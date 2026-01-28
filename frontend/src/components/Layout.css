@@ -1,0 +1,20 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #121212;
+}
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  margin-left: 240px;
+  padding-bottom: 90px;
+  background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    margin-left: 0;
+  }
+}

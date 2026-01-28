@@ -1,0 +1,182 @@
+.liked-header {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 32px;
+  padding: 32px 0;
+}
+
+.liked-cover {
+  width: 232px;
+  height: 232px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.liked-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.liked-type {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.liked-title {
+  font-size: 72px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 16px;
+  line-height: 1;
+}
+
+.liked-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #b3b3b3;
+  margin-bottom: 24px;
+}
+
+.liked-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.play-button-large {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 32px;
+  background-color: #1db954;
+  color: #ffffff;
+  border: none;
+  border-radius: 50px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.play-button-large:hover {
+  background-color: #1ed760;
+  transform: scale(1.05);
+}
+
+.liked-tracks {
+  margin-top: 32px;
+}
+
+.tracks-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tracks-table thead {
+  border-bottom: 1px solid #333;
+}
+
+.tracks-table th {
+  text-align: left;
+  padding: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b3b3b3;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.tracks-table th:first-child {
+  width: 40px;
+  text-align: center;
+}
+
+.tracks-table th:last-child {
+  width: 80px;
+  text-align: right;
+}
+
+.track-row {
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 4px;
+}
+
+.track-row:hover {
+  background-color: #1a1a1a;
+}
+
+.track-row td {
+  padding: 12px;
+  font-size: 14px;
+}
+
+.track-number {
+  text-align: center;
+  color: #b3b3b3;
+  width: 40px;
+}
+
+.track-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.track-table-cover {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: #333;
+}
+
+.track-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.track-artist {
+  font-size: 14px;
+  color: #b3b3b3;
+}
+
+.track-album {
+  color: #b3b3b3;
+}
+
+.track-duration {
+  text-align: right;
+  color: #b3b3b3;
+}
+
+.empty-liked {
+  text-align: center;
+  padding: 128px 32px;
+  color: #b3b3b3;
+}
+
+.empty-liked p {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.empty-liked-subtitle {
+  font-size: 14px;
+  color: #666;
+}
