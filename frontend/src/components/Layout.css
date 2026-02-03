@@ -11,10 +11,45 @@
   margin-left: 240px;
   padding-bottom: 90px;
   background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
+  transition: margin-left 0.3s ease;
 }
 
 @media (max-width: 768px) {
+  .layout {
+    background-color: #050505;
+  }
+
   .main-content {
     margin-left: 0;
+    padding-bottom: 140px;
+    background: transparent;
+  }
+
+  .mobile-nav-global {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 72px;
+    background: rgba(0, 0, 0, 0.95);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-evenly;
+    z-index: 1002;
+  }
+
+  .mobile-nav-global-item {
+    color: #cfcfcf;
+    display: grid;
+    place-items: center;
+    text-decoration: none;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
+  .mobile-nav-global-item:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
 }

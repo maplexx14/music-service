@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart, Plus } from 'lucide-react'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './Player.css'
 
 function Player() {
@@ -17,11 +19,17 @@ function Player() {
     setCurrentTime,
     setDuration,
     setVolume,
+    openFullScreen,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
   const [isLiked, setIsLiked] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
+  const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
+  const [playlists, setPlaylists] = useState([])
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
+  const [loadingPlaylists, setLoadingPlaylists] = useState(false)
+  const [addError, setAddError] = useState('')
 
   useEffect(() => {
     const audio = audioRef.current
@@ -40,7 +48,7 @@ function Player() {
       audio.removeEventListener('loadedmetadata', updateDuration)
       audio.removeEventListener('ended', handleEnded)
     }
-  }, [setCurrentTime, setDuration, nextTrack])
+  }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
 
   // Check if track is liked when it changes
   useEffect(() => {
@@ -66,6 +74,9 @@ function Player() {
     audio.load()
     setCurrentTime(0)
     setDuration(0)
+    setShowAddToPlaylist(false)
+    setAddError('')
+    setSelectedPlaylistId('')
   }, [currentTrack?.id, setCurrentTime, setDuration])
 
   useEffect(() => {
@@ -169,6 +180,38 @@ function Player() {
     }
   }
 
+  const handleOpenAddToPlaylist = async () => {
+    if (!currentTrack) return
+    setShowAddToPlaylist((prev) => !prev)
+    setAddError('')
+
+    if (playlists.length === 0 && !loadingPlaylists) {
+      setLoadingPlaylists(true)
+      try {
+        const response = await api.get('/playlists/me')
+        setPlaylists(response.data)
+      } catch (error) {
+        setAddError('Не удалось загрузить плейлисты')
+      } finally {
+        setLoadingPlaylists(false)
+      }
+    }
+  }
+
+  const handleAddToPlaylist = async () => {
+    if (!currentTrack || !selectedPlaylistId) {
+      setAddError('Выберите плейлист')
+      return
+    }
+    setAddError('')
+    try {
+      await api.post(`/playlists/${selectedPlaylistId}/tracks/${currentTrack.id}`)
+      setShowAddToPlaylist(false)
+    } catch (error) {
+      setAddError(error.response?.data?.detail || 'Не удалось добавить трек')
+    }
+  }
+
   return (
     <div className="player">
       <audio
@@ -206,23 +249,71 @@ function Player() {
         }}
       />
       
-      <div className="player-left">
-        {currentTrack.cover_url && (
-          <img src={currentTrack.cover_url} alt={currentTrack.title} className="player-cover" />
-        )}
+      <div className="player-left" onClick={openFullScreen} role="button" tabIndex={0}>
+        <img
+          src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+          alt={currentTrack.title}
+          className="player-cover"
+        />
         <div className="player-info">
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">{currentTrack.artist}</div>
         </div>
         <button
           className={`like-btn ${isLiked ? 'liked' : ''}`}
-          onClick={handleLike}
+          onClick={(event) => {
+            event.stopPropagation()
+            handleLike()
+          }}
           disabled={loadingLike}
           title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
         >
           <Heart size={16} fill={isLiked ? 'currentColor' : 'none'} />
         </button>
+        <button
+          className="add-btn"
+          onClick={(event) => {
+            event.stopPropagation()
+            handleOpenAddToPlaylist()
+          }}
+          title="Добавить в плейлист"
+        >
+          <Plus size={16} />
+        </button>
       </div>
+
+      {showAddToPlaylist && (
+        <div className="playlist-add-panel">
+          <div className="playlist-add-title">Добавить в плейлист</div>
+          {loadingPlaylists ? (
+            <div className="playlist-add-loading">Загрузка...</div>
+          ) : playlists.length === 0 ? (
+            <div className="playlist-add-empty">Нет плейлистов</div>
+          ) : (
+            <select
+              className="playlist-add-select"
+              value={selectedPlaylistId}
+              onChange={(e) => setSelectedPlaylistId(e.target.value)}
+            >
+              <option value="">Выберите плейлист</option>
+              {playlists.map((playlist) => (
+                <option key={playlist.id} value={playlist.id}>
+                  {playlist.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {addError && <div className="playlist-add-error">{addError}</div>}
+          <div className="playlist-add-actions">
+            <button className="playlist-add-cancel" onClick={() => setShowAddToPlaylist(false)}>
+              Отмена
+            </button>
+            <button className="playlist-add-confirm" onClick={handleAddToPlaylist}>
+              Добавить
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="player-center">
         <div className="player-controls">

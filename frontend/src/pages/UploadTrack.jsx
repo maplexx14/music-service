@@ -6,6 +6,7 @@ import './UploadTrack.css'
 
 function UploadTrack() {
   const [file, setFile] = useState(null)
+  const [coverFile, setCoverFile] = useState(null)
   const [formData, setFormData] = useState({
     title: '',
     artist: '',
@@ -57,6 +58,19 @@ function UploadTrack() {
     }
   }
 
+  const handleCoverChange = (e) => {
+    const selectedFile = e.target.files[0]
+    if (!selectedFile) return
+    const fileExt = selectedFile.name.split('.').pop().toLowerCase()
+    const allowedExts = ['jpg', 'jpeg', 'png', 'webp']
+    if (!allowedExts.includes(fileExt)) {
+      setError('Неподдерживаемый формат обложки. Разрешены: JPG, PNG, WEBP')
+      return
+    }
+    setCoverFile(selectedFile)
+    setError('')
+  }
+
   const handleInputChange = (e) => {
     setFormData({
       ...formData,
@@ -84,6 +98,9 @@ function UploadTrack() {
     try {
       const uploadFormData = new FormData()
       uploadFormData.append('file', file)
+      if (coverFile) {
+        uploadFormData.append('cover', coverFile)
+      }
       uploadFormData.append('title', formData.title)
       uploadFormData.append('artist', formData.artist)
       if (formData.album) {
@@ -115,6 +132,7 @@ function UploadTrack() {
 
   const handleRemoveFile = () => {
     setFile(null)
+    setCoverFile(null)
     setFormData({
       title: '',
       artist: '',
@@ -182,6 +200,46 @@ function UploadTrack() {
               type="file"
               accept="audio/*"
               onChange={handleFileChange}
+              className="file-input"
+            />
+          </label>
+        </div>
+
+        <div className="upload-section">
+          <label htmlFor="cover-upload" className="file-upload-label">
+            <div className="file-upload-box">
+              {coverFile ? (
+                <div className="file-selected">
+                  <Music size={48} />
+                  <div className="file-info">
+                    <div className="file-name">{coverFile.name}</div>
+                    <div className="file-size">
+                      {(coverFile.size / 1024 / 1024).toFixed(2)} MB
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCoverFile(null)}
+                    className="remove-file-btn"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <Upload size={48} />
+                  <div className="upload-text">
+                    <span>Добавить обложку (необязательно)</span>
+                    <span className="upload-hint">JPG, PNG, WEBP</span>
+                  </div>
+                </>
+              )}
+            </div>
+            <input
+              id="cover-upload"
+              type="file"
+              accept="image/*"
+              onChange={handleCoverChange}
               className="file-input"
             />
           </label>

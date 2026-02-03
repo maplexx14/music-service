@@ -21,6 +21,12 @@ body {
   flex-direction: column;
 }
 
+@media (max-width: 768px) {
+  .page-container {
+    padding: 0 16px 150px;
+  }
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;

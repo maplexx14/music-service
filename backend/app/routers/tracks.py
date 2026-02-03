@@ -14,9 +14,12 @@ router = APIRouter()
 
 # Allowed audio file extensions
 ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac'}
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 # Use environment variable or default path
 MUSIC_DIR = Path(os.getenv("MUSIC_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "music_files")))
+COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+COVER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.get("/", response_model=List[TrackResponse])
@@ -118,6 +121,7 @@ async def create_track(
 @router.post("/upload", response_model=TrackResponse, status_code=status.HTTP_201_CREATED)
 async def upload_track(
     file: UploadFile = File(...),
+    cover: Optional[UploadFile] = File(None),
     title: str = Form(...),
     artist: str = Form(...),
     album: Optional[str] = Form(None),
@@ -160,6 +164,28 @@ async def upload_track(
         # In production, use mutagen to get actual duration
         duration = 180  # Default 3 minutes
     
+    # Save cover if provided
+    cover_url = None
+    if cover and cover.filename:
+        cover_ext = Path(cover.filename).suffix.lower()
+        if cover_ext not in ALLOWED_IMAGE_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
+            )
+        cover_filename = f"{file_id}{cover_ext}"
+        cover_path = COVER_DIR / cover_filename
+        try:
+            async with aiofiles.open(cover_path, 'wb') as f:
+                content = await cover.read()
+                await f.write(content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save cover: {str(e)}"
+            )
+        cover_url = f"/cover_files/{cover_filename}"
+
     # Create track record
     relative_path = f"/music_files/{filename}"
     db_track = Track(
@@ -169,13 +195,49 @@ async def upload_track(
         genre=genre,
         duration=duration,
         file_path=relative_path,
-        cover_url=None
+        cover_url=cover_url
     )
     db.add(db_track)
     db.commit()
     db.refresh(db_track)
     
     return db_track
+
+
+@router.post("/{track_id}/cover", response_model=TrackResponse)
+async def upload_track_cover(
+    track_id: int,
+    cover: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    cover_ext = Path(cover.filename).suffix.lower()
+    if cover_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
+        )
+
+    cover_filename = f"{uuid.uuid4()}{cover_ext}"
+    cover_path = COVER_DIR / cover_filename
+    try:
+        async with aiofiles.open(cover_path, 'wb') as f:
+            content = await cover.read()
+            await f.write(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save cover: {str(e)}"
+        )
+
+    track.cover_url = f"/cover_files/{cover_filename}"
+    db.commit()
+    db.refresh(track)
+    return track
 
 
 @router.post("/{track_id}/like", status_code=status.HTTP_200_OK)

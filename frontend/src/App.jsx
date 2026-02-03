@@ -8,6 +8,7 @@ import Playlists from './pages/Playlists'
 import PlaylistDetail from './pages/PlaylistDetail'
 import LikedSongs from './pages/LikedSongs'
 import UploadTrack from './pages/UploadTrack'
+import Settings from './pages/Settings'
 import Layout from './components/Layout'
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
                   <Route path="/playlists/:id" element={<PlaylistDetail />} />
                   <Route path="/liked" element={<LikedSongs />} />
                   <Route path="/upload" element={<UploadTrack />} />
+                  <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Layout>
             ) : (

@@ -1,0 +1,140 @@
+.fullscreen-player {
+  position: fixed;
+  inset: 0;
+  background: #5f7285;
+  color: #ffffff;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto auto;
+  padding: 24px 20px 32px;
+  z-index: 1200;
+}
+
+.fullscreen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fullscreen-title {
+  text-align: center;
+  flex: 1;
+}
+
+.fullscreen-subtitle {
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.fullscreen-track {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.fullscreen-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.12);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.fullscreen-art {
+  display: grid;
+  place-items: center;
+  margin: 20px 0;
+}
+
+.fullscreen-art img,
+.fullscreen-art-placeholder {
+  width: min(320px, 80vw);
+  height: min(320px, 80vw);
+  border-radius: 18px;
+  object-fit: cover;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.fullscreen-art-placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 48px;
+}
+
+.fullscreen-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fullscreen-track-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.fullscreen-artist {
+  opacity: 0.8;
+}
+
+.fullscreen-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.fullscreen-progress {
+  margin-top: 20px;
+}
+
+.fullscreen-progress-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+
+.fullscreen-progress-fill {
+  height: 100%;
+  background: #ffffff;
+}
+
+.fullscreen-progress-time {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 8px;
+}
+
+.fullscreen-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.fullscreen-play {
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2c2f33;
+  border: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.25);
+}
+
+@media (max-width: 768px) {
+  .fullscreen-player {
+    padding: 20px 18px 28px;
+  }
+}

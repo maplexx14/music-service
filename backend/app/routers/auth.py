@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
 from app.schemas import Token, UserCreate, UserResponse
-from app.auth import verify_password, get_password_hash, create_access_token
+from app.auth import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.dependencies import get_current_active_user
 
 router = APIRouter()
@@ -52,7 +52,7 @@ async def login(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     
-    access_token_expires = timedelta(minutes=30)
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )

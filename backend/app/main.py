@@ -13,7 +13,7 @@ app = FastAPI(title="Music Streaming API", version="1.0.0")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,9 +30,14 @@ app.include_router(recommendations.router, prefix="/api/recommendations", tags=[
 # Mount static files for music
 music_dir = os.path.join(os.path.dirname(__file__), "..", "music_files")
 os.makedirs(music_dir, exist_ok=True)
+# Mount static files for covers
+cover_dir = os.path.join(os.path.dirname(__file__), "..", "cover_files")
+os.makedirs(cover_dir, exist_ok=True)
 # Mount static files with CORS support
 if os.path.exists(music_dir):
     app.mount("/music_files", StaticFiles(directory=music_dir), name="music_files")
+if os.path.exists(cover_dir):
+    app.mount("/cover_files", StaticFiles(directory=cover_dir), name="cover_files")
 
 
 @app.get("/")

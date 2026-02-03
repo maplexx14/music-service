@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './Playlists.css'
 
 function Playlists() {
@@ -9,6 +11,7 @@ function Playlists() {
   const [loading, setLoading] = useState(true)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
+  const [coverFile, setCoverFile] = useState(null)
 
   useEffect(() => {
     fetchPlaylists()
@@ -34,8 +37,18 @@ function Playlists() {
         name: newPlaylistName,
         is_public: true,
       })
-      setPlaylists([...playlists, response.data])
+      let createdPlaylist = response.data
+      if (coverFile) {
+        const coverForm = new FormData()
+        coverForm.append('cover', coverFile)
+        const coverResponse = await api.post(`/playlists/${response.data.id}/cover`, coverForm, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        createdPlaylist = coverResponse.data
+      }
+      setPlaylists([...playlists, createdPlaylist])
       setNewPlaylistName('')
+      setCoverFile(null)
       setShowCreateForm(false)
     } catch (error) {
       console.error('Error creating playlist:', error)
@@ -72,6 +85,11 @@ function Playlists() {
             onChange={(e) => setNewPlaylistName(e.target.value)}
             autoFocus
           />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setCoverFile(e.target.files?.[0] || null)}
+          />
           <div className="form-actions">
             <button type="submit" className="submit-btn">Создать</button>
             <button
@@ -97,11 +115,11 @@ function Playlists() {
         <div className="playlists-grid">
           {playlists.map((playlist) => (
             <Link key={playlist.id} to={`/playlists/${playlist.id}`} className="playlist-card">
-              {playlist.cover_url ? (
-                <img src={playlist.cover_url} alt={playlist.name} className="playlist-cover" />
-              ) : (
-                <div className="playlist-cover placeholder">♪</div>
-              )}
+              <img
+                src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                alt={playlist.name}
+                className="playlist-cover"
+              />
               <div className="playlist-info">
                 <div className="playlist-name">{playlist.name}</div>
                 {playlist.description && (

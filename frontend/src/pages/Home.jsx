@@ -1,13 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Search, Heart, Music, Play, Pause, Settings } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
+import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './Home.css'
 
 function Home() {
   const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
   const [trending, setTrending] = useState([])
   const [loading, setLoading] = useState(true)
-  const { playPlaylist } = usePlayerStore()
+  const { playPlaylist, isPlaying, source, togglePlayPause, currentTrack, openFullScreen } = usePlayerStore()
+  const { color, animate, waveGif } = useWaveSettingsStore()
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
+  const navigate = useNavigate()
 
   useEffect(() => {
     fetchData()
@@ -30,13 +38,30 @@ function Home() {
 
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
-    playTrack(track, recommendations.tracks)
+    playTrack(track, recommendations.tracks, 'wave')
+    openFullScreen()
   }
 
   const handlePlayPlaylist = (playlist) => {
     if (playlist.tracks && playlist.tracks.length > 0) {
-      playPlaylist(playlist.tracks, 0)
+      playPlaylist(playlist.tracks, 0, 'wave')
     }
+  }
+
+  const isWavePlaying = isPlaying && source === 'wave'
+  const waveTracks = recommendations.tracks.length > 0 ? recommendations.tracks : trending
+  const waveReady = waveTracks.length > 0
+  const upcomingText = useMemo(() => {
+    if (!waveTracks.length) return ''
+    return waveTracks.slice(0, 4).map((track) => track.title).join(', ')
+  }, [waveTracks])
+  const handleWaveClick = () => {
+    if (!waveReady) return
+    if (isWavePlaying) {
+      togglePlayPause()
+      return
+    }
+    handlePlayPlaylist({ tracks: waveTracks })
   }
 
   if (loading) {
@@ -49,13 +74,64 @@ function Home() {
 
   return (
     <div className="page-container">
-      <div className="hero-section">
-        <div className="hero-content">
-          <h1>Моя волна</h1>
-          <p>Персонализированная подборка музыки для вас</p>
-          <button className="play-button" onClick={() => handlePlayPlaylist({ tracks: recommendations.tracks })}>
-            ▶ Воспроизвести
+      <div className="mobile-header">
+        <button
+          className="icon-btn"
+          type="button"
+          aria-label="Поиск"
+          onClick={() => navigate('/search')}
+        >
+          <Search size={18} />
+        </button>
+
+        <span>BoltMusic</span>
+        <div className="mobile-profile">
+          <button
+            className="mobile-avatar"
+            type="button"
+            aria-label="Профиль"
+            onClick={() => setIsProfileMenuOpen((prev) => !prev)}
+          >
+            <span>BM</span>
           </button>
+          {isProfileMenuOpen && (
+            <div className="mobile-profile-menu">
+              <Link to="/settings" className="mobile-profile-item">
+                <Settings size={16} />
+                Настройки
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="hero-section">
+        <div
+          className={`wave-widget ${animate ? 'is-animated' : 'is-static'} ${isWavePlaying ? 'is-playing' : ''}`}
+          style={{ '--wave-color': color }}
+        >
+          <div className="wave-splash" />
+          <div className="wave-ring-wrapper"><div className="wave-ring" /></div>
+          <div className="wave-ring-wrapper"><div className="wave-ring wave-ring-2" /></div>
+          <div className="wave-ring-wrapper"><div className="wave-ring wave-ring-3" /></div>
+          <div className="wave-center">
+            {waveGif ? (
+              <button type="button" onClick={handleWaveClick} className="wave-gif-button" aria-label="Моя волна">
+                <img
+                  src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
+                  alt="Моя волна"
+                />
+                <span className="wave-gif-icon">
+                  {isWavePlaying ? <Pause size={22} /> : <Play size={22} />}
+                </span>
+              </button>
+            ) : (
+              <button type="button" onClick={handleWaveClick} className="wave-title">
+                {isWavePlaying ? <Pause size={18} /> : <Play size={18} />}
+                <span>Моя волна</span>
+              </button>
+            )}
+            
+          </div>
         </div>
       </div>
 
@@ -64,11 +140,11 @@ function Home() {
         <div className="tracks-grid">
           {recommendations.tracks.slice(0, 12).map((track) => (
             <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track)}>
-              {track.cover_url ? (
-                <img src={track.cover_url} alt={track.title} className="track-cover" />
-              ) : (
-                <div className="track-cover placeholder">♪</div>
-              )}
+              <img
+                src={resolveCoverUrl(track.cover_url) || defaultCover}
+                alt={track.title}
+                className="track-cover"
+              />
               <div className="track-info">
                 <div className="track-title">{track.title}</div>
                 <div className="track-artist">{track.artist}</div>
@@ -83,11 +159,11 @@ function Home() {
         <div className="tracks-grid">
           {trending.slice(0, 12).map((track) => (
             <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track)}>
-              {track.cover_url ? (
-                <img src={track.cover_url} alt={track.title} className="track-cover" />
-              ) : (
-                <div className="track-cover placeholder">♪</div>
-              )}
+              <img
+                src={resolveCoverUrl(track.cover_url) || defaultCover}
+                alt={track.title}
+                className="track-cover"
+              />
               <div className="track-info">
                 <div className="track-title">{track.title}</div>
                 <div className="track-artist">{track.artist}</div>
@@ -107,11 +183,11 @@ function Home() {
                 className="playlist-card"
                 onClick={() => handlePlayPlaylist(playlist)}
               >
-                {playlist.cover_url ? (
-                  <img src={playlist.cover_url} alt={playlist.name} className="playlist-cover" />
-                ) : (
-                  <div className="playlist-cover placeholder">♪</div>
-                )}
+                <img
+                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                  alt={playlist.name}
+                  className="playlist-cover"
+                />
                 <div className="playlist-info">
                   <div className="playlist-name">{playlist.name}</div>
                   {playlist.description && (
@@ -123,6 +199,8 @@ function Home() {
           </div>
         </div>
       )}
+
+    
     </div>
   )
 }

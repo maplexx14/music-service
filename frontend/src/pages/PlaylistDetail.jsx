@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Heart, MoreVertical } from 'lucide-react'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './PlaylistDetail.css'
 
 function PlaylistDetail() {
@@ -10,7 +12,7 @@ function PlaylistDetail() {
   const navigate = useNavigate()
   const [playlist, setPlaylist] = useState(null)
   const [loading, setLoading] = useState(true)
-  const { playPlaylist } = usePlayerStore()
+  const { playPlaylist, openFullScreen } = usePlayerStore()
 
   useEffect(() => {
     fetchPlaylist()
@@ -31,11 +33,13 @@ function PlaylistDetail() {
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
       playPlaylist(playlist.tracks, 0)
+      openFullScreen()
     }
   }
 
   const handlePlayTrack = (track, index) => {
     playPlaylist(playlist.tracks, index)
+    openFullScreen()
   }
 
   if (loading) {
@@ -53,11 +57,11 @@ function PlaylistDetail() {
   return (
     <div className="page-container">
       <div className="playlist-header">
-        {playlist.cover_url ? (
-          <img src={playlist.cover_url} alt={playlist.name} className="playlist-header-cover" />
-        ) : (
-          <div className="playlist-header-cover placeholder">♪</div>
-        )}
+        <img
+          src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+          alt={playlist.name}
+          className="playlist-header-cover"
+        />
         <div className="playlist-header-info">
           <div className="playlist-type">Плейлист</div>
           <h1 className="playlist-title">{playlist.name}</h1>
@@ -108,9 +112,11 @@ function PlaylistDetail() {
                 >
                   <td className="track-number">{index + 1}</td>
                   <td className="track-name-cell">
-                    {track.cover_url && (
-                      <img src={track.cover_url} alt={track.title} className="track-table-cover" />
-                    )}
+                    <img
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+                      alt={track.title}
+                      className="track-table-cover"
+                    />
                     <div>
                       <div className="track-name">{track.title}</div>
                       <div className="track-artist">{track.artist}</div>

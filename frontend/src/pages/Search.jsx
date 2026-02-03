@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './Search.css'
 
 function Search() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
   const [loading, setLoading] = useState(false)
+  const { openFullScreen } = usePlayerStore()
 
   useEffect(() => {
     if (query.trim().length > 0) {
@@ -36,6 +39,7 @@ function Search() {
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
     playTrack(track, results.tracks)
+    openFullScreen()
   }
 
   return (
@@ -67,11 +71,11 @@ function Search() {
                     className="track-item"
                     onClick={() => handlePlayTrack(track)}
                   >
-                    {track.cover_url ? (
-                      <img src={track.cover_url} alt={track.title} className="track-item-cover" />
-                    ) : (
-                      <div className="track-item-cover placeholder">♪</div>
-                    )}
+                    <img
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+                      alt={track.title}
+                      className="track-item-cover"
+                    />
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>
                       <div className="track-item-artist">{track.artist}</div>
@@ -88,11 +92,11 @@ function Search() {
               <div className="playlists-list">
                 {results.playlists.map((playlist) => (
                   <div key={playlist.id} className="playlist-item">
-                    {playlist.cover_url ? (
-                      <img src={playlist.cover_url} alt={playlist.name} className="playlist-item-cover" />
-                    ) : (
-                      <div className="playlist-item-cover placeholder">♪</div>
-                    )}
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.name}
+                      className="playlist-item-cover"
+                    />
                     <div className="playlist-item-info">
                       <div className="playlist-item-name">{playlist.name}</div>
                       {playlist.description && (

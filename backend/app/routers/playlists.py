@@ -1,10 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List
+import os
+import uuid
+import aiofiles
+from pathlib import Path
 from app.database import get_db
 from app.models import Playlist, Track, User
 from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate
 from app.dependencies import get_current_active_user
+
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
+COVER_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
 
@@ -80,6 +88,45 @@ async def update_playlist(
     for field, value in update_data.items():
         setattr(playlist, field, value)
     
+    db.commit()
+    db.refresh(playlist)
+    return playlist
+
+
+@router.post("/{playlist_id}/cover", response_model=PlaylistResponse)
+async def upload_playlist_cover(
+    playlist_id: int,
+    cover: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    if playlist.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    cover_ext = Path(cover.filename).suffix.lower()
+    if cover_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
+        )
+
+    cover_filename = f"{uuid.uuid4()}{cover_ext}"
+    cover_path = COVER_DIR / cover_filename
+    try:
+        async with aiofiles.open(cover_path, 'wb') as f:
+            content = await cover.read()
+            await f.write(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save cover: {str(e)}"
+        )
+
+    playlist.cover_url = f"/cover_files/{cover_filename}"
     db.commit()
     db.refresh(playlist)
     return playlist

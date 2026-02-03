@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Heart } from 'lucide-react'
 import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './LikedSongs.css'
 
 function LikedSongs() {
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
-  const { playPlaylist } = usePlayerStore()
+  const { playPlaylist, openFullScreen } = usePlayerStore()
 
   useEffect(() => {
     fetchLikedTracks()
@@ -27,11 +29,13 @@ function LikedSongs() {
   const handlePlay = () => {
     if (tracks.length > 0) {
       playPlaylist(tracks, 0)
+      openFullScreen()
     }
   }
 
   const handlePlayTrack = (track, index) => {
     playPlaylist(tracks, index)
+    openFullScreen()
   }
 
   if (loading) {
@@ -83,9 +87,11 @@ function LikedSongs() {
                 >
                   <td className="track-number">{index + 1}</td>
                   <td className="track-name-cell">
-                    {track.cover_url && (
-                      <img src={track.cover_url} alt={track.title} className="track-table-cover" />
-                    )}
+                    <img
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+                      alt={track.title}
+                      className="track-table-cover"
+                    />
                     <div>
                       <div className="track-name">{track.title}</div>
                       <div className="track-artist">{track.artist}</div>
