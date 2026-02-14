@@ -314,6 +314,7 @@
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+  
 }
 
 .volume-slider::-webkit-slider-thumb {
@@ -333,6 +334,7 @@
   border-radius: 50%;
   cursor: pointer;
   border: none;
+  display: none;
 }
 
 .volume-slider:hover {

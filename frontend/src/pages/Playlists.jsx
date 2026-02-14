@@ -72,7 +72,7 @@ function Playlists() {
           onClick={() => setShowCreateForm(!showCreateForm)}
         >
           <Plus size={20} />
-          Создать плейлист
+          Создать плейглист
         </button>
       </div>
 
@@ -85,7 +85,9 @@ function Playlists() {
             onChange={(e) => setNewPlaylistName(e.target.value)}
             autoFocus
           />
+          <span className="create-playlist-form-input-form"></span>
           <input
+            className="create-playlist-form-input-btn"
             type="file"
             accept="image/*"
             onChange={(e) => setCoverFile(e.target.files?.[0] || null)}

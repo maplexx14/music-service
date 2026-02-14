@@ -87,7 +87,7 @@
     justify-content: space-evenly;
     z-index: 1002;
   }
-
+ 
   .mobile-nav-global-item {
     color: #cfcfcf;
     display: grid;
@@ -97,6 +97,7 @@
     height: 44px;
     border-radius: 12px;
   }
+  
 
   .mobile-nav-global-item:hover {
     background: rgba(255, 255, 255, 0.08);

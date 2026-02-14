@@ -65,7 +65,7 @@ function Layout({ children }) {
             <ArrowLeft size={20} />
           </button>
           <div className="mobile-topbar-title" aria-hidden="true">
-            Назад
+        
           </div>
           <div className="mobile-topbar-spacer" />
         </div>

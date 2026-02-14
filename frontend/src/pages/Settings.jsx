@@ -34,9 +34,8 @@ function Settings() {
       </div>
 
       <div className="settings-card">
-        <h2>Моя волна</h2>
         <div className="settings-row">
-          <div className="settings-label">Цвет окружности</div>
+          <div className="settings-label">Палитра потока</div>
           <div className="settings-control">
             <input
               type="color"
@@ -51,20 +50,36 @@ function Settings() {
               className="settings-color-text"
               maxLength={7}
             />
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              aria-label="Цвет волны"
+            />
+             <input
+              type="text"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="settings-color-text"
+              maxLength={7}
+            />
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              aria-label="Цвет волны"
+            />
+             <input
+              type="text"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="settings-color-text"
+              maxLength={7}
+            />
           </div>
         </div>
 
-        <div className="settings-row">
-          <div className="settings-label">Анимация окружности</div>
-          <label className="settings-toggle">
-            <input
-              type="checkbox"
-              checked={animate}
-              onChange={(e) => setAnimation(e.target.checked)}
-            />
-            <span className="settings-toggle-slider" />
-          </label>
-        </div>
+      
 
         <div className="settings-row">
           <div className="settings-label">GIF вместо текста</div>
