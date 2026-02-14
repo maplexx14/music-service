@@ -20,6 +20,10 @@ function Player() {
     setDuration,
     setVolume,
     openFullScreen,
+    isRepeatOne,
+    isShuffle,
+    toggleRepeatOne,
+    toggleShuffle,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
@@ -37,7 +41,14 @@ function Player() {
 
     const updateTime = () => setCurrentTime(audio.currentTime)
     const updateDuration = () => setDuration(audio.duration)
-    const handleEnded = () => nextTrack()
+    const handleEnded = () => {
+      if (usePlayerStore.getState().isRepeatOne) {
+        audio.currentTime = 0
+        audio.play().catch(() => {})
+      } else {
+        nextTrack()
+      }
+    }
 
     audio.addEventListener('timeupdate', updateTime)
     audio.addEventListener('loadedmetadata', updateDuration)
@@ -249,12 +260,19 @@ function Player() {
         }}
       />
       
-      <div className="player-left" onClick={openFullScreen} role="button" tabIndex={0}>
-        <img
-          src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
-          alt={currentTrack.title}
-          className="player-cover"
-        />
+      <div className="player-left">
+        <button
+          type="button"
+          className="player-cover-wrap"
+          onClick={openFullScreen}
+          aria-label="Открыть плеер на весь экран"
+        >
+          <img
+            src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+            alt={currentTrack.title}
+            className="player-cover"
+          />
+        </button>
         <div className="player-info">
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">{currentTrack.artist}</div>
@@ -268,7 +286,7 @@ function Player() {
           disabled={loadingLike}
           title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
         >
-          <Heart size={16} fill={isLiked ? 'currentColor' : 'none'} />
+          <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
         </button>
         <button
           className="add-btn"
@@ -278,7 +296,7 @@ function Player() {
           }}
           title="Добавить в плейлист"
         >
-          <Plus size={16} />
+          <Plus size={18} />
         </button>
       </div>
 
@@ -317,20 +335,30 @@ function Player() {
 
       <div className="player-center">
         <div className="player-controls">
-          <button className="control-btn">
-            <Shuffle size={18} />
+          <button
+            type="button"
+            className={`control-btn ${isShuffle ? 'active' : ''}`}
+            onClick={toggleShuffle}
+            title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+          >
+            <Shuffle size={20} />
           </button>
-          <button className="control-btn" onClick={previousTrack}>
+          <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
             <SkipBack size={20} />
           </button>
-          <button className="play-pause-btn" onClick={togglePlayPause}>
+          <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
             {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
           </button>
-          <button className="control-btn" onClick={nextTrack}>
+          <button type="button" className="control-btn" onClick={nextTrack} aria-label="Следующий">
             <SkipForward size={20} />
           </button>
-          <button className="control-btn">
-            <Repeat size={18} />
+          <button
+            type="button"
+            className={`control-btn ${isRepeatOne ? 'active' : ''}`}
+            onClick={toggleRepeatOne}
+            title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
+          >
+            <Repeat size={20} />
           </button>
         </div>
         <div className="player-progress">
@@ -347,7 +375,7 @@ function Player() {
 
       <div className="player-right">
         <div className="volume-control">
-          <Volume2 size={18} />
+          <Volume2 size={20} />
           <input
             type="range"
             min="0"

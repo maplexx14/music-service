@@ -9,7 +9,7 @@ import './LikedSongs.css'
 function LikedSongs() {
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
-  const { playPlaylist, openFullScreen } = usePlayerStore()
+  const { playPlaylist } = usePlayerStore()
 
   useEffect(() => {
     fetchLikedTracks()
@@ -29,13 +29,11 @@ function LikedSongs() {
   const handlePlay = () => {
     if (tracks.length > 0) {
       playPlaylist(tracks, 0)
-      openFullScreen()
     }
   }
 
   const handlePlayTrack = (track, index) => {
     playPlaylist(tracks, index)
-    openFullScreen()
   }
 
   if (loading) {

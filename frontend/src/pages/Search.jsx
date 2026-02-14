@@ -9,7 +9,6 @@ function Search() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
   const [loading, setLoading] = useState(false)
-  const { openFullScreen } = usePlayerStore()
 
   useEffect(() => {
     if (query.trim().length > 0) {
@@ -39,7 +38,6 @@ function Search() {
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
     playTrack(track, results.tracks)
-    openFullScreen()
   }
 
   return (

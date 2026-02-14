@@ -9,7 +9,7 @@
   justify-content: center;
   height: 400px;
   color: #b3b3b3;
-  font-size: 18px;
+  font-size: var(--text-lg);
 }
 
 .hero-section {
@@ -25,94 +25,37 @@
   gap: 32px;
 }
 
+.hero-grainient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+.hero-grainient .grainient-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
 .wave-widget {
-  --wave-color: #b14dff;
   width: 355px;
   height: 325px;
   border-radius: 50%;
   position: relative;
+  z-index: 2;
   display: grid;
   place-items: center;
 }
-
-.wave-widget .wave-splash {
-  inset: auto;
+.wave-widget.is-playing {
+  animation: waveWidgetPulse 4s ease-in-out infinite;
 }
 
-.wave-widget.is-static .wave-ring {
-  animation: none;
+@keyframes waveWidgetPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
 }
-
-.wave-ring-wrapper {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-}
-
-.wave-widget.is-playing .wave-ring-wrapper:nth-child(1),
-.wave-widget.is-playing .wave-ring-wrapper:nth-child(2),
-.wave-widget.is-playing .wave-ring-wrapper:nth-child(3) {
-  animation: waveRotate 12s linear infinite;
-}
-
-.wave-widget.is-playing .wave-ring {
-  animation: waveMorph 12s ease-in-out infinite;
-}
-
-.wave-widget.is-playing .wave-ring-2 {
-  animation: waveMorph 14s ease-in-out infinite reverse;
-  animation-delay: -2s;
-}
-
-.wave-widget.is-playing .wave-ring-3 {
-  animation: waveMorph 16s ease-in-out infinite;
-  animation-delay: -3s;
-}
-
-.wave-widget.is-animated .wave-ring {
-  animation: waveMorph 18s ease-in-out infinite;
-}
-
-@keyframes waveRotate {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-.wave-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  pointer-events: none;
-  --ring-width: 12px;
-  background:
-    radial-gradient(circle,
-      transparent calc(100% - var(--ring-width)),
-      color-mix(in srgb, var(--wave-color) 75%, transparent) calc(100% - var(--ring-width) + 1px),
-      color-mix(in srgb, var(--wave-color) 65%, transparent) 100%);
-  box-shadow:
-    0 0 32px color-mix(in srgb, var(--wave-color) 55%, transparent),
-    inset 0 0 32px color-mix(in srgb, var(--wave-color) 45%, transparent);
-  transition: background 0.5s ease;
-}
-
-.wave-ring-2 {
-  inset: -15px;
-  opacity: 1;
-  --ring-width: 10px;
-}
-
-.wave-ring-3 {
-  inset: -30px;
-  opacity: 1;
-  --ring-width: 8px;
-}
-
 .wave-center {
   width: 180px;
   height: 180px;
@@ -132,7 +75,8 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 24px;
+  font-size: var(--text-xl);
+  font-family: 'Unbounded', sans-serif;
   font-weight: 700;
   color: #ffffff;
   letter-spacing: 0.3px;
@@ -189,57 +133,12 @@
   transform: scale(1.08);
 }
 
-@property --ring-width {
-  syntax: '<length>';
-  inherits: false;
-  initial-value: 12px;
-}
-
-@keyframes waveMorph {
-  0% {
-    transform: scale(1);
-    border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%;
-    filter: blur(0);
-    --ring-width: 12px;
-  }
-  20% {
-    transform: scale(1.08, 0.95);
-    border-radius: 40% 60% 54% 46% / 49% 60% 40% 51%;
-    filter: blur(0.5px);
-    --ring-width: 18px;
-  }
-  40% {
-    transform: scale(0.92, 1.1);
-    border-radius: 65% 35% 50% 50% / 45% 45% 55% 55%;
-    filter: blur(1px);
-    --ring-width: 9px;
-  }
-  60% {
-    transform: scale(1.05, 1.05);
-    border-radius: 45% 55% 48% 52% / 58% 42% 52% 48%;
-    filter: blur(0.3px);
-    --ring-width: 15px;
-  }
-  80% {
-    transform: scale(0.97, 0.93);
-    border-radius: 55% 45% 62% 38% / 40% 55% 45% 60%;
-    filter: blur(0.8px);
-    --ring-width: 7px;
-  }
-  100% {
-    transform: scale(1);
-    border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%;
-    filter: blur(0);
-    --ring-width: 12px;
-  }
-}
-
 .content-section {
   margin-bottom: 48px;
 }
 
 .section-title {
-  font-size: 24px;
+  font-size: var(--text-xl);
   font-weight: bold;
   color: #ffffff;
   margin-bottom: 24px;
@@ -286,7 +185,7 @@
 }
 
 .track-title {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 4px;
@@ -296,7 +195,7 @@
 }
 
 .track-artist {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: #b3b3b3;
   white-space: nowrap;
   overflow: hidden;
@@ -340,14 +239,14 @@
 }
 
 .playlist-name {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 4px;
 }
 
 .playlist-description {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: #b3b3b3;
   line-height: 1.4;
 }
@@ -361,19 +260,6 @@
 
 .wave-subtitle span {
   color: rgba(255, 255, 255, 0.85);
-}
-
-.wave-splash {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  top: 50%;
-  left: 50%;
-
-  border-radius: 40% 60% 50% 50%;
-  filter: blur(8px);
-  opacity: 0.9;
-  pointer-events: none;
 }
 
 .mobile-profile {
@@ -470,55 +356,94 @@
 
 @media (max-width: 768px) {
   .page-container {
-    padding: 0 0 150px;
-    
+    padding: 0 16px 150px;
   }
 
   .mobile-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 24px 8px 8px;
+    padding: 16px 0 8px;
+  }
+
+  .mobile-logo {
+    font-family: 'Syne', sans-serif;
+    font-size: var(--text-xl);
+    font-weight: 700;
   }
 
   .hero-section {
-    z-index: 10;
+    z-index: 1;
     flex-direction: column;
-    padding: 8px 0 24px;
-    min-height: 100vh;
-    margin-bottom: 0;
-    width: 100vw;
-    height: 100%;
-    margin-left: calc(-50vw + 50%);
-    justify-content: flex-start;
+    padding: 0 0 24px;
+    margin: 0 -16px 24px;
+    width: calc(100% + 32px);
+    min-height: min(100dvh, 400px);
+    max-height: 480px;
+    border-radius: 0;
+    justify-content: center;
+  }
+
+  .hero-grainient {
+    border-radius: 0;
   }
 
   .wave-widget {
-    width: min(420px, 100vw);
-    height: min(420px, 100vw);
-    margin-top: 8px;
+    width: min(320px, 80vw);
+    height: min(320px, 80vw);
   }
 
   .wave-center {
-    width: 190px;
-    height: 190px;
+    width: 140px;
+    height: 140px;
+  }
+
+  .wave-gif-button img {
+    width: min(300px, 75vw);
+    height: min(300px, 75vw);
   }
 
   .wave-title {
-    font-size: 24px;
+    font-size: var(--text-lg);
+  }
+
+  .content-section {
+    margin-bottom: 32px;
+  }
+
+  .section-title {
+    font-size: var(--text-lg);
+    margin-bottom: 16px;
   }
 
   .tracks-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
   }
 
   .playlists-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
   }
 
   .track-card,
   .playlist-card {
     padding: 12px;
+  }
+
+  .track-cover,
+  .playlist-cover {
+    margin-bottom: 8px;
+  }
+
+  .track-title,
+  .playlist-name {
+    font-size: var(--text-sm);
+  }
+
+  .track-artist,
+  .playlist-description {
+    font-size: var(--text-xs);
   }
 
   .mobile-player {

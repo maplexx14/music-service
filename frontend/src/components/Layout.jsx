@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { Home, Search, Library, Heart, Upload } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Home, Search, Library, Heart, Upload, ArrowLeft } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import Sidebar from './Sidebar'
 import Player from './Player'
@@ -17,6 +17,8 @@ function Layout({ children }) {
     return window.innerWidth <= 768
   })
   const isFullScreen = usePlayerStore((state) => state.isFullScreen)
+  const location = useLocation()
+  const navigate = useNavigate()
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -47,11 +49,29 @@ function Layout({ children }) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const showMobileBack = isMobile && location.pathname !== '/'
+
   return (
     <div className="layout">
       <Sidebar />
+      {showMobileBack && (
+        <div className="mobile-topbar">
+          <button
+            type="button"
+            className="mobile-back-btn"
+            onClick={() => navigate(-1)}
+            aria-label="Назад"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <div className="mobile-topbar-title" aria-hidden="true">
+            Назад
+          </div>
+          <div className="mobile-topbar-spacer" />
+        </div>
+      )}
       <main
-        className="main-content"
+        className={`main-content ${showMobileBack ? 'has-mobile-topbar' : ''}`}
         style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}
       >
         {children}
@@ -61,20 +81,22 @@ function Layout({ children }) {
       {isMobile && (
         <nav className="mobile-nav-global" aria-label="Нижняя навигация">
           <Link to="/" className="mobile-nav-global-item">
-            <Home size={18} />
+            <Home size={20} />
           </Link>
           <Link to="/search" className="mobile-nav-global-item">
-            <Search size={18} />
-          </Link>
-          <Link to="/playlists" className="mobile-nav-global-item">
-            <Library size={18} />
-          </Link>
-          <Link to="/liked" className="mobile-nav-global-item">
-            <Heart size={18} />
+            <Search size={20} />
           </Link>
           <Link to="/upload" className="mobile-nav-global-item">
-            <Upload size={18} />
+            <Upload size={20} />
           </Link>
+          <Link to="/liked" className="mobile-nav-global-item">
+            <Heart size={20} />
+          </Link>
+          <Link to="/playlists" className="mobile-nav-global-item">
+            <Library size={20} />
+          </Link>
+         
+         
         </nav>
       )}
     </div>

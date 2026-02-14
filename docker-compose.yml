@@ -57,6 +57,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: https://nuwz6p-95-161-60-219.ru.tuna.am/api
     container_name: music_frontend
     environment:
       VITE_API_URL: http://localhost:8000/api
@@ -64,7 +66,7 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - frontend_node_modules:/app/node_modules
     depends_on:
       - backend
 
@@ -72,3 +74,4 @@ volumes:
   postgres_data:
   redis_data:
   music_files:
+  frontend_node_modules:

@@ -25,6 +25,55 @@
     background: transparent;
   }
 
+  .main-content.has-mobile-topbar {
+    padding-top: 56px;
+  }
+
+  .mobile-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 52px;
+    display: grid;
+    grid-template-columns: 52px 1fr 52px;
+    align-items: center;
+    padding: 0 8px;
+    background: rgba(0, 0, 0, 0.85);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 1003;
+    backdrop-filter: blur(8px);
+  }
+
+  .mobile-back-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .mobile-back-btn:active {
+    transform: scale(0.96);
+  }
+
+  .mobile-topbar-title {
+    text-align: center;
+    font-size: var(--text-base);
+    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .mobile-topbar-spacer {
+    width: 40px;
+    height: 40px;
+  }
+
   .mobile-nav-global {
     position: fixed;
     left: 0;

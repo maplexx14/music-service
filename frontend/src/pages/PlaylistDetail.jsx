@@ -12,7 +12,7 @@ function PlaylistDetail() {
   const navigate = useNavigate()
   const [playlist, setPlaylist] = useState(null)
   const [loading, setLoading] = useState(true)
-  const { playPlaylist, openFullScreen } = usePlayerStore()
+  const { playPlaylist } = usePlayerStore()
 
   useEffect(() => {
     fetchPlaylist()
@@ -33,13 +33,11 @@ function PlaylistDetail() {
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
       playPlaylist(playlist.tracks, 0)
-      openFullScreen()
     }
   }
 
   const handlePlayTrack = (track, index) => {
     playPlaylist(playlist.tracks, index)
-    openFullScreen()
   }
 
   if (loading) {
@@ -83,10 +81,10 @@ function PlaylistDetail() {
               Воспроизвести
             </button>
             <button className="action-button">
-              <Heart size={24} />
+              <Heart size={20} />
             </button>
             <button className="action-button">
-              <MoreVertical size={24} />
+              <MoreVertical size={20} />
             </button>
           </div>
         </div>

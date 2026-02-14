@@ -23,6 +23,17 @@
   min-width: 0;
 }
 
+.player-cover-wrap {
+  display: block;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 8px;
+  line-height: 0;
+}
+
 .player-cover {
   width: 48px;
   height: 48px;
@@ -37,7 +48,7 @@
 }
 
 .player-track-title {
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 500;
   color: #ffffff;
   white-space: nowrap;
@@ -47,7 +58,7 @@
 }
 
 .player-track-artist {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: #b3b3b3;
   white-space: nowrap;
   overflow: hidden;
@@ -104,7 +115,7 @@
 }
 
 .playlist-add-title {
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 8px;
@@ -112,7 +123,7 @@
 
 .playlist-add-loading,
 .playlist-add-empty {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: #b3b3b3;
   margin-bottom: 8px;
 }
@@ -124,12 +135,12 @@
   border: 1px solid #333;
   border-radius: 6px;
   color: #ffffff;
-  font-size: 12px;
+  font-size: var(--text-sm);
   margin-bottom: 8px;
 }
 
 .playlist-add-error {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: #e22134;
   margin-bottom: 8px;
 }
@@ -140,24 +151,24 @@
   gap: 8px;
 }
 
-.playlist-add-cancel {
+.playlist-add-cancel,
+.playlist-add-confirm {
   padding: 6px 10px;
-  background: transparent;
-  border: 1px solid #333;
   border-radius: 6px;
-  color: #b3b3b3;
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
+.playlist-add-cancel {
+  background: transparent;
+  border: 1px solid #333;
+  color: #b3b3b3;
+}
+
 .playlist-add-confirm {
-  padding: 6px 10px;
   background-color: #1db954;
   border: none;
-  border-radius: 6px;
   color: #ffffff;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 .player-center {
@@ -191,6 +202,10 @@
   color: #ffffff;
 }
 
+.control-btn.active {
+  color: #1db954;
+}
+
 .play-pause-btn {
   background: #4cb542;
   border: none;
@@ -217,7 +232,7 @@
 }
 
 .time-text {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: #b3b3b3;
   min-width: 40px;
   text-align: center;

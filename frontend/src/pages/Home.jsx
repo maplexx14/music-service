@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Heart, Music, Play, Pause, Settings } from 'lucide-react'
+import { Search, Play, Pause, Settings } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
+import Grainient from '../components/Grainient'
 import './Home.css'
 
 function Home() {
   const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
   const [trending, setTrending] = useState([])
   const [loading, setLoading] = useState(true)
-  const { playPlaylist, isPlaying, source, togglePlayPause, currentTrack, openFullScreen } = usePlayerStore()
-  const { color, animate, waveGif } = useWaveSettingsStore()
+  const { playPlaylist, isPlaying, source, togglePlayPause } = usePlayerStore()
+  const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const navigate = useNavigate()
 
@@ -39,7 +40,6 @@ function Home() {
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
     playTrack(track, recommendations.tracks, 'wave')
-    openFullScreen()
   }
 
   const handlePlayPlaylist = (playlist) => {
@@ -81,10 +81,10 @@ function Home() {
           aria-label="Поиск"
           onClick={() => navigate('/search')}
         >
-          <Search size={18} />
+          <Search size={20} />
         </button>
 
-        <span>BoltMusic</span>
+        <span className="mobile-logo">BoltMusic</span>
         <div className="mobile-profile">
           <button
             className="mobile-avatar"
@@ -97,7 +97,7 @@ function Home() {
           {isProfileMenuOpen && (
             <div className="mobile-profile-menu">
               <Link to="/settings" className="mobile-profile-item">
-                <Settings size={16} />
+                <Settings size={20} />
                 Настройки
               </Link>
             </div>
@@ -105,29 +105,49 @@ function Home() {
         </div>
       </div>
       <div className="hero-section">
-        <div
-          className={`wave-widget ${animate ? 'is-animated' : 'is-static'} ${isWavePlaying ? 'is-playing' : ''}`}
-          style={{ '--wave-color': color }}
-        >
-          <div className="wave-splash" />
-          <div className="wave-ring-wrapper"><div className="wave-ring" /></div>
-          <div className="wave-ring-wrapper"><div className="wave-ring wave-ring-2" /></div>
-          <div className="wave-ring-wrapper"><div className="wave-ring wave-ring-3" /></div>
+        <div className="hero-grainient">
+          <Grainient
+            color1="#aef0b1"
+            color2="#7d98a8"
+            color3="#B19EEF"
+            timeSpeed={5}
+            colorBalance={-0.32}
+            warpStrength={1.4}
+            warpFrequency={5}
+            warpSpeed={2}
+            warpAmplitude={50}
+            blendAngle={-49}
+            blendSoftness={0.05}
+            rotationAmount={500}
+            noiseScale={1.95}
+            grainAmount={0}
+            grainScale={0.2}
+            grainAnimated={false}
+            contrast={1.5}
+            gamma={1}
+            saturation={1}
+            centerX={0}
+            centerY={0}
+            zoom={0.9}
+            active={isWavePlaying}
+          />
+        </div>
+        <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
           <div className="wave-center">
             {waveGif ? (
-              <button type="button" onClick={handleWaveClick} className="wave-gif-button" aria-label="Моя волна">
+              <button type="button" onClick={handleWaveClick} className="wave-gif-button" aria-label="поток рекомендаций">
                 <img
                   src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
-                  alt="Моя волна"
+                  alt="поток рекомендаций"
                 />
                 <span className="wave-gif-icon">
-                  {isWavePlaying ? <Pause size={22} /> : <Play size={22} />}
+                  {isWavePlaying ? <Pause size={20} /> : <Play size={20} />}
                 </span>
               </button>
             ) : (
               <button type="button" onClick={handleWaveClick} className="wave-title">
-                {isWavePlaying ? <Pause size={18} /> : <Play size={18} />}
-                <span>Моя волна</span>
+                {isWavePlaying ? <Pause size={20} /> : <Play size={20} />}
+                <span>поток</span>
               </button>
             )}
             

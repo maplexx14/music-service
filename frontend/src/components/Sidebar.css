@@ -50,8 +50,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 24px;
-  font-weight: bold;
+  font-family: 'Syne', sans-serif;
+  font-size: var(--text-xl);
+  font-weight: 700;
   color: #1db954;
   text-decoration: none;
   flex-shrink: 0;
@@ -71,7 +72,7 @@
   color: #1db954;
 }
 .logo-icon {
-  font-size: 32px;
+  font-size: var(--text-2xl);
   flex-shrink: 0;
   display: block;
   width: 32px;
@@ -115,7 +116,7 @@
   text-decoration: none;
   border-radius: 8px;
   transition: all 0.2s;
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
@@ -165,7 +166,7 @@
 }
 
 .user-name {
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: #ffffff;
   white-space: nowrap;
@@ -174,7 +175,7 @@
 }
 
 .user-email {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: #b3b3b3;
   white-space: nowrap;
   overflow: hidden;

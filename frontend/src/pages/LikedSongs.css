@@ -25,7 +25,7 @@
 }
 
 .liked-type {
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 8px;
@@ -34,7 +34,7 @@
 }
 
 .liked-title {
-  font-size: 72px;
+  font-size: clamp(32px, 8vw, 72px);
   font-weight: bold;
   color: #ffffff;
   margin-bottom: 16px;
@@ -45,7 +45,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--text-base);
   color: #b3b3b3;
   margin-bottom: 24px;
 }
@@ -145,14 +145,14 @@
 }
 
 .track-name {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 500;
   color: #ffffff;
   margin-bottom: 4px;
 }
 
 .track-artist {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: #b3b3b3;
 }
 
@@ -179,4 +179,82 @@
 .empty-liked-subtitle {
   font-size: 14px;
   color: #666;
+}
+
+@media (max-width: 768px) {
+  .liked-header {
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 0 8px;
+  }
+
+  .liked-cover {
+    width: 160px;
+    height: 160px;
+  }
+
+  .liked-info {
+    align-items: center;
+    text-align: center;
+  }
+
+  .liked-title {
+    font-size: 32px;
+  }
+
+  .liked-meta {
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .liked-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .play-button-large {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .liked-tracks {
+    margin-top: 24px;
+  }
+
+  .tracks-table thead {
+    display: none;
+  }
+
+  .tracks-table,
+  .tracks-table tbody,
+  .tracks-table tr,
+  .tracks-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .track-row {
+    padding: 12px 0;
+    border-bottom: 1px solid #222;
+  }
+
+  .track-row td {
+    padding: 6px 0;
+  }
+
+  .track-number,
+  .track-album,
+  .track-duration {
+    display: none;
+  }
+
+  .track-name-cell {
+    gap: 10px;
+  }
+
+  .track-table-cover {
+    width: 48px;
+    height: 48px;
+  }
 }

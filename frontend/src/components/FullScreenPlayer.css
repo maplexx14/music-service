@@ -22,14 +22,14 @@
 }
 
 .fullscreen-subtitle {
-  font-size: 12px;
+  font-size: var(--text-sm);
   letter-spacing: 0.2em;
   text-transform: uppercase;
   opacity: 0.8;
 }
 
 .fullscreen-track {
-  font-size: 16px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -43,6 +43,10 @@
   display: grid;
   place-items: center;
   cursor: pointer;
+}
+
+.fullscreen-icon.active {
+  color: #1db954;
 }
 
 .fullscreen-art {
@@ -64,7 +68,7 @@
 .fullscreen-art-placeholder {
   display: grid;
   place-items: center;
-  font-size: 48px;
+  font-size: var(--text-3xl);
 }
 
 .fullscreen-info {
@@ -75,7 +79,7 @@
 }
 
 .fullscreen-track-name {
-  font-size: 20px;
+  font-size: var(--text-lg);
   font-weight: 700;
 }
 
@@ -107,7 +111,7 @@
 .fullscreen-progress-time {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--text-sm);
   opacity: 0.8;
   margin-top: 8px;
 }
