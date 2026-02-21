@@ -4,6 +4,7 @@ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart, Pl
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
+import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 
 function Player() {
@@ -27,6 +28,9 @@ function Player() {
   } = usePlayerStore()
 
   const audioRef = useRef(null)
+  const blobUrlRef = useRef(null)
+  const lastRecordedTrackIdRef = useRef(null)
+  const [audioSrc, setAudioSrc] = useState(null)
   const [isLiked, setIsLiked] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
@@ -75,6 +79,57 @@ function Player() {
     }
     checkLikedStatus()
   }, [currentTrack])
+
+  // Resolve audio URL: для Tuna/внешнего API используем fetch с tuna-skip-browser-warning
+  useEffect(() => {
+    if (!currentTrack) {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
+      setAudioSrc(undefined)
+      return
+    }
+
+    const rawUrl = currentTrack.id
+      ? `${API_URL}/tracks/${currentTrack.id}/stream`
+      : currentTrack.file_path?.startsWith('http')
+        ? currentTrack.file_path
+        : currentTrack.file_path
+          ? `${SERVER_URL}${currentTrack.file_path.startsWith('/') ? '' : '/'}${currentTrack.file_path}`
+          : undefined
+
+    if (!rawUrl) {
+      setAudioSrc(undefined)
+      return
+    }
+
+    const isOurApi = rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL)
+    if (isOurApi) {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
+      setAudioSrc(null)
+      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
+        .then((r) => r.blob())
+        .then((blob) => {
+          const url = URL.createObjectURL(blob)
+          blobUrlRef.current = url
+          setAudioSrc(url)
+        })
+        .catch(() => setAudioSrc(rawUrl))
+    } else {
+      setAudioSrc(rawUrl)
+    }
+
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
+    }
+  }, [currentTrack?.id, currentTrack?.file_path, API_URL, SERVER_URL])
 
   // Reload audio when track changes
   useEffect(() => {
@@ -140,6 +195,13 @@ function Player() {
       audio.removeEventListener('loadeddata', handleLoadedData)
     }
   }, [isPlaying, currentTrack, setDuration])
+
+  useEffect(() => {
+    if (!currentTrack || !isPlaying) return
+    if (lastRecordedTrackIdRef.current === currentTrack.id) return
+    lastRecordedTrackIdRef.current = currentTrack.id
+    api.post(`/tracks/${currentTrack.id}/play`).catch(() => {})
+  }, [currentTrack?.id, isPlaying])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -227,14 +289,8 @@ function Player() {
     <div className="player">
       <audio
         ref={audioRef}
-        key={currentTrack.id}
-        src={currentTrack.id
-          ? `http://localhost:8000/api/tracks/${currentTrack.id}/stream`
-          : currentTrack.file_path?.startsWith('http')
-            ? currentTrack.file_path
-            : currentTrack.file_path
-              ? `http://localhost:8000${currentTrack.file_path.startsWith('/') ? '' : '/'}${currentTrack.file_path}`
-              : undefined}
+        key={currentTrack?.id}
+        src={audioSrc || undefined}
         preload="auto"
         crossOrigin="anonymous"
         onError={(e) => {

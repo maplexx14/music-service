@@ -1,0 +1,122 @@
+import { useEffect, useMemo, useState } from 'react'
+import api from '../services/api'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
+import './Admin.css'
+
+function Admin() {
+  const [userCount, setUserCount] = useState(0)
+  const [tracks, setTracks] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [deletingId, setDeletingId] = useState(null)
+  const [searchTerm, setSearchTerm] = useState('')
+
+  const fetchAdminData = async () => {
+    setLoading(true)
+    try {
+      const [countResponse, tracksResponse] = await Promise.all([
+        api.get('/users/stats/count'),
+        api.get('/tracks?limit=200'),
+      ])
+      setUserCount(countResponse.data.total || 0)
+      setTracks(tracksResponse.data || [])
+    } catch (error) {
+      console.error('Error fetching admin data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchAdminData()
+  }, [])
+
+  const filteredTracks = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (!term) return tracks
+    return tracks.filter((track) => {
+      const title = track.title?.toLowerCase() || ''
+      const artist = track.artist?.toLowerCase() || ''
+      return title.includes(term) || artist.includes(term)
+    })
+  }, [tracks, searchTerm])
+
+  const handleDelete = async (trackId) => {
+    if (!trackId) return
+    const confirmed = window.confirm('Удалить трек? Это действие нельзя отменить.')
+    if (!confirmed) return
+    setDeletingId(trackId)
+    try {
+      await api.delete(`/tracks/${trackId}`)
+      setTracks((prev) => prev.filter((track) => track.id !== trackId))
+    } catch (error) {
+      console.error('Error deleting track:', error)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="page-container">
+        <div className="loading">Загрузка...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="page-container admin-page">
+      <div className="admin-header">
+        <div>
+          <h1 className="admin-title">Админ панель</h1>
+          <div className="admin-subtitle">Пользователей: {userCount}</div>
+        </div>
+        <button type="button" className="admin-refresh" onClick={fetchAdminData}>
+          Обновить
+        </button>
+      </div>
+
+      <div className="admin-section">
+        <div className="admin-section-head">
+          <div className="admin-section-title">Треки</div>
+          <input
+            type="text"
+            className="admin-search-input"
+            placeholder="Поиск по названию или артисту"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        {filteredTracks.length === 0 ? (
+          <div className="admin-empty">Треки не найдены</div>
+        ) : (
+          <div className="admin-tracks">
+            {filteredTracks.map((track) => (
+              <div key={track.id} className="admin-track">
+                <img
+                  src={resolveCoverUrl(track.cover_url) || defaultCover}
+                  alt={track.title}
+                  className="admin-track-cover"
+                />
+                <div className="admin-track-info">
+                  <div className="admin-track-title">{track.title}</div>
+                  <div className="admin-track-artist">{track.artist}</div>
+                </div>
+                <button
+                  type="button"
+                  className="admin-delete"
+                  onClick={() => handleDelete(track.id)}
+                  disabled={deletingId === track.id}
+                >
+                  {deletingId === track.id ? 'Удаление...' : 'Удалить'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default Admin

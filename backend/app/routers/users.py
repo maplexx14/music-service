@@ -14,6 +14,12 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     return current_user
 
 
+@router.get("/stats/count")
+async def get_user_count(db: Session = Depends(get_db)):
+    total = db.query(User).count()
+    return {"total": total}
+
+
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()

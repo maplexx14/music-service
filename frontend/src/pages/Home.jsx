@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Play, Pause, Settings } from 'lucide-react'
+import { Search, Play, Pause, Settings, Shield, Home as HomeIcon, History } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import api from '../services/api'
@@ -12,7 +12,10 @@ import './Home.css'
 function Home() {
   const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
   const [trending, setTrending] = useState([])
+  const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState('home')
   const { playPlaylist, isPlaying, source, togglePlayPause } = usePlayerStore()
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
@@ -37,9 +40,21 @@ function Home() {
     }
   }
 
-  const handlePlayTrack = (track) => {
+  const fetchHistory = async () => {
+    setHistoryLoading(true)
+    try {
+      const response = await api.get('/tracks/me/history', { params: { limit: 30 } })
+      setHistory(response.data)
+    } catch (error) {
+      console.error('Error fetching history:', error)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const handlePlayTrack = (track, queue) => {
     const { playTrack } = usePlayerStore.getState()
-    playTrack(track, recommendations.tracks, 'wave')
+    playTrack(track, queue, 'wave')
   }
 
   const handlePlayPlaylist = (playlist) => {
@@ -100,6 +115,10 @@ function Home() {
                 <Settings size={20} />
                 Настройки
               </Link>
+              <Link to="/admin" className="mobile-profile-item">
+                <Shield size={20} />
+                Админ
+              </Link>
             </div>
           )}
         </div>
@@ -150,73 +169,135 @@ function Home() {
                 <span>поток</span>
               </button>
             )}
-            
           </div>
         </div>
       </div>
 
-      <div className="content-section">
-        <h2 className="section-title">Рекомендуем новинки</h2>
-        <div className="tracks-grid">
-          {recommendations.tracks.slice(0, 12).map((track) => (
-            <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track)}>
-              <img
-                src={resolveCoverUrl(track.cover_url) || defaultCover}
-                alt={track.title}
-                className="track-cover"
-              />
-              <div className="track-info">
-                <div className="track-title">{track.title}</div>
-                <div className="track-artist">{track.artist}</div>
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="home-tabs">
+        <button
+          type="button"
+          className={`home-tab-card ${activeTab === 'home' ? 'active' : ''}`}
+          onClick={() => setActiveTab('home')}
+        >
+          <span className="home-tab-icon">
+            <HomeIcon size={20} />
+          </span>
+          <span className="home-tab-text">
+            <span className="home-tab-title">Главная</span>
+            <span className="home-tab-subtitle">Рекомендации и подборки</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`home-tab-card ${activeTab === 'history' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('history')
+            if (history.length === 0 && !historyLoading) {
+              fetchHistory()
+            }
+          }}
+        >
+          <span className="home-tab-icon">
+            <History size={20} />
+          </span>
+          <span className="home-tab-text">
+            <span className="home-tab-title">История</span>
+            <span className="home-tab-subtitle">Недавно слушали</span>
+          </span>
+        </button>
       </div>
 
-      <div className="content-section">
-        <h2 className="section-title">Тренды</h2>
-        <div className="tracks-grid">
-          {trending.slice(0, 12).map((track) => (
-            <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track)}>
-              <img
-                src={resolveCoverUrl(track.cover_url) || defaultCover}
-                alt={track.title}
-                className="track-cover"
-              />
-              <div className="track-info">
-                <div className="track-title">{track.title}</div>
-                <div className="track-artist">{track.artist}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {recommendations.playlists.length > 0 && (
-        <div className="content-section">
-          <h2 className="section-title">Рекомендуемые плейлисты</h2>
-          <div className="playlists-grid">
-            {recommendations.playlists.map((playlist) => (
-              <div
-                key={playlist.id}
-                className="playlist-card"
-                onClick={() => handlePlayPlaylist(playlist)}
-              >
-                <img
-                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                  alt={playlist.name}
-                  className="playlist-cover"
-                />
-                <div className="playlist-info">
-                  <div className="playlist-name">{playlist.name}</div>
-                  {playlist.description && (
-                    <div className="playlist-description">{playlist.description}</div>
-                  )}
+      {activeTab === 'home' ? (
+        <>
+          <div className="content-section">
+            <h2 className="section-title">Рекомендуем новинки</h2>
+            <div className="tracks-grid">
+              {recommendations.tracks.slice(0, 12).map((track) => (
+                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, recommendations.tracks)}>
+                  <img
+                    src={resolveCoverUrl(track.cover_url) || defaultCover}
+                    alt={track.title}
+                    className="track-cover"
+                  />
+                  <div className="track-info">
+                    <div className="track-title">{track.title}</div>
+                    <div className="track-artist">{track.artist}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+
+          <div className="content-section">
+            <h2 className="section-title">Тренды</h2>
+            <div className="tracks-grid">
+              {trending.slice(0, 12).map((track) => (
+                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, trending)}>
+                  <img
+                    src={resolveCoverUrl(track.cover_url) || defaultCover}
+                    alt={track.title}
+                    className="track-cover"
+                  />
+                  <div className="track-info">
+                    <div className="track-title">{track.title}</div>
+                    <div className="track-artist">{track.artist}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {recommendations.playlists.length > 0 && (
+            <div className="content-section">
+              <h2 className="section-title">Рекомендуемые плейлисты</h2>
+              <div className="playlists-grid">
+                {recommendations.playlists.map((playlist) => (
+                  <div
+                    key={playlist.id}
+                    className="playlist-card"
+                    onClick={() => handlePlayPlaylist(playlist)}
+                  >
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.name}
+                      className="playlist-cover"
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name">{playlist.name}</div>
+                      {playlist.description && (
+                        <div className="playlist-description">{playlist.description}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="content-section">
+          <h2 className="section-title">История прослушиваний</h2>
+          {historyLoading ? (
+            <div className="loading">Загрузка...</div>
+          ) : history.length === 0 ? (
+            <div className="home-empty">Пока нет истории прослушивания</div>
+          ) : (
+            <div className="tracks-grid">
+              {history.map((track) => (
+                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, history)}>
+                  <img
+                    src={resolveCoverUrl(track.cover_url) || defaultCover}
+                    alt={track.title}
+                    className="track-cover"
+                  />
+                  <div className="track-info">
+                    <div className="track-title">{track.title}</div>
+                    <div className="track-artist">{track.artist}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

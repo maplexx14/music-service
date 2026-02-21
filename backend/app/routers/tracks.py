@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import desc, update, insert, func
 from typing import List, Optional
 import os
 import uuid
 import aiofiles
 from pathlib import Path
 from app.database import get_db
-from app.models import Track, User, user_liked_tracks
+from app.models import Track, User, user_liked_tracks, user_track_plays
 from app.schemas import TrackResponse, TrackCreate
 from app.dependencies import get_current_active_user
 
@@ -285,6 +286,23 @@ async def get_liked_tracks(
     return current_user.liked_tracks
 
 
+@router.get("/me/history", response_model=List[TrackResponse])
+async def get_listening_history(
+    limit: int = 50,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    history = (
+        db.query(Track)
+        .join(user_track_plays, Track.id == user_track_plays.c.track_id)
+        .filter(user_track_plays.c.user_id == current_user.id)
+        .order_by(desc(user_track_plays.c.last_played))
+        .limit(limit)
+        .all()
+    )
+    return history
+
+
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
 async def record_track_play(
     track_id: int,
@@ -296,17 +314,13 @@ async def record_track_play(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
-    # Update or create play record
-    from app.models import user_track_plays
-    from sqlalchemy import update, insert
-    
     stmt = (
         update(user_track_plays)
         .where(
             (user_track_plays.c.user_id == current_user.id) &
             (user_track_plays.c.track_id == track_id)
         )
-        .values(play_count=user_track_plays.c.play_count + 1)
+        .values(play_count=user_track_plays.c.play_count + 1, last_played=func.now())
     )
     result = db.execute(stmt)
     
@@ -315,9 +329,45 @@ async def record_track_play(
         stmt = insert(user_track_plays).values(
             user_id=current_user.id,
             track_id=track_id,
-            play_count=1
+            play_count=1,
+            last_played=func.now()
         )
         db.execute(stmt)
     
     db.commit()
     return {"message": "Play recorded"}
+
+
+@router.delete("/{track_id}", status_code=status.HTTP_200_OK)
+async def delete_track(
+    track_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    file_path = track.file_path
+    cover_path = track.cover_url
+
+    db.delete(track)
+    db.commit()
+
+    def safe_remove(path_value: Optional[str], base_dir: Path) -> None:
+        if not path_value:
+            return
+        filename = Path(path_value).name
+        if not filename:
+            return
+        target = base_dir / filename
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+    safe_remove(file_path, MUSIC_DIR)
+    safe_remove(cover_path, COVER_DIR)
+
+    return {"message": "Track deleted"}

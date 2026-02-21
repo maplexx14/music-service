@@ -1,0 +1,132 @@
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.admin-title {
+  margin: 0;
+  font-size: 28px;
+  color: #ffffff;
+}
+
+.admin-subtitle {
+  color: #b3b3b3;
+  margin-top: 6px;
+}
+
+.admin-refresh {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.admin-section-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 16px;
+}
+
+.admin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.admin-section-head .admin-section-title {
+  margin-bottom: 0;
+}
+
+.admin-search-input {
+  flex: 1;
+  max-width: 320px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.admin-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.admin-empty {
+  color: #b3b3b3;
+  padding: 16px 8px;
+}
+
+.admin-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-track {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #181818;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.admin-track-cover {
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #2b2b2b;
+}
+
+.admin-track-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-track-title {
+  color: #ffffff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-track-artist {
+  color: #b3b3b3;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-delete {
+  border: none;
+  background: #ff4d4f;
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.admin-delete:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

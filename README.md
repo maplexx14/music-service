@@ -56,7 +56,14 @@ bolt/
 cd bolt
 ```
 
-2. Запустите все сервисы с помощью Docker Compose:
+2. Создайте `.env` в корне проекта (обязательно, если фронт и бэкенд на разных адресах):
+```bash
+cp .env.example .env
+# VITE_API_URL — URL бэкенд API (например, https://backend.example.com/api)
+# При одинаковом домене можно не задавать — будет использоваться origin + /api
+```
+
+3. Запустите все сервисы с помощью Docker Compose:
 ```bash
 docker-compose up --build
 ```
@@ -67,7 +74,7 @@ docker-compose up --build
 - Backend API на http://localhost:8000
 - Frontend на http://localhost:3000
 
-3. Откройте браузер и перейдите на http://localhost:3000
+4. Откройте браузер и перейдите на http://localhost:3000
 
 ### Остановка
 
@@ -128,6 +135,8 @@ uvicorn app.main:app --reload
 
 ```bash
 cd frontend
+cp .env.example .env
+# Отредактируйте .env и задайте VITE_API_URL (по умолчанию: http://localhost:8000/api)
 npm install
 npm run dev
 ```

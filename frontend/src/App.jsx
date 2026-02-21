@@ -9,6 +9,7 @@ import PlaylistDetail from './pages/PlaylistDetail'
 import LikedSongs from './pages/LikedSongs'
 import UploadTrack from './pages/UploadTrack'
 import Settings from './pages/Settings'
+import Admin from './pages/Admin'
 import Layout from './components/Layout'
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
                   <Route path="/liked" element={<LikedSongs />} />
                   <Route path="/upload" element={<UploadTrack />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route path="/admin" element={<Admin />} />
                 </Routes>
               </Layout>
             ) : (

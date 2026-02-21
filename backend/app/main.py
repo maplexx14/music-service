@@ -10,13 +10,24 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Music Streaming API", version="1.0.0")
 
-# CORS middleware
+# CORS: allow_origins=["*"] и allow_credentials=True несовместимы.
+# По умолчанию allow_credentials=False (Bearer в заголовке не требует cookies).
+# Для разных доменов фронта и бэка задайте CORS_ORIGINS в .env (через запятую).
+CORS_ORIGINS_STR = os.getenv("CORS_ORIGINS", "*")
+CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS_STR.split(",") if o.strip()]
+if not CORS_ORIGINS or "*" in CORS_ORIGINS:
+    CORS_ORIGINS = ["*"]
+    ALLOW_CREDENTIALS = False
+else:
+    ALLOW_CREDENTIALS = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include routers

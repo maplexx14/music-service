@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
+import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ChevronDown, Shield } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import './Sidebar.css'
 
@@ -48,6 +48,7 @@ function Sidebar() {
     { path: '/playlists', icon: Library, label: 'Моя музыка' },
     { path: '/liked', icon: Heart, label: 'Понравившиеся' },
     { path: '/upload', icon: Upload, label: 'Загрузить трек' },
+    { path: '/admin', icon: Shield, label: 'Админ' },
   ]
 
   return (

@@ -41,6 +41,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SECRET_KEY: your-secret-key-change-in-production
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
     ports:
       - "8000:8000"
     volumes:
@@ -58,10 +59,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: https://nuwz6p-95-161-60-219.ru.tuna.am/api
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
     container_name: music_frontend
     environment:
-      VITE_API_URL: http://localhost:8000/api
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
     ports:
       - "3000:3000"
     volumes:
