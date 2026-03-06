@@ -1,0 +1,32 @@
+# Stage 1: Build the React Application
+FROM node:18-alpine as builder
+
+WORKDIR /app
+
+# Add ARG and ENV to allow Vite to build with the correct API URL
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+
+# Add ARG and ENV to allow Vite to build with the CDN URL for media files
+ARG VITE_CDN_URL
+ENV VITE_CDN_URL=$VITE_CDN_URL
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
+
+# Remove default nginx static assets
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy static assets from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Expose port (Internal to docker network)
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

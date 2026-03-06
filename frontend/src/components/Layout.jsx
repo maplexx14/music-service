@@ -25,7 +25,7 @@ function Layout({ children }) {
       const saved = localStorage.getItem('sidebar-collapsed')
       setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
     }
-    
+
     window.addEventListener('storage', handleStorageChange)
     // Also listen for custom event from Sidebar
     const handleSidebarToggle = () => {
@@ -33,7 +33,7 @@ function Layout({ children }) {
       setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
     }
     window.addEventListener('sidebarToggle', handleSidebarToggle)
-    
+
     return () => {
       window.removeEventListener('storage', handleStorageChange)
       window.removeEventListener('sidebarToggle', handleSidebarToggle)
@@ -49,10 +49,10 @@ function Layout({ children }) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const showMobileBack = isMobile && location.pathname !== '/'
+  const showMobileBack = isMobile && !['/', '/liked'].includes(location.pathname)
 
   return (
-    <div className="layout">
+    <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
       <Sidebar />
       {showMobileBack && (
         <div className="mobile-topbar">
@@ -95,8 +95,8 @@ function Layout({ children }) {
           <Link to="/playlists" className="mobile-nav-global-item">
             <Library size={20} />
           </Link>
-         
-         
+
+
         </nav>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Home, Search, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ShieldCheck, User } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import './Sidebar.css'
 
@@ -11,10 +11,10 @@ function Sidebar() {
     const saved = localStorage.getItem('sidebar-collapsed')
     return saved ? JSON.parse(saved) : false
   })
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('sidebar-collapsed', JSON.stringify(isCollapsed))
-    // Dispatch custom event to notify Layout
     window.dispatchEvent(new Event('sidebarToggle'))
   }, [isCollapsed])
 
@@ -30,11 +30,13 @@ function Sidebar() {
   const navItems = [
     { path: '/', icon: Home, label: 'Главная' },
     { path: '/search', icon: Search, label: 'Поиск' },
-    { path: '/playlists', icon: Library, label: 'Моя музыка' },
-    { path: '/liked', icon: Heart, label: 'Понравившиеся' },
+    { path: '/liked', icon: Heart, label: 'Моя музыка' },
     { path: '/upload', icon: Upload, label: 'Загрузить трек' },
-    { path: '/settings', icon: Settings, label: 'Настройки' },
   ]
+
+  if (user?.is_admin) {
+    navItems.push({ path: '/admin', icon: ShieldCheck, label: 'Админ Панель' })
+  }
 
   return (
     <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
@@ -47,7 +49,7 @@ function Sidebar() {
           {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
         </button>
       </div>
-      
+
       <nav className="sidebar-nav">
         {navItems.map((item) => {
           const Icon = item.icon
@@ -59,7 +61,10 @@ function Sidebar() {
               className={`nav-item ${isActive ? 'active' : ''}`}
               title={isCollapsed ? item.label : ''}
             >
-              <Icon size={24} />
+              <Icon
+                size={24}
+                strokeWidth={isActive ? 2.5 : 2}
+              />
               {!isCollapsed && <span>{item.label}</span>}
             </Link>
           )
@@ -67,23 +72,43 @@ function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        {!isCollapsed && (
-          <div className="user-info">
-            {user?.avatar_url && (
-              <img src={user.avatar_url} alt={user.username} className="user-avatar" />
+        <div className="profile-container">
+          <button
+            className={`profile-toggle ${isUserMenuOpen ? 'active' : ''}`}
+            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+          >
+            {user?.avatar_url ? (
+              <img
+                src={user.avatar_url}
+                alt={user.username}
+                className={isCollapsed ? "user-avatar-collapsed" : "user-avatar"}
+              />
+            ) : (
+              <div className={isCollapsed ? "user-avatar-collapsed placeholder" : "user-avatar placeholder"}>
+                <User size={isCollapsed ? 20 : 24} />
+              </div>
             )}
-            <div className="user-details">
-              <div className="user-name">{user?.full_name || user?.username}</div>
-              <div className="user-email">{user?.email}</div>
+
+            {!isCollapsed && (
+              <div className="user-details">
+                <div className="user-name">{user?.full_name || user?.username}</div>
+              </div>
+            )}
+          </button>
+
+          {isUserMenuOpen && (
+            <div className="profile-dropdown">
+              <Link to="/settings" className="dropdown-item" onClick={() => setIsUserMenuOpen(false)}>
+                <Settings size={18} />
+                <span>Настройки</span>
+              </Link>
+              <button className="dropdown-item logout" onClick={handleLogout}>
+                <LogOut size={18} />
+                <span>Выйти</span>
+              </button>
             </div>
-          </div>
-        )}
-        {isCollapsed && user?.avatar_url && (
-          <img src={user.avatar_url} alt={user.username} className="user-avatar-collapsed" />
-        )}
-        <button onClick={handleLogout} className="logout-btn" title="Выйти">
-          <LogOut size={20} />
-        </button>
+          )}
+        </div>
       </div>
     </div>
   )

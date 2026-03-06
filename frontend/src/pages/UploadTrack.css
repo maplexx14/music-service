@@ -11,7 +11,7 @@
 
 .upload-header p {
   font-size: 16px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .upload-form {
@@ -29,7 +29,7 @@
 
 .success-message {
   padding: 16px;
-  background-color: #1db954;
+  background-color: var(--color-accent);
   color: #ffffff;
   border-radius: 8px;
   margin-bottom: 24px;
@@ -56,17 +56,17 @@
   text-align: center;
   background-color: #181818;
   transition: all 0.2s;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .file-upload-box:hover {
-  border-color: #1db954;
+  border-color: var(--color-accent);
   background-color: #1a1a1a;
 }
 
 .file-upload-box svg {
   margin-bottom: 16px;
-  color: #1db954;
+  color: var(--color-accent);
 }
 
 .upload-text {
@@ -85,7 +85,7 @@
 .upload-hint {
   font-size: 14px;
   font-weight: normal;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .upload-formats {
@@ -115,13 +115,13 @@
 
 .file-size {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .remove-file-btn {
   background: none;
   border: none;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 8px;
   border-radius: 50%;
@@ -171,7 +171,7 @@
 
 .form-group input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: var(--color-accent);
   background-color: #222;
 }
 
@@ -190,7 +190,7 @@
 .cancel-btn {
   padding: 12px 24px;
   background-color: transparent;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   border: 1px solid #333;
   border-radius: 6px;
   font-size: 14px;
@@ -211,7 +211,7 @@
 
 .submit-btn {
   padding: 12px 32px;
-  background-color: #1db954;
+  background-color: var(--color-accent);
   color: #ffffff;
   border: none;
   border-radius: 6px;
@@ -222,7 +222,7 @@
 }
 
 .submit-btn:hover:not(:disabled) {
-  background-color: #1ed760;
+  background-color: var(--color-accent-hover);
   transform: scale(1.02);
 }
 

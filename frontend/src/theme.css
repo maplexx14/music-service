@@ -1,0 +1,32 @@
+:root {
+    /* Основной фон сайта */
+    --bg-main: #2c2c2c;
+
+    /* Вторичный фон (панели, карточки, элементы управления) */
+    --bg-secondary: #1b1a1a;
+
+    /* Акцентный цвет (кнопки, активные элементы, логотип) */
+    --accent-base:  #6329eb;
+    --color-accent: var(--accent-base);
+    --color-accent-hover: color-mix(in srgb, var(--accent-base) 85%, white);
+
+    /* Цвет основного текста */
+    --text-main: #ffffff;
+
+    /* Цвет вторичного текста */
+    --text-secondary: #b3b3b3;
+
+    /* Специальные области */
+    --bg-sidebar: #1f1f1f;
+    --bg-player: #252525;
+    --bg-card: #282828;
+
+    /* Цветовая палитра потока (Grainient) */
+    --stream-color-1: #c8f3a0;
+    --stream-color-2: #7d98a8;
+    --stream-color-3: #9772ee;
+
+    /* Дополнительные цвета для удобства */
+    --bg-hover: rgba(255, 255, 255, 0.1);
+    --border-color: rgba(255, 255, 255, 0.1);
+}

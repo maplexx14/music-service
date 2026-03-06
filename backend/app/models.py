@@ -1,3 +1,4 @@
+import uuid as uuid_mod
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -33,6 +34,30 @@ user_track_plays = Table(
 )
 
 
+class LikedArtist(Base):
+    __tablename__ = "liked_artists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    artist_id = Column(String, nullable=False)
+    artist_name = Column(String, nullable=False)
+    avatar_url = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="liked_artists")
+
+
+class LikedPlaylist(Base):
+    __tablename__ = "liked_playlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="liked_playlists")
+    playlist = relationship("Playlist")
+
 class User(Base):
     __tablename__ = "users"
 
@@ -43,12 +68,16 @@ class User(Base):
     full_name = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+    is_email_verified = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     playlists = relationship("Playlist", back_populates="owner", cascade="all, delete-orphan")
     liked_tracks = relationship("Track", secondary=user_liked_tracks, back_populates="liked_by_users")
     track_plays = relationship("Track", secondary=user_track_plays, back_populates="played_by_users")
+    liked_artists = relationship("LikedArtist", back_populates="user", cascade="all, delete-orphan")
+    liked_playlists = relationship("LikedPlaylist", back_populates="user", cascade="all, delete-orphan")
 
 
 class Track(Base):
@@ -76,6 +105,7 @@ class Playlist(Base):
     __tablename__ = "playlists"
 
     id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String, unique=True, index=True, default=lambda: str(uuid_mod.uuid4()))
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     cover_url = Column(String, nullable=True)

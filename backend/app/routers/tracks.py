@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import List, Optional
 import os
 import uuid
@@ -9,6 +10,7 @@ from app.database import get_db
 from app.models import Track, User, user_liked_tracks
 from app.schemas import TrackResponse, TrackCreate
 from app.dependencies import get_current_active_user
+from app.utils import compress_image
 
 router = APIRouter()
 
@@ -28,32 +30,34 @@ async def get_tracks(
     limit: int = 100,
     genre: Optional[str] = None,
     artist: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    query = db.query(Track)
+    query = select(Track)
     if genre:
         query = query.filter(Track.genre == genre)
     if artist:
         query = query.filter(Track.artist.ilike(f"%{artist}%"))
-    tracks = query.order_by(Track.play_count.desc()).offset(skip).limit(limit).all()
-    return tracks
+    
+    result = await db.execute(query.order_by(Track.play_count.desc()).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
-async def get_track(track_id: int, db: Session = Depends(get_db)):
-    track = db.query(Track).filter(Track.id == track_id).first()
+async def get_track(track_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     # Increment play count
     track.play_count += 1
-    db.commit()
+    await db.commit()
     return track
 
 
 @router.get("/{track_id}/stream")
 async def stream_track(
     track_id: int,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Stream audio file with proper headers for audio playback.
@@ -63,7 +67,8 @@ async def stream_track(
     from fastapi.responses import FileResponse, Response
     import mimetypes
     
-    track = db.query(Track).filter(Track.id == track_id).first()
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
@@ -109,12 +114,12 @@ async def stream_track(
 async def create_track(
     track: TrackCreate,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     db_track = Track(**track.dict())
     db.add(db_track)
-    db.commit()
-    db.refresh(db_track)
+    await db.commit()
+    await db.refresh(db_track)
     return db_track
 
 
@@ -128,7 +133,7 @@ async def upload_track(
     genre: Optional[str] = Form(None),
     duration: Optional[int] = Form(None),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Upload a music file and create a track record.
@@ -173,12 +178,13 @@ async def upload_track(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
             )
-        cover_filename = f"{file_id}{cover_ext}"
+        cover_filename = f"{file_id}.webp"
         cover_path = COVER_DIR / cover_filename
         try:
+            content = await cover.read()
+            compressed_content = await compress_image(content, max_size=(600, 600), format="WEBP", quality=80)
             async with aiofiles.open(cover_path, 'wb') as f:
-                content = await cover.read()
-                await f.write(content)
+                await f.write(compressed_content)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -198,8 +204,8 @@ async def upload_track(
         cover_url=cover_url
     )
     db.add(db_track)
-    db.commit()
-    db.refresh(db_track)
+    await db.commit()
+    await db.refresh(db_track)
     
     return db_track
 
@@ -209,9 +215,10 @@ async def upload_track_cover(
     track_id: int,
     cover: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    track = db.query(Track).filter(Track.id == track_id).first()
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -222,12 +229,13 @@ async def upload_track_cover(
             detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
         )
 
-    cover_filename = f"{uuid.uuid4()}{cover_ext}"
+    cover_filename = f"{uuid.uuid4()}.webp"
     cover_path = COVER_DIR / cover_filename
     try:
+        content = await cover.read()
+        compressed_content = await compress_image(content, max_size=(600, 600), format="WEBP", quality=80)
         async with aiofiles.open(cover_path, 'wb') as f:
-            content = await cover.read()
-            await f.write(content)
+            await f.write(compressed_content)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -235,8 +243,8 @@ async def upload_track_cover(
         )
 
     track.cover_url = f"/cover_files/{cover_filename}"
-    db.commit()
-    db.refresh(track)
+    await db.commit()
+    await db.refresh(track)
     return track
 
 
@@ -244,18 +252,26 @@ async def upload_track_cover(
 async def like_track(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    track = db.query(Track).filter(Track.id == track_id).first()
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
     # Check if already liked
-    if track in current_user.liked_tracks:
+    like_res = await db.execute(
+        select(user_liked_tracks).filter(
+            (user_liked_tracks.c.user_id == current_user.id) & 
+            (user_liked_tracks.c.track_id == track_id)
+        )
+    )
+    if like_res.first():
         raise HTTPException(status_code=400, detail="Track already liked")
     
-    current_user.liked_tracks.append(track)
-    db.commit()
+    from sqlalchemy import insert
+    await db.execute(insert(user_liked_tracks).values(user_id=current_user.id, track_id=track_id))
+    await db.commit()
     return {"message": "Track liked successfully"}
 
 
@@ -263,36 +279,52 @@ async def like_track(
 async def unlike_track(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    track = db.query(Track).filter(Track.id == track_id).first()
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
-    if track not in current_user.liked_tracks:
+    # Check if liked
+    like_res = await db.execute(
+        select(user_liked_tracks).filter(
+            (user_liked_tracks.c.user_id == current_user.id) & 
+            (user_liked_tracks.c.track_id == track_id)
+        )
+    )
+    if not like_res.first():
         raise HTTPException(status_code=400, detail="Track not liked")
     
-    current_user.liked_tracks.remove(track)
-    db.commit()
+    from sqlalchemy import delete
+    await db.execute(delete(user_liked_tracks).where(
+        (user_liked_tracks.c.user_id == current_user.id) & 
+        (user_liked_tracks.c.track_id == track_id)
+    ))
+    await db.commit()
     return {"message": "Track unliked successfully"}
 
 
 @router.get("/me/liked", response_model=List[TrackResponse])
 async def get_liked_tracks(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    return current_user.liked_tracks
+    result = await db.execute(
+        select(Track).join(user_liked_tracks).filter(user_liked_tracks.c.user_id == current_user.id)
+    )
+    return result.scalars().all()
 
 
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
 async def record_track_play(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Record that a user played a track (for recommendations)"""
-    track = db.query(Track).filter(Track.id == track_id).first()
+    result = await db.execute(select(Track).filter(Track.id == track_id))
+    track = result.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
@@ -308,7 +340,7 @@ async def record_track_play(
         )
         .values(play_count=user_track_plays.c.play_count + 1)
     )
-    result = db.execute(stmt)
+    result = await db.execute(stmt)
     
     if result.rowcount == 0:
         # Insert new record
@@ -317,7 +349,7 @@ async def record_track_play(
             track_id=track_id,
             play_count=1
         )
-        db.execute(stmt)
+        await db.execute(stmt)
     
-    db.commit()
+    await db.commit()
     return {"message": "Play recorded"}

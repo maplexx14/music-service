@@ -1,14 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from typing import List
 import os
 import uuid
 import aiofiles
 from pathlib import Path
 from app.database import get_db
-from app.models import Playlist, Track, User
-from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate
+from app.models import Playlist, Track, User, LikedPlaylist
+from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate, LikedPlaylistResponse
 from app.dependencies import get_current_active_user
+from sqlalchemy import delete as sa_delete
+from app.utils import compress_image
 
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
@@ -17,36 +21,66 @@ COVER_DIR.mkdir(parents=True, exist_ok=True)
 router = APIRouter()
 
 
+@router.get("/shared/{playlist_uuid}", response_model=PlaylistResponse)
+async def get_shared_playlist(
+    playlist_uuid: str,
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Playlist).options(selectinload(Playlist.tracks))
+        .filter(Playlist.uuid == playlist_uuid, Playlist.is_public == True)
+    )
+    playlist = result.scalars().first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return playlist
+
+
 @router.get("/", response_model=List[PlaylistResponse])
 async def get_playlists(
     skip: int = 0,
     limit: int = 100,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     # Get user's playlists and public playlists
-    playlists = db.query(Playlist).filter(
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(
         (Playlist.owner_id == current_user.id) | (Playlist.is_public == True)
-    ).offset(skip).limit(limit).all()
-    return playlists
+    ).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.get("/me", response_model=List[PlaylistResponse])
 async def get_my_playlists(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlists = db.query(Playlist).filter(Playlist.owner_id == current_user.id).all()
-    return playlists
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.owner_id == current_user.id))
+    return result.scalars().all()
+
+
+@router.get("/me/liked", response_model=List[LikedPlaylistResponse])
+async def get_liked_playlists(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(LikedPlaylist)
+        .options(selectinload(LikedPlaylist.playlist).selectinload(Playlist.tracks))
+        .filter(LikedPlaylist.user_id == current_user.id)
+        .order_by(LikedPlaylist.created_at.desc())
+    )
+    return result.scalars().all()
 
 
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 async def get_playlist(
     playlist_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -61,12 +95,15 @@ async def get_playlist(
 async def create_playlist(
     playlist: PlaylistCreate,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     db_playlist = Playlist(**playlist.dict(), owner_id=current_user.id)
     db.add(db_playlist)
-    db.commit()
-    db.refresh(db_playlist)
+    await db.commit()
+    
+    # Re-fetch with tracks loaded
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == db_playlist.id))
+    db_playlist = result.scalars().first()
     return db_playlist
 
 
@@ -75,9 +112,10 @@ async def update_playlist(
     playlist_id: int,
     playlist_update: PlaylistUpdate,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
@@ -88,8 +126,7 @@ async def update_playlist(
     for field, value in update_data.items():
         setattr(playlist, field, value)
     
-    db.commit()
-    db.refresh(playlist)
+    await db.commit()
     return playlist
 
 
@@ -98,9 +135,10 @@ async def upload_playlist_cover(
     playlist_id: int,
     cover: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
@@ -114,12 +152,13 @@ async def upload_playlist_cover(
             detail=f"Cover type not allowed. Allowed types: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"
         )
 
-    cover_filename = f"{uuid.uuid4()}{cover_ext}"
+    cover_filename = f"{uuid.uuid4()}.webp"
     cover_path = COVER_DIR / cover_filename
     try:
+        content = await cover.read()
+        compressed_content = await compress_image(content, max_size=(800, 800), format="WEBP", quality=80)
         async with aiofiles.open(cover_path, 'wb') as f:
-            content = await cover.read()
-            await f.write(content)
+            await f.write(compressed_content)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -127,8 +166,7 @@ async def upload_playlist_cover(
         )
 
     playlist.cover_url = f"/cover_files/{cover_filename}"
-    db.commit()
-    db.refresh(playlist)
+    await db.commit()
     return playlist
 
 
@@ -136,17 +174,18 @@ async def upload_playlist_cover(
 async def delete_playlist(
     playlist_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
     if playlist.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    db.delete(playlist)
-    db.commit()
+    await db.delete(playlist)
+    await db.commit()
     return None
 
 
@@ -155,16 +194,18 @@ async def add_track_to_playlist(
     playlist_id: int,
     track_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
     if playlist.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    track = db.query(Track).filter(Track.id == track_id).first()
+    track_res = await db.execute(select(Track).filter(Track.id == track_id))
+    track = track_res.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
@@ -174,9 +215,9 @@ async def add_track_to_playlist(
     # Get current max position
     from app.models import playlist_tracks
     from sqlalchemy import func
-    max_position = db.query(func.max(playlist_tracks.c.position)).filter(
+    max_position = await db.scalar(select(func.max(playlist_tracks.c.position)).filter(
         playlist_tracks.c.playlist_id == playlist_id
-    ).scalar() or -1
+    )) or -1
     
     # Add track with next position
     from sqlalchemy import insert
@@ -185,8 +226,8 @@ async def add_track_to_playlist(
         track_id=track_id,
         position=max_position + 1
     )
-    db.execute(stmt)
-    db.commit()
+    await db.execute(stmt)
+    await db.commit()
     
     return {"message": "Track added to playlist"}
 
@@ -196,16 +237,18 @@ async def remove_track_from_playlist(
     playlist_id: int,
     track_id: int,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
+    result = await db.execute(select(Playlist).options(selectinload(Playlist.tracks)).filter(Playlist.id == playlist_id))
+    playlist = result.scalars().first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
     
     if playlist.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    track = db.query(Track).filter(Track.id == track_id).first()
+    track_res = await db.execute(select(Track).filter(Track.id == track_id))
+    track = track_res.scalars().first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
@@ -213,5 +256,45 @@ async def remove_track_from_playlist(
         raise HTTPException(status_code=400, detail="Track not in playlist")
     
     playlist.tracks.remove(track)
-    db.commit()
+    await db.commit()
     return {"message": "Track removed from playlist"}
+
+
+@router.post("/{playlist_id}/like", status_code=200)
+async def like_playlist(
+    playlist_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    pl = await db.execute(select(Playlist).filter(Playlist.id == playlist_id))
+    if not pl.scalars().first():
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+    existing = await db.execute(
+        select(LikedPlaylist).filter(
+            (LikedPlaylist.user_id == current_user.id) &
+            (LikedPlaylist.playlist_id == playlist_id)
+        )
+    )
+    if existing.scalars().first():
+        return {"message": "Playlist already liked"}
+
+    db.add(LikedPlaylist(user_id=current_user.id, playlist_id=playlist_id))
+    await db.commit()
+    return {"message": "Playlist liked successfully"}
+
+
+@router.delete("/{playlist_id}/like", status_code=200)
+async def unlike_playlist(
+    playlist_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    await db.execute(
+        sa_delete(LikedPlaylist).where(
+            (LikedPlaylist.user_id == current_user.id) &
+            (LikedPlaylist.playlist_id == playlist_id)
+        )
+    )
+    await db.commit()
+    return {"message": "Playlist unliked successfully"}

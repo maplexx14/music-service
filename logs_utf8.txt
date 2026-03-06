@@ -1,0 +1,187 @@
+﻿docker :   File "/usr/local/li
+b/python3.11/site-packages/uvi
+corn/protocols/http/httptools_
+impl.py", line 419, in run_asg
+i
+At line:1 char:1
++ docker logs --tail 60 music_
+backend 2>&1 | Out-File -FileP
+ath logs_ut ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~
+    + CategoryInfo          : 
+    NotSpecified: (  File "/  
+  usr/lo...19, in run_asgi:   
+ String) [], RemoteExcepti    
+on
+    + FullyQualifiedErrorId : 
+    NativeCommandError
+ 
+    result = await app(  # typ
+e: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3
+.11/site-packages/uvicorn/midd
+leware/proxy_headers.py", line
+ 84, in __call__
+    return await self.app(scop
+e, receive, send)
+           ^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3
+.11/site-packages/fastapi/appl
+ications.py", line 1054, in __
+call__
+    await super().__call__(sco
+pe, receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ap
+plications.py", line 123, in _
+_call__
+    await self.middleware_stac
+k(scope, receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/mi
+ddleware/errors.py", line 186,
+ in __call__
+    raise exc
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/mi
+ddleware/errors.py", line 164,
+ in __call__
+    await self.app(scope, rece
+ive, _send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/mi
+ddleware/cors.py", line 91, in
+ __call__
+    await self.simple_response
+(scope, receive, send, request
+_headers=headers)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/mi
+ddleware/cors.py", line 146, i
+n simple_response
+    await self.app(scope, rece
+ive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/mi
+ddleware/exceptions.py", line 
+62, in __call__
+    await wrap_app_handling_ex
+ceptions(self.app, conn)(scope
+, receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/_e
+xception_handler.py", line 64,
+ in wrapped_app
+    raise exc
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/_e
+xception_handler.py", line 53,
+ in wrapped_app
+    await app(scope, receive, 
+sender)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ro
+uting.py", line 762, in __call
+__
+    await self.middleware_stac
+k(scope, receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ro
+uting.py", line 782, in app
+    await route.handle(scope, 
+receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ro
+uting.py", line 297, in handle
+    await self.app(scope, rece
+ive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ro
+uting.py", line 77, in app
+    await wrap_app_handling_ex
+ceptions(app, request)(scope, 
+receive, send)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/_e
+xception_handler.py", line 64,
+ in wrapped_app
+    raise exc
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/_e
+xception_handler.py", line 53,
+ in wrapped_app
+    await app(scope, receive, 
+sender)
+  File "/usr/local/lib/python3
+.11/site-packages/starlette/ro
+uting.py", line 72, in app
+    response = await func(requ
+est)
+               ^^^^^^^^^^^^^^^
+^^^^
+  File "/usr/local/lib/python3
+.11/site-packages/fastapi/rout
+ing.py", line 299, in app
+    raise e
+  File "/usr/local/lib/python3
+.11/site-packages/fastapi/rout
+ing.py", line 294, in app
+    raw_response = await run_e
+ndpoint_function(
+                   ^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3
+.11/site-packages/fastapi/rout
+ing.py", line 191, in run_endp
+oint_function
+    return await dependant.cal
+l(**values)
+           ^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^
+  File "/app/app/routers/recom
+mendations.py", line 79, in ge
+t_recommendations
+    playlists=[PlaylistRespons
+e.model_validate(p) for p in p
+opular_playlists]
+              ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "/app/app/routers/recom
+mendations.py", line 79, in <l
+istcomp>
+    playlists=[PlaylistRespons
+e.model_validate(p) for p in p
+opular_playlists]
+               ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3
+.11/site-packages/pydantic/mai
+n.py", line 503, in model_vali
+date
+    return cls.__pydantic_vali
+dator__.validate_python(
+           ^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.V
+alidationError: 1 validation e
+rror for PlaylistResponse
+tracks
+  Error extracting attribute: 
+MissingGreenlet: greenlet_spaw
+n has not been called; can't c
+all await_only() here. Was IO 
+attempted in an unexpected pla
+ce? (Background on this error 
+at: https://sqlalche.me/e/20/x
+d2s) [type=get_attribute_error
+, input_value=<app.models.Play
+list object at 0x7a0b147ac890>
+, input_type=Playlist]
+    For further information vi
+sit https://errors.pydantic.de
+v/2.5/v/get_attribute_error

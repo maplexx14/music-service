@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Play, Pause, Settings } from 'lucide-react'
+import { Search, Play, Pause, Settings, MoreHorizontal } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import api from '../services/api'
@@ -17,6 +17,15 @@ function Home() {
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const navigate = useNavigate()
+
+  const streamColors = useMemo(() => {
+    const s = getComputedStyle(document.documentElement)
+    return {
+      color1: s.getPropertyValue('--stream-color-1').trim() || '#aef0b1',
+      color2: s.getPropertyValue('--stream-color-2').trim() || '#7d98a8',
+      color3: s.getPropertyValue('--stream-color-3').trim() || '#B19EEF',
+    }
+  }, [])
 
   useEffect(() => {
     fetchData()
@@ -37,9 +46,23 @@ function Home() {
     }
   }
 
+  const waveTracks = useMemo(() => {
+    const merged = [...recommendations.tracks, ...trending]
+    const unique = []
+    const seen = new Set()
+    for (const track of merged) {
+      const key = track?.id ?? `${track?.title ?? ''}:${track?.artist ?? ''}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        unique.push(track)
+      }
+    }
+    return unique
+  }, [recommendations.tracks, trending])
+
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
-    playTrack(track, recommendations.tracks, 'wave')
+    playTrack(track, waveTracks, 'wave')
   }
 
   const handlePlayPlaylist = (playlist) => {
@@ -49,7 +72,6 @@ function Home() {
   }
 
   const isWavePlaying = isPlaying && source === 'wave'
-  const waveTracks = recommendations.tracks.length > 0 ? recommendations.tracks : trending
   const waveReady = waveTracks.length > 0
   const upcomingText = useMemo(() => {
     if (!waveTracks.length) return ''
@@ -107,9 +129,9 @@ function Home() {
       <div className="hero-section">
         <div className="hero-grainient">
           <Grainient
-            color1="#aef0b1"
-            color2="#7d98a8"
-            color3="#B19EEF"
+            color1={streamColors.color1}
+            color2={streamColors.color2}
+            color3={streamColors.color3}
             timeSpeed={5}
             colorBalance={-0.32}
             warpStrength={1.4}
@@ -150,7 +172,7 @@ function Home() {
                 <span>поток</span>
               </button>
             )}
-            
+
           </div>
         </div>
       </div>
@@ -169,6 +191,9 @@ function Home() {
                 <div className="track-title">{track.title}</div>
                 <div className="track-artist">{track.artist}</div>
               </div>
+              <button className="track-more-btn" onClick={(e) => e.stopPropagation()}>
+                <MoreHorizontal size={20} />
+              </button>
             </div>
           ))}
         </div>
@@ -198,10 +223,10 @@ function Home() {
           <h2 className="section-title">Рекомендуемые плейлисты</h2>
           <div className="playlists-grid">
             {recommendations.playlists.map((playlist) => (
-              <div
+              <Link
                 key={playlist.id}
+                to={`/playlists/${playlist.id}`}
                 className="playlist-card"
-                onClick={() => handlePlayPlaylist(playlist)}
               >
                 <img
                   src={resolveCoverUrl(playlist.cover_url) || defaultCover}
@@ -214,13 +239,13 @@ function Home() {
                     <div className="playlist-description">{playlist.description}</div>
                   )}
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
       )}
 
-    
+
     </div>
   )
 }

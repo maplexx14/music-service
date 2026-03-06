@@ -26,15 +26,15 @@ function UploadTrack() {
       const allowedTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/flac', 'audio/m4a', 'audio/ogg', 'audio/aac']
       const fileExt = selectedFile.name.split('.').pop().toLowerCase()
       const allowedExts = ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac']
-      
+
       if (!allowedExts.includes(fileExt)) {
         setError('Неподдерживаемый формат файла. Разрешены: MP3, WAV, FLAC, M4A, OGG, AAC')
         return
       }
-      
+
       setFile(selectedFile)
       setError('')
-      
+
       // Try to extract metadata from filename
       if (!formData.title && !formData.artist) {
         const filename = selectedFile.name.replace(/\.[^/.]+$/, '')
@@ -55,6 +55,17 @@ function UploadTrack() {
           }))
         }
       }
+
+      // Try to extract audio duration using browser Audio API
+      const objectUrl = URL.createObjectURL(selectedFile)
+      const audio = new Audio(objectUrl)
+      audio.addEventListener('loadedmetadata', () => {
+        setFormData(prev => ({ ...prev, duration: Math.round(audio.duration).toString() }))
+        URL.revokeObjectURL(objectUrl)
+      })
+      audio.addEventListener('error', () => {
+        URL.revokeObjectURL(objectUrl)
+      })
     }
   }
 

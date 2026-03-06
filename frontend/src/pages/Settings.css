@@ -10,7 +10,7 @@
 }
 
 .settings-header p {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -42,7 +42,7 @@
 }
 
 .settings-label {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -112,7 +112,7 @@
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {
-  background: #1db954;
+  background: var(--color-accent);
 }
 
 .settings-toggle input:checked + .settings-toggle-slider::before {

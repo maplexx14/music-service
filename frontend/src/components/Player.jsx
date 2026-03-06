@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart, Plus } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, resolveTrackUrl } from '../utils/media'
 import './Player.css'
 
 function Player() {
@@ -24,6 +24,10 @@ function Player() {
     isShuffle,
     toggleRepeatOne,
     toggleShuffle,
+    queue,
+    currentIndex,
+    shuffledOrder,
+    currentShuffleIndex,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
@@ -44,7 +48,7 @@ function Player() {
     const handleEnded = () => {
       if (usePlayerStore.getState().isRepeatOne) {
         audio.currentTime = 0
-        audio.play().catch(() => {})
+        audio.play().catch(() => { })
       } else {
         nextTrack()
       }
@@ -146,7 +150,89 @@ function Player() {
     if (audio) {
       audio.volume = volume
     }
-  }, [volume])
+  }, [volume, currentTrack?.id])
+
+  const playerRef = useRef(null)
+  const touchStartRef = useRef(null)
+  const swipingRef = useRef(false)
+  const [swipeX, setSwipeX] = useState(0)
+  const [swipeAnim, setSwipeAnim] = useState(false)
+  const swipeThreshold = 50
+
+  const getAdjacentTrack = useCallback((direction) => {
+    if (queue.length === 0) return null
+    if (isShuffle && shuffledOrder.length > 0) {
+      const si = direction === 'next'
+        ? currentShuffleIndex + 1
+        : currentShuffleIndex - 1
+      if (si < 0 || si >= shuffledOrder.length) return null
+      return queue[shuffledOrder[si]] || null
+    }
+    const ni = direction === 'next' ? currentIndex + 1 : currentIndex - 1
+    if (ni < 0 || ni >= queue.length) return null
+    return queue[ni] || null
+  }, [queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex])
+
+  const peekDirection = swipeX < 0 ? 'next' : swipeX > 0 ? 'prev' : null
+  const peekTrack = peekDirection ? getAdjacentTrack(peekDirection === 'next' ? 'next' : 'prev') : null
+
+  const handleTouchStart = useCallback((e) => {
+    if (swipeAnim) return
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    swipingRef.current = false
+  }, [swipeAnim])
+
+  const handleTouchMove = useCallback((e) => {
+    if (!touchStartRef.current || swipeAnim) return
+    const dx = e.touches[0].clientX - touchStartRef.current.x
+    const dy = e.touches[0].clientY - touchStartRef.current.y
+    if (!swipingRef.current) {
+      if (Math.abs(dy) > Math.abs(dx)) {
+        touchStartRef.current = null
+        return
+      }
+      if (Math.abs(dx) > 8) swipingRef.current = true
+    }
+    if (swipingRef.current) {
+      e.preventDefault()
+      setSwipeX(dx)
+    }
+  }, [swipeAnim])
+
+  const handleTouchEnd = useCallback((e) => {
+    if (!touchStartRef.current || swipeAnim) {
+      touchStartRef.current = null
+      return
+    }
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x
+    touchStartRef.current = null
+
+    if (!swipingRef.current || Math.abs(dx) < swipeThreshold) {
+      swipingRef.current = false
+      setSwipeX(0)
+      return
+    }
+
+    const goNext = dx < 0
+    const target = getAdjacentTrack(goNext ? 'next' : 'prev')
+    if (!target) {
+      swipingRef.current = false
+      setSwipeX(0)
+      return
+    }
+
+    setSwipeAnim(true)
+    const playerW = playerRef.current?.offsetWidth || window.innerWidth
+    setSwipeX(goNext ? -playerW : playerW)
+
+    setTimeout(() => {
+      if (goNext) nextTrack()
+      else previousTrack()
+      setSwipeX(0)
+      setSwipeAnim(false)
+      swipingRef.current = false
+    }, 250)
+  }, [nextTrack, previousTrack, swipeAnim, getAdjacentTrack])
 
   if (!currentTrack) {
     return null
@@ -172,7 +258,7 @@ function Player() {
 
   const handleLike = async () => {
     if (!currentTrack || loadingLike) return
-    
+
     setLoadingLike(true)
     try {
       if (isLiked) {
@@ -223,81 +309,84 @@ function Player() {
     }
   }
 
+  const playerWidth = playerRef.current?.offsetWidth || 0
+
+  const renderTrackSlide = (track) => (
+    <div className="player-slide" style={{ minWidth: '100%' }}>
+      <button
+        type="button"
+        className="player-cover-wrap"
+        onClick={openFullScreen}
+        aria-label="Открыть плеер на весь экран"
+      >
+        <img
+          src={resolveCoverUrl(track.cover_url) || defaultCover}
+          alt={track.title}
+          className="player-cover"
+        />
+      </button>
+      <div className="player-info">
+        <div className="player-track-title">{track.title}</div>
+        <div className="player-track-artist">{track.artist}</div>
+      </div>
+    </div>
+  )
+
   return (
-    <div className="player">
+    <div
+      className="player"
+      ref={playerRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
       <audio
         ref={audioRef}
         key={currentTrack.id}
-        src={currentTrack.id
-          ? `http://localhost:8000/api/tracks/${currentTrack.id}/stream`
-          : currentTrack.file_path?.startsWith('http')
-            ? currentTrack.file_path
-            : currentTrack.file_path
-              ? `http://localhost:8000${currentTrack.file_path.startsWith('/') ? '' : '/'}${currentTrack.file_path}`
-              : undefined}
+        src={resolveTrackUrl(currentTrack)}
         preload="auto"
-        crossOrigin="anonymous"
         onError={(e) => {
           console.error('Audio element error:', e)
-          console.error('Track:', currentTrack)
-          console.error('File path:', currentTrack.file_path)
           console.error('Audio src:', audioRef.current?.src)
-          console.error('Audio error details:', audioRef.current?.error)
-        }}
-        onLoadStart={() => {
-          console.log('Audio loading started:', currentTrack.title, 'src:', audioRef.current?.src)
         }}
         onCanPlay={() => {
-          console.log('Audio can play:', currentTrack.title)
           if (isPlaying) {
-            audioRef.current?.play().catch(err => {
-              console.error('Play error:', err)
-            })
+            audioRef.current?.play().catch(() => {})
           }
         }}
-        onLoadedMetadata={() => {
-          console.log('Metadata loaded for:', currentTrack.title)
-        }}
       />
-      
+
       <div className="player-left">
-        <button
-          type="button"
-          className="player-cover-wrap"
-          onClick={openFullScreen}
-          aria-label="Открыть плеер на весь экран"
+        <div
+          className="player-swipe-rail"
+          style={{
+            transform: peekDirection === 'prev' && peekTrack
+              ? `translateX(calc(-100% + ${swipeX}px))`
+              : `translateX(${swipeX}px)`,
+            transition: swipeAnim ? 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)' : (swipingRef.current ? 'none' : 'transform 0.2s ease-out'),
+          }}
         >
-          <img
-            src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
-            alt={currentTrack.title}
-            className="player-cover"
-          />
-        </button>
-        <div className="player-info">
-          <div className="player-track-title">{currentTrack.title}</div>
-          <div className="player-track-artist">{currentTrack.artist}</div>
+          {peekDirection === 'prev' && peekTrack && renderTrackSlide(peekTrack)}
+          {renderTrackSlide(currentTrack)}
+          {peekDirection === 'next' && peekTrack && renderTrackSlide(peekTrack)}
         </div>
-        <button
-          className={`like-btn ${isLiked ? 'liked' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            handleLike()
-          }}
-          disabled={loadingLike}
-          title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-        >
-          <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
-        </button>
-        <button
-          className="add-btn"
-          onClick={(event) => {
-            event.stopPropagation()
-            handleOpenAddToPlaylist()
-          }}
-          title="Добавить в плейлист"
-        >
-          <Plus size={18} />
-        </button>
+        <div className="player-actions-fixed">
+          <button
+            className={`like-btn ${isLiked ? 'liked' : ''}`}
+            onClick={(event) => { event.stopPropagation(); handleLike() }}
+            disabled={loadingLike}
+            title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+          >
+            <Heart size={24} fill={isLiked ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            className="add-btn"
+            onClick={(event) => { event.stopPropagation(); handleOpenAddToPlaylist() }}
+            title="Добавить в плейлист"
+          >
+            <Plus size={20} />
+          </button>
+        </div>
       </div>
 
       {showAddToPlaylist && (

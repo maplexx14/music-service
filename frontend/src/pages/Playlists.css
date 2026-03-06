@@ -16,7 +16,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  background-color: #1db954;
+  background-color: var(--color-accent);
   color: #ffffff;
   border: none;
   border-radius: 50px;
@@ -27,7 +27,7 @@
 }
 
 .create-playlist-btn:hover {
-  background-color: #1ed760;
+  background-color: var(--color-accent-hover);
   transform: scale(1.05);
 }
 
@@ -51,7 +51,7 @@
 
 .create-playlist-form input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: var(--color-accent);
   background-color: #222;
 }
 
@@ -62,7 +62,7 @@
 
 .submit-btn {
   padding: 10px 24px;
-  background-color: #1db954;
+  background-color: var(--color-accent);
   color: #ffffff;
   border: none;
   border-radius: 6px;
@@ -73,13 +73,13 @@
 }
 
 .submit-btn:hover {
-  background-color: #1ed760;
+  background-color: var(--color-accent-hover);
 }
 
 .cancel-btn {
   padding: 10px 24px;
   background-color: transparent;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   border: 1px solid #333;
   border-radius: 6px;
   font-size: 14px;
@@ -96,7 +96,7 @@
 .empty-state {
   text-align: center;
   padding: 128px 32px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .empty-state p {
@@ -155,7 +155,7 @@
 
 .playlist-description {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin-bottom: 8px;
   line-height: 1.4;
 }

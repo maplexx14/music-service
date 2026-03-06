@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func, desc, or_
+from sqlalchemy.orm import selectinload
 from typing import List
 from app.database import get_db
 from app.models import Track, Playlist, User, user_track_plays, user_liked_tracks
@@ -14,16 +16,21 @@ router = APIRouter()
 async def get_recommendations(
     limit: int = 20,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    # Get user's liked tracks and frequently played tracks
-    liked_track_ids = [track.id for track in current_user.liked_tracks]
+    # Get user's liked tracks directly from db to avoid lazy load issues
+    liked_res = await db.execute(
+        select(Track).join(user_liked_tracks).filter(user_liked_tracks.c.user_id == current_user.id)
+    )
+    liked_track_ids = [track.id for track in liked_res.scalars().all()]
     
     # Get frequently played tracks by this user
-    played_tracks = db.query(user_track_plays.c.track_id).filter(
-        user_track_plays.c.user_id == current_user.id
-    ).order_by(desc(user_track_plays.c.play_count)).limit(10).all()
-    played_track_ids = [t[0] for t in played_tracks]
+    played_res = await db.execute(
+        select(user_track_plays.c.track_id).filter(
+            user_track_plays.c.user_id == current_user.id
+        ).order_by(desc(user_track_plays.c.play_count)).limit(10)
+    )
+    played_track_ids = [row[0] for row in played_res.all()]
     
     # Combine liked and played track IDs
     user_track_ids = list(set(liked_track_ids + played_track_ids))
@@ -32,34 +39,41 @@ async def get_recommendations(
     
     if user_track_ids:
         # Find tracks with similar genres or artists
-        user_tracks = db.query(Track).filter(Track.id.in_(user_track_ids)).all()
+        user_tracks_res = await db.execute(select(Track).filter(Track.id.in_(user_track_ids)))
+        user_tracks = user_tracks_res.scalars().all()
         
         # Extract genres and artists
         genres = [t.genre for t in user_tracks if t.genre]
         artists = [t.artist for t in user_tracks]
         
         # Find similar tracks
-        from sqlalchemy import or_
-        similar_tracks = db.query(Track).filter(
-            or_(
-                Track.genre.in_(genres),
-                Track.artist.in_(artists)
-            )
-        ).filter(~Track.id.in_(user_track_ids)).order_by(desc(Track.play_count)).limit(limit).all()
+        similar_res = await db.execute(
+            select(Track).filter(
+                or_(
+                    Track.genre.in_(genres),
+                    Track.artist.in_(artists)
+                )
+            ).filter(~Track.id.in_(user_track_ids)).order_by(desc(Track.play_count)).limit(limit)
+        )
         
-        recommended_tracks = similar_tracks
+        recommended_tracks = list(similar_res.scalars().all())
     
     # If not enough recommendations, add popular tracks
     if len(recommended_tracks) < limit:
-        popular_tracks = db.query(Track).filter(
-            ~Track.id.in_(user_track_ids + [t.id for t in recommended_tracks])
-        ).order_by(desc(Track.play_count)).limit(limit - len(recommended_tracks)).all()
-        recommended_tracks.extend(popular_tracks)
+        pop_res = await db.execute(
+            select(Track).filter(
+                ~Track.id.in_(user_track_ids + [t.id for t in recommended_tracks])
+            ).order_by(desc(Track.play_count)).limit(limit - len(recommended_tracks))
+        )
+        recommended_tracks.extend(pop_res.scalars().all())
     
     # Get popular playlists
-    popular_playlists = db.query(Playlist).filter(
-        Playlist.is_public == True
-    ).order_by(desc(Playlist.created_at)).limit(10).all()
+    pl_res = await db.execute(
+        select(Playlist).options(selectinload(Playlist.tracks)).filter(
+            Playlist.is_public == True
+        ).order_by(desc(Playlist.created_at)).limit(10)
+    )
+    popular_playlists = pl_res.scalars().all()
     
     return RecommendationResponse(
         tracks=[TrackResponse.model_validate(t) for t in recommended_tracks[:limit]],
@@ -71,7 +85,7 @@ async def get_recommendations(
 async def get_recommended_tracks(
     limit: int = 20,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     recommendations = await get_recommendations(limit=limit, current_user=current_user, db=db)
     return recommendations.tracks
@@ -81,7 +95,7 @@ async def get_recommended_tracks(
 async def get_recommended_playlists(
     limit: int = 10,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     recommendations = await get_recommendations(limit=limit, current_user=current_user, db=db)
     return recommendations.playlists

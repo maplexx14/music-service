@@ -1,0 +1,3292 @@
+﻿diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 64324c5..255f324 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -9,6 +9,9 @@ import PlaylistDetail from './pages/PlaylistDetail'
+ import LikedSongs from './pages/LikedSongs'
+ import UploadTrack from './pages/UploadTrack'
+ import Settings from './pages/Settings'
++import Admin from './pages/Admin'
++import Artist from './pages/Artist'
++import LikedArtists from './pages/LikedArtists'
+ import Layout from './components/Layout'
+ 
+ function App() {
+@@ -29,9 +32,12 @@ function App() {
+                   <Route path="/search" element={<Search />} />
+                   <Route path="/playlists" element={<Playlists />} />
+                   <Route path="/playlists/:id" element={<PlaylistDetail />} />
++                  <Route path="/artist/:id" element={<Artist />} />
+                   <Route path="/liked" element={<LikedSongs />} />
++                  <Route path="/liked/artists" element={<LikedArtists />} />
+                   <Route path="/upload" element={<UploadTrack />} />
+                   <Route path="/settings" element={<Settings />} />
++                  <Route path="/admin" element={<Admin />} />
+                 </Routes>
+               </Layout>
+             ) : (
+diff --git a/frontend/src/components/Layout.css b/frontend/src/components/Layout.css
+index 29a09a1..129271f 100644
+--- a/frontend/src/components/Layout.css
++++ b/frontend/src/components/Layout.css
+@@ -10,7 +10,7 @@
+   overflow-y: auto;
+   margin-left: 240px;
+   padding-bottom: 90px;
+-  background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
++  background: #121212;
+   transition: margin-left 0.3s ease;
+ }
+ 
+@@ -101,4 +101,4 @@
+   .mobile-nav-global-item:hover {
+     background: rgba(255, 255, 255, 0.08);
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/frontend/src/components/Layout.jsx b/frontend/src/components/Layout.jsx
+index 163b3ca..5700d8f 100644
+--- a/frontend/src/components/Layout.jsx
++++ b/frontend/src/components/Layout.jsx
+@@ -25,7 +25,7 @@ function Layout({ children }) {
+       const saved = localStorage.getItem('sidebar-collapsed')
+       setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
+     }
+-    
++
+     window.addEventListener('storage', handleStorageChange)
+     // Also listen for custom event from Sidebar
+     const handleSidebarToggle = () => {
+@@ -33,7 +33,7 @@ function Layout({ children }) {
+       setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
+     }
+     window.addEventListener('sidebarToggle', handleSidebarToggle)
+-    
++
+     return () => {
+       window.removeEventListener('storage', handleStorageChange)
+       window.removeEventListener('sidebarToggle', handleSidebarToggle)
+@@ -52,7 +52,7 @@ function Layout({ children }) {
+   const showMobileBack = isMobile && location.pathname !== '/'
+ 
+   return (
+-    <div className="layout">
++    <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
+       <Sidebar />
+       {showMobileBack && (
+         <div className="mobile-topbar">
+@@ -95,8 +95,8 @@ function Layout({ children }) {
+           <Link to="/playlists" className="mobile-nav-global-item">
+             <Library size={20} />
+           </Link>
+-         
+-         
++
++
+         </nav>
+       )}
+     </div>
+diff --git a/frontend/src/components/Player.css b/frontend/src/components/Player.css
+index 0fb08e0..104ea06 100644
+--- a/frontend/src/components/Player.css
++++ b/frontend/src/components/Player.css
+@@ -1,18 +1,18 @@
+ .player {
+   position: fixed;
+   bottom: 12px;
+-  left: 16px;
++  left: calc(var(--sidebar-width, 240px) + 16px);
+   right: 16px;
+-  height: 72px;
++  height: 80px;
+   background: #333333;
+   border: 1px solid rgba(255, 255, 255, 0.08);
+-  border-radius: 18px;
++  border-radius: 14px;
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   padding: 0 16px;
+   z-index: 1000;
+-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
++  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+ }
+ 
+ .player-left {
+@@ -35,10 +35,10 @@
+ }
+ 
+ .player-cover {
+-  width: 48px;
+-  height: 48px;
++  width: 56px;
++  height: 56px;
+   object-fit: cover;
+-  border-radius: 8px;
++  border-radius: 6px;
+   background-color: #444;
+ }
+ 
+@@ -48,7 +48,7 @@
+ }
+ 
+ .player-track-title {
+-  font-size: var(--text-base);
++  font-size: 1rem;
+   font-weight: 500;
+   color: #ffffff;
+   white-space: nowrap;
+@@ -58,7 +58,7 @@
+ }
+ 
+ .player-track-artist {
+-  font-size: var(--text-sm);
++  font-size: 0.85rem;
+   color: #b3b3b3;
+   white-space: nowrap;
+   overflow: hidden;
+@@ -211,8 +211,8 @@
+   border: none;
+   color: #1a1a1a;
+   cursor: pointer;
+-  width: 40px;
+-  height: 40px;
++  width: 44px;
++  height: 44px;
+   border-radius: 999px;
+   display: flex;
+   align-items: center;
+@@ -247,7 +247,17 @@
+   position: relative;
+ }
+ 
++.progress-bar::before {
++  content: '';
++  position: absolute;
++  top: -12px;
++  bottom: -12px;
++  left: 0;
++  right: 0;
++}
++
+ .progress-bar:hover {
++  height: 6px;
+   background-color: #6a6a6a;
+ }
+ 
+@@ -274,7 +284,7 @@
+     left: 12px;
+     right: 12px;
+     bottom: 86px;
+-    height: 64px;
++    height: 68px;
+     padding: 0 12px;
+   }
+ 
+@@ -307,28 +317,31 @@
+ 
+ .volume-slider {
+   width: 93px;
+-  height: 4px;
++  height: 6px;
+   -webkit-appearance: none;
+   appearance: none;
+   background: #535353;
+-  border-radius: 2px;
++  border-radius: 3px;
+   outline: none;
+   cursor: pointer;
++  padding: 8px 0;
++  box-sizing: content-box;
++  background-clip: content-box;
+ }
+ 
+ .volume-slider::-webkit-slider-thumb {
+   -webkit-appearance: none;
+   appearance: none;
+-  width: 12px;
+-  height: 12px;
++  width: 16px;
++  height: 16px;
+   background: #ffffff;
+   border-radius: 50%;
+   cursor: pointer;
+ }
+ 
+ .volume-slider::-moz-range-thumb {
+-  width: 12px;
+-  height: 12px;
++  width: 16px;
++  height: 16px;
+   background: #ffffff;
+   border-radius: 50%;
+   cursor: pointer;
+@@ -337,6 +350,7 @@
+ 
+ .volume-slider:hover {
+   background: #6a6a6a;
++  background-clip: content-box;
+ }
+ 
+ .volume-slider:hover::-webkit-slider-thumb {
+@@ -345,4 +359,4 @@
+ 
+ .volume-slider:hover::-moz-range-thumb {
+   background: #1db954;
+-}
++}
+\ No newline at end of file
+diff --git a/frontend/src/components/Player.jsx b/frontend/src/components/Player.jsx
+index 8401ad2..6e4367c 100644
+--- a/frontend/src/components/Player.jsx
++++ b/frontend/src/components/Player.jsx
+@@ -3,7 +3,7 @@ import { usePlayerStore } from '../store/playerStore'
+ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart, Plus } from 'lucide-react'
+ import api from '../services/api'
+ import defaultCover from '../assets/default-cover.svg'
+-import { resolveCoverUrl } from '../utils/media'
++import { resolveCoverUrl, resolveTrackUrl } from '../utils/media'
+ import './Player.css'
+ 
+ function Player() {
+@@ -44,7 +44,7 @@ function Player() {
+     const handleEnded = () => {
+       if (usePlayerStore.getState().isRepeatOne) {
+         audio.currentTime = 0
+-        audio.play().catch(() => {})
++        audio.play().catch(() => { })
+       } else {
+         nextTrack()
+       }
+@@ -172,7 +172,7 @@ function Player() {
+ 
+   const handleLike = async () => {
+     if (!currentTrack || loadingLike) return
+-    
++
+     setLoadingLike(true)
+     try {
+       if (isLiked) {
+@@ -228,15 +228,8 @@ function Player() {
+       <audio
+         ref={audioRef}
+         key={currentTrack.id}
+-        src={currentTrack.id
+-          ? `http://localhost:8000/api/tracks/${currentTrack.id}/stream`
+-          : currentTrack.file_path?.startsWith('http')
+-            ? currentTrack.file_path
+-            : currentTrack.file_path
+-              ? `http://localhost:8000${currentTrack.file_path.startsWith('/') ? '' : '/'}${currentTrack.file_path}`
+-              : undefined}
++        src={resolveTrackUrl(currentTrack)}
+         preload="auto"
+-        crossOrigin="anonymous"
+         onError={(e) => {
+           console.error('Audio element error:', e)
+           console.error('Track:', currentTrack)
+@@ -259,7 +252,7 @@ function Player() {
+           console.log('Metadata loaded for:', currentTrack.title)
+         }}
+       />
+-      
++
+       <div className="player-left">
+         <button
+           type="button"
+diff --git a/frontend/src/components/Sidebar.css b/frontend/src/components/Sidebar.css
+index 7fced95..95539ad 100644
+--- a/frontend/src/components/Sidebar.css
++++ b/frontend/src/components/Sidebar.css
+@@ -32,7 +32,8 @@
+   align-items: center;
+   justify-content: space-between;
+   gap: 12px;
+-  height: 40px; /* Fixed height to ensure alignment */
++  height: 40px;
++  /* Fixed height to ensure alignment */
+ }
+ 
+ .sidebar.collapsed .sidebar-header {
+@@ -65,12 +66,15 @@
+ .sidebar.collapsed .logo-text {
+   display: none;
+ }
+-.logo-text{
++
++.logo-text {
+   text-decoration: none;
+ }
+-.logo-text:visited{
++
++.logo-text:visited {
+   color: #1db954;
+ }
++
+ .logo-icon {
+   font-size: var(--text-2xl);
+   flex-shrink: 0;
+@@ -86,7 +90,7 @@
+   padding: 6px;
+   border-radius: 4px;
+   display: flex;
+-  
++
+   transition: all 0.2s;
+   flex-shrink: 0;
+ }
+@@ -122,42 +126,69 @@
+ 
+ .nav-item:hover {
+   color: #ffffff;
+-  background-color: #1a1a1a;
+ }
+ 
+ .nav-item.active {
+   color: #ffffff;
+-  background-color: #1a1a1a;
++}
++
++.nav-item svg {
++  flex-shrink: 0;
+ }
+ 
+ .sidebar-footer {
+   padding-top: 16px;
+   border-top: 1px solid #282828;
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  gap: 12px;
++  position: relative;
+ }
+ 
+-.sidebar.collapsed .sidebar-footer {
+-  flex-direction: column;
+-  gap: 8px;
++.profile-container {
++  width: 100%;
+ }
+ 
+-.user-info {
++.profile-toggle {
++  width: 100%;
+   display: flex;
+   align-items: center;
+   gap: 12px;
+-  flex: 1;
+-  min-width: 0;
++  padding: 8px;
++  background: transparent;
++  border: none;
++  border-radius: 12px;
++  cursor: pointer;
++  transition: all 0.2s;
++  color: #ffffff;
++  text-align: left;
+ }
+ 
+-.user-avatar {
++.profile-toggle:hover,
++.profile-toggle.active {
++  background: rgba(255, 255, 255, 0.08);
++}
++
++.user-avatar,
++.user-avatar-collapsed {
+   width: 40px;
+   height: 40px;
+   border-radius: 50%;
+   object-fit: cover;
+   background-color: #333;
++  flex-shrink: 0;
++}
++
++.placeholder {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  background: #2a2a2a;
++  color: #a0a0a0;
++  border: 1px solid rgba(255, 255, 255, 0.05);
++}
++
++.user-avatar-collapsed {
++  width: 32px;
++  height: 32px;
++  margin: 0 auto;
+ }
+ 
+ .user-details {
+@@ -168,7 +199,6 @@
+ .user-name {
+   font-size: var(--text-base);
+   font-weight: 600;
+-  color: #ffffff;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+@@ -182,38 +212,73 @@
+   text-overflow: ellipsis;
+ }
+ 
+-.logout-btn {
+-  background: none;
+-  border: none;
+-  color: #b3b3b3;
+-  cursor: pointer;
+-  padding: 8px;
+-  border-radius: 4px;
++.profile-dropdown {
++  position: absolute;
++  bottom: calc(100% + 12px);
++  left: 8px;
++  right: 8px;
++  background: #181818;
++  border: 1px solid rgba(255, 255, 255, 0.1);
++  border-radius: 12px;
++  padding: 4px;
++  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
++  z-index: 1000;
++  animation: slideUp 0.2s ease-out;
++}
++
++.sidebar.collapsed .profile-dropdown {
++  left: 4px;
++  right: 4px;
++  width: 180px;
++  left: 72px;
++  bottom: 0;
++}
++
++@keyframes slideUp {
++  from {
++    transform: translateY(10px);
++    opacity: 0;
++  }
++
++  to {
++    transform: translateY(0);
++    opacity: 1;
++  }
++}
++
++.dropdown-item {
++  width: 100%;
+   display: flex;
+   align-items: center;
+-  justify-content: center;
++  gap: 12px;
++  padding: 10px 12px;
++  color: #b3b3b3;
++  text-decoration: none;
++  border-radius: 8px;
++  font-size: 14px;
++  font-weight: 500;
++  background: transparent;
++  border: none;
++  cursor: pointer;
+   transition: all 0.2s;
+ }
+ 
+-.logout-btn:hover {
++.dropdown-item:hover {
++  background: rgba(255, 255, 255, 0.1);
+   color: #ffffff;
+-  background-color: #1a1a1a;
+ }
+ 
+-.user-avatar-collapsed {
+-  width: 32px;
+-  height: 32px;
+-  border-radius: 50%;
+-  object-fit: cover;
+-  background-color: #333;
++.dropdown-item.logout {
++  color: #ff4d4d;
+ }
+ 
+-.sidebar.collapsed .user-info {
+-  display: none;
++.dropdown-item.logout:hover {
++  background: rgba(255, 77, 77, 0.1);
+ }
+ 
++
+ @media (max-width: 768px) {
+   .sidebar {
+     display: none;
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/frontend/src/components/Sidebar.jsx b/frontend/src/components/Sidebar.jsx
+index b91da59..e8fe2c2 100644
+--- a/frontend/src/components/Sidebar.jsx
++++ b/frontend/src/components/Sidebar.jsx
+@@ -1,6 +1,6 @@
+ import { useState, useEffect } from 'react'
+ import { Link, useLocation } from 'react-router-dom'
+-import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight } from 'lucide-react'
++import { Home, Search, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ShieldCheck, User } from 'lucide-react'
+ import { useAuthStore } from '../store/authStore'
+ import './Sidebar.css'
+ 
+@@ -11,10 +11,10 @@ function Sidebar() {
+     const saved = localStorage.getItem('sidebar-collapsed')
+     return saved ? JSON.parse(saved) : false
+   })
++  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+ 
+   useEffect(() => {
+     localStorage.setItem('sidebar-collapsed', JSON.stringify(isCollapsed))
+-    // Dispatch custom event to notify Layout
+     window.dispatchEvent(new Event('sidebarToggle'))
+   }, [isCollapsed])
+ 
+@@ -30,12 +30,14 @@ function Sidebar() {
+   const navItems = [
+     { path: '/', icon: Home, label: '╨ô╨╗╨░╨▓╨╜╨░╤Å' },
+     { path: '/search', icon: Search, label: '╨ƒ╨╛╨╕╤ü╨║' },
+-    { path: '/playlists', icon: Library, label: '╨£╨╛╤Å ╨╝╤â╨╖╤ï╨║╨░' },
+-    { path: '/liked', icon: Heart, label: '╨ƒ╨╛╨╜╤Ç╨░╨▓╨╕╨▓╤ê╨╕╨╡╤ü╤Å' },
++    { path: '/liked', icon: Heart, label: '╨£╨╛╤Å ╨╝╤â╨╖╤ï╨║╨░' },
+     { path: '/upload', icon: Upload, label: '╨ù╨░╨│╤Ç╤â╨╖╨╕╤é╤î ╤é╤Ç╨╡╨║' },
+-    { path: '/settings', icon: Settings, label: '╨¥╨░╤ü╤é╤Ç╨╛╨╣╨║╨╕' },
+   ]
+ 
++  if (user?.is_admin) {
++    navItems.push({ path: '/admin', icon: ShieldCheck, label: '╨É╨┤╨╝╨╕╨╜ ╨ƒ╨░╨╜╨╡╨╗╤î' })
++  }
++
+   return (
+     <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
+       <div className="sidebar-header">
+@@ -47,7 +49,7 @@ function Sidebar() {
+           {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+         </button>
+       </div>
+-      
++
+       <nav className="sidebar-nav">
+         {navItems.map((item) => {
+           const Icon = item.icon
+@@ -59,7 +61,10 @@ function Sidebar() {
+               className={`nav-item ${isActive ? 'active' : ''}`}
+               title={isCollapsed ? item.label : ''}
+             >
+-              <Icon size={24} />
++              <Icon
++                size={24}
++                strokeWidth={isActive ? 2.5 : 2}
++              />
+               {!isCollapsed && <span>{item.label}</span>}
+             </Link>
+           )
+@@ -67,23 +72,43 @@ function Sidebar() {
+       </nav>
+ 
+       <div className="sidebar-footer">
+-        {!isCollapsed && (
+-          <div className="user-info">
+-            {user?.avatar_url && (
+-              <img src={user.avatar_url} alt={user.username} className="user-avatar" />
++        <div className="profile-container">
++          <button
++            className={`profile-toggle ${isUserMenuOpen ? 'active' : ''}`}
++            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
++          >
++            {user?.avatar_url ? (
++              <img
++                src={user.avatar_url}
++                alt={user.username}
++                className={isCollapsed ? "user-avatar-collapsed" : "user-avatar"}
++              />
++            ) : (
++              <div className={isCollapsed ? "user-avatar-collapsed placeholder" : "user-avatar placeholder"}>
++                <User size={isCollapsed ? 20 : 24} />
++              </div>
++            )}
++
++            {!isCollapsed && (
++              <div className="user-details">
++                <div className="user-name">{user?.full_name || user?.username}</div>
++              </div>
+             )}
+-            <div className="user-details">
+-              <div className="user-name">{user?.full_name || user?.username}</div>
+-              <div className="user-email">{user?.email}</div>
++          </button>
++
++          {isUserMenuOpen && (
++            <div className="profile-dropdown">
++              <Link to="/settings" className="dropdown-item" onClick={() => setIsUserMenuOpen(false)}>
++                <Settings size={18} />
++                <span>╨¥╨░╤ü╤é╤Ç╨╛╨╣╨║╨╕</span>
++              </Link>
++              <button className="dropdown-item logout" onClick={handleLogout}>
++                <LogOut size={18} />
++                <span>╨Æ╤ï╨╣╤é╨╕</span>
++              </button>
+             </div>
+-          </div>
+-        )}
+-        {isCollapsed && user?.avatar_url && (
+-          <img src={user.avatar_url} alt={user.username} className="user-avatar-collapsed" />
+-        )}
+-        <button onClick={handleLogout} className="logout-btn" title="╨Æ╤ï╨╣╤é╨╕">
+-          <LogOut size={20} />
+-        </button>
++          )}
++        </div>
+       </div>
+     </div>
+   )
+diff --git a/frontend/src/pages/Auth.css b/frontend/src/pages/Auth.css
+index 3d185fe..0182e1b 100644
+--- a/frontend/src/pages/Auth.css
++++ b/frontend/src/pages/Auth.css
+@@ -118,3 +118,35 @@
+ .auth-footer a:hover {
+   text-decoration: underline;
+ }
++
++.verify-code-input {
++  text-align: center;
++  font-size: 28px !important;
++  letter-spacing: 12px;
++  font-weight: 700;
++  padding: 16px !important;
++}
++
++.resend-btn {
++  background: none;
++  border: none;
++  color: #1db954;
++  font-weight: 600;
++  font-size: 14px;
++  cursor: pointer;
++  text-decoration: underline;
++  padding: 0;
++}
++
++.resend-btn:hover {
++  color: #1ed760;
++}
++
++.resend-timer {
++  color: #666;
++  font-size: 14px;
++}
++
++.auth-header strong {
++  color: #1db954;
++}
+\ No newline at end of file
+diff --git a/frontend/src/pages/Home.css b/frontend/src/pages/Home.css
+index affe9bb..3e66dd4 100644
+--- a/frontend/src/pages/Home.css
++++ b/frontend/src/pages/Home.css
+@@ -48,14 +48,23 @@
+   display: grid;
+   place-items: center;
+ }
++
+ .wave-widget.is-playing {
+   animation: waveWidgetPulse 4s ease-in-out infinite;
+ }
+ 
+ @keyframes waveWidgetPulse {
+-  0%, 100% { transform: scale(1); }
+-  50% { transform: scale(1.02); }
++
++  0%,
++  100% {
++    transform: scale(1);
++  }
++
++  50% {
++    transform: scale(1.02);
++  }
+ }
++
+ .wave-center {
+   width: 180px;
+   height: 180px;
+@@ -107,7 +116,7 @@
+   position: absolute;
+   inset: 0;
+   display: grid;
+-  
++
+   place-items: center;
+   color: #ffffff;
+   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+@@ -180,7 +189,8 @@
+   color: #666;
+ }
+ 
+-.track-info {
++.track-info,
++.playlist-info {
+   min-height: 60px;
+ }
+ 
+@@ -202,6 +212,10 @@
+   text-overflow: ellipsis;
+ }
+ 
++.track-more-btn {
++  display: none;
++}
++
+ .playlists-grid {
+   display: grid;
+   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+@@ -298,7 +312,7 @@
+ .mobile-player,
+ .mobile-nav {
+   display: none;
+-  
++
+ }
+ 
+ .icon-btn {
+@@ -417,33 +431,133 @@
+   }
+ 
+   .tracks-grid {
+-    grid-template-columns: repeat(2, 1fr);
+-    gap: 12px;
++    display: grid;
++    grid-template-rows: repeat(4, auto);
++    grid-auto-flow: column;
++    grid-auto-columns: 88vw;
++    gap: 8px 16px;
++    overflow-x: auto;
++    scroll-snap-type: x mandatory;
++    margin: 0 -16px;
++    padding: 0 16px 16px;
++    scrollbar-width: none;
++    -webkit-overflow-scrolling: touch;
++  }
++
++  .tracks-grid::-webkit-scrollbar {
++    display: none;
+   }
+ 
+   .playlists-grid {
+-    grid-template-columns: repeat(2, 1fr);
++    display: flex;
++    overflow-x: auto;
++    scroll-snap-type: x mandatory;
++    gap: 16px;
++    margin: 0 -16px;
++    padding: 0 16px 16px;
++    scrollbar-width: none;
++    -webkit-overflow-scrolling: touch;
++  }
++
++  .playlists-grid::-webkit-scrollbar {
++    display: none;
++  }
++
++  .track-card {
++    display: flex;
++    align-items: center;
+     gap: 12px;
++    padding: 6px 0;
++    background: transparent;
++    border-radius: 0;
++    scroll-snap-align: start;
++    width: 100%;
+   }
+ 
+-  .track-card,
+   .playlist-card {
+-    padding: 12px;
++    display: block;
++    width: 130px;
++    flex: 0 0 auto;
++    background: transparent;
++    padding: 0;
++    scroll-snap-align: start;
++  }
++
++  .track-cover {
++    width: 52px;
++    height: 52px;
++    min-width: 52px;
++    margin-bottom: 0;
++    border-radius: 6px;
+   }
+ 
+-  .track-cover,
+   .playlist-cover {
++    width: 100%;
++    height: auto;
++    aspect-ratio: 1;
+     margin-bottom: 8px;
++    border-radius: 8px;
++  }
++
++  .track-info {
++    flex: 1;
++    min-width: 0;
++    display: flex;
++    flex-direction: column;
++    justify-content: center;
++  }
++
++  .playlist-info {
++    min-width: 0;
++    display: block;
++  }
++
++  .track-title {
++    font-size: 15px;
++    font-weight: 600;
++    color: #fff;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
++    margin-bottom: 2px;
+   }
+ 
+-  .track-title,
+   .playlist-name {
+-    font-size: var(--text-sm);
++    font-size: 13px;
++    font-weight: 600;
++    color: #fff;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
++    margin-bottom: 4px;
++  }
++
++  .track-artist {
++    font-size: 13px;
++    color: #b3b3b3;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
+   }
+ 
+-  .track-artist,
+   .playlist-description {
+-    font-size: var(--text-xs);
++    font-size: 12px;
++    color: #b3b3b3;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
++  }
++
++  .track-more-btn {
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    background: transparent;
++    border: none;
++    color: #666;
++    padding: 8px;
++    margin-right: -4px;
++    cursor: pointer;
+   }
+ 
+   .mobile-player {
+@@ -470,4 +584,4 @@
+   .mobile-nav-item {
+     display: none;
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/frontend/src/pages/Home.jsx b/frontend/src/pages/Home.jsx
+index e5172ff..77f8c64 100644
+--- a/frontend/src/pages/Home.jsx
++++ b/frontend/src/pages/Home.jsx
+@@ -1,6 +1,6 @@
+ import { useEffect, useMemo, useState } from 'react'
+ import { Link, useNavigate } from 'react-router-dom'
+-import { Search, Play, Pause, Settings } from 'lucide-react'
++import { Search, Play, Pause, Settings, MoreHorizontal } from 'lucide-react'
+ import { usePlayerStore } from '../store/playerStore'
+ import { useWaveSettingsStore } from '../store/waveSettingsStore'
+ import api from '../services/api'
+@@ -150,7 +150,7 @@ function Home() {
+                 <span>╨┐╨╛╤é╨╛╨║</span>
+               </button>
+             )}
+-            
++
+           </div>
+         </div>
+       </div>
+@@ -169,6 +169,9 @@ function Home() {
+                 <div className="track-title">{track.title}</div>
+                 <div className="track-artist">{track.artist}</div>
+               </div>
++              <button className="track-more-btn" onClick={(e) => e.stopPropagation()}>
++                <MoreHorizontal size={20} />
++              </button>
+             </div>
+           ))}
+         </div>
+@@ -220,7 +223,7 @@ function Home() {
+         </div>
+       )}
+ 
+-    
++
+     </div>
+   )
+ }
+diff --git a/frontend/src/pages/LikedSongs.css b/frontend/src/pages/LikedSongs.css
+index bb0eff1..168bd15 100644
+--- a/frontend/src/pages/LikedSongs.css
++++ b/frontend/src/pages/LikedSongs.css
+@@ -1,260 +1,578 @@
+-.liked-header {
++/* ==================== */
++/* MY MUSIC PAGE        */
++/* ==================== */
++
++.my-music-page {
+   display: flex;
+-  gap: 32px;
+-  margin-bottom: 32px;
+-  padding: 32px 0;
++  flex-direction: column;
++  gap: 48px;
++  padding-bottom: 120px;
+ }
+ 
+-.liked-cover {
+-  width: 232px;
+-  height: 232px;
+-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+-  border-radius: 8px;
++/* ===== LIKED TRACKS SECTION ===== */
++
++.liked-section {
++  display: flex;
++  flex-direction: column;
++  gap: 20px;
++}
++
++.liked-section-header {
++  display: flex;
++  align-items: center;
++  gap: 16px;
++  padding: 16px 20px;
++  background: #1a1a1a;
++  border-radius: 16px;
++}
++
++.liked-section-icon {
++  width: 56px;
++  height: 56px;
++  border-radius: 14px;
++  background: #c62828;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   color: #ffffff;
+-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
++  flex-shrink: 0;
+ }
+ 
+-.liked-info {
++.liked-section-info {
+   flex: 1;
++  min-width: 0;
++}
++
++.liked-section-title-link {
++  text-decoration: none;
++  color: inherit;
++}
++
++.liked-section-title {
++  font-size: 22px;
++  font-weight: 700;
++  color: #ffffff;
+   display: flex;
+-  flex-direction: column;
+-  justify-content: flex-end;
++  align-items: center;
++  gap: 4px;
++  margin: 0;
++  line-height: 1.2;
+ }
+ 
+-.liked-type {
+-  font-size: var(--text-base);
+-  font-weight: 600;
++.liked-section-title:hover {
++  text-decoration: underline;
++}
++
++.chevron-icon {
++  opacity: 0.5;
++  transition: opacity 0.2s;
++}
++
++.liked-section-title:hover .chevron-icon {
++  opacity: 1;
++}
++
++.liked-section-count {
++  font-size: 13px;
++  color: #b3b3b3;
++  margin-top: 2px;
++  display: block;
++}
++
++.liked-play-btn {
++  width: 44px;
++  height: 44px;
++  border-radius: 50%;
++  background: #1db954;
++  border: none;
+   color: #ffffff;
+-  margin-bottom: 8px;
+-  text-transform: uppercase;
+-  letter-spacing: 1px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  cursor: pointer;
++  flex-shrink: 0;
++  transition: all 0.2s;
++}
++
++.liked-play-btn:hover {
++  background: #1ed760;
++  transform: scale(1.08);
++}
++
++/* Liked tracks grid - 2 columns */
++
++.liked-tracks-grid {
++  display: grid;
++  grid-template-columns: 1fr 1fr;
++  gap: 4px;
++}
++
++.liked-track-item {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  padding: 8px 12px;
++  border-radius: 8px;
++  cursor: pointer;
++  transition: background 0.2s;
++}
++
++.liked-track-item:hover {
++  background: rgba(255, 255, 255, 0.06);
+ }
+ 
+-.liked-title {
+-  font-size: clamp(32px, 8vw, 72px);
+-  font-weight: bold;
++.liked-track-cover {
++  width: 44px;
++  height: 44px;
++  border-radius: 6px;
++  object-fit: cover;
++  background: #333;
++  flex-shrink: 0;
++}
++
++.liked-track-info {
++  flex: 1;
++  min-width: 0;
++}
++
++.liked-track-name {
++  font-size: 14px;
++  font-weight: 600;
+   color: #ffffff;
+-  margin-bottom: 16px;
+-  line-height: 1;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++.liked-track-artist {
++  font-size: 12px;
++  color: #b3b3b3;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  margin-top: 2px;
+ }
+ 
+-.liked-meta {
++.liked-track-actions {
+   display: flex;
+   align-items: center;
+-  gap: 8px;
+-  font-size: var(--text-base);
++  gap: 10px;
++  flex-shrink: 0;
++}
++
++.liked-track-heart {
++  color: #e53935;
++  fill: #e53935;
++  opacity: 0.7;
++}
++
++.liked-track-item:hover .liked-track-heart {
++  opacity: 1;
++}
++
++.liked-track-duration {
++  font-size: 12px;
+   color: #b3b3b3;
+-  margin-bottom: 24px;
++  font-variant-numeric: tabular-nums;
+ }
+ 
+-.liked-actions {
++.liked-empty {
++  text-align: center;
++  padding: 40px 20px;
++  color: #666;
++  font-size: 14px;
++}
++
++/* ===== LIKED ARTISTS SECTION ===== */
++
++.liked-artists-widget {
++  display: flex;
++  flex-direction: column;
++  gap: 20px;
++}
++
++.section-header .section-title-link {
++  text-decoration: none;
++  color: inherit;
++}
++
++.section-header .section-title {
++  font-size: 22px;
++  font-weight: 700;
++  color: #ffffff;
+   display: flex;
+   align-items: center;
+-  gap: 16px;
++  gap: 4px;
++  margin: 0;
++}
++
++.section-header .section-title:hover {
++  text-decoration: underline;
+ }
+ 
+-.play-button-large {
++.artists-mini-grid {
+   display: flex;
++  gap: 24px;
++  overflow-x: auto;
++  padding-bottom: 8px;
++}
++
++.artist-mini-card {
++  display: flex;
++  flex-direction: column;
+   align-items: center;
+   gap: 12px;
+-  padding: 14px 32px;
+-  background-color: #1db954;
+-  color: #ffffff;
+-  border: none;
+-  border-radius: 50px;
+-  font-size: 16px;
+-  font-weight: 600;
+-  cursor: pointer;
+-  transition: all 0.2s;
++  text-decoration: none;
++  width: 120px;
++  flex-shrink: 0;
++  transition: transform 0.2s;
+ }
+ 
+-.play-button-large:hover {
+-  background-color: #1ed760;
+-  transform: scale(1.05);
++.artist-mini-card:hover {
++  transform: translateY(-4px);
+ }
+ 
+-.liked-tracks {
+-  margin-top: 32px;
++.artist-mini-avatar-wrap {
++  width: 120px;
++  height: 120px;
++  border-radius: 50%;
++  overflow: hidden;
++  background: #1a1a1a;
++  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+ }
+ 
+-.tracks-table {
++.artist-mini-avatar {
+   width: 100%;
+-  border-collapse: collapse;
++  height: 100%;
++  object-fit: cover;
+ }
+ 
+-.tracks-table thead {
+-  border-bottom: 1px solid #333;
++.artist-mini-avatar.placeholder {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  font-size: 40px;
++  font-weight: 700;
++  color: #444;
+ }
+ 
+-.tracks-table th {
+-  text-align: left;
+-  padding: 12px;
+-  font-size: 12px;
++.artist-mini-name {
++  font-size: 14px;
+   font-weight: 600;
+-  color: #b3b3b3;
+-  text-transform: uppercase;
+-  letter-spacing: 1px;
++  color: #ffffff;
++  text-align: center;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  width: 100%;
+ }
+ 
+-.tracks-table th:first-child {
+-  width: 40px;
+-  text-align: center;
++.artists-empty-hint {
++  color: #555;
++  font-size: 14px;
++  padding: 20px 0;
++}
++
++
++/* ===== PLAYLISTS SECTION ===== */
++
++.playlists-section {
++  display: flex;
++  flex-direction: column;
++  gap: 16px;
+ }
+ 
+-.tracks-table th:last-child {
+-  width: 80px;
+-  text-align: right;
++.playlists-section-header {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++}
++
++.playlists-section-title-link {
++  text-decoration: none;
++  color: inherit;
+ }
+ 
+-.track-row {
++.playlists-section-title {
++  font-size: 22px;
++  font-weight: 700;
++  color: #ffffff;
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  margin: 0;
++}
++
++.playlists-section-title:hover {
++  text-decoration: underline;
++}
++
++.create-playlist-btn-sm {
++  width: 36px;
++  height: 36px;
++  border-radius: 50%;
++  background: rgba(255, 255, 255, 0.08);
++  border: none;
++  color: #b3b3b3;
++  display: flex;
++  align-items: center;
++  justify-content: center;
+   cursor: pointer;
+   transition: all 0.2s;
+-  border-radius: 4px;
+ }
+ 
+-.track-row:hover {
+-  background-color: #1a1a1a;
++.create-playlist-btn-sm:hover {
++  background: rgba(255, 255, 255, 0.14);
++  color: #ffffff;
+ }
+ 
+-.track-row td {
+-  padding: 12px;
+-  font-size: 14px;
++/* Tabs */
++
++.playlist-tabs {
++  display: flex;
++  gap: 8px;
+ }
+ 
+-.track-number {
+-  text-align: center;
++.playlist-tab {
++  padding: 8px 16px;
++  border-radius: 20px;
++  border: none;
++  font-size: 13px;
++  font-weight: 600;
++  cursor: pointer;
++  transition: all 0.2s;
++  background: rgba(255, 255, 255, 0.06);
+   color: #b3b3b3;
+-  width: 40px;
+ }
+ 
+-.track-name-cell {
++.playlist-tab:hover {
++  background: rgba(255, 255, 255, 0.1);
++  color: #ffffff;
++}
++
++.playlist-tab.active {
++  background: #ffffff;
++  color: #000000;
++}
++
++/* Playlist horizontal scroll grid */
++
++.playlists-scroll-grid {
+   display: flex;
+-  align-items: center;
+-  gap: 12px;
++  gap: 16px;
++  overflow-x: auto;
++  padding-bottom: 8px;
++  scroll-snap-type: x mandatory;
++  -webkit-overflow-scrolling: touch;
++}
++
++.playlists-scroll-grid::-webkit-scrollbar {
++  height: 6px;
++}
++
++.playlists-scroll-grid::-webkit-scrollbar-track {
++  background: transparent;
++}
++
++.playlists-scroll-grid::-webkit-scrollbar-thumb {
++  background: #333;
++  border-radius: 3px;
++}
++
++.playlist-card-sm {
++  width: 160px;
++  min-width: 160px;
++  flex-shrink: 0;
++  text-decoration: none;
++  scroll-snap-align: start;
++  transition: transform 0.2s;
+ }
+ 
+-.track-table-cover {
+-  width: 40px;
+-  height: 40px;
++.playlist-card-sm:hover {
++  transform: translateY(-4px);
++}
++
++.playlist-card-cover {
++  width: 160px;
++  height: 160px;
++  border-radius: 10px;
+   object-fit: cover;
+-  border-radius: 4px;
+-  background-color: #333;
++  background: #1a1a1a;
++  margin-bottom: 10px;
+ }
+ 
+-.track-name {
+-  font-size: var(--text-md);
+-  font-weight: 500;
++.playlist-card-name {
++  font-size: 14px;
++  font-weight: 600;
+   color: #ffffff;
+-  margin-bottom: 4px;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
+ }
+ 
+-.track-artist {
+-  font-size: var(--text-base);
+-  color: #b3b3b3;
++.playlist-card-count {
++  font-size: 12px;
++  color: #666;
++  margin-top: 2px;
+ }
+ 
+-.track-album {
+-  color: #b3b3b3;
++/* Create card */
++
++.create-card {
++  cursor: pointer;
++}
++
++.create-card-icon {
++  width: 160px;
++  height: 160px;
++  border-radius: 10px;
++  background: rgba(255, 255, 255, 0.04);
++  border: 2px dashed rgba(255, 255, 255, 0.12);
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  color: #666;
++  transition: all 0.2s;
++  margin-bottom: 10px;
+ }
+ 
+-.track-duration {
+-  text-align: right;
++.create-card:hover .create-card-icon {
++  background: rgba(255, 255, 255, 0.08);
++  border-color: rgba(255, 255, 255, 0.2);
+   color: #b3b3b3;
+ }
+ 
+-.empty-liked {
+-  text-align: center;
+-  padding: 128px 32px;
++/* Create form inline */
++
++.create-form-inline {
++  background: #181818;
++  border-radius: 12px;
++  padding: 20px;
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.create-form-inline input[type="text"] {
++  width: 100%;
++  padding: 12px 16px;
++  background: #1a1a1a;
++  border: 1px solid #333;
++  border-radius: 8px;
++  color: #ffffff;
++  font-size: 14px;
++  font-family: inherit;
++}
++
++.create-form-inline input[type="text"]:focus {
++  outline: none;
++  border-color: #1db954;
++  background: #222;
++}
++
++.create-form-inline input[type="file"] {
++  font-size: 13px;
+   color: #b3b3b3;
+ }
+ 
+-.empty-liked p {
+-  font-size: 18px;
+-  margin-bottom: 8px;
++.create-form-actions {
++  display: flex;
++  gap: 10px;
+ }
+ 
+-.empty-liked-subtitle {
++.create-form-submit {
++  padding: 10px 24px;
++  background: #1db954;
++  color: #ffffff;
++  border: none;
++  border-radius: 8px;
+   font-size: 14px;
+-  color: #666;
++  font-weight: 600;
++  cursor: pointer;
++  transition: all 0.2s;
+ }
+ 
+-@media (max-width: 768px) {
+-  .liked-header {
+-    flex-direction: column;
+-    align-items: center;
+-    gap: 16px;
+-    padding: 16px 0 8px;
+-  }
++.create-form-submit:hover {
++  background: #1ed760;
++}
+ 
+-  .liked-cover {
+-    width: 160px;
+-    height: 160px;
+-  }
++.create-form-cancel {
++  padding: 10px 24px;
++  background: transparent;
++  color: #b3b3b3;
++  border: 1px solid #333;
++  border-radius: 8px;
++  font-size: 14px;
++  font-weight: 600;
++  cursor: pointer;
++  transition: all 0.2s;
++}
+ 
+-  .liked-info {
+-    align-items: center;
+-    text-align: center;
+-  }
++.create-form-cancel:hover {
++  color: #ffffff;
++  border-color: #555;
++}
+ 
+-  .liked-title {
+-    font-size: 32px;
+-  }
++/* Empty state hint for playlists */
+ 
+-  .liked-meta {
+-    justify-content: center;
+-    margin-bottom: 16px;
+-  }
++.playlists-empty-hint {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  gap: 8px;
++  width: 100%;
++  min-height: 160px;
++  color: #555;
++  font-size: 14px;
++}
+ 
+-  .liked-actions {
+-    width: 100%;
+-    justify-content: center;
++/* ===== RESPONSIVE ===== */
++
++@media (max-width: 768px) {
++  .my-music-page {
++    gap: 32px;
+   }
+ 
+-  .play-button-large {
+-    width: 100%;
+-    justify-content: center;
++  .liked-tracks-grid {
++    grid-template-columns: 1fr;
+   }
+ 
+-  .liked-tracks {
+-    margin-top: 24px;
++  .liked-section-header {
++    padding: 12px 16px;
+   }
+ 
+-  .tracks-table thead {
+-    display: none;
++  .liked-section-icon {
++    width: 48px;
++    height: 48px;
++    border-radius: 12px;
+   }
+ 
+-  .tracks-table,
+-  .tracks-table tbody,
+-  .tracks-table tr,
+-  .tracks-table td {
+-    display: block;
+-    width: 100%;
++  .liked-section-icon svg {
++    width: 24px;
++    height: 24px;
+   }
+ 
+-  .track-row {
+-    padding: 12px 0;
+-    border-bottom: 1px solid #222;
++  .liked-section-title {
++    font-size: 18px;
+   }
+ 
+-  .track-row td {
+-    padding: 6px 0;
++  .playlists-section-title {
++    font-size: 18px;
+   }
+ 
+-  .track-number,
+-  .track-album,
+-  .track-duration {
+-    display: none;
++  .playlist-card-sm {
++    width: 140px;
++    min-width: 140px;
+   }
+ 
+-  .track-name-cell {
+-    gap: 10px;
++  .playlist-card-cover {
++    width: 140px;
++    height: 140px;
+   }
+ 
+-  .track-table-cover {
+-    width: 48px;
+-    height: 48px;
++  .create-card-icon {
++    width: 140px;
++    height: 140px;
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/frontend/src/pages/LikedSongs.jsx b/frontend/src/pages/LikedSongs.jsx
+index 392eb5b..4f1bfd0 100644
+--- a/frontend/src/pages/LikedSongs.jsx
++++ b/frontend/src/pages/LikedSongs.jsx
+@@ -1,6 +1,7 @@
+ import { useEffect, useState } from 'react'
++import { Link } from 'react-router-dom'
+ import { usePlayerStore } from '../store/playerStore'
+-import { Play, Heart } from 'lucide-react'
++import { Play, Heart, ChevronRight, Plus, Music } from 'lucide-react'
+ import api from '../services/api'
+ import defaultCover from '../assets/default-cover.svg'
+ import { resolveCoverUrl } from '../utils/media'
+@@ -8,19 +9,31 @@ import './LikedSongs.css'
+ 
+ function LikedSongs() {
+   const [tracks, setTracks] = useState([])
++  const [playlists, setPlaylists] = useState([])
++  const [likedArtists, setLikedArtists] = useState([])
+   const [loading, setLoading] = useState(true)
++  const [playlistTab, setPlaylistTab] = useState('created') // 'created' | 'liked'
++  const [showCreateForm, setShowCreateForm] = useState(false)
++  const [newPlaylistName, setNewPlaylistName] = useState('')
++  const [coverFile, setCoverFile] = useState(null)
+   const { playPlaylist } = usePlayerStore()
+ 
+   useEffect(() => {
+-    fetchLikedTracks()
++    fetchData()
+   }, [])
+ 
+-  const fetchLikedTracks = async () => {
++  const fetchData = async () => {
+     try {
+-      const response = await api.get('/tracks/me/liked')
+-      setTracks(response.data)
++      const [tracksRes, playlistsRes, artistsRes] = await Promise.all([
++        api.get('/tracks/me/liked'),
++        api.get('/playlists/me'),
++        api.get('/users/me/liked/artists'),
++      ])
++      setTracks(tracksRes.data)
++      setPlaylists(playlistsRes.data)
++      setLikedArtists(artistsRes.data)
+     } catch (error) {
+-      console.error('Error fetching liked tracks:', error)
++      console.error('Error fetching data:', error)
+     } finally {
+       setLoading(false)
+     }
+@@ -36,6 +49,33 @@ function LikedSongs() {
+     playPlaylist(tracks, index)
+   }
+ 
++  const handleCreatePlaylist = async (e) => {
++    e.preventDefault()
++    if (!newPlaylistName.trim()) return
++
++    try {
++      const response = await api.post('/playlists', {
++        name: newPlaylistName,
++        is_public: true,
++      })
++      let createdPlaylist = response.data
++      if (coverFile) {
++        const coverForm = new FormData()
++        coverForm.append('cover', coverFile)
++        const coverResponse = await api.post(`/playlists/${response.data.id}/cover`, coverForm, {
++          headers: { 'Content-Type': 'multipart/form-data' },
++        })
++        createdPlaylist = coverResponse.data
++      }
++      setPlaylists([...playlists, createdPlaylist])
++      setNewPlaylistName('')
++      setCoverFile(null)
++      setShowCreateForm(false)
++    } catch (error) {
++      console.error('Error creating playlist:', error)
++    }
++  }
++
+   if (loading) {
+     return (
+       <div className="page-container">
+@@ -44,72 +84,195 @@ function LikedSongs() {
+     )
+   }
+ 
++  // Show max 4 tracks in the compact liked section, with 2 columns
++  const previewTracks = tracks.slice(0, 8)
++
+   return (
+-    <div className="page-container">
+-      <div className="liked-header">
+-        <div className="liked-cover">
+-          <Heart size={64} fill="currentColor" />
+-        </div>
+-        <div className="liked-info">
+-          <div className="liked-type">╨ƒ╨╗╨╡╨╣╨╗╨╕╤ü╤é</div>
+-          <h1 className="liked-title">╨ƒ╨╛╨╜╤Ç╨░╨▓╨╕╨▓╤ê╨╕╨╡╤ü╤Å</h1>
+-          <div className="liked-meta">
+-            <span>{tracks.length} ╤é╤Ç╨╡╨║╨╛╨▓</span>
++    <div className="page-container my-music-page">
++      {/* ===== LIKED TRACKS SECTION ===== */}
++      <section className="liked-section">
++        <div className="liked-section-header">
++          <div className="liked-section-icon">
++            <Heart size={32} fill="currentColor" />
+           </div>
+-          <div className="liked-actions">
+-            <button className="play-button-large" onClick={handlePlay}>
+-              <Play size={24} fill="currentColor" />
+-              ╨Æ╨╛╤ü╨┐╤Ç╨╛╨╕╨╖╨▓╨╡╤ü╤é╨╕
+-            </button>
++          <div className="liked-section-info">
++            <Link to="/liked" className="liked-section-title-link">
++              <h2 className="liked-section-title">
++                ╨£╨╜╨╡ ╨╜╤Ç╨░╨▓╨╕╤é╤ü╤Å
++                <ChevronRight size={24} className="chevron-icon" />
++              </h2>
++            </Link>
++            <span className="liked-section-count">{tracks.length} ╤é╤Ç╨╡╨║╨╛╨▓</span>
+           </div>
++          <button className="liked-play-btn" onClick={handlePlay} title="╨Æ╨╛╤ü╨┐╤Ç╨╛╨╕╨╖╨▓╨╡╤ü╤é╨╕">
++            <Play size={20} fill="currentColor" />
++          </button>
+         </div>
+-      </div>
+ 
+-      <div className="liked-tracks">
+-        {tracks.length > 0 ? (
+-          <table className="tracks-table">
+-            <thead>
+-              <tr>
+-                <th>#</th>
+-                <th>╨¥╨░╨╖╨▓╨░╨╜╨╕╨╡</th>
+-                <th>╨É╨╗╤î╨▒╨╛╨╝</th>
+-                <th>╨ö╨╗╨╕╤é╨╡╨╗╤î╨╜╨╛╤ü╤é╤î</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {tracks.map((track, index) => (
+-                <tr
+-                  key={track.id}
+-                  className="track-row"
+-                  onClick={() => handlePlayTrack(track, index)}
+-                >
+-                  <td className="track-number">{index + 1}</td>
+-                  <td className="track-name-cell">
+-                    <img
+-                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+-                      alt={track.title}
+-                      className="track-table-cover"
+-                    />
+-                    <div>
+-                      <div className="track-name">{track.title}</div>
+-                      <div className="track-artist">{track.artist}</div>
+-                    </div>
+-                  </td>
+-                  <td className="track-album">{track.album || '-'}</td>
+-                  <td className="track-duration">
++        {previewTracks.length > 0 ? (
++          <div className="liked-tracks-grid">
++            {previewTracks.map((track, index) => (
++              <div
++                key={track.id}
++                className="liked-track-item"
++                onClick={() => handlePlayTrack(track, index)}
++              >
++                <img
++                  src={resolveCoverUrl(track.cover_url) || defaultCover}
++                  alt={track.title}
++                  className="liked-track-cover"
++                />
++                <div className="liked-track-info">
++                  <div className="liked-track-name">{track.title}</div>
++                  <div className="liked-track-artist">{track.artist}</div>
++                </div>
++                <div className="liked-track-actions">
++                  <Heart size={16} className="liked-track-heart" />
++                  <span className="liked-track-duration">
+                     {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
+-                  </td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
++                  </span>
++                </div>
++              </div>
++            ))}
++          </div>
+         ) : (
+-          <div className="empty-liked">
++          <div className="liked-empty">
+             <p>╨ú ╨▓╨░╤ü ╨┐╨╛╨║╨░ ╨╜╨╡╤é ╨┐╨╛╨╜╤Ç╨░╨▓╨╕╨▓╤ê╨╕╤à╤ü╤Å ╤é╤Ç╨╡╨║╨╛╨▓</p>
+-            <p className="empty-liked-subtitle">╨¥╨░╨╢╨╝╨╕╤é╨╡ ╨╜╨░ ╤ü╨╡╤Ç╨┤╨╡╤ç╨║╨╛, ╤ç╤é╨╛╨▒╤ï ╨┤╨╛╨▒╨░╨▓╨╕╤é╤î ╤é╤Ç╨╡╨║</p>
+           </div>
+         )}
+-      </div>
++      </section>
++
++      {/* ===== LIKED ARTISTS SECTION ===== */}
++      <section className="liked-artists-widget">
++        <div className="section-header">
++          <Link to="/liked/artists" className="section-title-link">
++            <h2 className="section-title">
++              ╨¢╤Ä╨▒╨╕╨╝╤ï╨╡ ╨╕╤ü╨┐╨╛╨╗╨╜╨╕╤é╨╡╨╗╨╕
++              <ChevronRight size={24} className="chevron-icon" />
++            </h2>
++          </Link>
++        </div>
++        <div className="artists-mini-grid">
++          {likedArtists.slice(0, 5).map(artist => (
++            <Link key={artist.artist_id} to={`/artist/${artist.artist_id}`} className="artist-mini-card">
++              <div className="artist-mini-avatar-wrap">
++                {artist.avatar_url ? (
++                  <img src={artist.avatar_url} alt={artist.artist_name} className="artist-mini-avatar" />
++                ) : (
++                  <div className="artist-mini-avatar placeholder">{artist.artist_name[0].toUpperCase()}</div>
++                )}
++              </div>
++              <span className="artist-mini-name">{artist.artist_name}</span>
++            </Link>
++          ))}
++          {likedArtists.length === 0 && (
++            <div className="artists-empty-hint">╨Æ╨░╤ê╨╕ ╨╗╤Ä╨▒╨╕╨╝╤ï╨╡ ╨╕╤ü╨┐╨╛╨╗╨╜╨╕╤é╨╡╨╗╨╕ ╨┐╨╛╤Å╨▓╤Å╤é╤ü╤Å ╨╖╨┤╨╡╤ü╤î</div>
++          )}
++        </div>
++      </section>
++
++      {/* ===== PLAYLISTS SECTION ===== */}
++      <section className="playlists-section">
++        <div className="playlists-section-header">
++          <Link to="/playlists" className="playlists-section-title-link">
++            <h2 className="playlists-section-title">
++              ╨£╨╛╨╕ ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é╤ï
++              <ChevronRight size={24} className="chevron-icon" />
++            </h2>
++          </Link>
++          <button
++            className="create-playlist-btn-sm"
++            onClick={() => setShowCreateForm(!showCreateForm)}
++            title="╨í╨╛╨╖╨┤╨░╤é╤î ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é"
++          >
++            <Plus size={20} />
++          </button>
++        </div>
++
++        <div className="playlist-tabs">
++          <button
++            className={`playlist-tab ${playlistTab === 'created' ? 'active' : ''}`}
++            onClick={() => setPlaylistTab('created')}
++          >
++            ╨Æ╤ï ╤ü╨╛╨▒╤Ç╨░╨╗╨╕
++          </button>
++          <button
++            className={`playlist-tab ${playlistTab === 'liked' ? 'active' : ''}`}
++            onClick={() => setPlaylistTab('liked')}
++          >
++            ╨Æ╨░╨╝ ╨┐╨╛╨╜╤Ç╨░╨▓╨╕╨╗╨╛╤ü╤î
++          </button>
++        </div>
++
++        {showCreateForm && (
++          <form onSubmit={handleCreatePlaylist} className="create-form-inline">
++            <input
++              type="text"
++              placeholder="╨¥╨░╨╖╨▓╨░╨╜╨╕╨╡ ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é╨░"
++              value={newPlaylistName}
++              onChange={(e) => setNewPlaylistName(e.target.value)}
++              autoFocus
++            />
++            <input
++              type="file"
++              accept="image/*"
++              onChange={(e) => setCoverFile(e.target.files?.[0] || null)}
++            />
++            <div className="create-form-actions">
++              <button type="submit" className="create-form-submit">╨í╨╛╨╖╨┤╨░╤é╤î</button>
++              <button
++                type="button"
++                className="create-form-cancel"
++                onClick={() => {
++                  setShowCreateForm(false)
++                  setNewPlaylistName('')
++                  setCoverFile(null)
++                }}
++              >
++                ╨₧╤é╨╝╨╡╨╜╨░
++              </button>
++            </div>
++          </form>
++        )}
++
++        {playlistTab === 'created' && (
++          <div className="playlists-scroll-grid">
++            <div
++              className="playlist-card-sm create-card"
++              onClick={() => setShowCreateForm(true)}
++            >
++              <div className="create-card-icon">
++                <Plus size={32} />
++              </div>
++            </div>
++            {playlists.map((playlist) => (
++              <Link key={playlist.id} to={`/playlists/${playlist.id}`} className="playlist-card-sm">
++                <img
++                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
++                  alt={playlist.name}
++                  className="playlist-card-cover"
++                />
++                <div className="playlist-card-name">{playlist.name}</div>
++                <div className="playlist-card-count">{playlist.tracks?.length || 0} ╤é╤Ç╨╡╨║╨╛╨▓</div>
++              </Link>
++            ))}
++            {playlists.length === 0 && (
++              <div className="playlists-empty-hint">
++                <p>╨í╨╛╨╖╨┤╨░╨╣╤é╨╡ ╤ü╨▓╨╛╨╣ ╨┐╨╡╤Ç╨▓╤ï╨╣ ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é</p>
++              </div>
++            )}
++          </div>
++        )}
++
++        {playlistTab === 'liked' && (
++          <div className="playlists-scroll-grid">
++            <div className="playlists-empty-hint">
++              <Music size={32} />
++              <p>╨ƒ╨╛╨╜╤Ç╨░╨▓╨╕╨▓╤ê╨╕╨╡╤ü╤Å ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é╤ï ╨▒╤â╨┤╤â╤é ╨╖╨┤╨╡╤ü╤î</p>
++            </div>
++          </div>
++        )}
++      </section>
+     </div>
+   )
+ }
+diff --git a/frontend/src/pages/Login.jsx b/frontend/src/pages/Login.jsx
+index 8c668de..a1be6b8 100644
+--- a/frontend/src/pages/Login.jsx
++++ b/frontend/src/pages/Login.jsx
+@@ -1,7 +1,7 @@
+ import { useState } from 'react'
+-import { Link } from 'react-router-dom'
++import { Link, useNavigate } from 'react-router-dom'
+ import { useAuthStore } from '../store/authStore'
+-import { useNavigate } from 'react-router-dom'
++import api from '../services/api'
+ import './Auth.css'
+ 
+ function Login() {
+@@ -9,9 +9,29 @@ function Login() {
+   const [password, setPassword] = useState('')
+   const [error, setError] = useState('')
+   const [loading, setLoading] = useState(false)
++
++  // Verification state
++  const [step, setStep] = useState('login') // 'login' | 'verify'
++  const [verifyEmail, setVerifyEmail] = useState('')
++  const [verifyCode, setVerifyCode] = useState('')
++  const [resendTimer, setResendTimer] = useState(0)
++
+   const { login } = useAuthStore()
+   const navigate = useNavigate()
+ 
++  const startResendTimer = () => {
++    setResendTimer(60)
++    const interval = setInterval(() => {
++      setResendTimer((prev) => {
++        if (prev <= 1) {
++          clearInterval(interval)
++          return 0
++        }
++        return prev - 1
++      })
++    }, 1000)
++  }
++
+   const handleSubmit = async (e) => {
+     e.preventDefault()
+     setError('')
+@@ -22,11 +42,103 @@ function Login() {
+ 
+     if (result.success) {
+       navigate('/')
++    } else if (result.needsVerification) {
++      // User exists but email not verified ΓÇö switch to verification step
++      setVerifyEmail(result.email)
++      setStep('verify')
++      startResendTimer()
+     } else {
+       setError(result.error)
+     }
+   }
+ 
++  const handleVerify = async (e) => {
++    e.preventDefault()
++    setError('')
++    setLoading(true)
++
++    try {
++      await api.post('/auth/verify-email', {
++        email: verifyEmail,
++        code: verifyCode,
++      })
++      // Verified ΓÇö now log in again
++      const result = await login(username, password)
++      if (result.success) {
++        navigate('/')
++      } else {
++        setError(result.error)
++      }
++    } catch (err) {
++      setError(err.response?.data?.detail || '╨¥╨╡╨▓╨╡╤Ç╨╜╤ï╨╣ ╨║╨╛╨┤')
++    } finally {
++      setLoading(false)
++    }
++  }
++
++  const handleResend = async () => {
++    if (resendTimer > 0) return
++    setError('')
++    try {
++      await api.post('/auth/resend-code', { email: verifyEmail })
++      startResendTimer()
++    } catch (err) {
++      setError(err.response?.data?.detail || '╨¥╨╡ ╤â╨┤╨░╨╗╨╛╤ü╤î ╨╛╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨║╨╛╨┤')
++    }
++  }
++
++  if (step === 'verify') {
++    return (
++      <div className="auth-container">
++        <div className="auth-card">
++          <div className="auth-header">
++            <h1>╨ƒ╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨╡╨╜╨╕╨╡ Email</h1>
++            <p>
++              ╨£╤ï ╨╛╤é╨┐╤Ç╨░╨▓╨╕╨╗╨╕ ╨║╨╛╨┤ ╨╜╨░ <strong>{verifyEmail}</strong>
++            </p>
++          </div>
++
++          <form onSubmit={handleVerify} className="auth-form">
++            {error && <div className="error-message">{error}</div>}
++
++            <div className="form-group">
++              <label htmlFor="code">╨Ü╨╛╨┤ ╨┐╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨╡╨╜╨╕╤Å</label>
++              <input
++                id="code"
++                type="text"
++                inputMode="numeric"
++                maxLength={6}
++                value={verifyCode}
++                onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ''))}
++                placeholder="000000"
++                required
++                autoComplete="one-time-code"
++                className="verify-code-input"
++              />
++            </div>
++
++            <button type="submit" className="auth-button" disabled={loading || verifyCode.length < 6}>
++              {loading ? '╨ƒ╤Ç╨╛╨▓╨╡╤Ç╨║╨░...' : '╨ƒ╨╛╨┤╤é╨▓╨╡╤Ç╨┤╨╕╤é╤î'}
++            </button>
++          </form>
++
++          <div className="auth-footer">
++            <p>
++              ╨¥╨╡ ╨┐╨╛╨╗╤â╤ç╨╕╨╗╨╕ ╨║╨╛╨┤?{' '}
++              {resendTimer > 0 ? (
++                <span className="resend-timer">╨₧╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨┐╨╛╨▓╤é╨╛╤Ç╨╜╨╛ ╤ç╨╡╤Ç╨╡╨╖ {resendTimer}╤ü</span>
++              ) : (
++                <button type="button" onClick={handleResend} className="resend-btn">
++                  ╨₧╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨┐╨╛╨▓╤é╨╛╤Ç╨╜╨╛
++                </button>
++              )}
++            </p>
++          </div>
++        </div>
++      </div>
++    )
++  }
++
+   return (
+     <div className="auth-container">
+       <div className="auth-card">
+@@ -34,10 +146,10 @@ function Login() {
+           <h1>Music Streaming</h1>
+           <p>╨Æ╨╛╨╣╨┤╨╕╤é╨╡ ╨▓ ╤ü╨▓╨╛╨╣ ╨░╨║╨║╨░╤â╨╜╤é</p>
+         </div>
+-        
++
+         <form onSubmit={handleSubmit} className="auth-form">
+           {error && <div className="error-message">{error}</div>}
+-          
++
+           <div className="form-group">
+             <label htmlFor="username">╨ÿ╨╝╤Å ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Å</label>
+             <input
+diff --git a/frontend/src/pages/Register.jsx b/frontend/src/pages/Register.jsx
+index 805bdc6..f079785 100644
+--- a/frontend/src/pages/Register.jsx
++++ b/frontend/src/pages/Register.jsx
+@@ -1,19 +1,22 @@
+ import { useState } from 'react'
+-import { Link } from 'react-router-dom'
++import { Link, useNavigate } from 'react-router-dom'
+ import { useAuthStore } from '../store/authStore'
+-import { useNavigate } from 'react-router-dom'
++import api from '../services/api'
+ import './Auth.css'
+ 
+ function Register() {
++  const [step, setStep] = useState('register') // 'register' | 'verify'
+   const [formData, setFormData] = useState({
+     username: '',
+     email: '',
+     password: '',
+     fullName: '',
+   })
++  const [verifyCode, setVerifyCode] = useState('')
+   const [error, setError] = useState('')
+   const [loading, setLoading] = useState(false)
+-  const { register } = useAuthStore()
++  const [resendTimer, setResendTimer] = useState(0)
++  const { login } = useAuthStore()
+   const navigate = useNavigate()
+ 
+   const handleChange = (e) => {
+@@ -23,26 +26,128 @@ function Register() {
+     })
+   }
+ 
+-  const handleSubmit = async (e) => {
++  const startResendTimer = () => {
++    setResendTimer(60)
++    const interval = setInterval(() => {
++      setResendTimer((prev) => {
++        if (prev <= 1) {
++          clearInterval(interval)
++          return 0
++        }
++        return prev - 1
++      })
++    }, 1000)
++  }
++
++  const handleRegister = async (e) => {
+     e.preventDefault()
+     setError('')
+     setLoading(true)
+ 
+-    const result = await register(
+-      formData.username,
+-      formData.email,
+-      formData.password,
+-      formData.fullName
+-    )
+-    setLoading(false)
++    try {
++      await api.post('/auth/register', {
++        username: formData.username,
++        email: formData.email,
++        password: formData.password,
++        full_name: formData.fullName,
++      })
++      // Registration successful, move to verification step
++      setStep('verify')
++      startResendTimer()
++    } catch (err) {
++      setError(err.response?.data?.detail || '╨₧╤ê╨╕╨▒╨║╨░ ╤Ç╨╡╨│╨╕╤ü╤é╤Ç╨░╤å╨╕╨╕')
++    } finally {
++      setLoading(false)
++    }
++  }
+ 
+-    if (result.success) {
+-      navigate('/')
+-    } else {
+-      setError(result.error)
++  const handleVerify = async (e) => {
++    e.preventDefault()
++    setError('')
++    setLoading(true)
++
++    try {
++      await api.post('/auth/verify-email', {
++        email: formData.email,
++        code: verifyCode,
++      })
++      // Email verified, now log in
++      const result = await login(formData.username, formData.password)
++      if (result.success) {
++        navigate('/')
++      } else {
++        setError(result.error)
++      }
++    } catch (err) {
++      setError(err.response?.data?.detail || '╨¥╨╡╨▓╨╡╤Ç╨╜╤ï╨╣ ╨║╨╛╨┤')
++    } finally {
++      setLoading(false)
++    }
++  }
++
++  const handleResend = async () => {
++    if (resendTimer > 0) return
++    setError('')
++    try {
++      await api.post('/auth/resend-code', { email: formData.email })
++      startResendTimer()
++    } catch (err) {
++      setError(err.response?.data?.detail || '╨¥╨╡ ╤â╨┤╨░╨╗╨╛╤ü╤î ╨╛╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨║╨╛╨┤')
+     }
+   }
+ 
++  if (step === 'verify') {
++    return (
++      <div className="auth-container">
++        <div className="auth-card">
++          <div className="auth-header">
++            <h1>╨ƒ╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨╡╨╜╨╕╨╡ Email</h1>
++            <p>
++              ╨£╤ï ╨╛╤é╨┐╤Ç╨░╨▓╨╕╨╗╨╕ ╨║╨╛╨┤ ╨╜╨░ <strong>{formData.email}</strong>
++            </p>
++          </div>
++
++          <form onSubmit={handleVerify} className="auth-form">
++            {error && <div className="error-message">{error}</div>}
++
++            <div className="form-group">
++              <label htmlFor="code">╨Ü╨╛╨┤ ╨┐╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨╡╨╜╨╕╤Å</label>
++              <input
++                id="code"
++                type="text"
++                inputMode="numeric"
++                maxLength={6}
++                value={verifyCode}
++                onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, ''))}
++                placeholder="000000"
++                required
++                autoComplete="one-time-code"
++                className="verify-code-input"
++              />
++            </div>
++
++            <button type="submit" className="auth-button" disabled={loading || verifyCode.length < 6}>
++              {loading ? '╨ƒ╤Ç╨╛╨▓╨╡╤Ç╨║╨░...' : '╨ƒ╨╛╨┤╤é╨▓╨╡╤Ç╨┤╨╕╤é╤î'}
++            </button>
++          </form>
++
++          <div className="auth-footer">
++            <p>
++              ╨¥╨╡ ╨┐╨╛╨╗╤â╤ç╨╕╨╗╨╕ ╨║╨╛╨┤?{' '}
++              {resendTimer > 0 ? (
++                <span className="resend-timer">╨₧╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨┐╨╛╨▓╤é╨╛╤Ç╨╜╨╛ ╤ç╨╡╤Ç╨╡╨╖ {resendTimer}╤ü</span>
++              ) : (
++                <button type="button" onClick={handleResend} className="resend-btn">
++                  ╨₧╤é╨┐╤Ç╨░╨▓╨╕╤é╤î ╨┐╨╛╨▓╤é╨╛╤Ç╨╜╨╛
++                </button>
++              )}
++            </p>
++          </div>
++        </div>
++      </div>
++    )
++  }
++
+   return (
+     <div className="auth-container">
+       <div className="auth-card">
+@@ -50,10 +155,10 @@ function Register() {
+           <h1>Music Streaming</h1>
+           <p>╨í╨╛╨╖╨┤╨░╨╣╤é╨╡ ╨╜╨╛╨▓╤ï╨╣ ╨░╨║╨║╨░╤â╨╜╤é</p>
+         </div>
+-        
+-        <form onSubmit={handleSubmit} className="auth-form">
++
++        <form onSubmit={handleRegister} className="auth-form">
+           {error && <div className="error-message">{error}</div>}
+-          
++
+           <div className="form-group">
+             <label htmlFor="username">╨ÿ╨╝╤Å ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Å</label>
+             <input
+diff --git a/frontend/src/pages/Search.css b/frontend/src/pages/Search.css
+index 0f3ec80..6135fee 100644
+--- a/frontend/src/pages/Search.css
++++ b/frontend/src/pages/Search.css
+@@ -1,206 +1,249 @@
+-.search-header {
++/* ==================== */
++/* SEARCH PAGE          */
++/* ==================== */
++
++.search-page-wrap {
++  padding-top: 32px;
++}
++
++.search-header-container {
+   margin-bottom: 32px;
+ }
+ 
+-.search-input {
++.search-input-wrapper {
++  position: relative;
++  display: flex;
++  align-items: center;
+   width: 100%;
+-  padding: 16px 24px;
++  max-width: 100%;
++}
++
++.search-icon-left {
++  position: absolute;
++  left: 20px;
++  color: #b3b3b3;
++  pointer-events: none;
++}
++
++.search-input-fancy {
++  width: 100%;
++  padding: 18px 52px;
+   background-color: #1a1a1a;
+-  border: 1px solid #333;
+-  border-radius: 8px;
++  border: 1px solid #282828;
++  border-radius: 9999px;
+   color: #ffffff;
+-  font-size: 16px;
++  font-size: 15px;
+   transition: all 0.2s;
+ }
+ 
+-.search-input:focus {
++.search-input-fancy:focus {
+   outline: none;
+-  border-color: #1db954;
+   background-color: #222;
++  border-color: #444;
+ }
+ 
+-.search-results {
+-  display: flex;
+-  flex-direction: column;
+-  gap: 32px;
++.search-input-fancy::placeholder {
++  color: #777;
+ }
+ 
+-.results-section {
+-  margin-bottom: 32px;
++.search-clear-btn {
++  position: absolute;
++  right: 16px;
++  width: 36px;
++  height: 36px;
++  background: transparent;
++  border: none;
++  color: #b3b3b3;
++  border-radius: 50%;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  cursor: pointer;
++  transition: all 0.2s;
+ }
+ 
+-.results-title {
+-  font-size: 20px;
+-  font-weight: bold;
++.search-clear-btn:hover {
++  background: rgba(255, 255, 255, 0.1);
+   color: #ffffff;
+-  margin-bottom: 16px;
+ }
+ 
+-.tracks-list {
++.search-loading {
++  text-align: left;
++  color: #b3b3b3;
++  font-size: 14px;
++}
++
++/* === RESULTS 2-COLUMN GRID === */
++
++.search-results-fancy {
+   display: flex;
+   flex-direction: column;
+-  gap: 8px;
+ }
+ 
+-.track-item {
++.search-grid-2col {
++  display: grid;
++  grid-template-columns: repeat(2, 1fr);
++  gap: 16px;
++  row-gap: 20px;
++}
++
++.search-item-fancy {
+   display: flex;
+   align-items: center;
+   gap: 16px;
+-  padding: 12px;
+-  background-color: #181818;
+-  border-radius: 8px;
++  padding: 10px;
++  border-radius: 12px;
++  transition: background 0.2s;
+   cursor: pointer;
+-  transition: all 0.2s;
+ }
+ 
+-.track-item:hover {
+-  background-color: #282828;
++.search-item-fancy.track-hover:hover {
++  background-color: #1a1a1a;
+ }
+ 
+-.track-item-cover {
+-  width: 56px;
+-  height: 56px;
++.search-item-cover {
++  width: 52px;
++  height: 52px;
+   object-fit: cover;
+-  border-radius: 4px;
+-  background-color: #333;
++  border-radius: 8px;
++  background-color: #2a2a2a;
++  flex-shrink: 0;
++}
++
++.search-item-cover.round {
++  border-radius: 50%;
+ }
+ 
+-.track-item-cover.placeholder {
++.search-item-cover.placeholder {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   font-size: 24px;
+-  color: #666;
++  font-weight: 500;
++  color: #a0a0a0;
+ }
+ 
+-.track-item-info {
++.search-item-info {
+   flex: 1;
+   min-width: 0;
+ }
+ 
+-.track-item-title {
+-  font-size: 16px;
++.search-item-title {
++  font-size: 15px;
+   font-weight: 500;
+   color: #ffffff;
+   margin-bottom: 4px;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
+ }
+ 
+-.track-item-artist {
+-  font-size: 14px;
++.search-item-subtitle {
++  font-size: 13px;
+   color: #b3b3b3;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
+ }
+ 
+-.playlists-list {
+-  display: grid;
+-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+-  gap: 16px;
++.search-item-subtitle.auth-role {
++  color: #a0a0a0;
+ }
+ 
+-.playlist-item {
+-  background-color: #181818;
+-  border-radius: 8px;
+-  padding: 16px;
+-  cursor: pointer;
+-  transition: all 0.2s;
++.search-item-trailing {
++  display: flex;
++  align-items: center;
++  gap: 14px;
++  padding-right: 8px;
++  color: #b3b3b3;
++  opacity: 0.6;
++  transition: opacity 0.2s;
++  flex-shrink: 0;
+ }
+ 
+-.playlist-item:hover {
+-  background-color: #282828;
++.search-item-fancy:hover .search-item-trailing {
++  opacity: 1;
+ }
+ 
+-.playlist-item-cover {
+-  width: 100%;
+-  aspect-ratio: 1;
+-  object-fit: cover;
+-  border-radius: 4px;
+-  margin-bottom: 12px;
+-  background-color: #333;
++.trailing-time {
++  font-size: 13px;
++  font-variant-numeric: tabular-nums;
++  color: #b3b3b3;
+ }
+ 
+-.playlist-item-cover.placeholder {
+-  display: flex;
+-  align-items: center;
+-  justify-content: center;
+-  font-size: 48px;
+-  color: #666;
++.heart-icon {
++  transition: transform 0.2s, fill 0.2s, color 0.2s;
+ }
+ 
+-.playlist-item-name {
+-  font-size: 16px;
+-  font-weight: 600;
++.heart-icon:hover {
+   color: #ffffff;
+-  margin-bottom: 4px;
+ }
+ 
+-.playlist-item-description {
+-  font-size: 14px;
+-  color: #b3b3b3;
+-}
++/* === EMPTY STATE === */
+ 
+-.users-list {
+-  display: grid;
+-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+-  gap: 16px;
++.no-results {
++  text-align: center;
++  padding: 80px 20px;
++  color: #777;
++  font-size: 15px;
+ }
+ 
+-.user-item {
++.search-placeholder {
+   display: flex;
++  flex-direction: column;
+   align-items: center;
+-  gap: 16px;
+-  padding: 16px;
+-  background-color: #181818;
+-  border-radius: 8px;
+-  cursor: pointer;
+-  transition: all 0.2s;
++  justify-content: center;
++  padding: 100px 32px;
++  color: #b3b3b3;
++  text-align: center;
+ }
+ 
+-.user-item:hover {
+-  background-color: #282828;
++.placeholder-icon {
++  margin-bottom: 24px;
++  color: #444;
+ }
+ 
+-.user-avatar {
+-  width: 56px;
+-  height: 56px;
+-  border-radius: 50%;
+-  object-fit: cover;
+-  background-color: #333;
++.search-placeholder h2 {
++  font-size: 24px;
++  color: #ffffff;
++  margin-bottom: 12px;
++  font-weight: 600;
++}
++
++.search-placeholder p {
++  font-size: 15px;
++  color: #777;
+ }
+ 
+-.user-avatar.placeholder {
++.search-like-btn {
++  background: none;
++  border: none;
++  padding: 4px;
++  cursor: pointer;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+-  font-size: 24px;
+-  font-weight: bold;
+-  color: #666;
++  color: #b3b3b3;
++  transition: all 0.2s ease;
++  margin-right: 8px;
+ }
+ 
+-.user-name {
+-  font-size: 16px;
+-  font-weight: 600;
++.search-like-btn:hover {
++  transform: scale(1.1);
+   color: #ffffff;
+-  margin-bottom: 4px;
+ }
+ 
+-.user-username {
+-  font-size: 14px;
+-  color: #b3b3b3;
++.heart-icon.liked {
++  color: #1ed760;
++  fill: #1ed760;
+ }
+ 
+-.no-results {
+-  text-align: center;
+-  padding: 64px;
+-  color: #b3b3b3;
+-}
+ 
+-.search-placeholder {
+-  text-align: center;
+-  padding: 128px 32px;
+-  color: #b3b3b3;
+-}
++/* === RESPONSIVE === */
+ 
+-.search-placeholder h2 {
+-  font-size: 32px;
+-  color: #ffffff;
+-  margin-bottom: 16px;
+-}
++@media (max-width: 900px) {
++  .search-grid-2col {
++    grid-template-columns: 1fr;
++    gap: 12px;
++  }
++}
+\ No newline at end of file
+diff --git a/frontend/src/pages/Search.jsx b/frontend/src/pages/Search.jsx
+index e80ad44..5dd5c84 100644
+--- a/frontend/src/pages/Search.jsx
++++ b/frontend/src/pages/Search.jsx
+@@ -1,5 +1,7 @@
+ import { useState, useEffect } from 'react'
++import { useNavigate } from 'react-router-dom'
+ import { usePlayerStore } from '../store/playerStore'
++import { Search as SearchIcon, X, Heart, ChevronRight } from 'lucide-react'
+ import api from '../services/api'
+ import defaultCover from '../assets/default-cover.svg'
+ import { resolveCoverUrl } from '../utils/media'
+@@ -9,6 +11,21 @@ function Search() {
+   const [query, setQuery] = useState('')
+   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
+   const [loading, setLoading] = useState(false)
++  const [likedTrackIds, setLikedTrackIds] = useState(new Set())
++  const navigate = useNavigate()
++
++  useEffect(() => {
++    fetchLikedTracks()
++  }, [])
++
++  const fetchLikedTracks = async () => {
++    try {
++      const res = await api.get('/tracks/me/liked')
++      setLikedTrackIds(new Set(res.data.map(t => t.id)))
++    } catch (error) {
++      console.error('Error fetching liked tracks:', error)
++    }
++  }
+ 
+   useEffect(() => {
+     if (query.trim().length > 0) {
+@@ -27,7 +44,47 @@ function Search() {
+       const response = await api.get('/search', {
+         params: { q: query, limit: 20 },
+       })
+-      setResults(response.data)
++
++      const { tracks, playlists, users } = response.data
++
++      // Extract unique artists from tracks that are not already listed as users
++      const existingUsernames = new Set(users.map(u => u.username.toLowerCase()))
++      const existingFullNames = new Set(users.map(u => (u.full_name || '').toLowerCase()))
++
++      const trackArtists = [...new Set(tracks.map(t => t.artist).filter(Boolean))]
++      const newArtists = trackArtists.filter(artist => {
++        const lower = artist.toLowerCase()
++        return !existingUsernames.has(lower) && !existingFullNames.has(lower)
++      })
++
++      // Simple string hashing function to generate 8-char hex
++      const generateHexId = (str) => {
++        let hash = 0
++        for (let i = 0; i < str.length; i++) {
++          hash = (hash << 5) - hash + str.charCodeAt(i)
++          hash |= 0 // Convert to 32bit integer
++        }
++        return Math.abs(hash).toString(16).padStart(8, '0').slice(0, 8)
++      }
++
++      const simulatedArtists = newArtists.map((artist) => {
++        const hexId = generateHexId(artist)
++        return {
++          id: hexId,
++          username: artist,
++          full_name: artist,
++          avatar_url: null,
++          is_simulated: true,
++          real_id: hexId,
++          original_name: artist
++        }
++      })
++
++      setResults({
++        tracks,
++        playlists,
++        users: [...users, ...simulatedArtists]
++      })
+     } catch (error) {
+       console.error('Search error:', error)
+     } finally {
+@@ -40,91 +97,141 @@ function Search() {
+     playTrack(track, results.tracks)
+   }
+ 
++  const handleToggleLikeTrack = async (e, trackId) => {
++    e.stopPropagation()
++    const isLiked = likedTrackIds.has(trackId)
++    try {
++      if (isLiked) {
++        await api.delete(`/tracks/${trackId}/like`)
++        setLikedTrackIds(prev => {
++          const next = new Set(prev)
++          next.delete(trackId)
++          return next
++        })
++      } else {
++        await api.post(`/tracks/${trackId}/like`)
++        setLikedTrackIds(prev => new Set(prev).add(trackId))
++      }
++    } catch (error) {
++      console.error('Error toggling track like:', error)
++    }
++  }
++
++  const formatTime = (seconds) => {
++    if (!seconds || isNaN(seconds)) return '0:00'
++    const mins = Math.floor(seconds / 60)
++    const secs = Math.floor(seconds % 60)
++    return `${mins}:${secs.toString().padStart(2, '0')}`
++  }
++
+   return (
+-    <div className="page-container">
+-      <div className="search-header">
+-        <input
+-          type="text"
+-          placeholder="╨º╤é╨╛ ╨▓╤ï ╤à╨╛╤é╨╕╤é╨╡ ╨┐╨╛╤ü╨╗╤â╤ê╨░╤é╤î?"
+-          value={query}
+-          onChange={(e) => setQuery(e.target.value)}
+-          className="search-input"
+-          autoFocus
+-        />
++    <div className="page-container search-page-wrap">
++      <div className="search-header-container">
++        <div className="search-input-wrapper">
++          <SearchIcon className="search-icon-left" size={20} />
++          <input
++            type="text"
++            placeholder="╨ÿ╨╝╤Å ╨░╤Ç╤é╨╕╤ü╤é╨░, ╤é╤Ç╨╡╨║ ╨╕╨╗╨╕ ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é"
++            value={query}
++            onChange={(e) => setQuery(e.target.value)}
++            className="search-input-fancy"
++            autoFocus
++          />
++          {query && (
++            <button className="search-clear-btn" onClick={() => setQuery('')}>
++              <X size={20} />
++            </button>
++          )}
++        </div>
+       </div>
+ 
+       {loading && (
+-        <div className="loading">╨ƒ╨╛╨╕╤ü╨║...</div>
++        <div className="search-loading">╨ƒ╨╛╨╕╤ü╨║...</div>
+       )}
+ 
+       {!loading && query && (
+-        <div className="search-results">
+-          {results.tracks.length > 0 && (
+-            <div className="results-section">
+-              <h2 className="results-title">╨ó╤Ç╨╡╨║╨╕</h2>
+-              <div className="tracks-list">
+-                {results.tracks.map((track) => (
+-                  <div
+-                    key={track.id}
+-                    className="track-item"
+-                    onClick={() => handlePlayTrack(track)}
+-                  >
+-                    <img
+-                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+-                      alt={track.title}
+-                      className="track-item-cover"
+-                    />
+-                    <div className="track-item-info">
+-                      <div className="track-item-title">{track.title}</div>
+-                      <div className="track-item-artist">{track.artist}</div>
+-                    </div>
++        <div className="search-results-fancy">
++          {(results.users.length > 0 || results.tracks.length > 0 || results.playlists.length > 0) && (
++            <div className="search-grid-2col">
++              {/* === ╨ƒ╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╨╕ (╨ÿ╤ü╨┐╨╛╨╗╨╜╨╕╤é╨╡╨╗╨╕) === */}
++              {results.users.map((user) => (
++                <div
++                  key={`user-${user.id}`}
++                  className="search-item-fancy track-hover"
++                  onClick={() => {
++                    if (user.is_simulated) {
++                      // Pass actual name in state so Artist page doesn't have to brute force crack the hash
++                      navigate(`/artist/${user.id}`, { state: { artistName: user.original_name } })
++                    } else {
++                      navigate(`/artist/${user.id}`)
++                    }
++                  }}
++                >
++                  {user.avatar_url ? (
++                    <img src={user.avatar_url} alt={user.username} className="search-item-cover round" />
++                  ) : (
++                    <div className="search-item-cover round placeholder">{user.username[0].toUpperCase()}</div>
++                  )}
++                  <div className="search-item-info">
++                    <div className="search-item-title">{user.full_name || user.username}</div>
++                    <div className="search-item-subtitle auth-role">╨ÿ╤ü╨┐╨╛╨╗╨╜╨╕╤é╨╡╨╗╤î</div>
+                   </div>
+-                ))}
+-              </div>
+-            </div>
+-          )}
++                  <div className="search-item-trailing">
++                    <ChevronRight size={20} className="trailing-icon" />
++                  </div>
++                </div>
++              ))}
+ 
+-          {results.playlists.length > 0 && (
+-            <div className="results-section">
+-              <h2 className="results-title">╨ƒ╨╗╨╡╨╣╨╗╨╕╤ü╤é╤ï</h2>
+-              <div className="playlists-list">
+-                {results.playlists.map((playlist) => (
+-                  <div key={playlist.id} className="playlist-item">
+-                    <img
+-                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+-                      alt={playlist.name}
+-                      className="playlist-item-cover"
+-                    />
+-                    <div className="playlist-item-info">
+-                      <div className="playlist-item-name">{playlist.name}</div>
+-                      {playlist.description && (
+-                        <div className="playlist-item-description">{playlist.description}</div>
+-                      )}
+-                    </div>
++              {/* === ╨ó╤Ç╨╡╨║╨╕ === */}
++              {results.tracks.map((track) => (
++                <div
++                  key={`track-${track.id}`}
++                  className="search-item-fancy track-hover"
++                  onClick={() => handlePlayTrack(track)}
++                >
++                  <img
++                    src={resolveCoverUrl(track.cover_url) || defaultCover}
++                    alt={track.title}
++                    className="search-item-cover"
++                  />
++                  <div className="search-item-info">
++                    <div className="search-item-title">{track.title}</div>
++                    <div className="search-item-subtitle">{track.artist}</div>
+                   </div>
+-                ))}
+-              </div>
+-            </div>
+-          )}
++                  <div className="search-item-trailing">
++                    <button
++                      className="search-like-btn"
++                      onClick={(e) => handleToggleLikeTrack(e, track.id)}
++                    >
++                      <Heart
++                        size={18}
++                        className={`trailing-icon heart-icon ${likedTrackIds.has(track.id) ? 'liked' : ''}`}
++                        fill={likedTrackIds.has(track.id) ? '#1db954' : 'none'}
++                        color={likedTrackIds.has(track.id) ? '#1db954' : 'currentColor'}
++                      />
++                    </button>
++                    <span className="trailing-time">{formatTime(track.duration)}</span>
++                  </div>
++                </div>
++              ))}
+ 
+-          {results.users.length > 0 && (
+-            <div className="results-section">
+-              <h2 className="results-title">╨ƒ╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╨╕</h2>
+-              <div className="users-list">
+-                {results.users.map((user) => (
+-                  <div key={user.id} className="user-item">
+-                    {user.avatar_url ? (
+-                      <img src={user.avatar_url} alt={user.username} className="user-avatar" />
+-                    ) : (
+-                      <div className="user-avatar placeholder">{user.username[0].toUpperCase()}</div>
+-                    )}
+-                    <div className="user-info">
+-                      <div className="user-name">{user.full_name || user.username}</div>
+-                      <div className="user-username">@{user.username}</div>
+-                    </div>
++              {/* === ╨ƒ╨╗╨╡╨╣╨╗╨╕╤ü╤é╤ï === */}
++              {results.playlists.map((playlist) => (
++                <div key={`pl-${playlist.id}`} className="search-item-fancy">
++                  <img
++                    src={resolveCoverUrl(playlist.cover_url) || defaultCover}
++                    alt={playlist.name}
++                    className="search-item-cover"
++                  />
++                  <div className="search-item-info">
++                    <div className="search-item-title">{playlist.name}</div>
++                    <div className="search-item-subtitle">{playlist.description || '╨ƒ╨╗╨╡╨╣╨╗╨╕╤ü╤é'}</div>
++                  </div>
++                  <div className="search-item-trailing">
++                    <ChevronRight size={20} className="trailing-icon" />
+                   </div>
+-                ))}
+-              </div>
++                </div>
++              ))}
+             </div>
+           )}
+ 
+@@ -138,6 +245,7 @@ function Search() {
+ 
+       {!query && (
+         <div className="search-placeholder">
++          <SearchIcon size={64} className="placeholder-icon" />
+           <h2>╨¥╨░╨╣╨┤╨╕╤é╨╡ ╨╗╤Ä╨▒╨╕╨╝╤â╤Ä ╨╝╤â╨╖╤ï╨║╤â</h2>
+           <p>╨ÿ╤ë╨╕╤é╨╡ ╤é╤Ç╨╡╨║╨╕, ╨┐╨╗╨╡╨╣╨╗╨╕╤ü╤é╤ï ╨╕ ╨╕╤ü╨┐╨╛╨╗╨╜╨╕╤é╨╡╨╗╨╡╨╣</p>
+         </div>
+diff --git a/frontend/src/pages/UploadTrack.jsx b/frontend/src/pages/UploadTrack.jsx
+index 7f95b9d..d8254b8 100644
+--- a/frontend/src/pages/UploadTrack.jsx
++++ b/frontend/src/pages/UploadTrack.jsx
+@@ -26,15 +26,15 @@ function UploadTrack() {
+       const allowedTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/flac', 'audio/m4a', 'audio/ogg', 'audio/aac']
+       const fileExt = selectedFile.name.split('.').pop().toLowerCase()
+       const allowedExts = ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac']
+-      
++
+       if (!allowedExts.includes(fileExt)) {
+         setError('╨¥╨╡╨┐╨╛╨┤╨┤╨╡╤Ç╨╢╨╕╨▓╨░╨╡╨╝╤ï╨╣ ╤ä╨╛╤Ç╨╝╨░╤é ╤ä╨░╨╣╨╗╨░. ╨á╨░╨╖╤Ç╨╡╤ê╨╡╨╜╤ï: MP3, WAV, FLAC, M4A, OGG, AAC')
+         return
+       }
+-      
++
+       setFile(selectedFile)
+       setError('')
+-      
++
+       // Try to extract metadata from filename
+       if (!formData.title && !formData.artist) {
+         const filename = selectedFile.name.replace(/\.[^/.]+$/, '')
+@@ -55,6 +55,17 @@ function UploadTrack() {
+           }))
+         }
+       }
++
++      // Try to extract audio duration using browser Audio API
++      const objectUrl = URL.createObjectURL(selectedFile)
++      const audio = new Audio(objectUrl)
++      audio.addEventListener('loadedmetadata', () => {
++        setFormData(prev => ({ ...prev, duration: Math.round(audio.duration).toString() }))
++        URL.revokeObjectURL(objectUrl)
++      })
++      audio.addEventListener('error', () => {
++        URL.revokeObjectURL(objectUrl)
++      })
+     }
+   }
+ 
+diff --git a/frontend/src/store/authStore.js b/frontend/src/store/authStore.js
+index c2cb78d..65b571b 100644
+--- a/frontend/src/store/authStore.js
++++ b/frontend/src/store/authStore.js
+@@ -20,84 +20,90 @@ const setStoredAuth = (data) => {
+ }
+ 
+ const useAuthStore = create((set, get) => ({
++  user: null,
++  token: null,
++  isAuthenticated: false,
++
++  login: async (username, password) => {
++    try {
++      const response = await api.post('/auth/login', new URLSearchParams({
++        username,
++        password,
++      }), {
++        headers: {
++          'Content-Type': 'application/x-www-form-urlencoded',
++        },
++      })
++
++      const { access_token } = response.data
++      api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
++
++      // Get user info
++      const userResponse = await api.get('/auth/me')
++
++      const newState = {
++        token: access_token,
++        user: userResponse.data,
++        isAuthenticated: true,
++      }
++      set(newState)
++      setStoredAuth(newState)
++
++      return { success: true }
++    } catch (error) {
++      // Handle email not verified (403)
++      if (error.response?.status === 403 && error.response?.data?.detail === 'email_not_verified') {
++        // Extract email from headers or response
++        const email = error.response?.headers?.['x-verify-email'] || ''
++        return { success: false, needsVerification: true, email, error: 'Email ╨╜╨╡ ╨┐╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╤æ╨╜' }
++      }
++      return { success: false, error: error.response?.data?.detail || 'Login failed' }
++    }
++  },
++
++  register: async (username, email, password, fullName) => {
++    try {
++      await api.post('/auth/register', {
++        username,
++        email,
++        password,
++        full_name: fullName,
++      })
++
++      // Auto login after registration
++      return await useAuthStore.getState().login(username, password)
++    } catch (error) {
++      return { success: false, error: error.response?.data?.detail || 'Registration failed' }
++    }
++  },
++
++  logout: () => {
++    delete api.defaults.headers.common['Authorization']
++    set({
+       user: null,
+       token: null,
+       isAuthenticated: false,
+-      
+-      login: async (username, password) => {
+-        try {
+-          const response = await api.post('/auth/login', new URLSearchParams({
+-            username,
+-            password,
+-          }), {
+-            headers: {
+-              'Content-Type': 'application/x-www-form-urlencoded',
+-            },
+-          })
+-          
+-          const { access_token } = response.data
+-          api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+-          
+-          // Get user info
+-          const userResponse = await api.get('/auth/me')
+-          
+-          const newState = {
+-            token: access_token,
+-            user: userResponse.data,
+-            isAuthenticated: true,
+-          }
+-          set(newState)
+-          setStoredAuth(newState)
+-          
+-          return { success: true }
+-        } catch (error) {
+-          return { success: false, error: error.response?.data?.detail || 'Login failed' }
+-        }
+-      },
+-      
+-      register: async (username, email, password, fullName) => {
+-        try {
+-          await api.post('/auth/register', {
+-            username,
+-            email,
+-            password,
+-            full_name: fullName,
+-          })
+-          
+-          // Auto login after registration
+-          return await useAuthStore.getState().login(username, password)
+-        } catch (error) {
+-          return { success: false, error: error.response?.data?.detail || 'Registration failed' }
+-        }
+-      },
+-      
+-      logout: () => {
+-        delete api.defaults.headers.common['Authorization']
++    })
++    setStoredAuth(null)
++  },
++
++  checkAuth: async () => {
++    const stored = getStoredAuth()
++    if (stored && stored.token) {
++      try {
++        api.defaults.headers.common['Authorization'] = `Bearer ${stored.token}`
++        const response = await api.get('/auth/me')
+         set({
+-          user: null,
+-          token: null,
+-          isAuthenticated: false,
++          user: response.data,
++          token: stored.token,
++          isAuthenticated: true,
+         })
+-        setStoredAuth(null)
+-      },
+-      
+-      checkAuth: async () => {
+-        const stored = getStoredAuth()
+-        if (stored && stored.token) {
+-          try {
+-            api.defaults.headers.common['Authorization'] = `Bearer ${stored.token}`
+-            const response = await api.get('/auth/me')
+-            set({
+-              user: response.data,
+-              token: stored.token,
+-              isAuthenticated: true,
+-            })
+-          } catch (error) {
+-            get().logout()
+-          }
+-        }
+-      },
+-    })
++      } catch (error) {
++        get().logout()
++      }
++    }
++  },
++})
+ )
+ 
+ // Persist state changes
+diff --git a/frontend/src/utils/media.js b/frontend/src/utils/media.js
+index 73f0c4c..5fd1b61 100644
+--- a/frontend/src/utils/media.js
++++ b/frontend/src/utils/media.js
+@@ -1,9 +1,37 @@
+ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+ const API_ORIGIN = API_BASE.replace(/\/api\/?$/, '')
++const CDN_URL = import.meta.env.VITE_CDN_URL
+ 
+ export const resolveCoverUrl = (coverUrl) => {
+   if (!coverUrl) return null
+   if (coverUrl.startsWith('http')) return coverUrl
++
++  if (CDN_URL) {
++    return `${CDN_URL}${coverUrl.startsWith('/') ? '' : '/'}${coverUrl}`
++  }
++
+   if (coverUrl.startsWith('/')) return `${API_ORIGIN}${coverUrl}`
+   return `${API_ORIGIN}/${coverUrl}`
+ }
++
++export const resolveTrackUrl = (track) => {
++  if (!track) return undefined
++
++  if (track.file_path?.startsWith('http')) {
++    return track.file_path
++  }
++
++  if (track.file_path) {
++    if (CDN_URL) {
++      return `${CDN_URL}${track.file_path.startsWith('/') ? '' : '/'}${track.file_path}`
++    }
++    return `${API_ORIGIN}${track.file_path.startsWith('/') ? '' : '/'}${track.file_path}`
++  }
++
++  // Fallback if file_path is somehow missing but track.id is present
++  if (track.id) {
++    return `${API_BASE}/tracks/${track.id}/stream`
++  }
++
++  return undefined
++}

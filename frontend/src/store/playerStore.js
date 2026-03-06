@@ -17,7 +17,7 @@ const usePlayerStore = create((set, get) => ({
   currentShuffleIndex: -1,
   isPlaying: false,
   source: null,
-  volume: 1,
+  volume: parseFloat(localStorage.getItem('player-volume')) || 1,
   currentTime: 0,
   duration: 0,
   isFullScreen: false,
@@ -80,7 +80,7 @@ const usePlayerStore = create((set, get) => ({
       set({ isShuffle: false, currentShuffleIndex: -1 })
     }
   },
-  
+
   togglePlayPause: () => {
     set((state) => ({ isPlaying: !state.isPlaying }))
   },
@@ -92,7 +92,7 @@ const usePlayerStore = create((set, get) => ({
   closeFullScreen: () => {
     set({ isFullScreen: false })
   },
-  
+
   nextTrack: () => {
     const { queue, currentIndex, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     if (isShuffle && shuffledOrder.length > 0) {
@@ -150,19 +150,21 @@ const usePlayerStore = create((set, get) => ({
       })
     }
   },
-  
+
   setVolume: (volume) => {
-    set({ volume: Math.max(0, Math.min(1, volume)) })
+    const newVolume = Math.max(0, Math.min(1, volume))
+    localStorage.setItem('player-volume', newVolume)
+    set({ volume: newVolume })
   },
-  
+
   setCurrentTime: (time) => {
     set({ currentTime: time })
   },
-  
+
   setDuration: (duration) => {
     set({ duration })
   },
-  
+
   clearQueue: () => {
     set({
       currentTrack: null,
