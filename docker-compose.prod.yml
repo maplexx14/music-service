@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: music_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-music_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-music_password}
+      POSTGRES_DB: ${DB_NAME:-music_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${DB_USER:-music_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: music_redis_prod
+    restart: unless-stopped
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: music_backend_prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-music_user}:${DB_PASSWORD:-music_password}@postgres:5432/${DB_NAME:-music_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      - music_files_prod:/app/music_files
+      - cover_files_prod:/app/cover_files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_CDN_URL: ${VITE_CDN_URL:-}
+    container_name: music_frontend_prod
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.prod
+    container_name: music_nginx_prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - music_files_prod:/var/www/music_files:ro
+      - cover_files_prod:/var/www/cover_files:ro
+    # For serving React frontend directly through nginx, wait for the build
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data_prod:
+  redis_data_prod:
+  music_files_prod:
+  cover_files_prod:

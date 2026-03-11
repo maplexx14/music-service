@@ -1,0 +1,249 @@
+/* ==================== */
+/* SEARCH PAGE          */
+/* ==================== */
+
+.search-page-wrap {
+  padding-top: 32px;
+}
+
+.search-header-container {
+  margin-bottom: 32px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+}
+
+.search-icon-left {
+  position: absolute;
+  left: 20px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.search-input-fancy {
+  width: 100%;
+  padding: 18px 52px;
+  background-color: #1a1a1a;
+  border: 1px solid #282828;
+  border-radius: 9999px;
+  color: #ffffff;
+  font-size: 15px;
+  transition: all 0.2s;
+}
+
+.search-input-fancy:focus {
+  outline: none;
+  background-color: #222;
+  border-color: #444;
+}
+
+.search-input-fancy::placeholder {
+  color: #777;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.search-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.search-loading {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* === RESULTS 2-COLUMN GRID === */
+
+.search-results-fancy {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-grid-2col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  row-gap: 20px;
+}
+
+.search-item-fancy {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px;
+  border-radius: 12px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.search-item-fancy.track-hover:hover {
+  background-color: #1a1a1a;
+}
+
+.search-item-cover {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 8px;
+  background-color: #2a2a2a;
+  flex-shrink: 0;
+}
+
+.search-item-cover.round {
+  border-radius: 50%;
+}
+
+.search-item-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 500;
+  color: #a0a0a0;
+}
+
+.search-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-item-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #ffffff;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-item-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-item-subtitle.auth-role {
+  color: #a0a0a0;
+}
+
+.search-item-trailing {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 8px;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.search-item-fancy:hover .search-item-trailing {
+  opacity: 1;
+}
+
+.trailing-time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.heart-icon {
+  transition: transform 0.2s, fill 0.2s, color 0.2s;
+}
+
+.heart-icon:hover {
+  color: #ffffff;
+}
+
+/* === EMPTY STATE === */
+
+.no-results {
+  text-align: center;
+  padding: 80px 20px;
+  color: #777;
+  font-size: 15px;
+}
+
+.search-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 32px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.placeholder-icon {
+  margin-bottom: 24px;
+  color: #444;
+}
+
+.search-placeholder h2 {
+  font-size: 24px;
+  color: #ffffff;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.search-placeholder p {
+  font-size: 15px;
+  color: #777;
+}
+
+.search-like-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+  margin-right: 8px;
+}
+
+.search-like-btn:hover {
+  transform: scale(1.1);
+  color: #ffffff;
+}
+
+.heart-icon.liked {
+  color: var(--accent-favourite);
+  fill: var(--accent-favourite);
+}
+
+
+/* === RESPONSIVE === */
+
+@media (max-width: 900px) {
+  .search-grid-2col {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}

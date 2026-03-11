@@ -1,0 +1,127 @@
+.prefs-header {
+  margin-bottom: 24px;
+}
+
+.prefs-header h1 {
+  font-size: 32px;
+  font-weight: bold;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.prefs-header p {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.prefs-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 20px;
+  max-width: 640px;
+}
+
+.prefs-error {
+  color: #ff6b6b;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.prefs-loading {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.prefs-section {
+  margin-bottom: 20px;
+}
+
+.prefs-section:last-of-type {
+  margin-bottom: 16px;
+}
+
+.prefs-label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.prefs-search {
+  width: 100%;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.prefs-search:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.prefs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.prefs-chip {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.prefs-chip:hover {
+  border-color: var(--color-accent);
+}
+
+.prefs-chip.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.prefs-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.prefs-actions {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.prefs-save-btn {
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.prefs-save-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.prefs-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

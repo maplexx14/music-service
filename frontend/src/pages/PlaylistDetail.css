@@ -1,0 +1,529 @@
+.pd-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 16px 16px 120px;
+}
+
+.pd-header {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pd-back {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.2s;
+}
+
+.pd-back:hover {
+  color: var(--text-main);
+}
+
+.pd-hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.pd-cover-wrap {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.pd-cover-wrap.editable {
+  cursor: pointer;
+}
+
+.pd-cover {
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--bg-secondary);
+  display: block;
+}
+
+.pd-cover-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.2s;
+  border-radius: 12px;
+}
+
+.pd-cover-wrap.editable:hover .pd-cover-overlay {
+  opacity: 1;
+}
+
+.pd-cover-loading {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pd-cover-loading::after {
+  content: '';
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pd-spin 0.6s linear infinite;
+}
+
+@keyframes pd-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pd-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pd-title {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pd-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pd-count {
+  font-size: 14px;
+  color: #888;
+}
+
+.pd-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.pd-play-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.pd-play-btn:hover {
+  transform: scale(1.08);
+  background: var(--color-accent-hover);
+}
+
+.pd-shuffle-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  border: none;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pd-shuffle-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text-main);
+}
+
+.pd-like-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.2s, transform 0.15s;
+}
+
+.pd-like-btn:hover {
+  color: var(--color-accent);
+}
+
+.pd-like-btn:active {
+  transform: scale(0.85);
+}
+
+.pd-like-btn.liked {
+  color: var(--accent-favourite);
+}
+
+.pd-share-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.2s, transform 0.15s;
+}
+
+.pd-share-btn:hover {
+  color: var(--text-main);
+}
+
+.pd-share-btn:active {
+  transform: scale(0.85);
+}
+
+.pd-add-toggle {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pd-add-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text-main);
+}
+
+.pd-add-toggle.active {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+/* Remove track button */
+
+.pd-remove-btn {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  padding: 8px;
+  margin: -4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.2s, background 0.2s;
+}
+
+.pd-track:hover .pd-remove-btn {
+  opacity: 1;
+}
+
+.pd-remove-btn:hover {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.1);
+}
+
+/* Add tracks panel */
+
+.pd-add-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.pd-add-header {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.pd-add-loading {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.pd-add-results {
+  display: flex;
+  flex-direction: column;
+}
+
+.pd-add-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.pd-add-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pd-add-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.pd-add-btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.pd-add-btn:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+.pd-add-btn.added {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.pd-add-no-results {
+  font-size: 14px;
+  color: #666;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.pd-empty-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+  margin-top: 8px;
+}
+
+.pd-empty-add-btn:hover {
+  background: var(--color-accent-hover);
+}
+
+.pd-empty-add-btn:active {
+  transform: scale(0.96);
+}
+
+/* Search */
+
+.pd-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pd-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.pd-search-input {
+  width: 100%;
+  padding: 12px 14px 12px 40px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-main);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.pd-search-input::placeholder {
+  color: #666;
+}
+
+.pd-search-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Track list */
+
+.pd-track-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pd-track {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pd-track:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pd-track.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pd-track-index {
+  width: 28px;
+  text-align: center;
+  font-size: 14px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.pd-track.active .pd-track-index {
+  color: var(--color-accent);
+}
+
+.pd-track-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+}
+
+.pd-track-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pd-track-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pd-track-name.active {
+  color: var(--color-accent);
+}
+
+.pd-track-artist {
+  font-size: 13px;
+  color: #888;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pd-track-duration {
+  font-size: 13px;
+  color: #888;
+  min-width: 40px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Empty states */
+
+.pd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 0;
+  color: #555;
+}
+
+.pd-empty p {
+  font-size: 16px;
+  color: #666;
+}
+
+@media (max-width: 768px) {
+  .pd-page {
+    padding: 16px 16px 150px;
+  }
+
+  .pd-title {
+    font-size: 22px;
+  }
+
+  .pd-cover-wrap {
+    width: 64px;
+    height: 64px;
+  }
+
+  .pd-track-index {
+    display: none;
+  }
+}

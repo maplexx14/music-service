@@ -1,0 +1,227 @@
+.settings-header {
+  margin-bottom: 24px;
+}
+
+.settings-header h1 {
+  font-size: 32px;
+  font-weight: bold;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.settings-header p {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.settings-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 20px;
+  max-width: 520px;
+}
+
+.settings-card h2 {
+  font-size: 18px;
+  color: var(--text-main);
+  margin-bottom: 16px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-row:first-of-type {
+  border-top: none;
+}
+
+.settings-label {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.settings-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.settings-control input[type='color'] {
+  width: 36px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.settings-color-text {
+  width: 88px;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.settings-color-text:focus {
+  outline: none;
+}
+
+.settings-toggle {
+  position: relative;
+  width: 46px;
+  height: 26px;
+}
+
+.settings-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--bg-card);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+.settings-toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  top: 3px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.2s ease;
+}
+
+.settings-toggle input:checked + .settings-toggle-slider {
+  background: var(--color-accent);
+}
+
+.settings-toggle input:checked + .settings-toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.settings-gif {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-theme-switch {
+  display: flex;
+  gap: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.settings-theme-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background 0.2s, color 0.2s;
+}
+
+.settings-theme-btn:hover {
+  color: var(--text-main);
+}
+
+.settings-theme-btn.active {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.settings-accent-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-preset-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  background: var(--preset-color);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.settings-preset-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 2px var(--text-secondary);
+}
+
+.settings-preset-btn.active {
+  border-color: var(--text-main);
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.settings-gif-upload {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: var(--text-main);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.settings-gif-upload input {
+  display: none;
+}
+
+.settings-gif-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-gif-preview img {
+  width: 80px;
+  height: 80px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--bg-main);
+}
+
+.settings-gif-preview button {
+  border: none;
+  background: var(--bg-card);
+  color: var(--text-main);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.settings-error {
+  color: #ff6b6b;
+  font-size: 12px;
+}

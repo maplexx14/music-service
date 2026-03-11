@@ -1,0 +1,61 @@
+:root {
+    /* Deezer-inspired: глубокий тёмный фон */
+    --bg-main: #0d0d0d;
+
+    /* Вторичный фон (панели, карточки) */
+    --bg-secondary: #141414;
+
+    /* Акцент: яркий фиолетовый/пурпурный (кнопки, прогресс, активные элементы) */
+    --accent-base: #8f00ff;
+    --accent-magenta: #ff1493;
+    --color-accent: var(--accent-base);
+    --color-accent-hover: color-mix(in srgb, var(--accent-base) 85%, white);
+
+    /* Градиент акцента (фиолетовый → розовый) */
+    --accent-gradient: linear-gradient(135deg, #8f00ff 0%, #ff1493 100%);
+
+    /* Цвет основного текста */
+    --text-main: #ffffff;
+
+    /* Вторичный текст (подписи, счётчики) */
+    --text-secondary: #a0a0a0;
+
+    /* Специальные области */
+    --bg-sidebar: #0d0d0d;
+    --bg-player: #141414;
+    --bg-card: #282828;
+    --bg-search: #282828;
+
+    /* Акцент для лайков/избранного (оранжево-красный) */
+    --accent-favourite: #ff4500;
+
+    /* Цветовая палитра потока / настроений (Deezer-style) */
+    --stream-color-1: #af52de;
+    --stream-color-2: #ffc107;
+    --stream-color-3: #ff69b4;
+    --mood-empower: #af52de;
+    --mood-happy: #ffc107;
+    --mood-workout: #ff7f00;
+    --mood-party: #ffd700;
+    --mood-chill: #ff69b4;
+    --mood-sad: #4169e1;
+    --mood-focus: #00ffff;
+
+    /* Дополнительные цвета */
+    --bg-hover: rgba(255, 255, 255, 0.08);
+    --border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Светлая тема */
+[data-theme="light"] {
+    --bg-main: #f5f5f5;
+    --bg-secondary: #ffffff;
+    --bg-sidebar: #f0f0f0;
+    --bg-player: #ffffff;
+    --bg-card: #ffffff;
+    --bg-search: #e8e8e8;
+    --text-main: #121212;
+    --text-secondary: #5a5a5a;
+    --bg-hover: rgba(0, 0, 0, 0.06);
+    --border-color: rgba(0, 0, 0, 0.12);
+}
