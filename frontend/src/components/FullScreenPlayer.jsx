@@ -1,6 +1,8 @@
-import { useMemo } from 'react'
-import { X, Heart, Share2, MoreHorizontal, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronDown, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
+import defaultCover from '../assets/default-cover.svg'
+import { resolveCoverUrl } from '../utils/media'
 import './FullScreenPlayer.css'
 
 function FullScreenPlayer() {
@@ -17,12 +19,36 @@ function FullScreenPlayer() {
     isShuffle,
     toggleRepeatOne,
     toggleShuffle,
+    queue,
+    currentIndex,
+    likedTrackIds,
+    fetchLikedTracks,
+    toggleTrackLike,
   } = usePlayerStore()
+  const [loadingLike, setLoadingLike] = useState(false)
 
   const progressPercent = useMemo(() => {
     if (!duration) return 0
     return Math.min(100, (currentTime / duration) * 100)
   }, [currentTime, duration])
+
+  const coverUrl = useMemo(
+    () => resolveCoverUrl(currentTrack?.cover_url) || defaultCover,
+    [currentTrack?.cover_url],
+  )
+
+  useEffect(() => {
+    const checkLikedStatus = async () => {
+      if (!currentTrack) return
+      try {
+        await fetchLikedTracks()
+      } catch (error) {
+        console.error('Error checking liked status:', error)
+      }
+    }
+
+    checkLikedStatus()
+  }, [currentTrack?.id, fetchLikedTracks])
 
   if (!currentTrack) return null
 
@@ -33,27 +59,39 @@ function FullScreenPlayer() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  const handleLike = async () => {
+    if (!currentTrack || loadingLike) return
+
+    setLoadingLike(true)
+    try {
+      await toggleTrackLike(currentTrack.id)
+    } catch (error) {
+      console.error('Error toggling like:', error)
+    } finally {
+      setLoadingLike(false)
+    }
+  }
+
+  const isLiked = likedTrackIds.includes(currentTrack.id)
+  const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
+
   return (
     <div className="fullscreen-player">
       <div className="fullscreen-header">
         <button className="fullscreen-icon" onClick={closeFullScreen} aria-label="Закрыть">
-          <X size={20} />
+          <ChevronDown size={22} />
         </button>
         <div className="fullscreen-title">
-          <div className="fullscreen-subtitle">Сейчас играет</div>
+          <div className="fullscreen-subtitle">{queueLabel}</div>
           <div className="fullscreen-track">{currentTrack.title}</div>
         </div>
-        <button className="fullscreen-icon" aria-label="Меню">
-          <MoreHorizontal size={20} />
+        <button className="fullscreen-icon" type="button" aria-label="Очередь">
+          <ListMusic size={20} />
         </button>
       </div>
 
       <div className="fullscreen-art">
-        {currentTrack.cover_url ? (
-          <img src={currentTrack.cover_url} alt={currentTrack.title} />
-        ) : (
-          <div className="fullscreen-art-placeholder">♪</div>
-        )}
+        <img src={coverUrl} alt={currentTrack.title} />
       </div>
 
       <div className="fullscreen-info">
@@ -62,11 +100,14 @@ function FullScreenPlayer() {
           <div className="fullscreen-artist">{currentTrack.artist}</div>
         </div>
         <div className="fullscreen-actions">
-          <button className="fullscreen-icon" aria-label="Нравится">
-            <Heart size={20} />
-          </button>
-          <button className="fullscreen-icon" aria-label="Поделиться">
-            <Share2 size={20} />
+          <button
+            type="button"
+            className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
+            onClick={handleLike}
+            disabled={loadingLike}
+            aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+          >
+            <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
           </button>
         </div>
       </div>
@@ -105,7 +146,7 @@ function FullScreenPlayer() {
           onClick={toggleRepeatOne}
           aria-label={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
         >
-          <Repeat size={20} />
+          <Repeat1 size={20} />
         </button>
       </div>
     </div>

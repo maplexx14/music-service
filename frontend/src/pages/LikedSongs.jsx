@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Heart } from 'lucide-react'
 import api from '../services/api'
+import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './LikedSongs.css'
@@ -39,7 +40,7 @@ function LikedSongs() {
   if (loading) {
     return (
       <div className="page-container">
-        <div className="loading">Загрузка...</div>
+        <Spinner />
       </div>
     )
   }

@@ -1,11 +1,3 @@
-/**
- * API configuration.
- * Порядок приоритета:
- * 1. window.__APP_CONFIG__.VITE_API_URL (public/config.js — runtime, без пересборки)
- * 2. import.meta.env.VITE_API_URL (.env при сборке)
- * 3. Тот же origin + /api (если фронт на https://example.com — API на https://example.com/api)
- * 4. http://localhost:8000/api (fallback для локальной разработки)
- */
 function getApiUrl() {
   if (typeof window !== 'undefined') {
     const runtime = window.__APP_CONFIG__?.VITE_API_URL

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import api from '../services/api'
+import api, { setApiAuthToken } from '../services/api'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -36,7 +36,7 @@ const useAuthStore = create((set, get) => ({
           })
           
           const { access_token } = response.data
-          api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+          setApiAuthToken(access_token)
           
           // Get user info
           const userResponse = await api.get('/auth/me')
@@ -72,7 +72,7 @@ const useAuthStore = create((set, get) => ({
       },
       
       logout: () => {
-        delete api.defaults.headers.common['Authorization']
+        setApiAuthToken(null)
         set({
           user: null,
           token: null,
@@ -85,7 +85,7 @@ const useAuthStore = create((set, get) => ({
         const stored = getStoredAuth()
         if (stored && stored.token) {
           try {
-            api.defaults.headers.common['Authorization'] = `Bearer ${stored.token}`
+            setApiAuthToken(stored.token)
             const response = await api.get('/auth/me')
             set({
               user: response.data,
@@ -121,7 +121,7 @@ if (typeof window !== 'undefined') {
       isAuthenticated: !!stored.token,
     })
     if (stored.token) {
-      api.defaults.headers.common['Authorization'] = `Bearer ${stored.token}`
+      setApiAuthToken(stored.token)
       // Verify token is still valid
       useAuthStore.getState().checkAuth()
     }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
+import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './Search.css'
@@ -54,7 +55,7 @@ function Search() {
       </div>
 
       {loading && (
-        <div className="loading">Поиск...</div>
+        <Spinner label="Поиск..." />
       )}
 
       {!loading && query && (

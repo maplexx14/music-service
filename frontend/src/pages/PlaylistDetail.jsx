@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Heart, MoreVertical } from 'lucide-react'
 import api from '../services/api'
+import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './PlaylistDetail.css'
@@ -43,7 +44,7 @@ function PlaylistDetail() {
   if (loading) {
     return (
       <div className="page-container">
-        <div className="loading">Загрузка...</div>
+        <Spinner />
       </div>
     )
   }

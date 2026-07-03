@@ -1,14 +1,21 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.database import engine, Base
+from app.rate_limit import limiter
 from app.routers import auth, tracks, playlists, search, recommendations, users
 import os
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Schema is managed by Alembic migrations (alembic upgrade head).
+# For quick local dev without migrations set DEBUG=true.
+if os.getenv("DEBUG", "").lower() in ("1", "true", "yes"):
+    Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Music Streaming API", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS: allow_origins=["*"] и allow_credentials=True несовместимы.
 # По умолчанию allow_credentials=False (Bearer в заголовке не требует cookies).

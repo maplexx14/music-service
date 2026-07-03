@@ -48,7 +48,7 @@ function Sidebar() {
     { path: '/playlists', icon: Library, label: 'Моя музыка' },
     { path: '/liked', icon: Heart, label: 'Понравившиеся' },
     { path: '/upload', icon: Upload, label: 'Загрузить трек' },
-    { path: '/admin', icon: Shield, label: 'Админ' },
+    ...(user?.is_admin ? [{ path: '/admin', icon: Shield, label: 'Админ' }] : []),
   ]
 
   return (

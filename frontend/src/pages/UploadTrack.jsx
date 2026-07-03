@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, Music, X } from 'lucide-react'
 import api from '../services/api'
+import { toast } from '../store/toastStore'
 import './UploadTrack.css'
 
 function UploadTrack() {
@@ -12,11 +13,11 @@ function UploadTrack() {
     artist: '',
     album: '',
     genre: '',
-    duration: '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const navigate = useNavigate()
 
   const handleFileChange = (e) => {
@@ -109,24 +110,29 @@ function UploadTrack() {
       if (formData.genre) {
         uploadFormData.append('genre', formData.genre)
       }
-      if (formData.duration) {
-        uploadFormData.append('duration', parseInt(formData.duration))
-      }
 
-      const response = await api.post('/tracks/upload', uploadFormData, {
+      await api.post('/tracks/upload', uploadFormData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+        },
+        skipErrorToast: true,
+        onUploadProgress: (event) => {
+          if (event.total) {
+            setUploadProgress(Math.round((event.loaded / event.total) * 100))
+          }
         },
       })
 
       setSuccess(true)
+      toast.success('Трек успешно загружен')
       setTimeout(() => {
         navigate('/')
-      }, 2000)
+      }, 1500)
     } catch (err) {
       setError(err.response?.data?.detail || 'Ошибка при загрузке файла')
     } finally {
       setLoading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -138,7 +144,6 @@ function UploadTrack() {
       artist: '',
       album: '',
       genre: '',
-      duration: '',
     })
   }
 
@@ -300,20 +305,14 @@ function UploadTrack() {
             </div>
           </div>
 
-          <div className="form-group">
-            <label htmlFor="duration">Длительность (секунды)</label>
-            <input
-              id="duration"
-              name="duration"
-              type="number"
-              value={formData.duration}
-              onChange={handleInputChange}
-              placeholder="180"
-              min="1"
-            />
-            <small>Оставьте пустым для автоматического определения</small>
-          </div>
         </div>
+
+        {loading && (
+          <div className="upload-progress">
+            <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+            <span className="upload-progress-label">{uploadProgress}%</span>
+          </div>
+        )}
 
         <div className="form-actions">
           <button

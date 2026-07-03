@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, Heart, Plus } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
@@ -25,13 +25,15 @@ function Player() {
     isShuffle,
     toggleRepeatOne,
     toggleShuffle,
+    likedTrackIds,
+    fetchLikedTracks,
+    toggleTrackLike,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
   const blobUrlRef = useRef(null)
   const lastRecordedTrackIdRef = useRef(null)
   const [audioSrc, setAudioSrc] = useState(null)
-  const [isLiked, setIsLiked] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
   const [playlists, setPlaylists] = useState([])
@@ -65,20 +67,13 @@ function Player() {
     }
   }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
 
-  // Check if track is liked when it changes
   useEffect(() => {
-    const checkLikedStatus = async () => {
-      if (!currentTrack) return
-      try {
-        const response = await api.get('/tracks/me/liked')
-        const likedTracks = response.data
-        setIsLiked(likedTracks.some(t => t.id === currentTrack.id))
-      } catch (error) {
+    if (currentTrack) {
+      fetchLikedTracks().catch((error) => {
         console.error('Error checking liked status:', error)
-      }
+      })
     }
-    checkLikedStatus()
-  }, [currentTrack])
+  }, [currentTrack?.id, fetchLikedTracks])
 
   // Resolve audio URL: для Tuna/внешнего API используем fetch с tuna-skip-browser-warning
   useEffect(() => {
@@ -150,12 +145,10 @@ function Player() {
     if (!audio || !currentTrack) return
 
     const handleLoad = () => {
-      console.log('Audio metadata loaded, duration:', audio.duration)
       setDuration(audio.duration)
     }
 
     const handleCanPlay = () => {
-      console.log('Audio can play')
       if (isPlaying) {
         audio.play().catch(err => {
           console.error('Error playing audio:', err)
@@ -171,14 +164,9 @@ function Player() {
       console.error('Current track:', currentTrack)
     }
 
-    const handleLoadedData = () => {
-      console.log('Audio data loaded')
-    }
-
     audio.addEventListener('loadedmetadata', handleLoad)
     audio.addEventListener('canplay', handleCanPlay)
     audio.addEventListener('error', handleError)
-    audio.addEventListener('loadeddata', handleLoadedData)
 
     if (isPlaying && audio.readyState >= 2) {
       audio.play().catch(err => {
@@ -192,7 +180,6 @@ function Player() {
       audio.removeEventListener('loadedmetadata', handleLoad)
       audio.removeEventListener('canplay', handleCanPlay)
       audio.removeEventListener('error', handleError)
-      audio.removeEventListener('loadeddata', handleLoadedData)
     }
   }, [isPlaying, currentTrack, setDuration])
 
@@ -237,21 +224,15 @@ function Player() {
     
     setLoadingLike(true)
     try {
-      if (isLiked) {
-        await api.delete(`/tracks/${currentTrack.id}/like`)
-        setIsLiked(false)
-      } else {
-        await api.post(`/tracks/${currentTrack.id}/like`)
-        setIsLiked(true)
-      }
+      await toggleTrackLike(currentTrack.id)
     } catch (error) {
       console.error('Error toggling like:', error)
-      // Revert state on error
-      setIsLiked(!isLiked)
     } finally {
       setLoadingLike(false)
     }
   }
+
+  const isLiked = currentTrack ? likedTrackIds.includes(currentTrack.id) : false
 
   const handleOpenAddToPlaylist = async () => {
     if (!currentTrack) return
@@ -300,19 +281,12 @@ function Player() {
           console.error('Audio src:', audioRef.current?.src)
           console.error('Audio error details:', audioRef.current?.error)
         }}
-        onLoadStart={() => {
-          console.log('Audio loading started:', currentTrack.title, 'src:', audioRef.current?.src)
-        }}
         onCanPlay={() => {
-          console.log('Audio can play:', currentTrack.title)
           if (isPlaying) {
             audioRef.current?.play().catch(err => {
               console.error('Play error:', err)
             })
           }
-        }}
-        onLoadedMetadata={() => {
-          console.log('Metadata loaded for:', currentTrack.title)
         }}
       />
       
@@ -352,7 +326,7 @@ function Player() {
           }}
           title="Добавить в плейлист"
         >
-          <Plus size={18} />
+          <ListPlus size={18} />
         </button>
       </div>
 
@@ -414,7 +388,7 @@ function Player() {
             onClick={toggleRepeatOne}
             title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
           >
-            <Repeat size={20} />
+            <Repeat1 size={20} />
           </button>
         </div>
         <div className="player-progress">

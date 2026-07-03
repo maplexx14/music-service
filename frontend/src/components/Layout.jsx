@@ -5,6 +5,7 @@ import { usePlayerStore } from '../store/playerStore'
 import Sidebar from './Sidebar'
 import Player from './Player'
 import FullScreenPlayer from './FullScreenPlayer'
+import ToastContainer from './Toast'
 import './Layout.css'
 
 function Layout({ children }) {
@@ -77,6 +78,7 @@ function Layout({ children }) {
         {children}
       </main>
       <Player />
+      <ToastContainer />
       {isFullScreen && <FullScreenPlayer />}
       {isMobile && (
         <nav className="mobile-nav-global" aria-label="Нижняя навигация">

@@ -4,7 +4,7 @@ from typing import List
 from app.database import get_db
 from app.models import User
 from app.schemas import UserResponse
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_current_admin_user
 
 router = APIRouter()
 
@@ -15,7 +15,10 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
 
 
 @router.get("/stats/count")
-async def get_user_count(db: Session = Depends(get_db)):
+async def get_user_count(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     total = db.query(User).count()
     return {"total": total}
 

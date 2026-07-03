@@ -7,6 +7,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import Grainient from '../components/Grainient'
+import Spinner from '../components/Spinner'
 import './Home.css'
 
 function Home() {
@@ -82,7 +83,7 @@ function Home() {
   if (loading) {
     return (
       <div className="page-container">
-        <div className="loading">Загрузка...</div>
+        <Spinner />
       </div>
     )
   }
@@ -278,7 +279,7 @@ function Home() {
         <div className="content-section">
           <h2 className="section-title">История прослушиваний</h2>
           {historyLoading ? (
-            <div className="loading">Загрузка...</div>
+            <Spinner />
           ) : history.length === 0 ? (
             <div className="home-empty">Пока нет истории прослушивания</div>
           ) : (

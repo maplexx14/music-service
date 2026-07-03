@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import api from '../services/api'
 
 function shuffleArray(arr) {
   const result = [...arr]
@@ -23,9 +24,51 @@ const usePlayerStore = create((set, get) => ({
   isFullScreen: false,
   isRepeatOne: false,
   isShuffle: false,
+  likedTrackIds: [],
+  likedTracksLoaded: false,
+  likedTracksLoading: false,
 
   setCurrentTrack: (track) => {
     set({ currentTrack: track, currentTime: 0 })
+  },
+
+  fetchLikedTracks: async () => {
+    const { likedTracksLoaded, likedTracksLoading } = get()
+    if (likedTracksLoaded || likedTracksLoading) return
+
+    set({ likedTracksLoading: true })
+    try {
+      const response = await api.get('/tracks/me/liked')
+      set({
+        likedTrackIds: response.data.map((track) => track.id),
+        likedTracksLoaded: true,
+      })
+    } finally {
+      set({ likedTracksLoading: false })
+    }
+  },
+
+  toggleTrackLike: async (trackId) => {
+    if (!trackId) return
+
+    const { likedTrackIds } = get()
+    const wasLiked = likedTrackIds.includes(trackId)
+    const nextLikedTrackIds = wasLiked
+      ? likedTrackIds.filter((id) => id !== trackId)
+      : [...likedTrackIds, trackId]
+
+    set({ likedTrackIds: nextLikedTrackIds, likedTracksLoaded: true })
+
+    try {
+      if (wasLiked) {
+        await api.delete(`/tracks/${trackId}/like`)
+      } else {
+        await api.post(`/tracks/${trackId}/like`)
+      }
+    } catch (error) {
+      set({ likedTrackIds })
+      throw error
+    }
   },
 
   playTrack: (track, queue = [], source = null) => {

@@ -2,20 +2,52 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, update, insert, func
 from typing import List, Optional
+import logging
 import os
 import uuid
 import aiofiles
 from pathlib import Path
+from mutagen import File as MutagenFile
 from app.database import get_db
 from app.models import Track, User, user_liked_tracks, user_track_plays
 from app.schemas import TrackResponse, TrackCreate
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_current_admin_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # Allowed audio file extensions
 ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac'}
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+MAX_AUDIO_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_COVER_SIZE = 5 * 1024 * 1024   # 5 MB
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+async def save_upload(upload: UploadFile, dest: Path, max_size: int, kind: str) -> None:
+    """Stream an upload to disk in chunks, enforcing a size limit."""
+    written = 0
+    try:
+        async with aiofiles.open(dest, 'wb') as f:
+            while chunk := await upload.read(UPLOAD_CHUNK_SIZE):
+                written += len(chunk)
+                if written > max_size:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"{kind} file too large (max {max_size // (1024 * 1024)} MB)"
+                    )
+                await f.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except Exception:
+        dest.unlink(missing_ok=True)
+        logger.exception("Failed to save %s file", kind)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save {kind} file"
+        )
 # Use environment variable or default path
 MUSIC_DIR = Path(os.getenv("MUSIC_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "music_files")))
 COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
@@ -82,10 +114,8 @@ async def stream_track(
         if alt_path.exists():
             file_path = alt_path
         else:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Audio file not found. Looking for: {file_path}. Track file_path: {track.file_path}"
-            )
+            logger.error("Audio file not found for track %s: %s", track_id, file_path)
+            raise HTTPException(status_code=404, detail="Audio file not found")
     
     # Determine media type from file extension
     mime_type, _ = mimetypes.guess_type(str(file_path))
@@ -127,7 +157,6 @@ async def upload_track(
     artist: str = Form(...),
     album: Optional[str] = Form(None),
     genre: Optional[str] = Form(None),
-    duration: Optional[int] = Form(None),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -147,23 +176,20 @@ async def upload_track(
     filename = f"{file_id}{file_ext}"
     file_path = MUSIC_DIR / filename
     
-    # Save file
+    await save_upload(file, file_path, MAX_AUDIO_SIZE, "audio")
+
+    # Validate content and extract real duration with mutagen
     try:
-        async with aiofiles.open(file_path, 'wb') as f:
-            content = await file.read()
-            await f.write(content)
-    except Exception as e:
+        audio = MutagenFile(str(file_path))
+    except Exception:
+        audio = None
+    if audio is None or audio.info is None:
+        file_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save file: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is not a valid audio file"
         )
-    
-    # Calculate duration if not provided (basic estimation)
-    # For production, use mutagen or similar library to extract real duration
-    if duration is None:
-        # Estimate: assume average bitrate, this is a placeholder
-        # In production, use mutagen to get actual duration
-        duration = 180  # Default 3 minutes
+    duration = int(audio.info.length)
     
     # Save cover if provided
     cover_url = None
@@ -176,15 +202,7 @@ async def upload_track(
             )
         cover_filename = f"{file_id}{cover_ext}"
         cover_path = COVER_DIR / cover_filename
-        try:
-            async with aiofiles.open(cover_path, 'wb') as f:
-                content = await cover.read()
-                await f.write(content)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save cover: {str(e)}"
-            )
+        await save_upload(cover, cover_path, MAX_COVER_SIZE, "cover")
         cover_url = f"/cover_files/{cover_filename}"
 
     # Create track record
@@ -225,15 +243,7 @@ async def upload_track_cover(
 
     cover_filename = f"{uuid.uuid4()}{cover_ext}"
     cover_path = COVER_DIR / cover_filename
-    try:
-        async with aiofiles.open(cover_path, 'wb') as f:
-            content = await cover.read()
-            await f.write(content)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save cover: {str(e)}"
-        )
+    await save_upload(cover, cover_path, MAX_COVER_SIZE, "cover")
 
     track.cover_url = f"/cover_files/{cover_filename}"
     db.commit()
@@ -341,7 +351,7 @@ async def record_track_play(
 @router.delete("/{track_id}", status_code=status.HTTP_200_OK)
 async def delete_track(
     track_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
     track = db.query(Track).filter(Track.id == track_id).first()

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import api from '../services/api'
+import { toast } from '../store/toastStore'
+import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './Playlists.css'
@@ -12,6 +14,7 @@ function Playlists() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [coverFile, setCoverFile] = useState(null)
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     fetchPlaylists()
@@ -30,8 +33,9 @@ function Playlists() {
 
   const handleCreatePlaylist = async (e) => {
     e.preventDefault()
-    if (!newPlaylistName.trim()) return
+    if (!newPlaylistName.trim() || creating) return
 
+    setCreating(true)
     try {
       const response = await api.post('/playlists', {
         name: newPlaylistName,
@@ -50,15 +54,18 @@ function Playlists() {
       setNewPlaylistName('')
       setCoverFile(null)
       setShowCreateForm(false)
+      toast.success('Плейлист создан')
     } catch (error) {
       console.error('Error creating playlist:', error)
+    } finally {
+      setCreating(false)
     }
   }
 
   if (loading) {
     return (
       <div className="page-container">
-        <div className="loading">Загрузка...</div>
+        <Spinner />
       </div>
     )
   }
@@ -85,7 +92,7 @@ function Playlists() {
             onChange={(e) => setNewPlaylistName(e.target.value)}
             autoFocus
           />
-          <span className="create-playlist-form-input-form"></span>
+          
           <input
             className="create-playlist-form-input-btn"
             type="file"
@@ -93,7 +100,9 @@ function Playlists() {
             onChange={(e) => setCoverFile(e.target.files?.[0] || null)}
           />
           <div className="form-actions">
-            <button type="submit" className="submit-btn">Создать</button>
+            <button type="submit" className="submit-btn" disabled={creating}>
+              {creating ? 'Создание...' : 'Создать'}
+            </button>
             <button
               type="button"
               className="cancel-btn"

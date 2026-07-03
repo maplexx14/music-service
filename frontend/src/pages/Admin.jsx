@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import api from '../services/api'
+import { toast } from '../store/toastStore'
+import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './Admin.css'
@@ -49,6 +51,7 @@ function Admin() {
     try {
       await api.delete(`/tracks/${trackId}`)
       setTracks((prev) => prev.filter((track) => track.id !== trackId))
+      toast.success('Трек удалён')
     } catch (error) {
       console.error('Error deleting track:', error)
     } finally {
@@ -59,7 +62,7 @@ function Admin() {
   if (loading) {
     return (
       <div className="page-container">
-        <div className="loading">Загрузка...</div>
+        <Spinner />
       </div>
     )
   }

@@ -5,7 +5,12 @@ from passlib.context import CryptContext
 import bcrypt
 import os
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if os.getenv("DEBUG", "").lower() in ("1", "true", "yes"):
+        SECRET_KEY = "dev-only-insecure-secret"
+    else:
+        raise RuntimeError("SECRET_KEY environment variable must be set (or set DEBUG=true for local development)")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43800"))
 
