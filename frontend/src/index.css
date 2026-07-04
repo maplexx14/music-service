@@ -191,3 +191,19 @@ body{
   font-family: 'Unbounded', sans-serif;
   font-weight: 400;
 }
+
+/* Облегчённый режим: отключает анимации, переходы и дорогие эффекты (blur/shadow) для снижения нагрузки на CPU/GPU */
+.lite-mode *,
+.lite-mode *::before,
+.lite-mode *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  scroll-behavior: auto !important;
+}
+
+.lite-mode img,
+.lite-mode video {
+  image-rendering: auto;
+}

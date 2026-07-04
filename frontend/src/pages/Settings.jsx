@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 import './Settings.css'
 
 function Settings() {
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
+  const { liteMode, toggleLiteMode } = useUiSettingsStore()
   const [gifError, setGifError] = useState('')
 
   const handleGifChange = (event) => {
@@ -34,6 +36,22 @@ function Settings() {
       </div>
 
       <div className="settings-card">
+        <div className="settings-row">
+          <div>
+            <div className="settings-label">Облегчённый режим</div>
+            <div className="settings-hint">Отключает анимации и фоновые эффекты, снижая нагрузку на процессор</div>
+          </div>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              checked={liteMode}
+              onChange={toggleLiteMode}
+              aria-label="Облегчённый режим"
+            />
+            <span className="settings-toggle-slider" />
+          </label>
+        </div>
+
         <div className="settings-row">
           <div className="settings-label">Палитра потока</div>
           <div className="settings-control">

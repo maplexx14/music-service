@@ -16,7 +16,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  background-color: #1db954;
+  background-color: #a259ff;
   color: #ffffff;
   border: none;
   border-radius: 50px;
@@ -65,7 +65,7 @@
 }
 .create-playlist-form input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: #a259ff;
   background-color: #222;
 }
 
@@ -76,7 +76,7 @@
 
 .submit-btn {
   padding: 10px 24px;
-  background-color: #1db954;
+  background-color: #a259ff;
   color: #ffffff;
   border: none;
   border-radius: 6px;

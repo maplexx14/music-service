@@ -42,6 +42,7 @@ services:
       REDIS_PORT: 6379
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
     ports:
       - "8000:8000"
     volumes:

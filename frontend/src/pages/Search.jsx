@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Download } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
@@ -9,7 +10,9 @@ import './Search.css'
 function Search() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
+  const [externalTracks, setExternalTracks] = useState([])
   const [loading, setLoading] = useState(false)
+  const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     if (query.trim().length > 0) {
@@ -19,18 +22,41 @@ function Search() {
       return () => clearTimeout(timeoutId)
     } else {
       setResults({ tracks: [], playlists: [], users: [] })
+      setExternalTracks([])
     }
   }, [query])
 
   const performSearch = async () => {
     setLoading(true)
+    setSearchError('')
     try {
-      const response = await api.get('/search', {
-        params: { q: query, limit: 20 },
-      })
-      setResults(response.data)
+      const [localResult, externalResult] = await Promise.allSettled([
+        api.get('/search', {
+          params: { q: query, limit: 20 },
+        }),
+        api.get('/external/search', {
+          params: { q: query, limit: 20 },
+          skipErrorToast: true,
+        }),
+      ])
+      if (localResult.status === 'fulfilled') {
+        setResults(localResult.value.data)
+      } else {
+        console.error('Local search error:', localResult.reason)
+        setResults({ tracks: [], playlists: [], users: [] })
+        setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
+      }
+      if (externalResult.status === 'fulfilled') {
+        setExternalTracks(externalResult.value.data)
+      } else {
+        console.error('External search error:', externalResult.reason)
+        setExternalTracks([])
+      }
     } catch (error) {
       console.error('Search error:', error)
+      setResults({ tracks: [], playlists: [], users: [] })
+      setExternalTracks([])
+      setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
       setLoading(false)
     }
@@ -40,6 +66,17 @@ function Search() {
     const { playTrack } = usePlayerStore.getState()
     playTrack(track, results.tracks)
   }
+
+  const handlePlayExternalTrack = (track) => {
+    const { playTrack } = usePlayerStore.getState()
+    playTrack(track, externalTracks, 'external')
+  }
+
+  const hasResults =
+    results.tracks.length > 0 ||
+    externalTracks.length > 0 ||
+    results.playlists.length > 0 ||
+    results.users.length > 0
 
   return (
     <div className="page-container">
@@ -56,6 +93,10 @@ function Search() {
 
       {loading && (
         <Spinner label="Поиск..." />
+      )}
+
+      {!loading && query && searchError && (
+        <div className="search-error">{searchError}</div>
       )}
 
       {!loading && query && (
@@ -78,6 +119,46 @@ function Search() {
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>
                       <div className="track-item-artist">{track.artist}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {externalTracks.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Внешний каталог</h2>
+              <div className="tracks-list">
+                {externalTracks.map((track) => (
+                  <div
+                    key={track.id}
+                    className="track-item"
+                    onClick={() => handlePlayExternalTrack(track)}
+                  >
+                    <img
+                      src={track.cover_url || defaultCover}
+                      alt={track.title}
+                      className="track-item-cover"
+                    />
+                    <div className="track-item-info">
+                      <div className="track-item-title">{track.title}</div>
+                      <div className="track-item-artist">{track.artist}</div>
+                    </div>
+                    <div className="track-item-meta">
+                      <span className="source-badge">Jamendo</span>
+                      {track.download_allowed && track.download_url && (
+                        <a
+                          className="track-download"
+                          href={track.download_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          aria-label={`Скачать ${track.title}`}
+                        >
+                          <Download size={18} />
+                        </a>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -129,7 +210,7 @@ function Search() {
             </div>
           )}
 
-          {!loading && query && results.tracks.length === 0 && results.playlists.length === 0 && results.users.length === 0 && (
+          {!loading && query && !hasResults && (
             <div className="no-results">
               <p>Ничего не найдено</p>
             </div>

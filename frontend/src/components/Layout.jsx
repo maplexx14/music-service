@@ -53,7 +53,7 @@ function Layout({ children }) {
   const showMobileBack = isMobile && location.pathname !== '/'
 
   return (
-    <div className="layout">
+    <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
       <Sidebar />
       {showMobileBack && (
         <div className="mobile-topbar">

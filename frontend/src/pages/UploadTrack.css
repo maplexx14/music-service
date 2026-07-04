@@ -29,7 +29,7 @@
 
 .success-message {
   padding: 16px;
-  background-color: #1db954;
+  background-color: #a259ff;
   color: #ffffff;
   border-radius: 8px;
   margin-bottom: 24px;
@@ -60,13 +60,13 @@
 }
 
 .file-upload-box:hover {
-  border-color: #1db954;
+  border-color: #a259ff;
   background-color: #1a1a1a;
 }
 
 .file-upload-box svg {
   margin-bottom: 16px;
-  color: #1db954;
+  color: #a259ff;
 }
 
 .upload-text {
@@ -171,7 +171,7 @@
 
 .form-group input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: #a259ff;
   background-color: #222;
 }
 
@@ -211,7 +211,7 @@
 
 .submit-btn {
   padding: 12px 32px;
-  background-color: #1db954;
+  background-color: #a259ff;
   color: #ffffff;
   border: none;
   border-radius: 6px;

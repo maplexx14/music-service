@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
+import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
@@ -26,6 +26,8 @@ function FullScreenPlayer() {
     toggleTrackLike,
   } = usePlayerStore()
   const [loadingLike, setLoadingLike] = useState(false)
+  const isExternalTrack = currentTrack?.source === 'jamendo'
+  const localTrackId = !isExternalTrack ? currentTrack?.id : null
 
   const progressPercent = useMemo(() => {
     if (!duration) return 0
@@ -33,13 +35,18 @@ function FullScreenPlayer() {
   }, [currentTime, duration])
 
   const coverUrl = useMemo(
-    () => resolveCoverUrl(currentTrack?.cover_url) || defaultCover,
-    [currentTrack?.cover_url],
+    () => {
+      if (currentTrack?.source === 'jamendo') {
+        return currentTrack.cover_url || defaultCover
+      }
+      return resolveCoverUrl(currentTrack?.cover_url) || defaultCover
+    },
+    [currentTrack?.cover_url, currentTrack?.source],
   )
 
   useEffect(() => {
     const checkLikedStatus = async () => {
-      if (!currentTrack) return
+      if (!localTrackId) return
       try {
         await fetchLikedTracks()
       } catch (error) {
@@ -48,7 +55,7 @@ function FullScreenPlayer() {
     }
 
     checkLikedStatus()
-  }, [currentTrack?.id, fetchLikedTracks])
+  }, [localTrackId, fetchLikedTracks])
 
   if (!currentTrack) return null
 
@@ -60,11 +67,11 @@ function FullScreenPlayer() {
   }
 
   const handleLike = async () => {
-    if (!currentTrack || loadingLike) return
+    if (!localTrackId || loadingLike) return
 
     setLoadingLike(true)
     try {
-      await toggleTrackLike(currentTrack.id)
+      await toggleTrackLike(localTrackId)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -72,7 +79,7 @@ function FullScreenPlayer() {
     }
   }
 
-  const isLiked = likedTrackIds.includes(currentTrack.id)
+  const isLiked = localTrackId ? likedTrackIds.includes(localTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
 
   return (
@@ -100,15 +107,28 @@ function FullScreenPlayer() {
           <div className="fullscreen-artist">{currentTrack.artist}</div>
         </div>
         <div className="fullscreen-actions">
-          <button
-            type="button"
-            className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
-            onClick={handleLike}
-            disabled={loadingLike}
-            aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-          >
-            <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
-          </button>
+          {!isExternalTrack && (
+            <button
+              type="button"
+              className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
+              onClick={handleLike}
+              disabled={loadingLike}
+              aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+            >
+              <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
+            </button>
+          )}
+          {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+            <a
+              className="fullscreen-icon"
+              href={currentTrack.download_url}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Скачать"
+            >
+              <Download size={20} />
+            </a>
+          )}
         </div>
       </div>
 

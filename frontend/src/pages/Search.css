@@ -15,7 +15,7 @@
 
 .search-input:focus {
   outline: none;
-  border-color: #1db954;
+  border-color: #a259ff;
   background-color: #222;
 }
 
@@ -51,6 +51,7 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  min-width: 0;
 }
 
 .track-item:hover {
@@ -83,11 +84,59 @@
   font-weight: 500;
   color: #ffffff;
   margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .track-item-artist {
   font-size: 14px;
   color: #b3b3b3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.source-badge {
+  border: 1px solid rgba(162, 89, 255, 0.4);
+  border-radius: 999px;
+  color: #a259ff;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 9px;
+}
+
+.track-download {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #d7d7d7;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-decoration: none;
+}
+
+.track-download:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.track-download:focus-visible {
+  outline: 2px solid #a259ff;
+  outline-offset: 2px;
+}
+
+.track-download:active {
+  transform: scale(0.94);
 }
 
 .playlists-list {
@@ -187,6 +236,16 @@
   color: #b3b3b3;
 }
 
+.search-error {
+  text-align: center;
+  padding: 16px;
+  margin-bottom: 16px;
+  color: #ff8080;
+  background-color: rgba(226, 33, 52, 0.1);
+  border: 1px solid rgba(226, 33, 52, 0.3);
+  border-radius: 8px;
+}
+
 .no-results {
   text-align: center;
   padding: 64px;
@@ -203,4 +262,28 @@
   font-size: 32px;
   color: #ffffff;
   margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .track-item {
+    gap: 12px;
+    padding: 10px;
+  }
+
+  .track-item-cover {
+    width: 48px;
+    height: 48px;
+  }
+
+  .source-badge {
+    padding: 4px;
+    font-size: 0;
+    line-height: 1;
+  }
+
+  .source-badge::before {
+    content: "J";
+    font-size: 11px;
+    line-height: 1;
+  }
 }

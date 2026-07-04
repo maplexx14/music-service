@@ -46,6 +46,13 @@
   font-size: 14px;
 }
 
+.settings-hint {
+  color: #7a7a80;
+  font-size: 12px;
+  margin-top: 4px;
+  max-width: 360px;
+}
+
 .settings-control {
   display: flex;
   align-items: center;
@@ -112,7 +119,7 @@
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {
-  background: #1db954;
+  background: #a259ff;
 }
 
 .settings-toggle input:checked + .settings-toggle-slider::before {

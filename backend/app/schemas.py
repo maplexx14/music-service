@@ -95,3 +95,17 @@ class SearchResponse(BaseModel):
 class RecommendationResponse(BaseModel):
     tracks: List[TrackResponse] = []
     playlists: List[PlaylistResponse] = []
+
+
+class ExternalTrackResponse(BaseModel):
+    id: str
+    source: str
+    external_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    duration: int
+    cover_url: Optional[str] = None
+    stream_url: str
+    download_url: Optional[str] = None
+    download_allowed: bool = False

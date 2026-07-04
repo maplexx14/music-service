@@ -77,9 +77,9 @@
 
 .hero-section {
   border-radius: 18px;
-  padding: 56px 32px;
+  padding: 40px 32px;
   margin-bottom: 32px;
-  min-height: 320px;
+  min-height: 220px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -95,6 +95,14 @@
   border-radius: inherit;
 }
 
+.hero-grainient-static {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #e0c3ff, #a259ff, #6a3093);
+}
+
 .hero-grainient .grainient-container {
   position: absolute;
   inset: 0;
@@ -103,9 +111,9 @@
 }
 
 .wave-widget {
-  width: 355px;
-  height: 325px;
-  border-radius: 50%;
+  width: 220px;
+  height: 140px;
+  border-radius: 999px;
   position: relative;
   z-index: 2;
   display: grid;
@@ -120,9 +128,6 @@
   50% { transform: scale(1.02); }
 }
 .wave-center {
-  width: 180px;
-  height: 180px;
-  border-radius: 50%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -131,37 +136,58 @@
   text-align: center;
   position: relative;
   z-index: 2;
-
 }
 
 .wave-title {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: var(--text-xl);
   font-family: 'Unbounded', sans-serif;
   font-weight: 700;
   color: #ffffff;
   letter-spacing: 0.3px;
   cursor: pointer;
-  background: transparent;
-  border: none;
-  padding: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  padding: 14px 28px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.wave-title:hover {
+  background: rgba(0, 0, 0, 0.45);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.wave-title:active {
+  transform: translateY(0) scale(0.97);
 }
 
 .wave-gif-button {
   background: transparent;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
   padding: 0;
   cursor: pointer;
   position: relative;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.wave-gif-button:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
 }
 
 .wave-gif-button img {
-  width: 330px;
-  height: 330px;
+  width: 200px;
+  height: 200px;
   display: block;
   border-radius: 50%;
 }
@@ -170,8 +196,8 @@
   position: absolute;
   inset: 0;
   display: grid;
-  
   place-items: center;
+  background: rgba(0, 0, 0, 0.25);
   color: #ffffff;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   pointer-events: none;
@@ -420,7 +446,7 @@
   height: 44px;
   border-radius: 999px;
   border: none;
-  background: #1db954;
+  background: #a259ff;
   color: #0b0b0e;
   display: grid;
   place-items: center;
@@ -474,11 +500,11 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    padding: 0 0 24px;
+    padding: 32px 16px;
     margin: 0 -16px 24px;
     width: calc(100% + 32px);
-    min-height: min(100dvh, 400px);
-    max-height: 480px;
+    min-height: 260px;
+    max-height: 320px;
     border-radius: 0;
     justify-content: center;
   }
@@ -488,22 +514,18 @@
   }
 
   .wave-widget {
-    width: min(320px, 80vw);
-    height: min(320px, 80vw);
-  }
-
-  .wave-center {
-    width: 140px;
-    height: 140px;
+    width: auto;
+    height: auto;
   }
 
   .wave-gif-button img {
-    width: min(300px, 75vw);
-    height: min(300px, 75vw);
+    width: min(180px, 55vw);
+    height: min(180px, 55vw);
   }
 
   .wave-title {
-    font-size: var(--text-lg);
+    font-size: var(--text-md);
+    padding: 12px 22px;
   }
 
   .content-section {

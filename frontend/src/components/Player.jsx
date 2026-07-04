@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
@@ -40,6 +40,8 @@ function Player() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
   const [loadingPlaylists, setLoadingPlaylists] = useState(false)
   const [addError, setAddError] = useState('')
+  const isExternalTrack = currentTrack?.source === 'jamendo'
+  const localTrackId = !isExternalTrack ? currentTrack?.id : null
 
   useEffect(() => {
     const audio = audioRef.current
@@ -68,12 +70,12 @@ function Player() {
   }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
 
   useEffect(() => {
-    if (currentTrack) {
+    if (localTrackId) {
       fetchLikedTracks().catch((error) => {
         console.error('Error checking liked status:', error)
       })
     }
-  }, [currentTrack?.id, fetchLikedTracks])
+  }, [localTrackId, fetchLikedTracks])
 
   // Resolve audio URL: для Tuna/внешнего API используем fetch с tuna-skip-browser-warning
   useEffect(() => {
@@ -86,7 +88,9 @@ function Player() {
       return
     }
 
-    const rawUrl = currentTrack.id
+    const rawUrl = isExternalTrack
+      ? currentTrack.stream_url
+      : currentTrack.id
       ? `${API_URL}/tracks/${currentTrack.id}/stream`
       : currentTrack.file_path?.startsWith('http')
         ? currentTrack.file_path
@@ -99,7 +103,7 @@ function Player() {
       return
     }
 
-    const isOurApi = rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL)
+    const isOurApi = !isExternalTrack && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
     if (isOurApi) {
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current)
@@ -124,7 +128,7 @@ function Player() {
         blobUrlRef.current = null
       }
     }
-  }, [currentTrack?.id, currentTrack?.file_path, API_URL, SERVER_URL])
+  }, [currentTrack?.id, currentTrack?.file_path, currentTrack?.stream_url, isExternalTrack, API_URL, SERVER_URL])
 
   // Reload audio when track changes
   useEffect(() => {
@@ -184,11 +188,15 @@ function Player() {
   }, [isPlaying, currentTrack, setDuration])
 
   useEffect(() => {
-    if (!currentTrack || !isPlaying) return
-    if (lastRecordedTrackIdRef.current === currentTrack.id) return
-    lastRecordedTrackIdRef.current = currentTrack.id
-    api.post(`/tracks/${currentTrack.id}/play`).catch(() => {})
-  }, [currentTrack?.id, isPlaying])
+    if (!localTrackId) {
+      lastRecordedTrackIdRef.current = null
+      return
+    }
+    if (!isPlaying) return
+    if (lastRecordedTrackIdRef.current === localTrackId) return
+    lastRecordedTrackIdRef.current = localTrackId
+    api.post(`/tracks/${localTrackId}/play`).catch(() => {})
+  }, [localTrackId, isPlaying])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -220,11 +228,11 @@ function Player() {
   }
 
   const handleLike = async () => {
-    if (!currentTrack || loadingLike) return
+    if (!localTrackId || loadingLike) return
     
     setLoadingLike(true)
     try {
-      await toggleTrackLike(currentTrack.id)
+      await toggleTrackLike(localTrackId)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -232,10 +240,10 @@ function Player() {
     }
   }
 
-  const isLiked = currentTrack ? likedTrackIds.includes(currentTrack.id) : false
+  const isLiked = localTrackId ? likedTrackIds.includes(localTrackId) : false
 
   const handleOpenAddToPlaylist = async () => {
-    if (!currentTrack) return
+    if (!localTrackId) return
     setShowAddToPlaylist((prev) => !prev)
     setAddError('')
 
@@ -253,13 +261,13 @@ function Player() {
   }
 
   const handleAddToPlaylist = async () => {
-    if (!currentTrack || !selectedPlaylistId) {
+    if (!localTrackId || !selectedPlaylistId) {
       setAddError('Выберите плейлист')
       return
     }
     setAddError('')
     try {
-      await api.post(`/playlists/${selectedPlaylistId}/tracks/${currentTrack.id}`)
+      await api.post(`/playlists/${selectedPlaylistId}/tracks/${localTrackId}`)
       setShowAddToPlaylist(false)
     } catch (error) {
       setAddError(error.response?.data?.detail || 'Не удалось добавить трек')
@@ -298,7 +306,7 @@ function Player() {
           aria-label="Открыть плеер на весь экран"
         >
           <img
-            src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+            src={isExternalTrack ? currentTrack.cover_url || defaultCover : resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
           />
@@ -307,27 +315,43 @@ function Player() {
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">{currentTrack.artist}</div>
         </div>
-        <button
-          className={`like-btn ${isLiked ? 'liked' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            handleLike()
-          }}
-          disabled={loadingLike}
-          title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-        >
-          <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
-        </button>
-        <button
-          className="add-btn"
-          onClick={(event) => {
-            event.stopPropagation()
-            handleOpenAddToPlaylist()
-          }}
-          title="Добавить в плейлист"
-        >
-          <ListPlus size={18} />
-        </button>
+        {!isExternalTrack && (
+          <>
+            <button
+              className={`like-btn ${isLiked ? 'liked' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleLike()
+              }}
+              disabled={loadingLike}
+              title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+            >
+              <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              className="add-btn"
+              onClick={(event) => {
+                event.stopPropagation()
+                handleOpenAddToPlaylist()
+              }}
+              title="Добавить в плейлист"
+            >
+              <ListPlus size={18} />
+            </button>
+          </>
+        )}
+        {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+          <a
+            className="add-btn"
+            href={currentTrack.download_url}
+            target="_blank"
+            rel="noreferrer"
+            title="Скачать"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Download size={18} />
+          </a>
+        )}
       </div>
 
       {showAddToPlaylist && (
@@ -377,7 +401,11 @@ function Player() {
             <SkipBack size={20} />
           </button>
           <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
-            {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
+            {isPlaying ? (
+              <Pause size={24} fill="currentColor" />
+            ) : (
+              <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
+            )}
           </button>
           <button type="button" className="control-btn" onClick={nextTrack} aria-label="Следующий">
             <SkipForward size={20} />

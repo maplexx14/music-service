@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Search, Play, Pause, Settings, Shield, Home as HomeIcon, History } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
@@ -19,6 +20,7 @@ function Home() {
   const [activeTab, setActiveTab] = useState('home')
   const { playPlaylist, isPlaying, source, togglePlayPause } = usePlayerStore()
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
+  const liteMode = useUiSettingsStore((s) => s.liteMode)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const navigate = useNavigate()
 
@@ -126,31 +128,35 @@ function Home() {
       </div>
       <div className="hero-section">
         <div className="hero-grainient">
-          <Grainient
-            color1="#aef0b1"
-            color2="#7d98a8"
-            color3="#B19EEF"
-            timeSpeed={5}
-            colorBalance={-0.32}
-            warpStrength={1.4}
-            warpFrequency={5}
-            warpSpeed={2}
-            warpAmplitude={50}
-            blendAngle={-49}
-            blendSoftness={0.05}
-            rotationAmount={500}
-            noiseScale={1.95}
-            grainAmount={0}
-            grainScale={0.2}
-            grainAnimated={false}
-            contrast={1.5}
-            gamma={1}
-            saturation={1}
-            centerX={0}
-            centerY={0}
-            zoom={0.9}
-            active={isWavePlaying}
-          />
+          {liteMode ? (
+            <div className="hero-grainient-static" />
+          ) : (
+            <Grainient
+              color1="#e0c3ff"
+              color2="#a259ff"
+              color3="#6a3093"
+              timeSpeed={5}
+              colorBalance={-0.32}
+              warpStrength={1.4}
+              warpFrequency={5}
+              warpSpeed={2}
+              warpAmplitude={50}
+              blendAngle={-49}
+              blendSoftness={0.05}
+              rotationAmount={500}
+              noiseScale={1.95}
+              grainAmount={0}
+              grainScale={0.2}
+              grainAnimated={false}
+              contrast={1.5}
+              gamma={1}
+              saturation={1}
+              centerX={0}
+              centerY={0}
+              zoom={0.9}
+              active={isWavePlaying}
+            />
+          )}
         </div>
         <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
           <div className="wave-center">

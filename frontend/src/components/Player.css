@@ -1,18 +1,33 @@
 .player {
   position: fixed;
-  bottom: 12px;
-  left: 16px;
+  bottom: 14px;
+  left: calc(var(--sidebar-width, 240px) + 16px);
   right: 16px;
-  height: 72px;
-  background: #333333;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
+  height: 76px;
+  transition: left 0.3s ease;
+  background: linear-gradient(180deg, rgba(44, 44, 44, 0.98), rgba(22, 22, 22, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 18px;
   z-index: 1000;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(162, 89, 255, 0.08),
+    0 18px 46px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.player::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: #a259ff;
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .player-left {
@@ -21,6 +36,8 @@
   gap: 14px;
   flex: 1;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .player-cover-wrap {
@@ -28,18 +45,25 @@
   padding: 0;
   margin: 0;
   background: none;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
   border-radius: 8px;
   line-height: 0;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.player-cover-wrap:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
 }
 
 .player-cover {
-  width: 48px;
-  height: 48px;
+  width: 50px;
+  height: 50px;
   object-fit: cover;
-  border-radius: 8px;
-  background-color: #444;
+  border-radius: 7px;
+  background-color: #181818;
 }
 
 .player-info {
@@ -49,7 +73,7 @@
 
 .player-track-title {
   font-size: var(--text-base);
-  font-weight: 500;
+  font-weight: 600;
   color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
@@ -59,59 +83,85 @@
 
 .player-track-artist {
   font-size: var(--text-sm);
-  color: #b3b3b3;
+  color: rgba(255, 255, 255, 0.58);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .like-btn {
-  background: none;
-  border: none;
-  color: #b3b3b3;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
-  padding: 8px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
 .like-btn:hover {
   color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .like-btn.liked {
-  color: #1db954;
+  color: #a259ff;
+  background: rgba(162, 89, 255, 0.12);
+  border-color: rgba(162, 89, 255, 0.24);
 }
 
 .add-btn {
-  background: none;
-  border: none;
-  color: #b3b3b3;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
-  padding: 8px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  text-decoration: none;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 .add-btn:hover {
   color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.add-btn:visited {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.like-btn:focus-visible,
+.add-btn:focus-visible,
+.control-btn:focus-visible,
+.play-pause-btn:focus-visible {
+  outline: 2px solid #a259ff;
+  outline-offset: 2px;
 }
 
 .playlist-add-panel {
   position: absolute;
-  bottom: 100px;
+  bottom: 96px;
   left: 16px;
-  background-color: #181818;
-  border: 1px solid #282828;
-  border-radius: 8px;
-  padding: 12px;
+  background: rgba(18, 18, 18, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 14px;
   min-width: 240px;
   z-index: 1001;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
 }
 
 .playlist-add-title {
@@ -124,15 +174,15 @@
 .playlist-add-loading,
 .playlist-add-empty {
   font-size: var(--text-sm);
-  color: #b3b3b3;
+  color: rgba(255, 255, 255, 0.62);
   margin-bottom: 8px;
 }
 
 .playlist-add-select {
   width: 100%;
   padding: 8px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
+  background-color: #121212;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   color: #ffffff;
   font-size: var(--text-sm);
@@ -161,14 +211,14 @@
 
 .playlist-add-cancel {
   background: transparent;
-  border: 1px solid #333;
-  color: #b3b3b3;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .playlist-add-confirm {
-  background-color: #1db954;
+  background-color: #a259ff;
   border: none;
-  color: #ffffff;
+  color: #0b0b0e;
 }
 
 .player-center {
@@ -178,6 +228,8 @@
   align-items: center;
   gap: 8px;
   max-width: 722px;
+  position: relative;
+  z-index: 1;
 }
 
 .player-controls {
@@ -187,41 +239,52 @@
 }
 
 .control-btn {
-  background: none;
-  border: none;
-  color: #b3b3b3;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.56);
   cursor: pointer;
-  padding: 8px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 .control-btn:hover {
   color: #ffffff;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .control-btn.active {
-  color: #1db954;
+  color: #a259ff;
+  background: rgba(162, 89, 255, 0.1);
+  border-color: rgba(162, 89, 255, 0.16);
 }
 
 .play-pause-btn {
-  background: #4cb542;
+  background: #a259ff;
   border: none;
-  color: #1a1a1a;
+  color: #26123d;
   cursor: pointer;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: none;
+  transition: filter 0.2s ease;
+}
+
+.play-pause-btn svg {
+  fill: currentColor;
 }
 
 .play-pause-btn:hover {
-  transform: scale(1.08);
+  filter: brightness(1.08);
 }
 
 .player-progress {
@@ -233,33 +296,34 @@
 
 .time-text {
   font-size: var(--text-sm);
-  color: #b3b3b3;
+  color: rgba(255, 255, 255, 0.58);
   min-width: 40px;
   text-align: center;
 }
 
 .progress-bar {
   flex: 1;
-  height: 4px;
-  background-color: #535353;
-  border-radius: 2px;
+  height: 5px;
+  background-color: rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
   cursor: pointer;
   position: relative;
+  overflow: hidden;
 }
 
 .progress-bar:hover {
-  background-color: #6a6a6a;
+  background-color: rgba(255, 255, 255, 0.2);
 }
 
 .progress-fill {
   height: 100%;
-  background-color: #ffffff;
-  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: inherit;
   transition: width 0.1s;
 }
 
 .progress-bar:hover .progress-fill {
-  background-color: #1db954;
+  background-color: #a259ff;
 }
 
 .player-right {
@@ -267,6 +331,8 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  position: relative;
+  z-index: 1;
 }
 
 @media (max-width: 768px) {
@@ -278,8 +344,18 @@
     padding: 0 12px;
   }
 
+  .player::before {
+    display: none;
+  }
+
   .player-left {
     flex: 2;
+    gap: 10px;
+  }
+
+  .player-cover {
+    width: 42px;
+    height: 42px;
   }
 
   .player-center {
@@ -302,16 +378,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #b3b3b3;
+  color: rgba(255, 255, 255, 0.58);
 }
 
 .volume-slider {
   width: 93px;
-  height: 4px;
+  height: 5px;
   -webkit-appearance: none;
   appearance: none;
-  background: #535353;
-  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
   outline: none;
   cursor: pointer;
   
@@ -338,13 +414,13 @@
 }
 
 .volume-slider:hover {
-  background: #6a6a6a;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .volume-slider:hover::-webkit-slider-thumb {
-  background: #1db954;
+  background: #a259ff;
 }
 
 .volume-slider:hover::-moz-range-thumb {
-  background: #1db954;
+  background: #a259ff;
 }
