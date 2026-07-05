@@ -24,10 +24,13 @@ function FullScreenPlayer() {
     likedTrackIds,
     fetchLikedTracks,
     toggleTrackLike,
+    materializeCurrentTrack,
   } = usePlayerStore()
   const [loadingLike, setLoadingLike] = useState(false)
-  const isExternalTrack = currentTrack?.source === 'jamendo'
-  const localTrackId = !isExternalTrack ? currentTrack?.id : null
+  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic'].includes(currentTrack?.source)
+  const dbTrackId =
+    currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
+  const canInteract = dbTrackId !== null || isExternalTrack
 
   const progressPercent = useMemo(() => {
     if (!duration) return 0
@@ -36,17 +39,17 @@ function FullScreenPlayer() {
 
   const coverUrl = useMemo(
     () => {
-      if (currentTrack?.source === 'jamendo') {
-        return currentTrack.cover_url || defaultCover
+      if (isExternalTrack) {
+        return currentTrack?.cover_url || defaultCover
       }
       return resolveCoverUrl(currentTrack?.cover_url) || defaultCover
     },
-    [currentTrack?.cover_url, currentTrack?.source],
+    [currentTrack?.cover_url, isExternalTrack],
   )
 
   useEffect(() => {
     const checkLikedStatus = async () => {
-      if (!localTrackId) return
+      if (!dbTrackId) return
       try {
         await fetchLikedTracks()
       } catch (error) {
@@ -55,7 +58,7 @@ function FullScreenPlayer() {
     }
 
     checkLikedStatus()
-  }, [localTrackId, fetchLikedTracks])
+  }, [dbTrackId, fetchLikedTracks])
 
   if (!currentTrack) return null
 
@@ -67,11 +70,12 @@ function FullScreenPlayer() {
   }
 
   const handleLike = async () => {
-    if (!localTrackId || loadingLike) return
+    if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
     try {
-      await toggleTrackLike(localTrackId)
+      const id = dbTrackId ?? (await materializeCurrentTrack())
+      if (id) await toggleTrackLike(id)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -79,7 +83,7 @@ function FullScreenPlayer() {
     }
   }
 
-  const isLiked = localTrackId ? likedTrackIds.includes(localTrackId) : false
+  const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
 
   return (
@@ -107,7 +111,7 @@ function FullScreenPlayer() {
           <div className="fullscreen-artist">{currentTrack.artist}</div>
         </div>
         <div className="fullscreen-actions">
-          {!isExternalTrack && (
+          {canInteract && (
             <button
               type="button"
               className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}

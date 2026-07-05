@@ -32,6 +32,41 @@ const usePlayerStore = create((set, get) => ({
     set({ currentTrack: track, currentTime: 0 })
   },
 
+  // Материализует текущий внешний трек в БД (для лайков/плейлистов/истории).
+  // Возвращает числовой id локальной записи. Идемпотентно на бэке.
+  materializeCurrentTrack: async () => {
+    const { currentTrack } = get()
+    if (!currentTrack) return null
+    if (typeof currentTrack.id === 'number') return currentTrack.id
+
+    const externalId =
+      currentTrack.external_id ?? String(currentTrack.id).split(':').slice(1).join(':')
+    const { data } = await api.post('/tracks/import', {
+      source: currentTrack.source,
+      external_id: externalId,
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      album: currentTrack.album ?? null,
+      duration: currentTrack.duration || 0,
+      cover_url: currentTrack.cover_url ?? null,
+      stream_url: currentTrack.stream_url ?? null,
+    })
+
+    // Числовой id БД кладём в отдельное поле db_id, НЕ трогая id — иначе <audio>
+    // перезагрузится и трек начнётся заново. id остаётся ключом стриминга.
+    const merged = {
+      ...currentTrack,
+      db_id: data.id,
+      external_id: currentTrack.external_id ?? data.external_id,
+      stream_url: currentTrack.stream_url || data.stream_url,
+    }
+    set((state) => ({
+      currentTrack: merged,
+      queue: state.queue.map((t) => (t.id === currentTrack.id ? merged : t)),
+    }))
+    return data.id
+  },
+
   fetchLikedTracks: async () => {
     const { likedTracksLoaded, likedTracksLoading } = get()
     if (likedTracksLoaded || likedTracksLoading) return

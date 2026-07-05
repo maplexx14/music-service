@@ -43,17 +43,42 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
+      SLSKD_URL: ${SLSKD_URL:-http://slskd:5030}
+      SLSKD_API_KEY: ${SLSKD_API_KEY:-}
+      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      SLSKD_DOWNLOADS_DIR: /app/slskd_downloads
+      SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - music_files:/app/music_files
+      - slskd_downloads:/app/slskd_downloads:ro
+      - slskd_incomplete:/app/slskd_incomplete:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  slskd:
+    image: slskd/slskd:latest
+    container_name: music_slskd
+    environment:
+      SLSKD_SLSK_USERNAME: ${SOULSEEK_USERNAME:-}
+      SLSKD_SLSK_PASSWORD: ${SOULSEEK_PASSWORD:-}
+      SLSKD_DOWNLOADS_DIR: /app/downloads
+      SLSKD_INCOMPLETE_DIR: /app/incomplete
+    ports:
+      - "5030:5030"
+      - "50300:50300"
+    volumes:
+      - ./slskd/slskd.yml:/app/slskd.yml
+      - ./backend/music_files:/app/shared:ro
+      - slskd_downloads:/app/downloads
+      - slskd_incomplete:/app/incomplete
+      - slskd_data:/app/data
 
   frontend:
     build:
@@ -77,3 +102,6 @@ volumes:
   redis_data:
   music_files:
   frontend_node_modules:
+  slskd_downloads:
+  slskd_incomplete:
+  slskd_data:

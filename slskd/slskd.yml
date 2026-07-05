@@ -1,0 +1,16 @@
+# Конфиг slskd, монтируется в /app/slskd.yml.
+# Учётные данные Soulseek задаются через env (SLSKD_SLSK_USERNAME/PASSWORD) в docker-compose.
+# Здесь — только API-ключ для REST API (вложенные словари через env ненадёжны).
+web:
+  authentication:
+    api_keys:
+      default:
+        key: cddd9a716e984ff9724ad26c1534230ec8132c3728d01aadd24c0b86911d5d9e
+        role: administrator
+        cidr: 0.0.0.0/0,::/0
+# Soulseek требует, чтобы пользователь что-то раздавал — иначе сеть не отдаёт
+# результаты поиска и не выдаёт распределённого родителя.
+shares:
+  directories:
+    - /app/shared
+    - /app/downloads

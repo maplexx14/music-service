@@ -1,32 +1,112 @@
 .player {
   position: fixed;
-  bottom: 14px;
+  bottom: 12px;
   left: calc(var(--sidebar-width, 240px) + 16px);
   right: 16px;
   height: 76px;
   transition: left 0.3s ease;
-  background: linear-gradient(180deg, rgba(44, 44, 44, 0.98), rgba(22, 22, 22, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 18px;
   z-index: 1000;
-  box-shadow:
-    0 0 0 1px rgba(162, 89, 255, 0.08),
-    0 18px 46px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(18px);
-  overflow: hidden;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  overflow: visible;
 }
 
-.player::before {
-  content: "";
+.player-progress-top {
   position: absolute;
-  inset: 0 0 auto;
-  height: 2px;
+  top: -16px;
+  left: 0;
+  right: 0;
+  height: 28px;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.player-progress-top-track {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: transparent;
+  transition: height 0.15s ease, background-color 0.15s ease;
+}
+
+.player-progress-top:hover .player-progress-top-track {
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.player-progress-top-fill {
+  position: relative;
+  height: 100%;
+  width: 0;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.player-progress-top:hover .player-progress-top-fill {
+  background-color: #a259ff;
+}
+
+.player-progress-thumb {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
   background: #a259ff;
-  opacity: 0.7;
+  transform: translateY(-50%) scale(0);
+  transition: transform 0.15s ease;
+  pointer-events: none;
+}
+
+.player-progress-top:hover .player-progress-thumb {
+  transform: translateY(-50%) scale(1);
+}
+
+.player-progress-time-bubble {
+  position: absolute;
+  bottom: 100%;
+  right: -18px;
+  transform: translateY(6px);
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.player-progress-top:hover .player-progress-time-bubble {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.player-progress-duration {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  white-space: nowrap;
   pointer-events: none;
 }
 
@@ -267,7 +347,7 @@
 .play-pause-btn {
   background: #a259ff;
   border: none;
-  color: #26123d;
+  color: #000000;
   cursor: pointer;
   width: 44px;
   height: 44px;
@@ -287,45 +367,6 @@
   filter: brightness(1.08);
 }
 
-.player-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.time-text {
-  font-size: var(--text-sm);
-  color: rgba(255, 255, 255, 0.58);
-  min-width: 40px;
-  text-align: center;
-}
-
-.progress-bar {
-  flex: 1;
-  height: 5px;
-  background-color: rgba(255, 255, 255, 0.13);
-  border-radius: 999px;
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-}
-
-.progress-bar:hover {
-  background-color: rgba(255, 255, 255, 0.2);
-}
-
-.progress-fill {
-  height: 100%;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: inherit;
-  transition: width 0.1s;
-}
-
-.progress-bar:hover .progress-fill {
-  background-color: #a259ff;
-}
-
 .player-right {
   flex: 1;
   display: flex;
@@ -337,15 +378,11 @@
 
 @media (max-width: 768px) {
   .player {
-    left: 12px;
-    right: 12px;
-    bottom: 86px;
+    left: 0;
+    right: 0;
+    bottom: 70px;
     height: 64px;
     padding: 0 12px;
-  }
-
-  .player::before {
-    display: none;
   }
 
   .player-left {
@@ -362,7 +399,6 @@
     flex: 1;
   }
 
-  .player-progress,
   .player-right,
   .like-btn,
   .add-btn {

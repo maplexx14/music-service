@@ -109,8 +109,22 @@
   border-radius: 999px;
   color: #a259ff;
   font-size: 12px;
+  font-weight: 600;
   line-height: 1;
   padding: 6px 9px;
+  white-space: nowrap;
+}
+
+/* FLAC (Soulseek, lossless) — фиолетовый = «премиум качество». */
+.source-badge--flac {
+  border-color: rgba(162, 89, 255, 0.4);
+  color: #a259ff;
+}
+
+/* MP3 (YouTube Music, быстро) — нейтральный зелёный = «доступно сразу». */
+.source-badge--mp3 {
+  border-color: rgba(80, 200, 120, 0.4);
+  color: #4ecb7a;
 }
 
 .track-download {
@@ -276,13 +290,14 @@
   }
 
   .source-badge {
-    padding: 4px;
+    padding: 4px 6px;
     font-size: 0;
     line-height: 1;
   }
 
+  /* На узких экранах показываем короткий лейбл из data-label (FLAC/MP3). */
   .source-badge::before {
-    content: "J";
+    content: attr(data-label);
     font-size: 11px;
     line-height: 1;
   }

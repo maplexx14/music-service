@@ -28,6 +28,7 @@ function Player() {
     likedTrackIds,
     fetchLikedTracks,
     toggleTrackLike,
+    materializeCurrentTrack,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
@@ -40,8 +41,12 @@ function Player() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
   const [loadingPlaylists, setLoadingPlaylists] = useState(false)
   const [addError, setAddError] = useState('')
-  const isExternalTrack = currentTrack?.source === 'jamendo'
-  const localTrackId = !isExternalTrack ? currentTrack?.id : null
+  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic'].includes(currentTrack?.source)
+  // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
+  const dbTrackId =
+    currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
+  // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
+  const canInteract = dbTrackId !== null || isExternalTrack
 
   useEffect(() => {
     const audio = audioRef.current
@@ -70,12 +75,12 @@ function Player() {
   }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
 
   useEffect(() => {
-    if (localTrackId) {
+    if (dbTrackId) {
       fetchLikedTracks().catch((error) => {
         console.error('Error checking liked status:', error)
       })
     }
-  }, [localTrackId, fetchLikedTracks])
+  }, [dbTrackId, fetchLikedTracks])
 
   // Resolve audio URL: для Tuna/внешнего API используем fetch с tuna-skip-browser-warning
   useEffect(() => {
@@ -188,15 +193,21 @@ function Player() {
   }, [isPlaying, currentTrack, setDuration])
 
   useEffect(() => {
-    if (!localTrackId) {
-      lastRecordedTrackIdRef.current = null
-      return
-    }
-    if (!isPlaying) return
-    if (lastRecordedTrackIdRef.current === localTrackId) return
-    lastRecordedTrackIdRef.current = localTrackId
-    api.post(`/tracks/${localTrackId}/play`).catch(() => {})
-  }, [localTrackId, isPlaying])
+    if (!isPlaying || !currentTrack) return
+    if (!canInteract) return
+    // Стабильный ключ: у внешних трек id меняется после материализации.
+    const playKey = currentTrack.external_id ?? currentTrack.id
+    if (lastRecordedTrackIdRef.current === playKey) return
+    lastRecordedTrackIdRef.current = playKey
+    ;(async () => {
+      try {
+        const id = dbTrackId ?? (await materializeCurrentTrack())
+        if (id) await api.post(`/tracks/${id}/play`)
+      } catch (error) {
+        console.error('Error recording play:', error)
+      }
+    })()
+  }, [currentTrack?.id, currentTrack?.external_id, isPlaying, canInteract, dbTrackId, materializeCurrentTrack])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -228,11 +239,12 @@ function Player() {
   }
 
   const handleLike = async () => {
-    if (!localTrackId || loadingLike) return
-    
+    if (!canInteract || loadingLike) return
+
     setLoadingLike(true)
     try {
-      await toggleTrackLike(localTrackId)
+      const id = dbTrackId ?? (await materializeCurrentTrack())
+      if (id) await toggleTrackLike(id)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -240,10 +252,10 @@ function Player() {
     }
   }
 
-  const isLiked = localTrackId ? likedTrackIds.includes(localTrackId) : false
+  const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
 
   const handleOpenAddToPlaylist = async () => {
-    if (!localTrackId) return
+    if (!canInteract) return
     setShowAddToPlaylist((prev) => !prev)
     setAddError('')
 
@@ -261,13 +273,18 @@ function Player() {
   }
 
   const handleAddToPlaylist = async () => {
-    if (!localTrackId || !selectedPlaylistId) {
+    if (!selectedPlaylistId) {
       setAddError('Выберите плейлист')
       return
     }
     setAddError('')
     try {
-      await api.post(`/playlists/${selectedPlaylistId}/tracks/${localTrackId}`)
+      const id = dbTrackId ?? (await materializeCurrentTrack())
+      if (!id) {
+        setAddError('Не удалось добавить трек')
+        return
+      }
+      await api.post(`/playlists/${selectedPlaylistId}/tracks/${id}`)
       setShowAddToPlaylist(false)
     } catch (error) {
       setAddError(error.response?.data?.detail || 'Не удалось добавить трек')
@@ -276,6 +293,18 @@ function Player() {
 
   return (
     <div className="player">
+      <div className="player-progress-top" onClick={handleSeek}>
+        <div className="player-progress-top-track">
+          <div
+            className="player-progress-top-fill"
+            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+          >
+            <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
+            <span className="player-progress-thumb" />
+          </div>
+        </div>
+        <span className="player-progress-duration">{formatTime(duration)}</span>
+      </div>
       <audio
         ref={audioRef}
         key={currentTrack?.id}
@@ -315,7 +344,7 @@ function Player() {
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">{currentTrack.artist}</div>
         </div>
-        {!isExternalTrack && (
+        {canInteract && (
           <>
             <button
               className={`like-btn ${isLiked ? 'liked' : ''}`}
@@ -418,16 +447,6 @@ function Player() {
           >
             <Repeat1 size={20} />
           </button>
-        </div>
-        <div className="player-progress">
-          <span className="time-text">{formatTime(currentTime)}</span>
-          <div className="progress-bar" onClick={handleSeek}>
-            <div
-              className="progress-fill"
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-            />
-          </div>
-          <span className="time-text">{formatTime(duration)}</span>
         </div>
       </div>
 

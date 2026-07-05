@@ -52,9 +52,24 @@ class TrackResponse(TrackBase):
     play_count: int
     release_date: Optional[datetime] = None
     created_at: datetime
+    source: str = "local"
+    external_id: Optional[str] = None
+    stream_url: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class ExternalTrackImport(BaseModel):
+    """Payload для материализации внешнего трека (ytmusic/soulseek) в БД."""
+    source: str
+    external_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    duration: int = 0
+    cover_url: Optional[str] = None
+    stream_url: Optional[str] = None
 
 
 class PlaylistBase(BaseModel):

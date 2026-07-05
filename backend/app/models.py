@@ -60,8 +60,12 @@ class Track(Base):
     artist = Column(String, nullable=False, index=True)
     album = Column(String, nullable=True)
     duration = Column(Integer, nullable=False)  # Duration in seconds
-    file_path = Column(String, nullable=False)
+    file_path = Column(String, nullable=True)  # null для внешних (ytmusic/soulseek)
     cover_url = Column(String, nullable=True)
+    # Источник трека: 'local' | 'ytmusic' | 'soulseek' | ...
+    source = Column(String, nullable=False, default="local", server_default="local", index=True)
+    external_id = Column(String, nullable=True, index=True)  # id у провайдера
+    stream_url = Column(String, nullable=True)  # прокси-URL провайдера для проигрывания
     genre = Column(String, nullable=True, index=True)
     release_date = Column(DateTime(timezone=True), nullable=True)
     play_count = Column(Integer, default=0)

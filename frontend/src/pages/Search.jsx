@@ -7,6 +7,16 @@ import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl } from '../utils/media'
 import './Search.css'
 
+// Лейбл и класс бейджа по источнику внешнего трека.
+const SOURCE_META = {
+  soulseek: { label: 'FLAC', className: 'source-badge--flac' },
+  ytmusic: { label: 'MP3', className: 'source-badge--mp3' },
+}
+
+function sourceMeta(source) {
+  return SOURCE_META[source] || { label: source || 'EXT', className: '' }
+}
+
 function Search() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
@@ -34,8 +44,8 @@ function Search() {
         api.get('/search', {
           params: { q: query, limit: 20 },
         }),
-        api.get('/external/search', {
-          params: { q: query, limit: 20 },
+        api.get('/search/external', {
+          params: { q: query, limit: 30 },
           skipErrorToast: true,
         }),
       ])
@@ -146,7 +156,12 @@ function Search() {
                       <div className="track-item-artist">{track.artist}</div>
                     </div>
                     <div className="track-item-meta">
-                      <span className="source-badge">Jamendo</span>
+                      <span
+                        className={`source-badge ${sourceMeta(track.source).className}`}
+                        data-label={sourceMeta(track.source).label}
+                      >
+                        {sourceMeta(track.source).label}
+                      </span>
                       {track.download_allowed && track.download_url && (
                         <a
                           className="track-download"

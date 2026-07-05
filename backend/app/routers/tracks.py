@@ -10,7 +10,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
 from app.models import Track, User, user_liked_tracks, user_track_plays
-from app.schemas import TrackResponse, TrackCreate
+from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from app.dependencies import get_current_active_user, get_current_admin_user
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,13 @@ async def get_track(track_id: int, db: Session = Depends(get_db)):
     return track
 
 
+# Реконструкция прокси-URL провайдера по источнику материализованного трека.
+EXTERNAL_STREAM_PREFIX = {
+    "soulseek": "/api/soulseek/stream/",
+    "ytmusic": "/api/ytdlp/stream/",
+}
+
+
 @router.get("/{track_id}/stream")
 async def stream_track(
     track_id: int,
@@ -92,14 +99,22 @@ async def stream_track(
     Stream audio file with proper headers for audio playback.
     Supports range requests for seeking.
     """
-    from fastapi import Request
-    from fastapi.responses import FileResponse, Response
+    from fastapi.responses import FileResponse, RedirectResponse
     import mimetypes
-    
+
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    
+
+    # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
+    if track.source and track.source != "local":
+        prefix = EXTERNAL_STREAM_PREFIX.get(track.source)
+        if prefix and track.external_id:
+            return RedirectResponse(url=f"{prefix}{track.external_id}", status_code=307)
+        if track.stream_url:
+            return RedirectResponse(url=track.stream_url, status_code=307)
+        raise HTTPException(status_code=404, detail="External stream unavailable")
+
     # Get full file path - handle both absolute and relative paths
     if track.file_path.startswith('/'):
         # Absolute path in file_path
@@ -147,6 +162,57 @@ async def create_track(
     db.commit()
     db.refresh(db_track)
     return db_track
+
+
+def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> Track:
+    """Идемпотентно апсертит внешний трек по (source, external_id)."""
+    track = (
+        db.query(Track)
+        .filter(Track.source == payload.source, Track.external_id == payload.external_id)
+        .first()
+    )
+    if track:
+        return track
+
+    track = Track(
+        title=payload.title,
+        artist=payload.artist,
+        album=payload.album,
+        duration=payload.duration or 0,
+        file_path=None,
+        cover_url=payload.cover_url,
+        source=payload.source,
+        external_id=payload.external_id,
+        stream_url=payload.stream_url,
+    )
+    db.add(track)
+    try:
+        db.commit()
+    except Exception:
+        # Гонка: параллельный запрос уже создал запись — берём её.
+        db.rollback()
+        track = (
+            db.query(Track)
+            .filter(Track.source == payload.source, Track.external_id == payload.external_id)
+            .first()
+        )
+        if track is None:
+            raise
+        return track
+    db.refresh(track)
+    return track
+
+
+@router.post("/import", response_model=TrackResponse)
+async def import_external_track(
+    payload: ExternalTrackImport,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Материализует внешний трек в БД, возвращает локальную запись (int id)."""
+    if payload.source == "local":
+        raise HTTPException(status_code=400, detail="Нельзя импортировать локальный трек")
+    return get_or_create_external_track(db, payload)
 
 
 @router.post("/upload", response_model=TrackResponse, status_code=status.HTTP_201_CREATED)
