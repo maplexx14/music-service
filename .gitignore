@@ -45,3 +45,6 @@ logs/
 
 # Docker
 .dockerignore
+
+# Cached external audio (YouTube Music etc.)
+backend/ytdlp_cache/

@@ -62,6 +62,21 @@ if os.path.exists(cover_dir):
     app.mount("/cover_files", StaticFiles(directory=cover_dir), name="cover_files")
 
 
+@app.on_event("startup")
+async def _configure_threadpool() -> None:
+    # Синхронные (def) эндпоинты и sync-генераторы стримов выполняются в
+    # anyio threadpool. Дефолт — 40 тредов, что мало под 100+ конкурентных
+    # запросов; поднимаем лимит. Должен согласовываться с размером пула БД.
+    import anyio
+    from anyio import to_thread
+
+    tokens = int(os.getenv("THREADPOOL_TOKENS", "60"))
+    try:
+        to_thread.current_default_thread_limiter().total_tokens = tokens
+    except Exception:  # noqa: BLE001 — не критично, если API изменится
+        pass
+
+
 @app.get("/")
 async def root():
     return {"message": "Music Streaming API"}

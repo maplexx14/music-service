@@ -3,7 +3,7 @@ import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Admin.css'
 
 function Admin() {
@@ -100,6 +100,7 @@ function Admin() {
                   src={resolveCoverUrl(track.cover_url) || defaultCover}
                   alt={track.title}
                   className="admin-track-cover"
+                  onError={handleCoverError}
                 />
                 <div className="admin-track-info">
                   <div className="admin-track-title">{track.title}</div>

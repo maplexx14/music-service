@@ -4,7 +4,7 @@ import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Search.css'
 
 // Лейбл и класс бейджа по источнику внешнего трека.
@@ -125,6 +125,7 @@ function Search() {
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-item-cover"
+                      onError={handleCoverError}
                     />
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>
@@ -150,6 +151,7 @@ function Search() {
                       src={track.cover_url || defaultCover}
                       alt={track.title}
                       className="track-item-cover"
+                      onError={handleCoverError}
                     />
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>
@@ -191,6 +193,7 @@ function Search() {
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
                       className="playlist-item-cover"
+                      onError={handleCoverError}
                     />
                     <div className="playlist-item-info">
                       <div className="playlist-item-name">{playlist.name}</div>

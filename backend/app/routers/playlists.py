@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.get("/", response_model=List[PlaylistResponse])
-async def get_playlists(
+def get_playlists(
     skip: int = 0,
     limit: int = 100,
     current_user: User = Depends(get_current_active_user),
@@ -32,7 +32,7 @@ async def get_playlists(
 
 
 @router.get("/me", response_model=List[PlaylistResponse])
-async def get_my_playlists(
+def get_my_playlists(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -41,7 +41,7 @@ async def get_my_playlists(
 
 
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
-async def get_playlist(
+def get_playlist(
     playlist_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -58,7 +58,7 @@ async def get_playlist(
 
 
 @router.post("/", response_model=PlaylistResponse, status_code=status.HTTP_201_CREATED)
-async def create_playlist(
+def create_playlist(
     playlist: PlaylistCreate,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -71,7 +71,7 @@ async def create_playlist(
 
 
 @router.put("/{playlist_id}", response_model=PlaylistResponse)
-async def update_playlist(
+def update_playlist(
     playlist_id: int,
     playlist_update: PlaylistUpdate,
     current_user: User = Depends(get_current_active_user),
@@ -133,7 +133,7 @@ async def upload_playlist_cover(
 
 
 @router.delete("/{playlist_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_playlist(
+def delete_playlist(
     playlist_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -151,7 +151,7 @@ async def delete_playlist(
 
 
 @router.post("/{playlist_id}/tracks/{track_id}", status_code=status.HTTP_200_OK)
-async def add_track_to_playlist(
+def add_track_to_playlist(
     playlist_id: int,
     track_id: int,
     current_user: User = Depends(get_current_active_user),
@@ -192,7 +192,7 @@ async def add_track_to_playlist(
 
 
 @router.delete("/{playlist_id}/tracks/{track_id}", status_code=status.HTTP_200_OK)
-async def remove_track_from_playlist(
+def remove_track_from_playlist(
     playlist_id: int,
     track_id: int,
     current_user: User = Depends(get_current_active_user),

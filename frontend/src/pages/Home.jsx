@@ -6,7 +6,7 @@ import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import Grainient from '../components/Grainient'
 import Spinner from '../components/Spinner'
 import './Home.css'
@@ -225,6 +225,7 @@ function Home() {
                     src={resolveCoverUrl(track.cover_url) || defaultCover}
                     alt={track.title}
                     className="track-cover"
+                    onError={handleCoverError}
                   />
                   <div className="track-info">
                     <div className="track-title">{track.title}</div>
@@ -244,6 +245,7 @@ function Home() {
                     src={resolveCoverUrl(track.cover_url) || defaultCover}
                     alt={track.title}
                     className="track-cover"
+                    onError={handleCoverError}
                   />
                   <div className="track-info">
                     <div className="track-title">{track.title}</div>
@@ -268,6 +270,7 @@ function Home() {
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
                       className="playlist-cover"
+                      onError={handleCoverError}
                     />
                     <div className="playlist-info">
                       <div className="playlist-name">{playlist.name}</div>
@@ -296,6 +299,7 @@ function Home() {
                     src={resolveCoverUrl(track.cover_url) || defaultCover}
                     alt={track.title}
                     className="track-cover"
+                    onError={handleCoverError}
                   />
                   <div className="track-info">
                     <div className="track-title">{track.title}</div>

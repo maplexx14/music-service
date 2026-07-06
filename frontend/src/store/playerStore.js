@@ -106,6 +106,27 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
+  // Заранее прогревает резолв следующего в очереди ytmusic-трека на бэке,
+  // чтобы переключение началось мгновенно (без ожидания yt-dlp).
+  prefetchNext: () => {
+    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
+    let nextIndex = null
+    if (isShuffle) {
+      if (currentShuffleIndex >= 0 && currentShuffleIndex < shuffledOrder.length - 1) {
+        nextIndex = shuffledOrder[currentShuffleIndex + 1]
+      }
+    } else if (currentIndex >= 0 && currentIndex < queue.length - 1) {
+      nextIndex = currentIndex + 1
+    }
+    if (nextIndex == null) return
+
+    const next = queue[nextIndex]
+    if (!next || next.source !== 'ytmusic') return
+    const externalId = next.external_id ?? String(next.id).split(':').slice(1).join(':')
+    if (!externalId) return
+    api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
+  },
+
   playTrack: (track, queue = [], source = null) => {
     const list = queue.length > 0 ? queue : [track]
     const trackIndex = list.findIndex(t => t.id === track.id)
@@ -236,7 +257,16 @@ const usePlayerStore = create((set, get) => ({
   setCurrentTime: (time) => {
     set({ currentTime: time })
   },
-  
+
+  // Запрос на перемотку из компонентов без доступа к <audio> (полноэкранный
+  // плеер). Player подхватывает seekRequest и выставляет audio.currentTime.
+  seekRequest: null,
+  seekTo: (time) => {
+    if (time == null || isNaN(time)) return
+    set({ currentTime: time, seekRequest: { time } })
+  },
+  clearSeekRequest: () => set({ seekRequest: null }),
+
   setDuration: (duration) => {
     set({ duration })
   },

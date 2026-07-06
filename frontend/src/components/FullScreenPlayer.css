@@ -138,10 +138,25 @@
 }
 
 .fullscreen-progress-bar {
+  position: relative;
   height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
-  overflow: hidden;
+  cursor: pointer;
+}
+
+/* Прозрачная зона нажатия выше самой полоски — удобнее попадать пальцем. */
+.fullscreen-progress-bar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  bottom: -10px;
+}
+
+.fullscreen-progress-bar .fullscreen-progress-fill {
+  pointer-events: none;
 }
 
 .fullscreen-progress-fill {

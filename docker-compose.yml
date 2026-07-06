@@ -48,11 +48,20 @@ services:
       SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
       SLSKD_DOWNLOADS_DIR: /app/slskd_downloads
       SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
+      YTDLP_CACHE_DIR: /app/ytdlp_cache
+      YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
+      # Конкурентность: пул БД и threadpool согласованы между собой.
+      # pool_size + max_overflow не должно превышать Postgres max_connections
+      # (по умолчанию 100) в сумме по всем воркерам.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
+      THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-60}
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - music_files:/app/music_files
+      - ytdlp_cache:/app/ytdlp_cache
       - slskd_downloads:/app/slskd_downloads:ro
       - slskd_incomplete:/app/slskd_incomplete:ro
     depends_on:
@@ -101,6 +110,7 @@ volumes:
   postgres_data:
   redis_data:
   music_files:
+  ytdlp_cache:
   frontend_node_modules:
   slskd_downloads:
   slskd_incomplete:

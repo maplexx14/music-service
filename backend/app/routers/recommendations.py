@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/", response_model=RecommendationResponse)
-async def get_recommendations(
+def get_recommendations(
     limit: int = 20,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -68,20 +68,20 @@ async def get_recommendations(
 
 
 @router.get("/tracks", response_model=List[TrackResponse])
-async def get_recommended_tracks(
+def get_recommended_tracks(
     limit: int = 20,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    recommendations = await get_recommendations(limit=limit, current_user=current_user, db=db)
+    recommendations = get_recommendations(limit=limit, current_user=current_user, db=db)
     return recommendations.tracks
 
 
 @router.get("/playlists", response_model=List[PlaylistResponse])
-async def get_recommended_playlists(
+def get_recommended_playlists(
     limit: int = 10,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    recommendations = await get_recommendations(limit=limit, current_user=current_user, db=db)
+    recommendations = get_recommendations(limit=limit, current_user=current_user, db=db)
     return recommendations.playlists

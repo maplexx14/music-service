@@ -4,7 +4,7 @@ import { Play, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './LikedSongs.css'
 
 function LikedSongs() {
@@ -90,6 +90,7 @@ function LikedSongs() {
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-table-cover"
+                      onError={handleCoverError}
                     />
                     <div>
                       <div className="track-name">{track.title}</div>

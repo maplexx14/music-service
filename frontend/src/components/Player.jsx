@@ -3,7 +3,8 @@ import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 
@@ -29,6 +30,9 @@ function Player() {
     fetchLikedTracks,
     toggleTrackLike,
     materializeCurrentTrack,
+    prefetchNext,
+    seekRequest,
+    clearSeekRequest,
   } = usePlayerStore()
 
   const audioRef = useRef(null)
@@ -192,6 +196,12 @@ function Player() {
     }
   }, [isPlaying, currentTrack, setDuration])
 
+  // Как только заиграл текущий трек — прогреваем следующий в очереди на бэке.
+  useEffect(() => {
+    if (!currentTrack) return
+    prefetchNext()
+  }, [currentTrack?.id, prefetchNext])
+
   useEffect(() => {
     if (!isPlaying || !currentTrack) return
     if (!canInteract) return
@@ -215,6 +225,17 @@ function Player() {
       audio.volume = volume
     }
   }, [volume])
+
+  // Перемотка, инициированная из полноэкранного плеера (у него нет доступа к
+  // <audio>). Применяем к элементу и сбрасываем запрос.
+  useEffect(() => {
+    if (!seekRequest) return
+    const audio = audioRef.current
+    if (audio && !isNaN(seekRequest.time)) {
+      audio.currentTime = seekRequest.time
+    }
+    clearSeekRequest()
+  }, [seekRequest, clearSeekRequest])
 
   if (!currentTrack) {
     return null
@@ -314,9 +335,14 @@ function Player() {
         onError={(e) => {
           console.error('Audio element error:', e)
           console.error('Track:', currentTrack)
-          console.error('File path:', currentTrack.file_path)
           console.error('Audio src:', audioRef.current?.src)
           console.error('Audio error details:', audioRef.current?.error)
+          // Внешний трек не проигрался (недоступен/удалён) — не зависаем на нём,
+          // а показываем уведомление и переходим к следующему.
+          if (isExternalTrack && audioRef.current?.src) {
+            toast.error(`Трек недоступен: ${currentTrack.title}`)
+            nextTrack()
+          }
         }}
         onCanPlay={() => {
           if (isPlaying) {
@@ -338,6 +364,7 @@ function Player() {
             src={isExternalTrack ? currentTrack.cover_url || defaultCover : resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
+            onError={handleCoverError}
           />
         </button>
         <div className="player-info">

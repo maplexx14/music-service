@@ -5,7 +5,7 @@ import { Play, Heart, MoreVertical } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 
 function PlaylistDetail() {
@@ -60,6 +60,7 @@ function PlaylistDetail() {
           src={resolveCoverUrl(playlist.cover_url) || defaultCover}
           alt={playlist.name}
           className="playlist-header-cover"
+          onError={handleCoverError}
         />
         <div className="playlist-header-info">
           <div className="playlist-type">Плейлист</div>
@@ -115,6 +116,7 @@ function PlaylistDetail() {
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-table-cover"
+                      onError={handleCoverError}
                     />
                     <div>
                       <div className="track-name">{track.title}</div>

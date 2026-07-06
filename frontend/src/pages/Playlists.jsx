@@ -5,7 +5,7 @@ import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
 
 function Playlists() {
@@ -130,6 +130,7 @@ function Playlists() {
                 src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                 alt={playlist.name}
                 className="playlist-cover"
+                onError={handleCoverError}
               />
               <div className="playlist-info">
                 <div className="playlist-name">{playlist.name}</div>

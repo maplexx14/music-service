@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
-async def register(request: Request, user_data: UserCreate, db: Session = Depends(get_db)):
+def register(request: Request, user_data: UserCreate, db: Session = Depends(get_db)):
     # Check if user already exists
     db_user = db.query(User).filter(
         (User.username == user_data.username) | (User.email == user_data.email)
@@ -41,7 +41,7 @@ async def register(request: Request, user_data: UserCreate, db: Session = Depend
 
 @router.post("/login", response_model=Token)
 @limiter.limit("10/minute")
-async def login(
+def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)

@@ -15,7 +15,7 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
 
 
 @router.get("/stats/count")
-async def get_user_count(
+def get_user_count(
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
@@ -24,7 +24,7 @@ async def get_user_count(
 
 
 @router.get("/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int, db: Session = Depends(get_db)):
+def get_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

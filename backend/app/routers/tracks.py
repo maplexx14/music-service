@@ -56,7 +56,7 @@ COVER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.get("/", response_model=List[TrackResponse])
-async def get_tracks(
+def get_tracks(
     skip: int = 0,
     limit: int = 100,
     genre: Optional[str] = None,
@@ -73,7 +73,7 @@ async def get_tracks(
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
-async def get_track(track_id: int, db: Session = Depends(get_db)):
+def get_track(track_id: int, db: Session = Depends(get_db)):
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -91,7 +91,7 @@ EXTERNAL_STREAM_PREFIX = {
 
 
 @router.get("/{track_id}/stream")
-async def stream_track(
+def stream_track(
     track_id: int,
     db: Session = Depends(get_db)
 ):
@@ -152,7 +152,7 @@ async def stream_track(
 
 
 @router.post("/", response_model=TrackResponse, status_code=status.HTTP_201_CREATED)
-async def create_track(
+def create_track(
     track: TrackCreate,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -204,7 +204,7 @@ def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> T
 
 
 @router.post("/import", response_model=TrackResponse)
-async def import_external_track(
+def import_external_track(
     payload: ExternalTrackImport,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -318,7 +318,7 @@ async def upload_track_cover(
 
 
 @router.post("/{track_id}/like", status_code=status.HTTP_200_OK)
-async def like_track(
+def like_track(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -337,7 +337,7 @@ async def like_track(
 
 
 @router.delete("/{track_id}/like", status_code=status.HTTP_200_OK)
-async def unlike_track(
+def unlike_track(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -355,7 +355,7 @@ async def unlike_track(
 
 
 @router.get("/me/liked", response_model=List[TrackResponse])
-async def get_liked_tracks(
+def get_liked_tracks(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -363,7 +363,7 @@ async def get_liked_tracks(
 
 
 @router.get("/me/history", response_model=List[TrackResponse])
-async def get_listening_history(
+def get_listening_history(
     limit: int = 50,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -380,7 +380,7 @@ async def get_listening_history(
 
 
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
-async def record_track_play(
+def record_track_play(
     track_id: int,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -415,7 +415,7 @@ async def record_track_play(
 
 
 @router.delete("/{track_id}", status_code=status.HTTP_200_OK)
-async def delete_track(
+def delete_track(
     track_id: int,
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './FullScreenPlayer.css'
 
 function FullScreenPlayer() {
@@ -25,6 +25,7 @@ function FullScreenPlayer() {
     fetchLikedTracks,
     toggleTrackLike,
     materializeCurrentTrack,
+    seekTo,
   } = usePlayerStore()
   const [loadingLike, setLoadingLike] = useState(false)
   const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic'].includes(currentTrack?.source)
@@ -86,6 +87,13 @@ function FullScreenPlayer() {
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
 
+  const handleSeek = (e) => {
+    if (!duration) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    seekTo(ratio * duration)
+  }
+
   return (
     <div className="fullscreen-player">
       <div className="fullscreen-header">
@@ -102,7 +110,7 @@ function FullScreenPlayer() {
       </div>
 
       <div className="fullscreen-art">
-        <img src={coverUrl} alt={currentTrack.title} />
+        <img src={coverUrl} alt={currentTrack.title} onError={handleCoverError} />
       </div>
 
       <div className="fullscreen-info">
@@ -137,7 +145,15 @@ function FullScreenPlayer() {
       </div>
 
       <div className="fullscreen-progress">
-        <div className="fullscreen-progress-bar">
+        <div
+          className="fullscreen-progress-bar"
+          onClick={handleSeek}
+          role="slider"
+          aria-label="Перемотка"
+          aria-valuemin={0}
+          aria-valuemax={Math.floor(duration || 0)}
+          aria-valuenow={Math.floor(currentTime || 0)}
+        >
           <div className="fullscreen-progress-fill" style={{ width: `${progressPercent}%` }} />
         </div>
         <div className="fullscreen-progress-time">

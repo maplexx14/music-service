@@ -10,7 +10,21 @@ if not DATABASE_URL:
     else:
         raise RuntimeError("DATABASE_URL environment variable must be set (or set DEBUG=true for local development)")
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# Пул под конкурентную нагрузку. Синхронные (def) эндпоинты выполняются в
+# threadpool, каждый занятый тред держит одно соединение — поэтому размер пула
+# должен покрывать размер threadpool (см. THREADPOOL_TOKENS в main.py).
+# pool_size + max_overflow = потолок соединений НА ОДИН воркер.
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "40"))
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=DB_POOL_SIZE,
+    max_overflow=DB_MAX_OVERFLOW,
+    pool_recycle=1800,  # пересоздаём соединения раз в 30 мин (защита от разрывов)
+    pool_timeout=30,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
