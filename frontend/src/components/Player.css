@@ -11,10 +11,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px;
+  padding: 18px;
   z-index: 1000;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   overflow: visible;
+
 }
 
 .player-progress-top {
@@ -380,7 +381,7 @@
   .player {
     left: 0;
     right: 0;
-    bottom: 70px;
+    bottom: 80px;
     height: 64px;
     padding: 0 12px;
   }
