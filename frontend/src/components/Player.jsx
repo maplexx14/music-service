@@ -3,7 +3,7 @@ import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
@@ -196,10 +196,12 @@ function Player() {
     }
   }, [isPlaying, currentTrack, setDuration])
 
-  // Как только заиграл текущий трек — прогреваем следующий в очереди на бэке.
+  // Как только заиграл текущий трек — прогреваем следующий в очереди на бэке
+  // и, если играет «Моя волна», подтягиваем следующую порцию потока.
   useEffect(() => {
     if (!currentTrack) return
     prefetchNext()
+    usePlayerStore.getState().extendFlowIfNeeded()
   }, [currentTrack?.id, prefetchNext])
 
   useEffect(() => {
@@ -236,6 +238,109 @@ function Player() {
     }
     clearSeekRequest()
   }, [seekRequest, clearSeekRequest])
+
+  // Media Session API — инфо о треке в системном виджете проигрывания (экран
+  // блокировки, шторка, медиаклавиши). Метаданные обновляем при смене трека.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    if (!currentTrack) {
+      navigator.mediaSession.metadata = null
+      return
+    }
+    const artwork = isExternalTrack
+      ? upscaleCover(currentTrack.cover_url)
+      : resolveCoverUrl(currentTrack.cover_url)
+    const artworkUrl = artwork
+      ? new URL(artwork, window.location.origin).href
+      : new URL(defaultCover, window.location.origin).href
+
+    navigator.mediaSession.metadata = new window.MediaMetadata({
+      title: currentTrack.title || 'Неизвестный трек',
+      artist: currentTrack.artist || '',
+      album: currentTrack.album || '',
+      artwork: [
+        { src: artworkUrl, sizes: '512x512', type: 'image/png' },
+      ],
+    })
+  }, [
+    currentTrack?.id,
+    currentTrack?.title,
+    currentTrack?.artist,
+    currentTrack?.album,
+    currentTrack?.cover_url,
+    isExternalTrack,
+  ])
+
+  // Обработчики кнопок системного виджета. Регистрируем один раз.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    const seekBy = (offset) => {
+      const audio = audioRef.current
+      if (!audio) return
+      audio.currentTime = Math.min(
+        audio.duration || Infinity,
+        Math.max(0, audio.currentTime + offset),
+      )
+    }
+    const handlers = {
+      play: () => {
+        if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+      },
+      pause: () => {
+        if (usePlayerStore.getState().isPlaying) togglePlayPause()
+      },
+      previoustrack: () => previousTrack(),
+      nexttrack: () => nextTrack(),
+      seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
+      seekforward: (d) => seekBy(d.seekOffset || 10),
+      seekto: (d) => {
+        const audio = audioRef.current
+        if (audio && d.seekTime != null) audio.currentTime = d.seekTime
+      },
+    }
+    for (const [action, handler] of Object.entries(handlers)) {
+      try {
+        ms.setActionHandler(action, handler)
+      } catch {
+        // Некоторые действия могут не поддерживаться браузером — игнорируем.
+      }
+    }
+    return () => {
+      for (const action of Object.keys(handlers)) {
+        try {
+          ms.setActionHandler(action, null)
+        } catch {
+          /* noop */
+        }
+      }
+    }
+  }, [togglePlayPause, previousTrack, nextTrack])
+
+  // Статус воспроизведения в виджете (play/pause индикатор).
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = currentTrack
+      ? isPlaying
+        ? 'playing'
+        : 'paused'
+      : 'none'
+  }, [isPlaying, currentTrack?.id])
+
+  // Позиция/длительность — прогресс-бар в системном виджете.
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
+    if (!duration || isNaN(duration) || !isFinite(duration)) return
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        position: Math.min(currentTime, duration),
+        playbackRate: 1,
+      })
+    } catch {
+      /* значения вне диапазона — пропускаем */
+    }
+  }, [currentTime, duration])
 
   if (!currentTrack) {
     return null
@@ -361,7 +466,7 @@ function Player() {
           aria-label="Открыть плеер на весь экран"
         >
           <img
-            src={isExternalTrack ? currentTrack.cover_url || defaultCover : resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+            src={isExternalTrack ? upscaleCover(currentTrack.cover_url) || defaultCover : resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
             onError={handleCoverError}

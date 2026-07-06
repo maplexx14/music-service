@@ -9,7 +9,7 @@ import aiofiles
 from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
-from app.models import Track, User, user_liked_tracks, user_track_plays
+from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from app.dependencies import get_current_active_user, get_current_admin_user
 
@@ -412,6 +412,44 @@ def record_track_play(
     
     db.commit()
     return {"message": "Play recorded"}
+
+
+@router.post("/{track_id}/skip")
+def record_track_skip(
+    track_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Скип трека (прослушано <25%) — негативный сигнал для рекомендаций.
+
+    Порог контролирует фронт: он вызывает эндпоинт только когда переключили,
+    прослушав меньше четверти трека.
+    """
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    stmt = (
+        update(user_track_skips)
+        .where(
+            (user_track_skips.c.user_id == current_user.id) &
+            (user_track_skips.c.track_id == track_id)
+        )
+        .values(skip_count=user_track_skips.c.skip_count + 1, last_skipped=func.now())
+    )
+    result = db.execute(stmt)
+
+    if result.rowcount == 0:
+        stmt = insert(user_track_skips).values(
+            user_id=current_user.id,
+            track_id=track_id,
+            skip_count=1,
+            last_skipped=func.now()
+        )
+        db.execute(stmt)
+
+    db.commit()
+    return {"message": "Skip recorded"}
 
 
 @router.delete("/{track_id}", status_code=status.HTTP_200_OK)

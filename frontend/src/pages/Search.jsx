@@ -4,7 +4,7 @@ import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import './Search.css'
 
 // Лейбл и класс бейджа по источнику внешнего трека.
@@ -148,7 +148,7 @@ function Search() {
                     onClick={() => handlePlayExternalTrack(track)}
                   >
                     <img
-                      src={track.cover_url || defaultCover}
+                      src={upscaleCover(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-item-cover"
                       onError={handleCoverError}

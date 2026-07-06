@@ -49,11 +49,35 @@ def clean_title(text: str) -> str:
     return _JUNK.sub("", text or "").strip(" -–—")
 
 
+def _upscale_thumb(url: str) -> str:
+    """Просит у CDN Google обложку в большем разрешении.
+
+    YouTube Music отдаёт превью с размером, зашитым в URL. Google-CDN ресайзит
+    по запросу, поэтому достаточно переписать параметры размера:
+      * lh3.googleusercontent.com: '=w544-h544-l90-rj' → '=w1200-h1200-l90-rj'
+      * i.ytimg.com/vi/<id>/hqdefault.jpg → '/maxresdefault.jpg'
+    """
+    if not url:
+        return url
+    if "googleusercontent.com" in url or "ggpht.com" in url:
+        # '=w544-h544-...': поднимаем ширину и высоту до 1200, хвост сохраняем.
+        return re.sub(r"=w\d+-h\d+", "=w1200-h1200", url, count=1)
+    if "i.ytimg.com" in url or "ytimg.com" in url:
+        return re.sub(
+            r"/(?:default|mqdefault|hqdefault|sddefault)\.jpg",
+            "/maxresdefault.jpg",
+            url,
+            count=1,
+        )
+    return url
+
+
 def _thumb(thumbnails: list) -> Optional[str]:
     if not thumbnails:
         return None
-    # ytmusicapi отдаёт список по возрастанию размера — берём самую крупную.
-    return thumbnails[-1].get("url")
+    # ytmusicapi отдаёт список по возрастанию размера — берём самую крупную
+    # и просим у CDN версию в большем разрешении.
+    return _upscale_thumb(thumbnails[-1].get("url"))
 
 
 def _duration_seconds(item: dict) -> int:
@@ -244,13 +268,14 @@ class TrackUnavailable(Exception):
     """Видео недоступно (удалено/приватно/регион) — резолв невозможен."""
 
 
-async def _resolve_cached(video_id: str) -> tuple[str, str, Optional[int]]:
+async def _resolve_cached(video_id: str, force: bool = False) -> tuple[str, str, Optional[int]]:
     """Резолв прямого URL с кэшем в Redis.
 
+    force=True — игнорирует кэш и резолвит заново (протухшая ссылка).
     Кидает TrackUnavailable, если видео недоступно, иначе — исходное исключение.
     """
     key = f"ytdlp:resolve:v2:{video_id}"
-    cached = get_cache(key)
+    cached = None if force else get_cache(key)
     if cached:
         if cached.get("unavailable"):
             raise TrackUnavailable(video_id)
@@ -374,18 +399,23 @@ def _parse_range(header: Optional[str], total: Optional[int]) -> tuple[int, Opti
     return start, end
 
 
-async def _probe_total(client: httpx.AsyncClient, url: str) -> Optional[int]:
-    """Узнаёт полный размер файла через ранний range-запрос."""
+async def _probe(client: httpx.AsyncClient, url: str) -> tuple[int, Optional[int]]:
+    """Пробный range-запрос: (http-статус, полный размер файла или None).
+
+    Заодно валидирует ссылку: googlevideo-URL живут ограниченно и могут быть
+    привязаны к IP — протухшая ссылка отвечает 403 ещё ДО начала стрима.
+    """
     try:
         resp = await client.get(url, headers={"Range": "bytes=0-0"})
     except httpx.HTTPError:
-        return None
+        return 599, None
     cr = resp.headers.get("content-range")  # 'bytes 0-0/12345'
+    total = None
     if cr and "/" in cr:
         tail = cr.rsplit("/", 1)[-1].strip()
         if tail.isdigit():
-            return int(tail)
-    return None
+            total = int(tail)
+    return resp.status_code, total
 
 
 @router.get("/stream/{video_id}")
@@ -417,9 +447,27 @@ async def stream_ytmusic(video_id: str, request: Request):
     # Content-Length должен ТОЧНО совпадать с тем, что реально отдаст эта
     # googlevideo-ссылка, иначе Starlette падает с "content shorter than
     # Content-Length". Авторитетный размер — из content-range самого googlevideo
-    # (probe), а filesize из yt-dlp может расходиться. Поэтому probe в приоритете,
-    # filesize — только фолбэк, если probe не удался.
-    probed = await _probe_total(client, direct_url)
+    # (probe), а filesize из yt-dlp может расходиться. Probe заодно валидирует
+    # ссылку: кэшированный URL мог протухнуть (403) — тогда резолвим заново
+    # и пробуем ещё раз, ДО отправки заголовков клиенту.
+    status, probed = await _probe(client, direct_url)
+    if status >= 400:
+        logger.info("stale direct url for %s (probe %s), re-resolving", video_id, status)
+        try:
+            direct_url, ext, total = await _resolve_cached(video_id, force=True)
+        except TrackUnavailable:
+            await client.aclose()
+            raise HTTPException(status_code=404, detail="Трек недоступен")
+        except Exception:  # noqa: BLE001
+            await client.aclose()
+            logger.exception("re-resolve failed: %s", video_id)
+            raise HTTPException(status_code=502, detail="Не удалось получить аудио")
+        media_type = MEDIA_TYPES.get(ext, "audio/mp4")
+        status, probed = await _probe(client, direct_url)
+        if status >= 400:
+            await client.aclose()
+            logger.warning("fresh url also dead for %s (probe %s)", video_id, status)
+            raise HTTPException(status_code=502, detail="Источник аудио недоступен")
     if probed is not None:
         total = probed
 

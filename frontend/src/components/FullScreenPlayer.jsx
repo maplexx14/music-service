@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import defaultCover from '../assets/default-cover.svg'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import './FullScreenPlayer.css'
 
 function FullScreenPlayer() {
@@ -41,7 +41,7 @@ function FullScreenPlayer() {
   const coverUrl = useMemo(
     () => {
       if (isExternalTrack) {
-        return currentTrack?.cover_url || defaultCover
+        return upscaleCover(currentTrack?.cover_url) || defaultCover
       }
       return resolveCoverUrl(currentTrack?.cover_url) || defaultCover
     },

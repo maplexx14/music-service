@@ -1,9 +1,23 @@
 import { SERVER_URL } from '../config'
 import defaultCover from '../assets/default-cover.svg'
 
+// Просит у CDN Google обложку большего разрешения. Обложки YouTube Music
+// приходят крошечными (120×120), но размер зашит в URL и CDN ресайзит по
+// запросу. Применяется и к уже сохранённым в БД старым URL при отображении.
+export const upscaleCover = (url) => {
+  if (!url) return url
+  if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
+    return url.replace(/=w\d+-h\d+/, '=w1200-h1200')
+  }
+  if (url.includes('ytimg.com')) {
+    return url.replace(/\/(default|mqdefault|hqdefault|sddefault)\.jpg/, '/maxresdefault.jpg')
+  }
+  return url
+}
+
 export const resolveCoverUrl = (coverUrl) => {
   if (!coverUrl) return null
-  if (coverUrl.startsWith('http')) return coverUrl
+  if (coverUrl.startsWith('http')) return upscaleCover(coverUrl)
   if (coverUrl.startsWith('/')) return `${SERVER_URL}${coverUrl}`
   return `${SERVER_URL}/${coverUrl}`
 }

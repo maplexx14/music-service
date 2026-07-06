@@ -141,7 +141,62 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: isShuffle ? shuffleIndex : -1,
       isPlaying: true,
       source,
+      flowActive: source === 'flow',
     })
+  },
+
+  // --- Персональный поток («Моя волна») ---
+  flowActive: false,
+  flowLoading: false,
+
+  startFlow: async () => {
+    if (get().flowLoading) return
+    set({ flowLoading: true })
+    try {
+      const { data } = await api.get('/recommendations/flow', { params: { limit: 20 } })
+      if (!data || data.length === 0) return false
+      get().playPlaylist(data, 0, 'flow')
+      set({ flowActive: true })
+      return true
+    } finally {
+      set({ flowLoading: false })
+    }
+  },
+
+  // Подгружает следующую порцию потока, когда очередь подходит к концу.
+  extendFlowIfNeeded: async () => {
+    const { flowActive, flowLoading, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
+    if (!flowActive || flowLoading) return
+    const pos = isShuffle ? currentShuffleIndex : currentIndex
+    if (pos < queue.length - 3) return
+
+    set({ flowLoading: true })
+    try {
+      // Исключаем то, что уже в очереди (хвост до 100 треков).
+      const exclude = queue.slice(-100).map((t) => t.id).join(',')
+      const { data } = await api.get('/recommendations/flow', {
+        params: { limit: 20, exclude },
+      })
+      const known = new Set(get().queue.map((t) => t.id))
+      const fresh = (data || []).filter((t) => !known.has(t.id))
+      if (fresh.length === 0) return
+
+      set((state) => {
+        const startIdx = state.queue.length
+        const newIndices = fresh.map((_, i) => startIdx + i)
+        return {
+          queue: [...state.queue, ...fresh],
+          // При шаффле новые индексы дописываем в конец порядка вперемешку.
+          shuffledOrder: state.isShuffle
+            ? [...state.shuffledOrder, ...shuffleArray(newIndices)]
+            : [...state.shuffledOrder, ...newIndices],
+        }
+      })
+    } catch (error) {
+      console.error('Flow extend error:', error)
+    } finally {
+      set({ flowLoading: false })
+    }
   },
 
   playPlaylist: (tracks, startIndex = 0, source = null) => {
@@ -158,6 +213,7 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: isShuffle ? idx : -1,
       isPlaying: true,
       source,
+      flowActive: source === 'flow',
     })
   },
 
@@ -192,7 +248,22 @@ const usePlayerStore = create((set, get) => ({
     set({ isFullScreen: false })
   },
   
+  // Скип как негативный сигнал: если переключили, прослушав <25% трека.
+  // nextTrack вызывается и при естественном окончании — там прогресс ~100%,
+  // так что порог отсекает его сам собой.
+  _recordSkipIfNeeded: () => {
+    const { currentTrack, currentTime, duration, isPlaying } = get()
+    if (!currentTrack || !isPlaying) return
+    if (!duration || isNaN(duration) || duration <= 0) return
+    if (currentTime / duration >= 0.25) return
+    const dbId =
+      currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
+    if (!dbId) return // внешний трек ещё не материализован — сигнал пропускаем
+    api.post(`/tracks/${dbId}/skip`).catch(() => {})
+  },
+
   nextTrack: () => {
+    get()._recordSkipIfNeeded()
     const { queue, currentIndex, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     if (isShuffle && shuffledOrder.length > 0) {
       if (currentShuffleIndex < shuffledOrder.length - 1) {

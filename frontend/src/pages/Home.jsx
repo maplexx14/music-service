@@ -66,20 +66,32 @@ function Home() {
     }
   }
 
-  const isWavePlaying = isPlaying && source === 'wave'
+  const isWavePlaying = isPlaying && (source === 'flow' || source === 'wave')
   const waveTracks = recommendations.tracks.length > 0 ? recommendations.tracks : trending
   const waveReady = waveTracks.length > 0
   const upcomingText = useMemo(() => {
     if (!waveTracks.length) return ''
     return waveTracks.slice(0, 4).map((track) => track.title).join(', ')
   }, [waveTracks])
-  const handleWaveClick = () => {
-    if (!waveReady) return
+  const handleWaveClick = async () => {
     if (isWavePlaying) {
       togglePlayPause()
       return
     }
-    handlePlayPlaylist({ tracks: waveTracks })
+    // Пауза потока — возобновляем, не пересоздавая очередь.
+    const st = usePlayerStore.getState()
+    if (st.flowActive && st.currentTrack) {
+      togglePlayPause()
+      return
+    }
+    // Персональный поток; если бэк не дал треков — фолбэк на рекомендации.
+    try {
+      const started = await st.startFlow()
+      if (started) return
+    } catch (error) {
+      console.error('Flow start error:', error)
+    }
+    if (waveReady) handlePlayPlaylist({ tracks: waveTracks })
   }
 
   if (loading) {
