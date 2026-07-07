@@ -206,8 +206,48 @@ _CLIENT_CANDIDATES = (
 )
 
 
-def _extract_with_clients(video_id: str, clients: List[str]) -> Optional[dict]:
-    """Одна попытка резолва конкретным набором клиентов. None при неудаче."""
+# Каждую попытку резолва ограничиваем по времени: без таймаута зависшее
+# соединение с YouTube тянет extract_info очень долго (жалобы «грузится вечно»),
+# а попыток четыре — задержки складываются. 15с хватает здоровому ролику.
+_SOCKET_TIMEOUT = 15
+
+
+class TrackUnavailable(Exception):
+    """Видео недоступно (удалено/приватно/регион) — резолв невозможен."""
+
+
+class TransientResolveError(Exception):
+    """Временный сбой резолва (таймаут/429/сеть) — стоит повторить позже."""
+
+
+# Маркеры в тексте ошибки yt-dlp, означающие ИМЕННО недоступность ролика, а не
+# временный сбой. Всё остальное (таймауты, 429, обрывы сети) считаем временным.
+_UNAVAILABLE_MARKERS = (
+    "video unavailable",
+    "private video",
+    "who has blocked it",
+    "removed",
+    "no longer available",
+    "not available",
+    "sign in to confirm",
+    "content isn't available",
+    "account associated with this video has been terminated",
+)
+
+
+def _is_unavailable_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(m in msg for m in _UNAVAILABLE_MARKERS)
+
+
+def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[dict], bool]:
+    """Одна попытка резолва набором клиентов.
+
+    Возвращает ``(info, transient)``: ``info`` — результат или None; ``transient``
+    True, если неудача выглядит временной (таймаут/сеть/429), а не «видео
+    недоступно». Классификация нужна, чтобы не помечать валидный трек надолго
+    недоступным из-за случайного сбоя.
+    """
     import yt_dlp
 
     url = f"https://music.youtube.com/watch?v={video_id}"
@@ -216,31 +256,42 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> Optional[dict]:
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
+        "socket_timeout": _SOCKET_TIMEOUT,
         "extractor_args": {"youtube": {"player_client": clients}},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+            return ydl.extract_info(url, download=False), False
     except yt_dlp.utils.DownloadError as exc:
-        logger.info("resolve via %s failed for %s: %s", clients, video_id, exc)
-        return None
+        transient = not _is_unavailable_error(exc)
+        logger.info(
+            "resolve via %s failed for %s (%s): %s",
+            clients, video_id, "transient" if transient else "unavailable", exc,
+        )
+        return None, transient
 
 
 def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
     """Через yt-dlp достаёт прямой URL аудио, расширение и размер. Блокирующая.
 
     Перебирает наборы клиентов — повышает шанс обойти 'Video unavailable',
-    которое часто специфично для клиента.
+    которое часто специфично для клиента. Кидает TrackUnavailable, если все
+    клиенты сообщили о недоступности, или TransientResolveError при временном
+    сбое (его негативно кэшируем ненадолго, чтобы дать треку восстановиться).
     """
     info = None
+    saw_transient = False
     for clients in _CLIENT_CANDIDATES:
-        info = _extract_with_clients(video_id, clients)
+        info, transient = _extract_with_clients(video_id, clients)
         if info and _pick_audio_format(info):
             break
+        saw_transient = saw_transient or transient
         info = None
 
     if info is None:
-        raise RuntimeError("видео недоступно ни для одного из клиентов")
+        if saw_transient:
+            raise TransientResolveError(video_id)
+        raise TrackUnavailable(video_id)
 
     fmt = _pick_audio_format(info)
     if not fmt:
@@ -259,20 +310,21 @@ def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
 # чтобы не гонять медленный yt-dlp при перемотке, повторе и ретраях. TTL с
 # запасом меньше реального срока жизни ссылки.
 _RESOLVE_TTL = 3 * 3600
-# Негативный кэш недоступных видео: не запускаем yt-dlp (4 попытки клиентов)
-# заново на каждый ретрай браузера. Короткий TTL — вдруг видео вернётся.
+# Негативный кэш ГЕНУИННО недоступных видео (удалено/приватно): не гоняем
+# yt-dlp на каждый ретрай браузера. Короткий TTL — вдруг видео вернётся.
 _UNAVAILABLE_TTL = 600
-
-
-class TrackUnavailable(Exception):
-    """Видео недоступно (удалено/приватно/регион) — резолв невозможен."""
+# Негативный кэш ВРЕМЕННЫХ сбоев (таймаут/429/сеть): короткий, чтобы, с одной
+# стороны, не долбить YouTube на каждый ретрай, а с другой — быстро дать
+# валидному треку восстановиться (иначе он «не играет» до 10 минут).
+_TRANSIENT_TTL = 25
 
 
 async def _resolve_cached(video_id: str, force: bool = False) -> tuple[str, str, Optional[int]]:
     """Резолв прямого URL с кэшем в Redis.
 
     force=True — игнорирует кэш и резолвит заново (протухшая ссылка).
-    Кидает TrackUnavailable, если видео недоступно, иначе — исходное исключение.
+    Кидает TrackUnavailable при недоступности видео (в т.ч. временной — наружу
+    это по-прежнему «недоступен», но негативный кэш живёт лишь секунды).
     """
     key = f"ytdlp:resolve:v2:{video_id}"
     cached = None if force else get_cache(key)
@@ -284,8 +336,11 @@ async def _resolve_cached(video_id: str, force: bool = False) -> tuple[str, str,
 
     try:
         url, ext, total = await asyncio.to_thread(_resolve_audio, video_id)
-    except Exception as exc:  # noqa: BLE001
-        # Видео недоступно всеми клиентами — помечаем негативным кэшем.
+    except TransientResolveError as exc:
+        # Временный сбой — короткий кэш, чтобы скорый повтор сработал.
+        set_cache(key, {"unavailable": True}, expire=_TRANSIENT_TTL)
+        raise TrackUnavailable(video_id) from exc
+    except Exception as exc:  # noqa: BLE001 — TrackUnavailable и прочее
         set_cache(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
         raise TrackUnavailable(video_id) from exc
 

@@ -178,3 +178,106 @@
   font-size: 12px;
   color: #666;
 }
+
+/* --- Импорт по ссылке --- */
+.playlists-header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.import-playlist-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background-color: transparent;
+  color: #ffffff;
+  border: 1px solid #a259ff;
+  border-radius: 50px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.import-playlist-btn:hover {
+  background-color: #a259ff;
+  transform: scale(1.05);
+}
+
+.import-playlist-form {
+  background-color: #181818;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 32px;
+}
+
+.import-hint {
+  color: #b3b3b3;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.import-input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.import-input-row input {
+  flex: 1;
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 15px;
+}
+
+.import-input-row input:focus {
+  outline: none;
+  border-color: #a259ff;
+  background-color: #222;
+}
+
+.import-preview {
+  background-color: #1a1a1a;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.import-preview-title {
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 12px;
+}
+
+.import-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-preview-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #b3b3b3;
+}
+
+.import-preview-track {
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-preview-artist {
+  flex-shrink: 0;
+  color: #888;
+}

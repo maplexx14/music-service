@@ -112,6 +112,36 @@ class RecommendationResponse(BaseModel):
     playlists: List[PlaylistResponse] = []
 
 
+class ImportRequest(BaseModel):
+    """Импорт коллекции/трека по ссылке из внешнего сервиса."""
+    url: str
+    playlist_name: Optional[str] = None
+
+
+class ImportPreviewTrack(BaseModel):
+    title: str
+    artist: str
+    duration: int = 0
+    cover_url: Optional[str] = None
+    source: str  # исходный сервис (soundcloud/yandex)
+
+
+class ImportPreviewResponse(BaseModel):
+    source: str          # soundcloud | yandex
+    kind: str            # playlist | user | track
+    title: Optional[str] = None
+    cover_url: Optional[str] = None
+    track_count: int
+    tracks: List[ImportPreviewTrack] = []
+
+
+class ImportResult(BaseModel):
+    playlist: Optional[PlaylistResponse] = None
+    imported: int    # сколько треков добавлено в плейлист
+    matched: int     # из них подобрано матчингом (не нативных)
+    skipped: int     # не удалось сделать играбельными
+
+
 class ExternalTrackResponse(BaseModel):
     id: str
     source: str

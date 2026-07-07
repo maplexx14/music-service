@@ -90,6 +90,29 @@ def _normalize(request: Request, entry: dict) -> Optional[ExternalTrackResponse]
     )
 
 
+def entry_to_import(request: Request, entry: dict) -> Optional["ExternalTrackImport"]:
+    """yt-dlp entry (из поиска/плейлиста/профиля) → ExternalTrackImport.
+
+    Нативная материализация SoundCloud-трека: тот же токен-URL, что и в поиске.
+    Используется импортером. Возвращает None, если entry не резолвится в трек.
+    """
+    from app.schemas import ExternalTrackImport
+
+    track = _normalize(request, entry)
+    if track is None:
+        return None
+    return ExternalTrackImport(
+        source=track.source,
+        external_id=track.external_id,
+        title=track.title,
+        artist=track.artist,
+        album=track.album,
+        duration=track.duration,
+        cover_url=track.cover_url,
+        stream_url=track.stream_url,
+    )
+
+
 def _search_blocking(q: str, limit: int) -> list:
     import yt_dlp
 
