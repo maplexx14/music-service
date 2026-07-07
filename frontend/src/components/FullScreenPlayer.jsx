@@ -28,7 +28,7 @@ function FullScreenPlayer() {
     seekTo,
   } = usePlayerStore()
   const [loadingLike, setLoadingLike] = useState(false)
-  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic'].includes(currentTrack?.source)
+  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || isExternalTrack

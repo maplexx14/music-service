@@ -3,6 +3,7 @@ import { usePlayerStore } from '../store/playerStore'
 import { Play, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
+import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './LikedSongs.css'
@@ -10,7 +11,8 @@ import './LikedSongs.css'
 function LikedSongs() {
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
-  const { playPlaylist } = usePlayerStore()
+  const [removingIds, setRemovingIds] = useState([])
+  const { playPlaylist, removeLike } = usePlayerStore()
 
   useEffect(() => {
     fetchLikedTracks()
@@ -35,6 +37,25 @@ function LikedSongs() {
 
   const handlePlayTrack = (track, index) => {
     playPlaylist(tracks, index)
+  }
+
+  const handleRemove = async (track, e) => {
+    e.stopPropagation()
+    if (removingIds.includes(track.id)) return
+
+    setRemovingIds((prev) => [...prev, track.id])
+    const previous = tracks
+    // Оптимистично убираем из списка; при ошибке возвращаем.
+    setTracks((prev) => prev.filter((t) => t.id !== track.id))
+    try {
+      await removeLike(track.id)
+    } catch (error) {
+      console.error('Error removing liked track:', error)
+      setTracks(previous)
+      toast.error('Не удалось убрать трек из понравившихся')
+    } finally {
+      setRemovingIds((prev) => prev.filter((id) => id !== track.id))
+    }
   }
 
   if (loading) {
@@ -75,6 +96,7 @@ function LikedSongs() {
                 <th>Название</th>
                 <th>Альбом</th>
                 <th>Длительность</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -100,6 +122,18 @@ function LikedSongs() {
                   <td className="track-album">{track.album || '-'}</td>
                   <td className="track-duration">
                     {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
+                  </td>
+                  <td className="track-remove-cell">
+                    <button
+                      type="button"
+                      className="track-remove-btn"
+                      onClick={(e) => handleRemove(track, e)}
+                      disabled={removingIds.includes(track.id)}
+                      title="Убрать из понравившихся"
+                      aria-label="Убрать из понравившихся"
+                    >
+                      <Heart size={18} fill="currentColor" />
+                    </button>
                   </td>
                 </tr>
               ))}

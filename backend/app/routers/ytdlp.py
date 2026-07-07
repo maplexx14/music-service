@@ -418,27 +418,29 @@ async def _probe(client: httpx.AsyncClient, url: str) -> tuple[int, Optional[int
     return resp.status_code, total
 
 
-@router.get("/stream/{video_id}")
-async def stream_ytmusic(video_id: str, request: Request):
-    if _ytmusic is None:
-        raise HTTPException(status_code=503, detail="YouTube Music не настроен")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
-        raise HTTPException(status_code=400, detail="Некорректный id")
+async def stream_cached_audio(request: Request, cache_id: str, resolver):
+    """Отдаёт аудио по прямому URL с диск-кэшем, probe и ресегментацией.
 
-    # Уже качали этот трек — отдаём с диска, минуя yt-dlp и googlevideo.
-    cached = _cached_file(video_id)
+    Общий движок стрима для всех yt-dlp-провайдеров (YouTube Music, SoundCloud).
+    Специфика источника вынесена в ``resolver`` — awaitable ``resolver(force)``,
+    возвращающий ``(direct_url, ext, total)`` и кидающий ``TrackUnavailable``,
+    когда трек недоступен. ``cache_id`` — безопасное для файловой системы имя
+    (используется как имя кэш-файла и должно быть уникальным между источниками).
+    """
+    # Уже качали этот трек — отдаём с диска, минуя yt-dlp и CDN источника.
+    cached = _cached_file(cache_id)
     if cached:
         ext = os.path.splitext(cached)[1].lower()
         return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
     try:
-        direct_url, ext, total = await _resolve_cached(video_id)
+        direct_url, ext, total = await resolver(False)
     except TrackUnavailable:
-        # Видео недоступно (удалено/приватно/регион) — это не сбой сервера.
-        logger.info("track unavailable: %s", video_id)
+        # Трек недоступен (удалён/приватен/регион) — это не сбой сервера.
+        logger.info("track unavailable: %s", cache_id)
         raise HTTPException(status_code=404, detail="Трек недоступен")
     except Exception:  # noqa: BLE001
-        logger.exception("yt-dlp resolve failed: %s", video_id)
+        logger.exception("yt-dlp resolve failed: %s", cache_id)
         raise HTTPException(status_code=502, detail="Не удалось получить аудио")
 
     media_type = MEDIA_TYPES.get(ext, "audio/mp4")
@@ -452,21 +454,21 @@ async def stream_ytmusic(video_id: str, request: Request):
     # и пробуем ещё раз, ДО отправки заголовков клиенту.
     status, probed = await _probe(client, direct_url)
     if status >= 400:
-        logger.info("stale direct url for %s (probe %s), re-resolving", video_id, status)
+        logger.info("stale direct url for %s (probe %s), re-resolving", cache_id, status)
         try:
-            direct_url, ext, total = await _resolve_cached(video_id, force=True)
+            direct_url, ext, total = await resolver(True)
         except TrackUnavailable:
             await client.aclose()
             raise HTTPException(status_code=404, detail="Трек недоступен")
         except Exception:  # noqa: BLE001
             await client.aclose()
-            logger.exception("re-resolve failed: %s", video_id)
+            logger.exception("re-resolve failed: %s", cache_id)
             raise HTTPException(status_code=502, detail="Не удалось получить аудио")
         media_type = MEDIA_TYPES.get(ext, "audio/mp4")
         status, probed = await _probe(client, direct_url)
         if status >= 400:
             await client.aclose()
-            logger.warning("fresh url also dead for %s (probe %s)", video_id, status)
+            logger.warning("fresh url also dead for %s (probe %s)", cache_id, status)
             raise HTTPException(status_code=502, detail="Источник аудио недоступен")
     if probed is not None:
         total = probed
@@ -477,7 +479,7 @@ async def stream_ytmusic(video_id: str, request: Request):
 
     # Кэшируем только когда клиент тянет файл целиком (start=0..total-1) —
     # тогда по завершении получаем полную копию, пригодную для повторной отдачи.
-    cache_final = os.path.join(CACHE_DIR, f"{video_id}{ext}")
+    cache_final = os.path.join(CACHE_DIR, f"{cache_id}{ext}")
     want_cache = (
         total is not None
         and req_start == 0
@@ -512,7 +514,7 @@ async def stream_ytmusic(video_id: str, request: Request):
                     try:
                         async with client.stream("GET", direct_url, headers=headers) as up:
                             if up.status_code >= 400:
-                                logger.warning("upstream %s for %s", up.status_code, video_id)
+                                logger.warning("upstream %s for %s", up.status_code, cache_id)
                                 return
                             async for chunk in up.aiter_bytes(chunk_size=65536):
                                 # Пишем в кэш только новые (за пределами уже
@@ -527,7 +529,7 @@ async def stream_ytmusic(video_id: str, request: Request):
                         if got:
                             headers = {"Range": f"bytes={pos + got}-{seg_end}"}
                         if attempt == _SEGMENT_RETRIES - 1:
-                            logger.warning("segment failed %s @%d: %s", video_id, pos, exc)
+                            logger.warning("segment failed %s @%d: %s", cache_id, pos, exc)
                             return
 
                 advanced = (seg_end - pos + 1)
@@ -569,6 +571,17 @@ async def stream_ytmusic(video_id: str, request: Request):
         status_code=status_code,
         media_type=media_type,
         headers=headers,
+    )
+
+
+@router.get("/stream/{video_id}")
+async def stream_ytmusic(video_id: str, request: Request):
+    if _ytmusic is None:
+        raise HTTPException(status_code=503, detail="YouTube Music не настроен")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
+        raise HTTPException(status_code=400, detail="Некорректный id")
+    return await stream_cached_audio(
+        request, video_id, lambda force: _resolve_cached(video_id, force=force)
     )
 
 

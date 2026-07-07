@@ -21,7 +21,7 @@ from app.cache import get_cache, set_cache
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
-from app.routers import ytdlp
+from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import ExternalTrackResponse, TrackResponse
 
@@ -37,6 +37,11 @@ _EXPLORE_RATIO = 0.6
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
 _RADIO_LIMIT = 50
+# У SoundCloud нет радио-эндпоинта в yt-dlp, поэтому «разведку» по нему делаем
+# поиском по любимым артистам. Сколько артистов зондируем и глубина кэша.
+_SC_EXPLORE_ARTISTS = 3
+_SC_EXPLORE_LIMIT = 15
+_SC_EXPLORE_TTL = 1800
 
 
 def _norm_key(artist: str, title: str) -> tuple:
@@ -261,6 +266,32 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
     return pool
 
 
+async def _soundcloud_pool(
+    request: Request, artist: str
+) -> List[ExternalTrackResponse]:
+    """SoundCloud-«разведка» по любимому артисту с кэшем в Redis.
+
+    Радио у SoundCloud нет — ближайший аналог «похожего» это поиск по имени
+    артиста. Кэшируем на артиста, чтобы не дёргать yt-dlp на каждую подгрузку.
+    """
+    key = f"flow:sc:{artist.lower()}"
+    cached = get_cache(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+
+    try:
+        pool = await soundcloud.search_soundcloud(
+            request, artist, limit=_SC_EXPLORE_LIMIT
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("flow soundcloud failed for artist %s", artist)
+        set_cache(key, [], expire=600)
+        return []
+
+    set_cache(key, [t.model_dump() for t in pool], expire=_SC_EXPLORE_TTL)
+    return pool
+
+
 def _parse_exclude(exclude: str) -> tuple:
     """'12,ytmusic:abc,...' → (numeric_ids, video_ids)."""
     numeric, videos = set(), set()
@@ -292,20 +323,31 @@ async def get_flow(
     excl_videos |= profile["recent_video_ids"]
     seen_keys = set(profile["recent_keys"])
 
-    # --- разведка: радио от 1–2 случайных сидов из свежих ---
+    # --- разведка: радио YT Music от сидов + поиск SoundCloud по любимым артистам ---
     # Не у каждого videoId есть радио, поэтому перебираем сиды волнами по 2,
     # пока не соберём хотя бы один непустой пул (максимум 3 волны).
     explore: List[ExternalTrackResponse] = []
+    merged: List[ExternalTrackResponse] = []
     seeds = profile["seeds"][:10]
     if seeds:
         order = random.sample(seeds, len(seeds))
-        merged: List[ExternalTrackResponse] = []
         for wave in range(0, min(len(order), 6), 2):
             batch = order[wave : wave + 2]
             pools = await asyncio.gather(*(_radio_pool(s) for s in batch))
             merged.extend(t for pool in pools for t in pool)
             if merged:
                 break
+
+    # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
+    # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.
+    sc_artists = profile["artists"][:_SC_EXPLORE_ARTISTS]
+    if sc_artists:
+        sc_pools = await asyncio.gather(
+            *(_soundcloud_pool(request, a) for a in sc_artists)
+        )
+        merged.extend(t for pool in sc_pools for t in pool)
+
+    if merged:
         random.shuffle(merged)
         banned = profile["banned_artists"]
         for t in merged:
@@ -317,7 +359,10 @@ async def get_flow(
                 continue
             seen_keys.add(key)
             excl_videos.add(t.external_id)
-            t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+            # ytmusic отдаёт пустой stream_url (нужен base_url); у soundcloud он
+            # уже проставлен search-ом с токеном — не перетираем.
+            if t.source == "ytmusic":
+                t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
             explore.append(t)
 
     # --- эксплуатация: локальная библиотека по вкусу ---

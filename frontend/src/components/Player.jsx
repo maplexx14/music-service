@@ -45,7 +45,7 @@ function Player() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
   const [loadingPlaylists, setLoadingPlaylists] = useState(false)
   const [addError, setAddError] = useState('')
-  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic'].includes(currentTrack?.source)
+  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
@@ -146,6 +146,9 @@ function Player() {
 
     // Reset audio when track changes
     audio.load()
+    // load() возвращает элементу дефолтную громкость (1) — восстанавливаем
+    // положение слайдера, иначе новый трек всегда играет на максимуме.
+    audio.volume = usePlayerStore.getState().volume
     setCurrentTime(0)
     setDuration(0)
     setShowAddToPlaylist(false)

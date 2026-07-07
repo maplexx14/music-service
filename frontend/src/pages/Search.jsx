@@ -11,6 +11,7 @@ import './Search.css'
 const SOURCE_META = {
   soulseek: { label: 'FLAC', className: 'source-badge--flac' },
   ytmusic: { label: 'MP3', className: 'source-badge--mp3' },
+  soundcloud: { label: 'SC', className: 'source-badge--soundcloud' },
 }
 
 function sourceMeta(source) {

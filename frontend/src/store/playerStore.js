@@ -106,6 +106,20 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
+  // Явное удаление из понравившихся (всегда DELETE) — не зависит от того,
+  // загружен ли likedTrackIds. Для страницы «Понравившиеся».
+  removeLike: async (trackId) => {
+    if (!trackId) return
+    const { likedTrackIds } = get()
+    set({ likedTrackIds: likedTrackIds.filter((id) => id !== trackId) })
+    try {
+      await api.delete(`/tracks/${trackId}/like`)
+    } catch (error) {
+      set({ likedTrackIds })
+      throw error
+    }
+  },
+
   // Заранее прогревает резолв следующего в очереди ytmusic-трека на бэке,
   // чтобы переключение началось мгновенно (без ожидания yt-dlp).
   prefetchNext: () => {
@@ -121,10 +135,15 @@ const usePlayerStore = create((set, get) => ({
     if (nextIndex == null) return
 
     const next = queue[nextIndex]
-    if (!next || next.source !== 'ytmusic') return
-    const externalId = next.external_id ?? String(next.id).split(':').slice(1).join(':')
-    if (!externalId) return
-    api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
+    if (!next) return
+    if (next.source === 'ytmusic') {
+      const externalId = next.external_id ?? String(next.id).split(':').slice(1).join(':')
+      if (externalId) api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
+    } else if (next.source === 'soundcloud') {
+      // Токен резолва зашит в stream_url (.../soundcloud/stream/{token}).
+      const token = (next.stream_url || '').split('/soundcloud/stream/')[1]
+      if (token) api.post(`/soundcloud/prefetch/${token}`).catch(() => {})
+    }
   },
 
   playTrack: (track, queue = [], source = null) => {

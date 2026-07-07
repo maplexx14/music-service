@@ -127,6 +127,12 @@
   color: #4ecb7a;
 }
 
+/* SoundCloud — фирменный оранжевый. */
+.source-badge--soundcloud {
+  border-color: rgba(255, 85, 0, 0.45);
+  color: #ff5500;
+}
+
 .track-download {
   width: 34px;
   height: 34px;

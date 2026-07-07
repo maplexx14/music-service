@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, update, insert, func
+from sqlalchemy import desc, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import List, Optional
 import logging
 import os
@@ -390,26 +391,23 @@ def record_track_play(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
-    stmt = (
-        update(user_track_plays)
-        .where(
-            (user_track_plays.c.user_id == current_user.id) &
-            (user_track_plays.c.track_id == track_id)
-        )
-        .values(play_count=user_track_plays.c.play_count + 1, last_played=func.now())
+    # Атомарный upsert: два параллельных /play на один (user, track) раньше
+    # оба получали rowcount==0 от UPDATE и оба пытались INSERT → UniqueViolation.
+    # ON CONFLICT делает вставку-или-инкремент одной операцией без гонки.
+    stmt = pg_insert(user_track_plays).values(
+        user_id=current_user.id,
+        track_id=track_id,
+        play_count=1,
+        last_played=func.now(),
     )
-    result = db.execute(stmt)
-    
-    if result.rowcount == 0:
-        # Insert new record
-        stmt = insert(user_track_plays).values(
-            user_id=current_user.id,
-            track_id=track_id,
-            play_count=1,
-            last_played=func.now()
-        )
-        db.execute(stmt)
-    
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[user_track_plays.c.user_id, user_track_plays.c.track_id],
+        set_={
+            "play_count": user_track_plays.c.play_count + 1,
+            "last_played": func.now(),
+        },
+    )
+    db.execute(stmt)
     db.commit()
     return {"message": "Play recorded"}
 
@@ -429,25 +427,21 @@ def record_track_skip(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    stmt = (
-        update(user_track_skips)
-        .where(
-            (user_track_skips.c.user_id == current_user.id) &
-            (user_track_skips.c.track_id == track_id)
-        )
-        .values(skip_count=user_track_skips.c.skip_count + 1, last_skipped=func.now())
+    # Атомарный upsert — как и в /play, защищает от гонки параллельных запросов.
+    stmt = pg_insert(user_track_skips).values(
+        user_id=current_user.id,
+        track_id=track_id,
+        skip_count=1,
+        last_skipped=func.now(),
     )
-    result = db.execute(stmt)
-
-    if result.rowcount == 0:
-        stmt = insert(user_track_skips).values(
-            user_id=current_user.id,
-            track_id=track_id,
-            skip_count=1,
-            last_skipped=func.now()
-        )
-        db.execute(stmt)
-
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[user_track_skips.c.user_id, user_track_skips.c.track_id],
+        set_={
+            "skip_count": user_track_skips.c.skip_count + 1,
+            "last_skipped": func.now(),
+        },
+    )
+    db.execute(stmt)
     db.commit()
     return {"message": "Skip recorded"}
 

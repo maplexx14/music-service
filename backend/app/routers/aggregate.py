@@ -5,7 +5,7 @@ from typing import List
 
 from fastapi import APIRouter, Query, Request
 
-from app.routers import soulseek, ytdlp
+from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import ExternalTrackResponse
 
@@ -16,7 +16,7 @@ router = APIRouter()
 # Приоритет источников при дедупе одинаковых треков.
 # В гибриде по умолчанию показываем быстрый ytmusic, но lossless (soulseek)
 # считаем «лучше» и оставляем именно его, если нашёлся дубль.
-_SOURCE_RANK = {"soulseek": 2, "ytmusic": 1}
+_SOURCE_RANK = {"soulseek": 3, "ytmusic": 2, "soundcloud": 1}
 
 
 def _dedup_key(track: ExternalTrackResponse) -> tuple:
@@ -36,13 +36,16 @@ async def search_external(
     q: str = Query(..., min_length=1),
     limit: int = Query(30, ge=1, le=60),
 ):
-    """Единый поиск по всем внешним источникам (Soulseek + YouTube Music)."""
+    """Единый поиск по внешним источникам (YouTube Music + SoundCloud).
+
+    Soulseek отключён (медленный поллинг slskd подвешивал ответ) — вернуть
+    строку в gather, когда понадобится lossless.
+    """
     per_source = max(10, limit)
 
-    # Временно только yt-dlp/YouTube Music. Soulseek отключён (медленный поллинг
-    # slskd подвешивал ответ) — вернуть строку в gather, когда понадобится lossless.
     results = await asyncio.gather(
         ytdlp.search_ytmusic(request, q, limit=per_source),
+        soundcloud.search_soundcloud(request, q, limit=per_source),
         return_exceptions=True,
     )
 

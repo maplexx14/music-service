@@ -105,8 +105,41 @@
 }
 
 .tracks-table th:last-child {
-  width: 80px;
+  width: 56px;
   text-align: right;
+}
+
+.track-remove-cell {
+  width: 56px;
+  text-align: right;
+}
+
+.track-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #a259ff;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, transform 0.1s;
+}
+
+.track-remove-btn:hover {
+  background-color: rgba(162, 89, 255, 0.15);
+  color: #ff5a6a;
+}
+
+.track-remove-btn:active {
+  transform: scale(0.9);
+}
+
+.track-remove-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .track-row {
@@ -227,34 +260,59 @@
   }
 
   .tracks-table,
-  .tracks-table tbody,
-  .tracks-table tr,
-  .tracks-table td {
+  .tracks-table tbody {
     display: block;
     width: 100%;
   }
 
-  .track-row {
-    padding: 12px 0;
+  /* Строка = флекс-ряд: обложка+название слева, кнопка справа.
+     Используем .tracks-table tr для достаточной специфичности. */
+  .tracks-table tr.track-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 4px;
     border-bottom: 1px solid #222;
   }
 
   .track-row td {
-    padding: 6px 0;
+    padding: 0;
   }
 
-  .track-number,
-  .track-album,
-  .track-duration {
+  /* Специфичность .track-row .track-* перебивает .tracks-table td. */
+  .track-row .track-number,
+  .track-row .track-album,
+  .track-row .track-duration {
     display: none;
   }
 
-  .track-name-cell {
-    gap: 10px;
+  .track-row .track-name-cell {
+    flex: 1;
+    min-width: 0;
+    gap: 12px;
+  }
+
+  .track-row .track-name-cell > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Название/артист не должны растягивать строку — обрезаем длинные. */
+  .track-row .track-name,
+  .track-row .track-artist {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-row .track-remove-cell {
+    flex-shrink: 0;
+    width: auto;
   }
 
   .track-table-cover {
     width: 48px;
     height: 48px;
+    flex-shrink: 0;
   }
 }
