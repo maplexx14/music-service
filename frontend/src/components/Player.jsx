@@ -127,6 +127,8 @@ function Player() {
 
     const handleLoad = () => {
       console.log('Audio metadata loaded, duration:', audio.duration)
+      // Трек загружен — применяем текущую громкость из стора.
+      audio.volume = usePlayerStore.getState().volume
       setDuration(audio.duration)
       if (pendingSeekRef.current !== null && Number.isFinite(audio.duration) && audio.readyState >= 1) {
         const pendingTime = pendingSeekRef.current
@@ -414,16 +416,23 @@ function Player() {
     >
       <audio
         ref={audioRef}
-        key={currentTrack.id}
         src={resolveTrackUrl(currentTrack)}
         preload="auto"
         onError={(e) => {
           console.error('Audio element error:', e)
           console.error('Audio src:', audioRef.current?.src)
         }}
+        onLoadStart={() => {
+          // Новый трек начал загружаться — сразу применяем текущую громкость,
+          // пока браузер не начал воспроизведение со значением по умолчанию (1).
+          if (audioRef.current) audioRef.current.volume = volume
+        }}
         onCanPlay={() => {
+          const audio = audioRef.current
+          if (!audio) return
+          audio.volume = volume
           if (isPlaying) {
-            audioRef.current?.play().catch(() => {})
+            audio.play().catch(() => {})
           }
         }}
       />

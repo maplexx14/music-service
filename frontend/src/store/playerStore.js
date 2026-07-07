@@ -17,7 +17,10 @@ const usePlayerStore = create((set, get) => ({
   currentShuffleIndex: -1,
   isPlaying: false,
   source: null,
-  volume: parseFloat(localStorage.getItem('player-volume')) || 1,
+  volume: (() => {
+    const stored = parseFloat(localStorage.getItem('player-volume'))
+    return Number.isNaN(stored) ? 1 : Math.max(0, Math.min(1, stored))
+  })(),
   currentTime: 0,
   duration: 0,
   isFullScreen: false,
