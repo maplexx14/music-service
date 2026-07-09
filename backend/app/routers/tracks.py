@@ -13,6 +13,8 @@ from app.database import get_db
 from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from app.dependencies import get_current_active_user, get_current_admin_user
+from fastapi.responses import FileResponse, RedirectResponse
+import mimetypes
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +102,7 @@ def stream_track(
     Stream audio file with proper headers for audio playback.
     Supports range requests for seeking.
     """
-    from fastapi.responses import FileResponse, RedirectResponse
-    import mimetypes
-
+    # смотрим по базе данных
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -133,14 +133,13 @@ def stream_track(
             logger.error("Audio file not found for track %s: %s", track_id, file_path)
             raise HTTPException(status_code=404, detail="Audio file not found")
     
-    # Determine media type from file extension
+    # чек типа файла
+    # если не аудио, то преобразовываем(хуйня на самом деле)
     mime_type, _ = mimetypes.guess_type(str(file_path))
     if not mime_type or not mime_type.startswith('audio/'):
-        # Default to audio/mpeg if can't determine
         mime_type = "audio/mpeg"
     
-    # Return file with proper headers for audio streaming
-    # FileResponse automatically handles Range requests
+    # тут отдает файл с музыкой
     return FileResponse(
         path=str(file_path),
         media_type=mime_type,
@@ -380,6 +379,8 @@ def get_listening_history(
     return history
 
 
+from sqlalchemy.exc import IntegrityError
+
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
 def record_track_play(
     track_id: int,
@@ -387,29 +388,33 @@ def record_track_play(
     db: Session = Depends(get_db)
 ):
     """Record that a user played a track (for recommendations)"""
-    track = db.query(Track).filter(Track.id == track_id).first()
-    if not track:
-        raise HTTPException(status_code=404, detail="Track not found")
     
-    # Атомарный upsert: два параллельных /play на один (user, track) раньше
-    # оба получали rowcount==0 от UPDATE и оба пытались INSERT → UniqueViolation.
-    # ON CONFLICT делает вставку-или-инкремент одной операцией без гонки.
+    # Сразу собираем атомарный UPSERT
     stmt = pg_insert(user_track_plays).values(
         user_id=current_user.id,
         track_id=track_id,
         play_count=1,
         last_played=func.now(),
-    )
-    stmt = stmt.on_conflict_do_update(
+    ).on_conflict_do_update(
         index_elements=[user_track_plays.c.user_id, user_track_plays.c.track_id],
         set_={
             "play_count": user_track_plays.c.play_count + 1,
             "last_played": func.now(),
         },
     )
-    db.execute(stmt)
-    db.commit()
+    
+    try:
+        db.execute(stmt)
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # Если сработал Foreign Key на track_id (трека нет в базе)
+        if "track_id" in str(e.orig):
+            raise HTTPException(status_code=404, detail="Track not found")
+        raise HTTPException(status_code=400, detail="Database integrity error")
+        
     return {"message": "Play recorded"}
+
 
 
 @router.post("/{track_id}/skip")

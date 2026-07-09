@@ -11,6 +11,7 @@ from app.cache import get_cache, set_cache
 from app.routers.ytdlp import (
     TrackUnavailable,
     _cached_file,
+    cached_ydl,
     clean_title,
     stream_cached_audio,
 )
@@ -176,15 +177,20 @@ def _pick_progressive(info: dict) -> Optional[dict]:
 def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
     import yt_dlp
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
+    # Переиспользуем YoutubeDL в рамках потока — конструктор грузит реестр
+    # экстракторов заново на каждый вызов, это заметная накладная трата
+    # (см. ytdlp.cached_ydl).
+    ydl = cached_ydl(
+        "soundcloud",
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        },
+    )
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(permalink, download=False)
+        info = ydl.extract_info(permalink, download=False)
     except yt_dlp.utils.DownloadError as exc:
         raise RuntimeError(str(exc)) from exc
 
@@ -199,15 +205,18 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
 
 async def _resolve_cached(
     track_id: str, permalink: str, force: bool = False
-) -> tuple[str, str, Optional[int]]:
-    """Резолв прямого URL с кэшем в Redis. Кидает TrackUnavailable при неудаче."""
+) -> tuple[str, str, Optional[int], bool]:
+    """Резолв прямого URL с кэшем в Redis. Кидает TrackUnavailable при неудаче.
+
+    Четвёртый элемент — ``fresh`` (см. аналогичное поле в ytdlp._resolve_cached).
+    """
     key = f"soundcloud:resolve:{track_id}"
     cached = None if force else get_cache(key)
     if cached:
         if cached.get("unavailable"):
             raise TrackUnavailable(track_id)
         if cached.get("url"):
-            return cached["url"], cached.get("ext", ".mp3"), cached.get("total")
+            return cached["url"], cached.get("ext", ".mp3"), cached.get("total"), False
 
     try:
         url, ext, total = await asyncio.to_thread(_resolve_blocking, permalink)
@@ -216,7 +225,7 @@ async def _resolve_cached(
         raise TrackUnavailable(track_id) from exc
 
     set_cache(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
-    return url, ext, total
+    return url, ext, total, True
 
 
 @router.get("/search", response_model=List[ExternalTrackResponse])

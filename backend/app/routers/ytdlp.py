@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 from typing import List, Optional
 
 import httpx
@@ -207,9 +208,17 @@ _CLIENT_CANDIDATES = (
 
 
 # Каждую попытку резолва ограничиваем по времени: без таймаута зависшее
-# соединение с YouTube тянет extract_info очень долго (жалобы «грузится вечно»),
-# а попыток четыре — задержки складываются. 15с хватает здоровому ролику.
-_SOCKET_TIMEOUT = 15
+# соединение с YouTube тянет extract_info очень долго (жалобы «грузится вечно»).
+# Попытки хеджированы (см. _resolve_audio), а не все параллельно с самого
+# начала, так что 8с — с запасом для здорового ролика, а зависший клиент не
+# держит резолв так долго, как раньше при последовательном переборе.
+_SOCKET_TIMEOUT = 8
+
+# Хедж-задержка: первым стартует самый надёжный набор клиентов; остальные
+# подключаются параллельно, только если он не ответил за это время. Экономит
+# нагрузку на YouTube в общем случае (обычно первый клиент и так отвечает),
+# но не жертвует задержкой, если он подвис.
+_HEDGE_DELAY = 2.5
 
 
 class TrackUnavailable(Exception):
@@ -240,6 +249,64 @@ def _is_unavailable_error(exc: Exception) -> bool:
     return any(m in msg for m in _UNAVAILABLE_MARKERS)
 
 
+# Создание YoutubeDL — это не только выделение объекта: конструктор грузит
+# реестр экстракторов и плагинов, и это ощутимая накладная трата на каждый
+# резолв. asyncio.to_thread гоняет задачи через пул потоков-воркеров, которые
+# переживают между вызовами, так что кэшируем инстанс per-thread по ключу
+# опций. Используется и SoundCloud-роутером (см. soundcloud._resolve_blocking).
+_thread_local = threading.local()
+
+
+def cached_ydl(cache_key, opts: dict):
+    """YoutubeDL с переиспользованием инстанса в рамках текущего потока.
+
+    ``cache_key`` — hashable-ключ (например, tuple клиентов или строка) для
+    различения наборов опций внутри одного потока.
+    """
+    import yt_dlp
+
+    cache = getattr(_thread_local, "ydl_cache", None)
+    if cache is None:
+        cache = {}
+        _thread_local.ydl_cache = cache
+    ydl = cache.get(cache_key)
+    if ydl is None:
+        ydl = yt_dlp.YoutubeDL(opts)
+        cache[cache_key] = ydl
+    return ydl
+
+
+def _warmup_ydl_blocking() -> None:
+    """Прогревает yt-dlp для primary-набора клиентов.
+
+    Основная цена здесь — process-wide: импорт модуля ``yt_dlp`` и загрузка
+    реестра экстракторов/плагинов (~0.5-0.7с суммарно), это происходит один
+    раз на процесс независимо от потока. Без прогрева эту цену при cold-start
+    платит самый первый резолв, что ощущается как «первый трек всегда долго
+    грузится». cached_ydl дополнительно кладёт готовый YoutubeDL-инстанс в
+    per-thread кэш текущего потока — это уже локальный бонус, если тот же
+    поток threadpool-воркера подхватит следующий запрос.
+    Вызывается один раз при старте приложения (см. app.main), в отдельном
+    потоке, чтобы не блокировать остальной startup.
+    """
+    try:
+        primary = _CLIENT_CANDIDATES[0]
+        cached_ydl(
+            tuple(primary),
+            {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "skip_download": True,
+                "socket_timeout": _SOCKET_TIMEOUT,
+                "extractor_args": {"youtube": {"player_client": primary}},
+            },
+        )
+        logger.info("yt-dlp extractor warmed up")
+    except Exception:  # noqa: BLE001 — прогрев best-effort, не должен ронять старт
+        logger.warning("yt-dlp warmup failed", exc_info=True)
+
+
 def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[dict], bool]:
     """Одна попытка резолва набором клиентов.
 
@@ -251,17 +318,19 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
     import yt_dlp
 
     url = f"https://music.youtube.com/watch?v={video_id}"
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "socket_timeout": _SOCKET_TIMEOUT,
-        "extractor_args": {"youtube": {"player_client": clients}},
-    }
+    ydl = cached_ydl(
+        tuple(clients),
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "socket_timeout": _SOCKET_TIMEOUT,
+            "extractor_args": {"youtube": {"player_client": clients}},
+        },
+    )
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False), False
+        return ydl.extract_info(url, download=False), False
     except yt_dlp.utils.DownloadError as exc:
         transient = not _is_unavailable_error(exc)
         logger.info(
@@ -271,22 +340,54 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
         return None, transient
 
 
-def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
-    """Через yt-dlp достаёт прямой URL аудио, расширение и размер. Блокирующая.
+async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
+    """Через yt-dlp достаёт прямой URL аудио, расширение и размер.
 
-    Перебирает наборы клиентов — повышает шанс обойти 'Video unavailable',
-    которое часто специфично для клиента. Кидает TrackUnavailable, если все
-    клиенты сообщили о недоступности, или TransientResolveError при временном
-    сбое (его негативно кэшируем ненадолго, чтобы дать треку восстановиться).
+    Хеджирование вместо постоянного запуска всех наборов клиентов разом:
+    сперва пробуем только первый (самый надёжный по опыту) набор; если он не
+    ответил за _HEDGE_DELAY секунд, параллельно подключаем остальные. Типичный
+    случай (первый клиент и так отвечает) не создаёт лишней нагрузки на
+    YouTube, а подвисший/медленный клиент не блокирует резолв дольше
+    хедж-задержки — итоговая задержка ограничена сверху примерно
+    _HEDGE_DELAY + _SOCKET_TIMEOUT, а не суммой по всем клиентам.
+    Кидает TrackUnavailable, если все клиенты сообщили о недоступности, или
+    TransientResolveError при временном сбое (его негативно кэшируем
+    ненадолго, чтобы дать треку восстановиться).
     """
+    primary, *rest = _CLIENT_CANDIDATES
+    pending = {asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, primary))}
+    hedged = False
     info = None
     saw_transient = False
-    for clients in _CLIENT_CANDIDATES:
-        info, transient = _extract_with_clients(video_id, clients)
-        if info and _pick_audio_format(info):
-            break
-        saw_transient = saw_transient or transient
-        info = None
+    try:
+        while pending:
+            done, pending = await asyncio.wait(
+                pending,
+                timeout=None if hedged else _HEDGE_DELAY,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                # Хедж: первый набор не успел за _HEDGE_DELAY — подключаем остальных.
+                hedged = True
+                pending |= {
+                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients))
+                    for clients in rest
+                }
+                continue
+            success = False
+            for t in done:
+                result_info, transient = t.result()
+                if result_info and _pick_audio_format(result_info):
+                    info = result_info
+                    success = True
+                    break
+                saw_transient = saw_transient or transient
+            if success:
+                break
+    finally:
+        for t in pending:
+            if not t.done():
+                t.cancel()
 
     if info is None:
         if saw_transient:
@@ -319,33 +420,47 @@ _UNAVAILABLE_TTL = 600
 _TRANSIENT_TTL = 25
 
 
-async def _resolve_cached(video_id: str, force: bool = False) -> tuple[str, str, Optional[int]]:
+async def _resolve_cached(
+    video_id: str, force: bool = False
+) -> tuple[str, str, Optional[int], bool]:
     """Резолв прямого URL с кэшем в Redis.
 
     force=True — игнорирует кэш и резолвит заново (протухшая ссылка).
-    Кидает TrackUnavailable при недоступности видео (в т.ч. временной — наружу
-    это по-прежнему «недоступен», но негативный кэш живёт лишь секунды).
+    Кидает TrackUnavailable при ГЕНУИННОЙ недоступности видео (удалено/
+    приватно/регион) и TransientResolveError при временном сбое (таймаут/
+    сеть/429). Раньше оба случая наружу выглядели одинаково («недоступен»),
+    и клиент не мог отличить «трек мёртв» от «сервер не успел» — это било по
+    UX (см. stream_cached_audio: TransientResolveError теперь отдаётся как
+    503 Retry-After, а не 404, и фронт не должен скипать трек на 503).
+    Четвёртый элемент — ``fresh``: True, если URL только что получен от
+    yt-dlp (валиден заведомо), False — если отдан из Redis-кэша (в теории
+    мог протухнуть). Позволяет вызывающему коду пропустить лишний probe-запрос
+    для заведомо свежей ссылки и не терять на нём время при холодном старте.
     """
     key = f"ytdlp:resolve:v2:{video_id}"
     cached = None if force else get_cache(key)
     if cached:
+        if cached.get("transient"):
+            raise TransientResolveError(video_id)
         if cached.get("unavailable"):
             raise TrackUnavailable(video_id)
         if cached.get("url"):
-            return cached["url"], cached.get("ext", ".m4a"), cached.get("total")
+            return cached["url"], cached.get("ext", ".m4a"), cached.get("total"), False
 
     try:
-        url, ext, total = await asyncio.to_thread(_resolve_audio, video_id)
-    except TransientResolveError as exc:
-        # Временный сбой — короткий кэш, чтобы скорый повтор сработал.
-        set_cache(key, {"unavailable": True}, expire=_TRANSIENT_TTL)
-        raise TrackUnavailable(video_id) from exc
+        url, ext, total = await _resolve_audio(video_id)
+    except TransientResolveError:
+        # Временный сбой — короткий негативный кэш отдельным маркером, чтобы
+        # скорый повтор от того же клиента не долбил yt-dlp, но чтобы вызывающий
+        # код (и в итоге HTTP-статус) не путал это с «трек реально недоступен».
+        set_cache(key, {"transient": True}, expire=_TRANSIENT_TTL)
+        raise
     except Exception as exc:  # noqa: BLE001 — TrackUnavailable и прочее
         set_cache(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
         raise TrackUnavailable(video_id) from exc
 
     set_cache(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
-    return url, ext, total
+    return url, ext, total, True
 
 
 # Размер сегмента при проксировании googlevideo. Длинный одиночный GET
@@ -478,8 +593,14 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
 
     Общий движок стрима для всех yt-dlp-провайдеров (YouTube Music, SoundCloud).
     Специфика источника вынесена в ``resolver`` — awaitable ``resolver(force)``,
-    возвращающий ``(direct_url, ext, total)`` и кидающий ``TrackUnavailable``,
-    когда трек недоступен. ``cache_id`` — безопасное для файловой системы имя
+    возвращающий ``(direct_url, ext, total, fresh)``. Кидает ``TrackUnavailable``
+    при генуинной недоступности (→ 404) и ``TransientResolveError`` при
+    временном сбое резолва (→ 503 Retry-After — НЕ 404). Различие важно для
+    фронта: 404 значит «трек мёртв, скипай», 503 — «попробуй ещё раз», и
+    смешивать их приводило к тому, что обычный таймаут yt-dlp выглядел как
+    недоступный трек и трек автоматически пропускался. ``fresh`` — True, если
+    URL только что получен от yt-dlp (пропускаем валидирующий probe), False —
+    если отдан из кэша. ``cache_id`` — безопасное для файловой системы имя
     (используется как имя кэш-файла и должно быть уникальным между источниками).
     """
     # Уже качали этот трек — отдаём с диска, минуя yt-dlp и CDN источника.
@@ -489,11 +610,20 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
         return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
     try:
-        direct_url, ext, total = await resolver(False)
+        direct_url, ext, total, fresh = await resolver(False)
     except TrackUnavailable:
         # Трек недоступен (удалён/приватен/регион) — это не сбой сервера.
         logger.info("track unavailable: %s", cache_id)
         raise HTTPException(status_code=404, detail="Трек недоступен")
+    except TransientResolveError:
+        # Временный сбой (таймаут/сеть/429) — сервер жив, стоит повторить
+        # скоро. 503, а не 404: фронт не должен считать трек мёртвым.
+        logger.info("transient resolve failure: %s", cache_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Временная ошибка получения аудио, повторите",
+            headers={"Retry-After": str(_TRANSIENT_TTL)},
+        )
     except Exception:  # noqa: BLE001
         logger.exception("yt-dlp resolve failed: %s", cache_id)
         raise HTTPException(status_code=502, detail="Не удалось получить аудио")
@@ -507,20 +637,38 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     # (probe), а filesize из yt-dlp может расходиться. Probe заодно валидирует
     # ссылку: кэшированный URL мог протухнуть (403) — тогда резолвим заново
     # и пробуем ещё раз, ДО отправки заголовков клиенту.
-    status, probed = await _probe(client, direct_url)
+    #
+    # Если URL только что получен от yt-dlp (fresh=True), он заведомо рабочий —
+    # probe для него лишний RTT на холодном старте, пропускаем при известном
+    # точном размере. Probe нужен только для URL, отданного из Redis-кэша.
+    if fresh and total is not None:
+        status, probed = 200, None
+    else:
+        status, probed = await _probe(client, direct_url)
     if status >= 400:
         logger.info("stale direct url for %s (probe %s), re-resolving", cache_id, status)
         try:
-            direct_url, ext, total = await resolver(True)
+            direct_url, ext, total, _ = await resolver(True)
         except TrackUnavailable:
             await client.aclose()
             raise HTTPException(status_code=404, detail="Трек недоступен")
+        except TransientResolveError:
+            await client.aclose()
+            logger.info("transient re-resolve failure: %s", cache_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Временная ошибка получения аудио, повторите",
+                headers={"Retry-After": str(_TRANSIENT_TTL)},
+            )
         except Exception:  # noqa: BLE001
             await client.aclose()
             logger.exception("re-resolve failed: %s", cache_id)
             raise HTTPException(status_code=502, detail="Не удалось получить аудио")
         media_type = MEDIA_TYPES.get(ext, "audio/mp4")
-        status, probed = await _probe(client, direct_url)
+        if total is not None:
+            status, probed = 200, None
+        else:
+            status, probed = await _probe(client, direct_url)
         if status >= 400:
             await client.aclose()
             logger.warning("fresh url also dead for %s (probe %s)", cache_id, status)

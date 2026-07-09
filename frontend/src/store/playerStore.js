@@ -120,9 +120,10 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Заранее прогревает резолв следующего в очереди ytmusic-трека на бэке,
-  // чтобы переключение началось мгновенно (без ожидания yt-dlp).
-  prefetchNext: () => {
+  // Трек, который заиграет следующим (с учётом шаффла), без побочных эффектов.
+  // Используется и для прогрева резолва на бэке, и для ленивой подгрузки
+  // аудио-буфера следующего трека в плеере (см. Player.jsx).
+  getNextTrack: () => {
     const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     let nextIndex = null
     if (isShuffle) {
@@ -132,9 +133,14 @@ const usePlayerStore = create((set, get) => ({
     } else if (currentIndex >= 0 && currentIndex < queue.length - 1) {
       nextIndex = currentIndex + 1
     }
-    if (nextIndex == null) return
+    if (nextIndex == null) return null
+    return queue[nextIndex] || null
+  },
 
-    const next = queue[nextIndex]
+  // Заранее прогревает резолв следующего в очереди ytmusic-трека на бэке,
+  // чтобы переключение началось мгновенно (без ожидания yt-dlp).
+  prefetchNext: () => {
+    const next = get().getNextTrack()
     if (!next) return
     if (next.source === 'ytmusic') {
       const externalId = next.external_id ?? String(next.id).split(':').slice(1).join(':')

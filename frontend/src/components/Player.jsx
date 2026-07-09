@@ -8,6 +8,35 @@ import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 
+// Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
+// спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
+// случае отдаёт 503, а не 404 (см. ytdlp.py: TransientResolveError). Вместо
+// немедленного скипа даём треку 2 тихих повторных попытки с нарастающей
+// паузой; скипаем сразу только если бэк явно сказал «трек недоступен» (404)
+// или ретраи исчерпаны.
+const MAX_TRACK_RETRIES = 2
+const RETRY_DELAY_MS = 900
+// Проверочный range-запрос при ошибке не должен зависать дольше этого —
+// иначе зависший probe держит трек в состоянии "буферизуется" бесконечно.
+const PROBE_TIMEOUT_MS = 6000
+// Ленивая подгрузка следующего трека: начинаем буферизовать его, когда до
+// конца текущего осталось <=15с ИЛИ проиграно >=85% — что наступит раньше.
+const PRELOAD_NEXT_REMAINING_SEC = 15
+const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
+
+// Собирает "сырой" src для <audio> из объекта трека — используется и для
+// текущего трека, и для ленивой подгрузки следующего.
+function resolveRawUrl(track, isExternal) {
+  if (!track) return undefined
+  if (isExternal) return track.stream_url
+  if (track.id) return `${API_URL}/tracks/${track.id}/stream`
+  if (track.file_path?.startsWith('http')) return track.file_path
+  if (track.file_path) {
+    return `${SERVER_URL}${track.file_path.startsWith('/') ? '' : '/'}${track.file_path}`
+  }
+  return undefined
+}
+
 function Player() {
   const {
     currentTrack,
@@ -37,8 +66,24 @@ function Player() {
 
   const audioRef = useRef(null)
   const blobUrlRef = useRef(null)
+  // Скрытый <audio preload="none">, который буферизирует следующий трек
+  // очереди, когда текущий подходит к концу — без него оставался бы только
+  // фоновый прогрев резолва на бэке (prefetchNext), а не реальная буферизация
+  // байтов в браузере.
+  const nextAudioRef = useRef(null)
+  const nextBlobUrlRef = useRef(null)
+  // id трека, для которого уже запущена ленивая подгрузка следующего — чтобы
+  // не запускать её повторно на каждом timeupdate.
+  const preloadTriggeredForRef = useRef(null)
   const lastRecordedTrackIdRef = useRef(null)
+  // Счётчик тихих ретраев текущего трека и хендл отложенного повтора —
+  // при ошибке внешнего трека не скипаем сразу, а даём 1-2 попытки.
+  const retryCountRef = useRef(0)
+  const retryTimeoutRef = useRef(null)
   const [audioSrc, setAudioSrc] = useState(null)
+  // Спиннер на время резолва/загрузки потока внешнего трека — иначе долгий
+  // (но живой) резолв YouTube Music выглядит как зависший плеер.
+  const [isBuffering, setIsBuffering] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
   const [playlists, setPlaylists] = useState([])
@@ -52,11 +97,62 @@ function Player() {
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
 
+  // Ленивая подгрузка следующего трека: пока не наступил порог — буфер
+  // остаётся пустым (preload="none"), браузер не трогает файл следующего
+  // трека. При приближении к концу текущего переключаем скрытый <audio> на
+  // preload="auto" и задаём ему src следующего трека — начинается фоновая
+  // буферизация без видимого запроса от пользователя.
+  const triggerNextPreload = () => {
+    const trackId = currentTrack?.id
+    if (trackId == null || preloadTriggeredForRef.current === trackId) return
+    const next = usePlayerStore.getState().getNextTrack()
+    if (!next) return
+    preloadTriggeredForRef.current = trackId
+
+    const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(next.source)
+    const rawUrl = resolveRawUrl(next, nextIsExternal)
+    if (!rawUrl) return
+
+    const nextAudio = nextAudioRef.current
+    if (!nextAudio) return
+
+    if (nextBlobUrlRef.current) {
+      URL.revokeObjectURL(nextBlobUrlRef.current)
+      nextBlobUrlRef.current = null
+    }
+
+    const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
+    nextAudio.preload = 'auto'
+    if (isOurApi) {
+      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
+        .then((r) => r.blob())
+        .then((blob) => {
+          const url = URL.createObjectURL(blob)
+          nextBlobUrlRef.current = url
+          nextAudio.src = url
+          nextAudio.load()
+        })
+        .catch(() => {})
+    } else {
+      nextAudio.src = rawUrl
+      nextAudio.load()
+    }
+  }
+
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
-    const updateTime = () => setCurrentTime(audio.currentTime)
+    const updateTime = () => {
+      setCurrentTime(audio.currentTime)
+      if (
+        audio.duration &&
+        (audio.duration - audio.currentTime <= PRELOAD_NEXT_REMAINING_SEC ||
+          audio.currentTime / audio.duration >= PRELOAD_NEXT_PROGRESS_RATIO)
+      ) {
+        triggerNextPreload()
+      }
+    }
     const updateDuration = () => setDuration(audio.duration)
     const handleEnded = () => {
       if (usePlayerStore.getState().isRepeatOne) {
@@ -97,15 +193,7 @@ function Player() {
       return
     }
 
-    const rawUrl = isExternalTrack
-      ? currentTrack.stream_url
-      : currentTrack.id
-      ? `${API_URL}/tracks/${currentTrack.id}/stream`
-      : currentTrack.file_path?.startsWith('http')
-        ? currentTrack.file_path
-        : currentTrack.file_path
-          ? `${SERVER_URL}${currentTrack.file_path.startsWith('/') ? '' : '/'}${currentTrack.file_path}`
-          : undefined
+    const rawUrl = resolveRawUrl(currentTrack, isExternalTrack)
 
     if (!rawUrl) {
       setAudioSrc(undefined)
@@ -144,6 +232,15 @@ function Player() {
     const audio = audioRef.current
     if (!audio || !currentTrack) return
 
+    // Новый трек — сбрасываем счётчик ретраев и отменяем висящий отложенный
+    // повтор от предыдущего трека.
+    retryCountRef.current = 0
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current)
+      retryTimeoutRef.current = null
+    }
+    setIsBuffering(false)
+
     // Reset audio when track changes
     audio.load()
     // load() возвращает элементу дефолтную громкость (1) — восстанавливаем
@@ -154,7 +251,34 @@ function Player() {
     setShowAddToPlaylist(false)
     setAddError('')
     setSelectedPlaylistId('')
+
+    // Сбрасываем состояние ленивой подгрузки следующего трека — новый трек
+    // ещё не приблизился к концу, буферизировать пока нечего.
+    preloadTriggeredForRef.current = null
+    if (nextBlobUrlRef.current) {
+      URL.revokeObjectURL(nextBlobUrlRef.current)
+      nextBlobUrlRef.current = null
+    }
+    const nextAudio = nextAudioRef.current
+    if (nextAudio) {
+      nextAudio.removeAttribute('src')
+      nextAudio.preload = 'none'
+      nextAudio.load()
+    }
   }, [currentTrack?.id, setCurrentTime, setDuration])
+
+  // Отменяем висящий ретрай и освобождаем буфер предзагрузки при
+  // размонтировании плеера.
+  useEffect(() => {
+    return () => {
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current)
+      }
+      if (nextBlobUrlRef.current) {
+        URL.revokeObjectURL(nextBlobUrlRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -420,6 +544,78 @@ function Player() {
     }
   }
 
+  // Ошибка <audio> у внешнего трека: если бэк уже вернул финальный вердикт
+  // (404 — трек мёртв, или бразуер прямо говорит "формат не поддерживается")
+  // — скипаем сразу, ретраить нечего. Иначе (503/сетевой обрыв/таймаут CDN)
+  // даём треку MAX_TRACK_RETRIES тихих попыток: перечитываем src через
+  // audio.load(), показывая спиннер, и только когда попытки исчерпаны —
+  // сдаёмся и переходим к следующему треку.
+  const handleAudioError = () => {
+    const audio = audioRef.current
+    const trackAtError = currentTrack
+    console.error('Audio element error:', audio?.error)
+    console.error('Track:', trackAtError)
+    console.error('Audio src:', audio?.src)
+
+    if (!isExternalTrack || !audio?.src) return
+
+    const mediaError = audio.error
+    const isFatal = mediaError?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+
+    const giveUp = () => {
+      setIsBuffering(false)
+      toast.error(`Трек недоступен: ${trackAtError.title}`)
+      nextTrack()
+    }
+
+    if (isFatal) {
+      giveUp()
+      return
+    }
+
+    if (retryCountRef.current >= MAX_TRACK_RETRIES) {
+      giveUp()
+      return
+    }
+
+    // Быстрый пробный запрос — если бэк прямо сейчас отвечает 404 (трек
+    // окончательно недоступен), ретраить бессмысленно, скипаем сразу вместо
+    // того чтобы жечь все попытки на заведомо мёртвый трек. Range 0-1 вместо
+    // HEAD: /stream/ отдаёт StreamingResponse, а у неё нет автоматического
+    // укорачивания тела под HEAD, так что HEAD рискует утянуть весь файл.
+    const scheduleRetry = () => {
+      retryCountRef.current += 1
+      setIsBuffering(true)
+      retryTimeoutRef.current = setTimeout(() => {
+        // Трек могли сменить, пока ждали — не трогаем уже неактуальный <audio>.
+        if (usePlayerStore.getState().currentTrack?.id !== trackAtError?.id) return
+        const el = audioRef.current
+        if (!el) return
+        el.load()
+      }, RETRY_DELAY_MS * retryCountRef.current)
+    }
+
+    const controller = new AbortController()
+    const probeTimer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
+    fetch(audio.src, { headers: { Range: 'bytes=0-1' }, signal: controller.signal })
+      .then((res) => {
+        clearTimeout(probeTimer)
+        res.body?.cancel().catch(() => {})
+        if (res.status === 404) {
+          giveUp()
+          return
+        }
+        // 503 (временный сбой резолва) или любой другой код — повторяем.
+        scheduleRetry()
+      })
+      .catch(() => {
+        clearTimeout(probeTimer)
+        // Запрос не прошёл (сеть/CORS/таймаут) — не знаем причину, считаем
+        // временной и всё равно ретраим, а не скипаем молча.
+        scheduleRetry()
+      })
+  }
+
   return (
     <div className="player">
       <div className="player-progress-top" onClick={handleSeek}>
@@ -440,27 +636,25 @@ function Player() {
         src={audioSrc || undefined}
         preload="auto"
         crossOrigin="anonymous"
-        onError={(e) => {
-          console.error('Audio element error:', e)
-          console.error('Track:', currentTrack)
-          console.error('Audio src:', audioRef.current?.src)
-          console.error('Audio error details:', audioRef.current?.error)
-          // Внешний трек не проигрался (недоступен/удалён) — не зависаем на нём,
-          // а показываем уведомление и переходим к следующему.
-          if (isExternalTrack && audioRef.current?.src) {
-            toast.error(`Трек недоступен: ${currentTrack.title}`)
-            nextTrack()
-          }
-        }}
+        onError={handleAudioError}
         onCanPlay={() => {
+          // Раз дошли до canplay — источник рабочий, ретраи для этой сессии
+          // трека больше не нужны, скрываем спиннер.
+          retryCountRef.current = 0
+          setIsBuffering(false)
           if (isPlaying) {
             audioRef.current?.play().catch(err => {
               console.error('Play error:', err)
             })
           }
         }}
+        onWaiting={() => setIsBuffering(true)}
+        onPlaying={() => setIsBuffering(false)}
       />
-      
+      {/* Скрытый плеер для ленивой буферизации следующего трека — начинает
+          грузиться только когда triggerNextPreload() выставит ему src. */}
+      <audio ref={nextAudioRef} preload="none" crossOrigin="anonymous" style={{ display: 'none' }} />
+
       <div className="player-left">
         <button
           type="button"
@@ -474,10 +668,17 @@ function Player() {
             className="player-cover"
             onError={handleCoverError}
           />
+          {isExternalTrack && isBuffering && (
+            <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
+              <div className="player-cover-buffering-spinner" />
+            </div>
+          )}
         </button>
         <div className="player-info">
           <div className="player-track-title">{currentTrack.title}</div>
-          <div className="player-track-artist">{currentTrack.artist}</div>
+          <div className="player-track-artist">
+            {isExternalTrack && isBuffering ? 'Загрузка…' : currentTrack.artist}
+          </div>
         </div>
         {canInteract && (
           <>

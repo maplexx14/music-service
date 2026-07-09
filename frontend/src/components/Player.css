@@ -122,6 +122,7 @@
 }
 
 .player-cover-wrap {
+  position: relative;
   display: block;
   padding: 0;
   margin: 0;
@@ -145,6 +146,33 @@
   object-fit: cover;
   border-radius: 7px;
   background-color: #181818;
+}
+
+/* Оверлей поверх обложки на время (пере)резолва потока внешнего трека —
+   без него долгий, но живой резолв YouTube Music выглядит как зависание. */
+.player-cover-buffering {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 7px;
+}
+
+.player-cover-buffering-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  animation: player-buffering-rotate 0.8s linear infinite;
+}
+
+@keyframes player-buffering-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .player-info {

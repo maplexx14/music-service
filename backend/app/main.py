@@ -1,3 +1,6 @@
+import asyncio
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,7 +9,6 @@ from slowapi.errors import RateLimitExceeded
 from app.database import engine, Base
 from app.rate_limit import limiter
 from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow
-import os
 
 # Schema is managed by Alembic migrations (alembic upgrade head).
 # For quick local dev without migrations set DEBUG=true.
@@ -78,6 +80,18 @@ async def _configure_threadpool() -> None:
         to_thread.current_default_thread_limiter().total_tokens = tokens
     except Exception:  # noqa: BLE001 — не критично, если API изменится
         pass
+
+
+@app.on_event("startup")
+async def _warmup_ytdlp() -> None:
+    # Первый резолв YouTube Music в свежем процессе платит cold-start за
+    # импорт yt_dlp и загрузку реестра экстракторов/плагинов (~0.5-0.7с) —
+    # без прогрева это ощущается как «первый проигранный трек всегда долго
+    # грузится». Гоняем в фоне (create_task), не await — не хотим держать
+    # health-check/остальной startup на сетевой инициализации yt-dlp.
+    if ytdlp._ytmusic is None:
+        return
+    asyncio.create_task(asyncio.to_thread(ytdlp._warmup_ydl_blocking))
 
 
 @app.get("/")
