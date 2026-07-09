@@ -122,8 +122,9 @@ function Player() {
     }
 
     const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
+    const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
     nextAudio.preload = 'auto'
-    if (isOurApi) {
+    if (isOurApi && !swActive) {
       fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
         .then((r) => r.blob())
         .then((blob) => {
@@ -182,7 +183,12 @@ function Player() {
     }
   }, [dbTrackId, fetchLikedTracks])
 
-  // Resolve audio URL: для Tuna/внешнего API используем fetch с tuna-skip-browser-warning
+  // Resolve audio URL. audio-sw.js подставляет заголовок для обхода
+  // предупреждения Tuna на уровне сети, так что <audio> обычно может грузить
+  // src напрямую и стримить файл нативными Range-запросами (трек начинает
+  // играть почти сразу, без ожидания полной закачки). Пока SW ещё не взял
+  // страницу под контроль (самый первый визит до активации) — как и раньше,
+  // подстраховываемся ручным fetch+blob с нужным заголовком.
   useEffect(() => {
     if (!currentTrack) {
       if (blobUrlRef.current) {
@@ -201,11 +207,14 @@ function Player() {
     }
 
     const isOurApi = !isExternalTrack && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
-    if (isOurApi) {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current)
-        blobUrlRef.current = null
-      }
+    const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
+
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current)
+      blobUrlRef.current = null
+    }
+
+    if (isOurApi && !swActive) {
       setAudioSrc(null)
       fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
         .then((r) => r.blob())
@@ -241,10 +250,12 @@ function Player() {
     }
     setIsBuffering(false)
 
-    // Reset audio when track changes
-    audio.load()
-    // load() возвращает элементу дефолтную громкость (1) — восстанавливаем
-    // положение слайдера, иначе новый трек всегда играет на максимуме.
+    // Сам load() тут не нужен: смена src (через audioSrc, см. эффект выше)
+    // уже запускает алгоритм загрузки ресурса сама по себе — явный load()
+    // здесь означал повторную полную загрузку того же потока (раньше element
+    // ещё и пересоздавался целиком из-за key={currentTrack?.id}, отсюда и
+    // третий "дубль" запроса). Громкость на persistent-элементе не сбрасывается
+    // сама, но выставляем явно для надёжности.
     audio.volume = usePlayerStore.getState().volume
     setCurrentTime(0)
     setDuration(0)
@@ -632,7 +643,6 @@ function Player() {
       </div>
       <audio
         ref={audioRef}
-        key={currentTrack?.id}
         src={audioSrc || undefined}
         preload="auto"
         crossOrigin="anonymous"

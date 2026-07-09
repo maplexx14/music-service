@@ -59,6 +59,9 @@ function Search() {
       }
       if (externalResult.status === 'fulfilled') {
         setExternalTracks(externalResult.value.data)
+        // Прогреваем резолв топ-нескольких результатов заранее — большинство
+        // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
+        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 4)
       } else {
         console.error('External search error:', externalResult.reason)
         setExternalTracks([])

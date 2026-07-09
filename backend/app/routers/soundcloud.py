@@ -187,6 +187,10 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
             "no_warnings": True,
             "skip_download": True,
             "noplaylist": True,
+            # См. ytdlp._extract_with_clients: без format дефолтный селектор
+            # может не смэтчиться и упасть с "Requested format is not
+            # available" ещё до того, как _pick_progressive выберет формат.
+            "format": "bestaudio/best",
         },
     )
     try:

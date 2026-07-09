@@ -10,6 +10,11 @@ function shuffleArray(arr) {
   return result
 }
 
+// Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
+// ре-рендеры компонентов, но не персистится между перезагрузками страницы
+// (это нормально: кэш на бэке в Redis всё равно тёплый).
+const requestedPrefetchIds = new Set()
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -120,36 +125,59 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Трек, который заиграет следующим (с учётом шаффла), без побочных эффектов.
-  // Используется и для прогрева резолва на бэке, и для ленивой подгрузки
-  // аудио-буфера следующего трека в плеере (см. Player.jsx).
-  getNextTrack: () => {
+  // Трек, который заиграет через `offset` позиций (с учётом шаффла), без
+  // побочных эффектов. offset=1 (по умолчанию) — следующий трек. Используется
+  // и для прогрева резолва на бэке (в т.ч. на несколько треков вперёд), и для
+  // ленивой подгрузки аудио-буфера следующего трека в плеере (см. Player.jsx).
+  getNextTrack: (offset = 1) => {
     const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     let nextIndex = null
     if (isShuffle) {
-      if (currentShuffleIndex >= 0 && currentShuffleIndex < shuffledOrder.length - 1) {
-        nextIndex = shuffledOrder[currentShuffleIndex + 1]
+      const idx = currentShuffleIndex + offset
+      if (currentShuffleIndex >= 0 && idx < shuffledOrder.length) {
+        nextIndex = shuffledOrder[idx]
       }
-    } else if (currentIndex >= 0 && currentIndex < queue.length - 1) {
-      nextIndex = currentIndex + 1
+    } else {
+      const idx = currentIndex + offset
+      if (currentIndex >= 0 && idx < queue.length) {
+        nextIndex = idx
+      }
     }
     if (nextIndex == null) return null
     return queue[nextIndex] || null
   },
 
-  // Заранее прогревает резолв следующего в очереди ytmusic-трека на бэке,
-  // чтобы переключение началось мгновенно (без ожидания yt-dlp).
-  prefetchNext: () => {
-    const next = get().getNextTrack()
-    if (!next) return
-    if (next.source === 'ytmusic') {
-      const externalId = next.external_id ?? String(next.id).split(':').slice(1).join(':')
-      if (externalId) api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
-    } else if (next.source === 'soundcloud') {
-      // Токен резолва зашит в stream_url (.../soundcloud/stream/{token}).
-      const token = (next.stream_url || '').split('/soundcloud/stream/')[1]
-      if (token) api.post(`/soundcloud/prefetch/${token}`).catch(() => {})
+  // Заранее прогревает резолв на бэке для первых `count` треков списка (не
+  // дожидаясь ответа) — чтобы к моменту, когда <audio> реально попросит
+  // поток, yt-dlp/Redis-кэш уже был тёплым. Бэк дедуплицирует параллельные
+  // резолвы одного video_id (см. _inflight_resolves в ytdlp.py), так что
+  // прогрев текущего трека не конкурирует с его же реальным стримом за
+  // отдельный yt-dlp вызов. requestedPrefetchIds — трек-левел дедуп на
+  // фронте, чтобы одно и то же не гонялось повторно при ре-рендерах.
+  prefetchTracks: (tracks, count = 1) => {
+    const list = (tracks || []).filter(Boolean).slice(0, count)
+    for (const track of list) {
+      if (track.source === 'ytmusic') {
+        const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+        if (!externalId || requestedPrefetchIds.has(`yt:${externalId}`)) continue
+        requestedPrefetchIds.add(`yt:${externalId}`)
+        api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
+      } else if (track.source === 'soundcloud') {
+        // Токен резолва зашит в stream_url (.../soundcloud/stream/{token}).
+        const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
+        if (!token || requestedPrefetchIds.has(`sc:${token}`)) continue
+        requestedPrefetchIds.add(`sc:${token}`)
+        api.post(`/soundcloud/prefetch/${token}`).catch(() => {})
+      }
     }
+  },
+
+  // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы
+  // переключение началось мгновенно (без ожидания yt-dlp). Греем 2 трека
+  // вперёд — при быстром next-next второй тоже успевает попасть в Redis.
+  prefetchNext: () => {
+    const upcoming = [get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean)
+    get().prefetchTracks(upcoming, upcoming.length)
   },
 
   playTrack: (track, queue = [], source = null) => {
@@ -168,6 +196,10 @@ const usePlayerStore = create((set, get) => ({
       source,
       flowActive: source === 'flow',
     })
+    // Кликнутый трек прогреваем немедленно — не дожидаясь, пока до него
+    // дойдёт очередь через prefetchNext(). Дедуп на бэке (single-flight в
+    // _resolve_cached) не даёт этому конкурировать с реальным <audio>-GET.
+    get().prefetchTracks([track], 1)
   },
 
   // --- Персональный поток («Моя волна») ---
@@ -181,6 +213,10 @@ const usePlayerStore = create((set, get) => ({
       const { data } = await api.get('/recommendations/flow', { params: { limit: 20 } })
       if (!data || data.length === 0) return false
       get().playPlaylist(data, 0, 'flow')
+      // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
+      // ожидания резолва на каждом переключении — это основной сценарий,
+      // где скорость важнее всего.
+      get().prefetchTracks(data.slice(0, 4), 4)
       set({ flowActive: true })
       return true
     } finally {
@@ -205,6 +241,8 @@ const usePlayerStore = create((set, get) => ({
       const known = new Set(get().queue.map((t) => t.id))
       const fresh = (data || []).filter((t) => !known.has(t.id))
       if (fresh.length === 0) return
+
+      get().prefetchTracks(fresh.slice(0, 4), 4)
 
       set((state) => {
         const startIdx = state.queue.length
@@ -240,6 +278,7 @@ const usePlayerStore = create((set, get) => ({
       source,
       flowActive: source === 'flow',
     })
+    get().prefetchTracks([tracks[actualIndex]], 1)
   },
 
   toggleRepeatOne: () => {

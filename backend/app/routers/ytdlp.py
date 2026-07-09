@@ -199,10 +199,16 @@ def _pick_audio_format(info: dict) -> Optional[dict]:
 # Наборы player-клиентов, которыми по очереди прикидываемся при резолве.
 # "Video unavailable" часто зависит от клиента: то, что недоступно для web,
 # нередко отдаётся tv/android_music/ios и наоборот. Перебираем, пока не выйдет.
+#
+# Primary — единственный лёгкий клиент (android_music): он не требует
+# JS-расшифровки n-sig/cipher параметра googlevideo-ссылок (в отличие от web),
+# поэтому обычно отвечает заметно быстрее. Остальные наборы (в т.ч. web)
+# остаются fallback'ом и подключаются через хедж, если primary не ответил
+# вовремя или отдал "unavailable".
 _CLIENT_CANDIDATES = (
+    ["android_music"],
     ["ios", "android", "web"],
     ["tv", "web_safari"],
-    ["android_music", "web_music"],
     ["mweb", "android"],
 )
 
@@ -217,8 +223,11 @@ _SOCKET_TIMEOUT = 8
 # Хедж-задержка: первым стартует самый надёжный набор клиентов; остальные
 # подключаются параллельно, только если он не ответил за это время. Экономит
 # нагрузку на YouTube в общем случае (обычно первый клиент и так отвечает),
-# но не жертвует задержкой, если он подвис.
-_HEDGE_DELAY = 2.5
+# но не жертвует задержкой, если он подвис. Primary теперь лёгкий одиночный
+# клиент (см. _CLIENT_CANDIDATES) и обычно отвечает быстро, поэтому задержку
+# можно держать короче — подвисший primary не тянет резолв дольше 0.6с до
+# подключения fallback-наборов.
+_HEDGE_DELAY = 0.6
 
 
 class TrackUnavailable(Exception):
@@ -299,6 +308,7 @@ def _warmup_ydl_blocking() -> None:
                 "noplaylist": True,
                 "skip_download": True,
                 "socket_timeout": _SOCKET_TIMEOUT,
+                "format": "bestaudio/best",
                 "extractor_args": {"youtube": {"player_client": primary}},
             },
         )
@@ -326,6 +336,14 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
             "noplaylist": True,
             "skip_download": True,
             "socket_timeout": _SOCKET_TIMEOUT,
+            # Без этого yt-dlp применяет дефолтный селектор
+            # 'bestvideo*+bestaudio/best' и падает с "Requested format is not
+            # available" на роликах без муксированного progressive-формата —
+            # ДО того, как _pick_audio_format успевает выбрать формат вручную.
+            # 'bestaudio/best' всегда матчится (audio-only поток есть почти
+            # всегда), а конкретный URL всё равно выбирает _pick_audio_format
+            # из info['formats'].
+            "format": "bestaudio/best",
             "extractor_args": {"youtube": {"player_client": clients}},
         },
     )
@@ -384,6 +402,17 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
                 saw_transient = saw_transient or transient
             if success:
                 break
+            if not hedged:
+                # Primary набор отработал (не подвис), но не дал результата —
+                # без этого фолбэки не подключились бы вовсе, т.к. эскалация
+                # выше срабатывает только по таймауту ожидания, а не по
+                # быстрому провалу (например, "Requested format is not
+                # available" из-за PO-token требований на некоторых клиентах).
+                hedged = True
+                pending |= {
+                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients))
+                    for clients in rest
+                }
     finally:
         for t in pending:
             if not t.done():
@@ -420,6 +449,16 @@ _UNAVAILABLE_TTL = 600
 _TRANSIENT_TTL = 25
 
 
+# Однополётность резолва: с прогревом (prefetch текущего/следующих треков во
+# flow) стало обычным делом, что несколько вызовов (прогрев + сам <audio>-GET,
+# либо несколько прогревов подряд) метят в один и тот же video_id почти
+# одновременно. Без дедупликации это означало бы несколько параллельных
+# yt-dlp extract_info на одно и то же видео — лишняя нагрузка на YouTube и
+# трата воркеров. Держим по одной in-flight задаче на video_id: все опоздавшие
+# вызовы просто дожидаются результата первой.
+_inflight_resolves: dict[str, asyncio.Task] = {}
+
+
 async def _resolve_cached(
     video_id: str, force: bool = False
 ) -> tuple[str, str, Optional[int], bool]:
@@ -447,6 +486,25 @@ async def _resolve_cached(
         if cached.get("url"):
             return cached["url"], cached.get("ext", ".m4a"), cached.get("total"), False
 
+    # Однополётность: если резолв этого video_id уже идёт (например, прогрев
+    # прогремел на долю секунды раньше настоящего запроса на стрим) — просто
+    # дожидаемся его вместо запуска второго extract_info.
+    existing = _inflight_resolves.get(video_id)
+    if existing is not None:
+        return await existing
+
+    task = asyncio.ensure_future(_resolve_and_cache(video_id, key))
+    _inflight_resolves[video_id] = task
+    try:
+        return await task
+    finally:
+        if _inflight_resolves.get(video_id) is task:
+            del _inflight_resolves[video_id]
+
+
+async def _resolve_and_cache(
+    video_id: str, key: str
+) -> tuple[str, str, Optional[int], bool]:
     try:
         url, ext, total = await _resolve_audio(video_id)
     except TransientResolveError:
