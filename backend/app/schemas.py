@@ -86,6 +86,7 @@ class PlaylistCreate(PlaylistBase):
 class PlaylistResponse(PlaylistBase):
     id: int
     owner_id: int
+    is_liked: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
     tracks: List[TrackResponse] = []

@@ -11,7 +11,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
 from app.cache import get_cache, set_cache
-from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
+from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from app.dependencies import get_current_active_user, get_current_admin_user
 from fastapi.responses import FileResponse, RedirectResponse
@@ -333,6 +333,23 @@ async def upload_track_cover(
     return track
 
 
+def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
+    playlist = db.query(Playlist).filter(
+        Playlist.owner_id == user.id, Playlist.is_liked == True
+    ).first()
+    if playlist is None:
+        playlist = Playlist(
+            name="Понравившиеся",
+            is_public=False,
+            is_liked=True,
+            owner_id=user.id,
+        )
+        db.add(playlist)
+        db.commit()
+        db.refresh(playlist)
+    return playlist
+
+
 @router.post("/{track_id}/like", status_code=status.HTTP_200_OK)
 def like_track(
     track_id: int,
@@ -342,12 +359,24 @@ def like_track(
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    
-    # Check if already liked
-    if track in current_user.liked_tracks:
+
+    liked_playlist = get_or_create_liked_playlist(db, current_user)
+
+    exists = db.query(playlist_tracks).filter(
+        playlist_tracks.c.playlist_id == liked_playlist.id,
+        playlist_tracks.c.track_id == track_id,
+    ).first()
+    if exists:
         raise HTTPException(status_code=400, detail="Track already liked")
-    
-    current_user.liked_tracks.append(track)
+
+    max_position = db.query(func.max(playlist_tracks.c.position)).filter(
+        playlist_tracks.c.playlist_id == liked_playlist.id
+    ).scalar() or -1
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_playlist.id,
+        track_id=track_id,
+        position=max_position + 1,
+    ))
     db.commit()
     return {"message": "Track liked successfully"}
 
@@ -361,11 +390,20 @@ def unlike_track(
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    
-    if track not in current_user.liked_tracks:
+
+    liked_playlist = get_or_create_liked_playlist(db, current_user)
+
+    exists = db.query(playlist_tracks).filter(
+        playlist_tracks.c.playlist_id == liked_playlist.id,
+        playlist_tracks.c.track_id == track_id,
+    ).first()
+    if not exists:
         raise HTTPException(status_code=400, detail="Track not liked")
-    
-    current_user.liked_tracks.remove(track)
+
+    db.execute(playlist_tracks.delete().where(
+        (playlist_tracks.c.playlist_id == liked_playlist.id) &
+        (playlist_tracks.c.track_id == track_id)
+    ))
     db.commit()
     return {"message": "Track unliked successfully"}
 
@@ -379,11 +417,12 @@ def get_liked_tracks(
     db: Session = Depends(get_db)
 ):
     # Свежие лайки первыми; без limit возвращаем весь список (нужен playerStore).
+    liked_playlist = get_or_create_liked_playlist(db, current_user)
     query = (
         db.query(Track)
-        .join(user_liked_tracks, user_liked_tracks.c.track_id == Track.id)
-        .filter(user_liked_tracks.c.user_id == current_user.id)
-        .order_by(desc(user_liked_tracks.c.liked_at))
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .filter(playlist_tracks.c.playlist_id == liked_playlist.id)
+        .order_by(desc(playlist_tracks.c.position))
     )
     response.headers["X-Total-Count"] = str(query.count())
     if limit is not None:

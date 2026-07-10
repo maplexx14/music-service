@@ -215,3 +215,116 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* --- Индикация играющего трека и действия над треком --- */
+
+.track-row.playing .track-name {
+  color: #1ed760;
+}
+
+/* Эквалайзер-анимация в колонке номера у играющего трека. */
+.now-playing-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.now-playing-bars span {
+  display: block;
+  width: 3px;
+  height: 100%;
+  background-color: #1ed760;
+  transform-origin: bottom;
+  animation: nowPlayingBar 0.9s ease-in-out infinite;
+}
+
+.now-playing-bars span:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.now-playing-bars span:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+/* На паузе — столбики замирают. */
+.now-playing-bars.paused span {
+  animation-play-state: paused;
+  height: 40%;
+}
+
+@keyframes nowPlayingBar {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+.track-actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.track-action-btn {
+  background: none;
+  border: none;
+  color: #b3b3b3;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  transition: color 0.2s, background-color 0.2s;
+}
+
+.track-action-btn:hover {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.track-action-btn.liked {
+  color: #1ed760;
+}
+
+/* Контейнер кнопки «в плейлист» — якорь для выпадающего меню. */
+.add-to-playlist {
+  position: relative;
+  display: inline-block;
+}
+
+.add-to-playlist-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  background-color: #282828;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+}
+
+.add-to-playlist-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.add-to-playlist-option:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.add-to-playlist-empty {
+  padding: 10px 12px;
+  color: #b3b3b3;
+  font-size: 14px;
+}

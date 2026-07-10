@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Plus } from 'lucide-react'
+import { Play, Plus, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import { toast } from '../store/toastStore'
@@ -18,11 +18,29 @@ function ExternalPlaylist() {
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
-  const { playPlaylist } = usePlayerStore()
+  const [myPlaylists, setMyPlaylists] = useState([])
+  const [menuTrackId, setMenuTrackId] = useState(null)
+  const {
+    playPlaylist,
+    currentTrack,
+    isPlaying,
+    likedTrackIds,
+    toggleTrackLike,
+    fetchLikedTracks,
+    materializeTrack,
+  } = usePlayerStore()
 
   useEffect(() => {
     fetchPlaylist()
+    fetchLikedTracks()
   }, [id])
+
+  useEffect(() => {
+    if (menuTrackId === null) return
+    const close = () => setMenuTrackId(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [menuTrackId])
 
   const fetchPlaylist = async () => {
     setLoading(true)
@@ -63,6 +81,62 @@ function ExternalPlaylist() {
       toast.error('Не удалось добавить плейлист в медиатеку')
     } finally {
       setImporting(false)
+    }
+  }
+
+  // Материализует внешний трек в БД и запоминает db_id в списке, чтобы
+  // индикация лайка работала после действия.
+  const ensureDbId = async (track) => {
+    if (typeof track.db_id === 'number') return track.db_id
+    const dbId = await materializeTrack(track)
+    setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: dbId } : t)))
+    return dbId
+  }
+
+  const handleToggleLike = async (track, e) => {
+    e.stopPropagation()
+    try {
+      const dbId = await ensureDbId(track)
+      await toggleTrackLike(dbId)
+    } catch (error) {
+      console.error('Error toggling like:', error)
+      toast.error('Не удалось обновить понравившиеся')
+    }
+  }
+
+  const handleOpenMenu = async (track, e) => {
+    e.stopPropagation()
+    if (menuTrackId === track.id) {
+      setMenuTrackId(null)
+      return
+    }
+    setMenuTrackId(track.id)
+    if (myPlaylists.length === 0) {
+      try {
+        const { data } = await api.get('/playlists/me')
+        setMyPlaylists(data)
+      } catch (error) {
+        console.error('Error fetching my playlists:', error)
+      }
+    }
+  }
+
+  const handleAddToPlaylist = async (track, target, e) => {
+    e.stopPropagation()
+    setMenuTrackId(null)
+    try {
+      const dbId = await ensureDbId(track)
+      await api.post(`/playlists/${target.id}/tracks/${dbId}`, null, {
+        skipErrorToast: true,
+      })
+      toast.success(`Добавлено в «${target.name}»`)
+    } catch (error) {
+      if (error.response?.status === 400) {
+        toast.error('Трек уже есть в этом плейлисте')
+      } else {
+        console.error('Error adding track to playlist:', error)
+        toast.error('Не удалось добавить трек')
+      }
     }
   }
 
@@ -125,16 +199,29 @@ function ExternalPlaylist() {
                 <th>Название</th>
                 <th>Альбом</th>
                 <th>Длительность</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track, index) => (
+              {tracks.map((track, index) => {
+                const isCurrent = currentTrack?.id === track.id
+                const dbId = typeof track.db_id === 'number' ? track.db_id : null
+                const isLiked = dbId ? likedTrackIds.includes(dbId) : false
+                return (
                 <tr
                   key={track.id}
-                  className="track-row"
+                  className={`track-row${isCurrent ? ' playing' : ''}`}
                   onClick={() => handlePlayTrack(track, index)}
                 >
-                  <td className="track-number">{index + 1}</td>
+                  <td className="track-number">
+                    {isCurrent ? (
+                      <span className={`now-playing-bars${isPlaying ? '' : ' paused'}`}>
+                        <span /><span /><span />
+                      </span>
+                    ) : (
+                      index + 1
+                    )}
+                  </td>
                   <td className="track-name-cell">
                     <img
                       src={track.cover_url || defaultCover}
@@ -151,8 +238,49 @@ function ExternalPlaylist() {
                   <td className="track-duration">
                     {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
                   </td>
+                  <td className="track-actions-cell">
+                    <button
+                      type="button"
+                      className={`track-action-btn${isLiked ? ' liked' : ''}`}
+                      onClick={(e) => handleToggleLike(track, e)}
+                      title={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
+                      aria-label={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
+                    >
+                      <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+                    </button>
+                    <div className="add-to-playlist">
+                      <button
+                        type="button"
+                        className="track-action-btn"
+                        onClick={(e) => handleOpenMenu(track, e)}
+                        title="Добавить в плейлист"
+                        aria-label="Добавить в плейлист"
+                      >
+                        <Plus size={18} />
+                      </button>
+                      {menuTrackId === track.id && (
+                        <div className="add-to-playlist-menu" onClick={(e) => e.stopPropagation()}>
+                          {myPlaylists.length > 0 ? (
+                            myPlaylists.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className="add-to-playlist-option"
+                                onClick={(e) => handleAddToPlaylist(track, p, e)}
+                              >
+                                {p.name}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="add-to-playlist-empty">Нет плейлистов</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         ) : (

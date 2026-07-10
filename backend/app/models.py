@@ -95,6 +95,7 @@ class Playlist(Base):
     description = Column(Text, nullable=True)
     cover_url = Column(String, nullable=True)
     is_public = Column(Boolean, default=True, index=True)
+    is_liked = Column(Boolean, default=False, nullable=False, server_default="false", index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

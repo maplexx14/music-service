@@ -37,6 +37,28 @@ const usePlayerStore = create((set, get) => ({
     set({ currentTrack: track, currentTime: 0 })
   },
 
+  // Материализует произвольный внешний трек в БД (для лайков/плейлистов).
+  // Возвращает числовой id локальной записи. Идемпотентно на бэке.
+  // Локальные треки (числовой id) возвращаются как есть.
+  materializeTrack: async (track) => {
+    if (!track) return null
+    if (typeof track.id === 'number') return track.id
+    if (typeof track.db_id === 'number') return track.db_id
+
+    const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+    const { data } = await api.post('/tracks/import', {
+      source: track.source,
+      external_id: externalId,
+      title: track.title,
+      artist: track.artist,
+      album: track.album ?? null,
+      duration: track.duration || 0,
+      cover_url: track.cover_url ?? null,
+      stream_url: track.stream_url ?? null,
+    })
+    return data.id
+  },
+
   // Материализует текущий внешний трек в БД (для лайков/плейлистов/истории).
   // Возвращает числовой id локальной записи. Идемпотентно на бэке.
   materializeCurrentTrack: async () => {

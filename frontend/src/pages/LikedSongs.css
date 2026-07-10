@@ -110,8 +110,9 @@
 }
 
 .track-remove-cell {
-  width: 56px;
+  width: 96px;
   text-align: right;
+  white-space: nowrap;
 }
 
 .track-remove-btn {
