@@ -196,6 +196,37 @@ async def _entry_to_import(
     return payload, True
 
 
+async def _soundcloud_playlist_native(
+    request: Request, url: str
+) -> Optional[Tuple[Optional[str], Optional[str], List[ExternalTrackImport]]]:
+    """SoundCloud-плейлист через api-v2: полные метаданные треков и обложка.
+
+    Плоский yt-dlp extract_flat отдаёт только id/title (без артиста, обложек и
+    длительностей) — api-v2 даёт всё сразу. None → падать в общий yt-dlp путь.
+    """
+    try:
+        meta, sc_tracks = await soundcloud.resolve_playlist_url(request, url)
+    except Exception:  # noqa: BLE001
+        logger.exception("soundcloud api-v2 playlist resolve failed for %s", url)
+        return None
+    if meta is None or not sc_tracks:
+        return None
+    imports = [
+        ExternalTrackImport(
+            source=t.source,
+            external_id=t.external_id,
+            title=t.title,
+            artist=t.artist,
+            album=t.album,
+            duration=t.duration,
+            cover_url=t.cover_url,
+            stream_url=t.stream_url,
+        )
+        for t in sc_tracks[:_MAX_TRACKS]
+    ]
+    return meta.title, meta.cover_url, imports
+
+
 @router.post("/preview", response_model=ImportPreviewResponse)
 async def import_preview(
     payload: ImportRequest,
@@ -204,6 +235,30 @@ async def import_preview(
 ):
     """Разбирает ссылку и возвращает метаданные без материализации (для UI)."""
     source, kind = _detect(payload.url)
+
+    if source == "soundcloud" and kind == "playlist":
+        native = await _soundcloud_playlist_native(request, payload.url)
+        if native:
+            title, cover, imports = native
+            tracks = [
+                ImportPreviewTrack(
+                    title=i.title,
+                    artist=i.artist,
+                    duration=i.duration,
+                    cover_url=i.cover_url,
+                    source=source,
+                )
+                for i in imports
+            ]
+            return ImportPreviewResponse(
+                source=source,
+                kind=kind,
+                title=title,
+                cover_url=cover,
+                track_count=len(tracks),
+                tracks=tracks,
+            )
+
     title, cover, entries = await _extract_collection(payload.url, source, kind)
 
     tracks = [
@@ -236,29 +291,39 @@ async def import_collection(
 ):
     """Импортирует коллекцию/трек в новый плейлист пользователя."""
     source, kind = _detect(payload.url)
-    title, cover, entries = await _extract_collection(payload.url, source, kind)
-    if not entries:
-        raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
-
-    # Резолвим все треки конкурентно (с ограничением), сохраняя исходный порядок.
-    sem = asyncio.Semaphore(_CONCURRENCY)
-
-    async def resolve(entry: dict):
-        async with sem:
-            return await _entry_to_import(request, source, entry)
-
-    resolved = await asyncio.gather(*(resolve(e) for e in entries))
 
     imports: List[ExternalTrackImport] = []
     matched = 0
     skipped = 0
-    for imp, was_matched in resolved:
-        if imp is None:
-            skipped += 1  # нативно не резолвится или матч в ytmusic не нашёлся
-            continue
-        imports.append(imp)
-        if was_matched:
-            matched += 1
+    title = cover = None
+
+    native = None
+    if source == "soundcloud" and kind == "playlist":
+        native = await _soundcloud_playlist_native(request, payload.url)
+
+    if native:
+        title, cover, imports = native
+    else:
+        title, cover, entries = await _extract_collection(payload.url, source, kind)
+        if not entries:
+            raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
+
+        # Резолвим все треки конкурентно (с ограничением), сохраняя исходный порядок.
+        sem = asyncio.Semaphore(_CONCURRENCY)
+
+        async def resolve(entry: dict):
+            async with sem:
+                return await _entry_to_import(request, source, entry)
+
+        resolved = await asyncio.gather(*(resolve(e) for e in entries))
+
+        for imp, was_matched in resolved:
+            if imp is None:
+                skipped += 1  # нативно не резолвится или матч в ytmusic не нашёлся
+                continue
+            imports.append(imp)
+            if was_matched:
+                matched += 1
 
     if not imports:
         raise HTTPException(

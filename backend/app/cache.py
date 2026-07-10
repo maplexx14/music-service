@@ -1,3 +1,4 @@
+import asyncio
 import redis
 import json
 from typing import Optional, Any
@@ -28,6 +29,18 @@ def set_cache(key: str, value: Any, expire: int = 3600):
         redis_client.setex(key, expire, json.dumps(value))
     except Exception:
         pass
+
+
+# Async-обёртки для вызова из async def: redis-клиент синхронный, и прямой
+# вызов get/set_cache из корутины блокирует event loop на сетевом round-trip —
+# под нагрузкой это стопорит ВСЕ async-эндпоинты, а не только вызывающий.
+# Sync-эндпоинты (def) работают в threadpool — им обёртки не нужны.
+async def get_cache_async(key: str) -> Optional[Any]:
+    return await asyncio.to_thread(get_cache, key)
+
+
+async def set_cache_async(key: str, value: Any, expire: int = 3600):
+    await asyncio.to_thread(set_cache, key, value, expire)
 
 
 def delete_cache(key: str):

@@ -14,6 +14,10 @@ router = APIRouter()
 JAMENDO_API_URL = "https://api.jamendo.com/v3.0/tracks/"
 JAMENDO_TIMEOUT = 8.0
 
+# Общий клиент на модуль: новый AsyncClient на каждый запрос = свежий TCP+TLS
+# хендшейк к Jamendo под каждым поиском. Keep-alive пул переживает запросы.
+_client = httpx.AsyncClient(timeout=JAMENDO_TIMEOUT)
+
 
 def normalize_jamendo_track(track: dict) -> ExternalTrackResponse | None:
     external_id = str(track.get("id") or "")
@@ -73,9 +77,8 @@ async def search_external_tracks(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=JAMENDO_TIMEOUT) as client:
-            response = await client.get(JAMENDO_API_URL, params=params)
-            response.raise_for_status()
+        response = await _client.get(JAMENDO_API_URL, params=params)
+        response.raise_for_status()
     except httpx.HTTPError:
         logger.exception("Jamendo search failed")
         return []

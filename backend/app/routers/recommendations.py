@@ -1,13 +1,18 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, desc
 from typing import List
 from app.database import get_db
+from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User, user_track_plays, user_liked_tracks
 from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse
 from app.dependencies import get_current_active_user
 
 router = APIRouter()
+
+# Рекомендации пересчитывать на каждый запрос дорого (несколько запросов с
+# IN-списками и сортировками), а меняются они медленно — короткий кэш.
+_RECS_TTL = 300
 
 
 @router.get("/", response_model=RecommendationResponse)
@@ -16,6 +21,11 @@ def get_recommendations(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
+    cache_key = f"recs:{current_user.id}:{limit}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return RecommendationResponse(**cached)
+
     # Get user's liked tracks and frequently played tracks
     liked_track_ids = [track.id for track in current_user.liked_tracks]
     
@@ -56,15 +66,17 @@ def get_recommendations(
         ).order_by(desc(Track.play_count)).limit(limit - len(recommended_tracks)).all()
         recommended_tracks.extend(popular_tracks)
     
-    # Get popular playlists
-    popular_playlists = db.query(Playlist).filter(
+    # Get popular playlists (selectinload: ответ встраивает tracks — иначе N+1)
+    popular_playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(
         Playlist.is_public == True
     ).order_by(desc(Playlist.created_at)).limit(10).all()
     
-    return RecommendationResponse(
+    response = RecommendationResponse(
         tracks=[TrackResponse.model_validate(t) for t in recommended_tracks[:limit]],
         playlists=[PlaylistResponse.model_validate(p) for p in popular_playlists]
     )
+    set_cache(cache_key, response.model_dump(mode="json"), expire=_RECS_TTL)
+    return response
 
 
 @router.get("/tracks", response_model=List[TrackResponse])

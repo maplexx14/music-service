@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
 import api from '../services/api'
-import defaultCover from '../assets/default-cover.svg'
+import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -20,8 +20,11 @@ const RETRY_DELAY_MS = 900
 // иначе зависший probe держит трек в состоянии "буферизуется" бесконечно.
 const PROBE_TIMEOUT_MS = 6000
 // Ленивая подгрузка следующего трека: начинаем буферизовать его, когда до
-// конца текущего осталось <=15с ИЛИ проиграно >=85% — что наступит раньше.
-const PRELOAD_NEXT_REMAINING_SEC = 15
+// конца текущего осталось <=20с ИЛИ проиграно >=85% — что наступит раньше.
+// Окно по остатку масштабируется вниз для коротких треков (40% длительности),
+// чтобы они не начинали буферизацию сразу со старта.
+const PRELOAD_NEXT_REMAINING_SEC = 20
+const PRELOAD_NEXT_REMAINING_RATIO = 0.4
 const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
 
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
@@ -146,9 +149,13 @@ function Player() {
 
     const updateTime = () => {
       setCurrentTime(audio.currentTime)
+      const remainingWindow = Math.min(
+        PRELOAD_NEXT_REMAINING_SEC,
+        audio.duration * PRELOAD_NEXT_REMAINING_RATIO
+      )
       if (
         audio.duration &&
-        (audio.duration - audio.currentTime <= PRELOAD_NEXT_REMAINING_SEC ||
+        (audio.duration - audio.currentTime <= remainingWindow ||
           audio.currentTime / audio.duration >= PRELOAD_NEXT_PROGRESS_RATIO)
       ) {
         triggerNextPreload()

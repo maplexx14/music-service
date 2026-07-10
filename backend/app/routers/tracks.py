@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, Response, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -10,6 +10,7 @@ import aiofiles
 from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
+from app.cache import get_cache, set_cache
 from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from app.dependencies import get_current_active_user, get_current_admin_user
@@ -66,12 +67,27 @@ def get_tracks(
     artist: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    # Первая страница без фильтров — самый горячий запрос (главная у всех
+    # пользователей одна и та же) — короткий Redis-кэш.
+    cache_key = None
+    if not genre and not artist and skip == 0:
+        cache_key = f"tracks:popular:{limit}"
+        cached = get_cache(cache_key)
+        if cached is not None:
+            return [TrackResponse(**t) for t in cached]
+
     query = db.query(Track)
     if genre:
         query = query.filter(Track.genre == genre)
     if artist:
         query = query.filter(Track.artist.ilike(f"%{artist}%"))
     tracks = query.order_by(Track.play_count.desc()).offset(skip).limit(limit).all()
+    if cache_key:
+        set_cache(
+            cache_key,
+            [TrackResponse.model_validate(t).model_dump(mode="json") for t in tracks],
+            expire=120,
+        )
     return tracks
 
 
@@ -80,9 +96,9 @@ def get_track(track_id: int, db: Session = Depends(get_db)):
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    # Increment play count
-    track.play_count += 1
-    db.commit()
+    # Счётчик прослушиваний инкрементирует POST /{id}/play, а не чтение
+    # метаданных: запись + коммит на каждом GET брали row lock и
+    # сериализовали параллельных читателей популярного трека.
     return track
 
 
@@ -356,10 +372,23 @@ def unlike_track(
 
 @router.get("/me/liked", response_model=List[TrackResponse])
 def get_liked_tracks(
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=100),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    return current_user.liked_tracks
+    # Свежие лайки первыми; без limit возвращаем весь список (нужен playerStore).
+    query = (
+        db.query(Track)
+        .join(user_liked_tracks, user_liked_tracks.c.track_id == Track.id)
+        .filter(user_liked_tracks.c.user_id == current_user.id)
+        .order_by(desc(user_liked_tracks.c.liked_at))
+    )
+    response.headers["X-Total-Count"] = str(query.count())
+    if limit is not None:
+        query = query.offset(skip).limit(limit)
+    return query.all()
 
 
 @router.get("/me/history", response_model=List[TrackResponse])
@@ -388,7 +417,19 @@ def record_track_play(
     db: Session = Depends(get_db)
 ):
     """Record that a user played a track (for recommendations)"""
-    
+
+    # Глобальный счётчик популярности живёт здесь (раньше — на GET /{id}, т.е.
+    # write-on-read). Атомарный UPDATE без загрузки строки; 0 строк = трека нет,
+    # это заодно даёт честный 404 до upsert'а в user_track_plays.
+    updated = (
+        db.query(Track)
+        .filter(Track.id == track_id)
+        .update({Track.play_count: Track.play_count + 1}, synchronize_session=False)
+    )
+    if not updated:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Track not found")
+
     # Сразу собираем атомарный UPSERT
     stmt = pg_insert(user_track_plays).values(
         user_id=current_user.id,

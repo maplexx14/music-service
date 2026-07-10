@@ -45,6 +45,11 @@ def _headers() -> dict:
     return {"X-API-Key": SLSKD_API_KEY} if SLSKD_API_KEY else {}
 
 
+# Общий клиент к slskd: без него каждый поиск/стрим платит свежий TCP-хендшейк
+# (плюс сокет-чурн под нагрузкой). Заголовки передаются per-request.
+_slskd_client = httpx.AsyncClient(timeout=15.0)
+
+
 def _token_encode(username: str, filename: str, size: int) -> str:
     raw = f"{username}\n{filename}\n{size}".encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")
@@ -126,34 +131,37 @@ async def search_soulseek(
     base_url = str(request.base_url).rstrip("/")
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, headers=_headers()) as client:
-            create = await client.post(
-                f"{SLSKD_URL}/api/v0/searches",
-                json={"searchText": q},
-            )
-            create.raise_for_status()
-            search_id = create.json().get("id")
-            if not search_id:
-                logger.error("slskd search did not return an id: %s", create.text)
-                return []
+        create = await _slskd_client.post(
+            f"{SLSKD_URL}/api/v0/searches",
+            json={"searchText": q},
+            headers=_headers(),
+        )
+        create.raise_for_status()
+        search_id = create.json().get("id")
+        if not search_id:
+            logger.error("slskd search did not return an id: %s", create.text)
+            return []
 
-            # Собираем ответы пиров, пока поиск не завершится или не истечёт таймаут.
-            elapsed = 0.0
-            responses: List[dict] = []
-            while elapsed < SEARCH_TIMEOUT:
-                await asyncio.sleep(SEARCH_POLL_INTERVAL)
-                elapsed += SEARCH_POLL_INTERVAL
-                state = await client.get(f"{SLSKD_URL}/api/v0/searches/{search_id}")
-                state.raise_for_status()
-                payload = state.json()
-                if payload.get("responseCount", 0) > 0:
-                    resp = await client.get(
-                        f"{SLSKD_URL}/api/v0/searches/{search_id}/responses"
-                    )
-                    resp.raise_for_status()
-                    responses = resp.json()
-                if payload.get("isComplete") or payload.get("state") == "Completed":
-                    break
+        # Собираем ответы пиров, пока поиск не завершится или не истечёт таймаут.
+        elapsed = 0.0
+        responses: List[dict] = []
+        while elapsed < SEARCH_TIMEOUT:
+            await asyncio.sleep(SEARCH_POLL_INTERVAL)
+            elapsed += SEARCH_POLL_INTERVAL
+            state = await _slskd_client.get(
+                f"{SLSKD_URL}/api/v0/searches/{search_id}", headers=_headers()
+            )
+            state.raise_for_status()
+            payload = state.json()
+            if payload.get("responseCount", 0) > 0:
+                resp = await _slskd_client.get(
+                    f"{SLSKD_URL}/api/v0/searches/{search_id}/responses",
+                    headers=_headers(),
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+            if payload.get("isComplete") or payload.get("state") == "Completed":
+                break
     except httpx.HTTPError:
         logger.exception("Soulseek search failed")
         return []
@@ -205,6 +213,7 @@ async def _enqueue_download(client: httpx.AsyncClient, username: str, filename: 
         await client.post(
             f"{SLSKD_URL}/api/v0/transfers/downloads/{username}",
             json=[{"filename": filename, "size": size}],
+            headers=_headers(),
         )
     except httpx.HTTPError:
         # Если файл уже в очереди, slskd вернёт ошибку — это не критично.
@@ -214,7 +223,9 @@ async def _enqueue_download(client: httpx.AsyncClient, username: str, filename: 
 async def _transfer_finished(client: httpx.AsyncClient, username: str, filename: str) -> Optional[bool]:
     """True — завершён, False — упал/отменён, None — ещё идёт/неизвестно."""
     try:
-        resp = await client.get(f"{SLSKD_URL}/api/v0/transfers/downloads/{username}")
+        resp = await client.get(
+            f"{SLSKD_URL}/api/v0/transfers/downloads/{username}", headers=_headers()
+        )
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPError:
@@ -249,7 +260,9 @@ async def stream_soulseek(token: str):
     ext = os.path.splitext(_basename(filename))[1].lower()
     media_type = MEDIA_TYPES.get(ext, "application/octet-stream")
 
-    client = httpx.AsyncClient(timeout=15.0, headers=_headers())
+    # Общий клиент (см. _slskd_client): не закрываем его в finally —
+    # он живёт на модуль и переиспользует соединения между стримами.
+    client = _slskd_client
     await _enqueue_download(client, username, filename, size)
 
     async def streamer():
@@ -295,7 +308,7 @@ async def stream_soulseek(token: str):
                     break
                 await asyncio.sleep(STREAM_POLL_INTERVAL)
         finally:
-            await client.aclose()
+            pass  # общий _slskd_client не закрываем
 
     headers = {
         "Content-Length": str(size),

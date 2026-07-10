@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, Request
 
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
-from app.schemas import ExternalTrackResponse
+from app.schemas import ExternalPlaylistResponse, ExternalTrackResponse
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +68,16 @@ async def search_external(
     # Сортировка: сначала быстрые ytmusic (мгновенный старт), lossless — следом.
     merged.sort(key=lambda t: _SOURCE_RANK.get(t.source, 0))
     return merged[:limit]
+
+
+@router.get("/external/playlists", response_model=List[ExternalPlaylistResponse])
+async def search_external_playlists(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=30),
+):
+    """Поиск плейлистов во внешних источниках (пока только SoundCloud)."""
+    try:
+        return await soundcloud.search_soundcloud_playlists(q, limit)
+    except Exception:  # noqa: BLE001
+        logger.exception("external playlist search failed")
+        return []

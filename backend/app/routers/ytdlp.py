@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.cache import get_cache, set_cache
+from app.cache import get_cache_async, set_cache_async
 from app.schemas import ExternalTrackResponse
 
 logger = logging.getLogger(__name__)
@@ -246,7 +246,7 @@ _UNAVAILABLE_MARKERS = (
     "who has blocked it",
     "removed",
     "no longer available",
-    "not available",
+    "not available in your",
     "sign in to confirm",
     "content isn't available",
     "account associated with this video has been terminated",
@@ -309,6 +309,7 @@ def _warmup_ydl_blocking() -> None:
                 "skip_download": True,
                 "socket_timeout": _SOCKET_TIMEOUT,
                 "format": "bestaudio/best",
+                "ignore_no_formats_error": True,
                 "extractor_args": {"youtube": {"player_client": primary}},
             },
         )
@@ -344,6 +345,13 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
             # всегда), а конкретный URL всё равно выбирает _pick_audio_format
             # из info['formats'].
             "format": "bestaudio/best",
+            # Подстраховка к предыдущему: на некоторых клиентах (PO-token и
+            # т.п.) даже 'bestaudio/best' не матчится, и extract_info кидает
+            # "Requested format is not available", хотя другой клиент отдал бы
+            # формат. С этим флагом yt-dlp не кидает ошибку селектора вовсе —
+            # возвращает info как есть, а непригодность форматов решает
+            # _pick_audio_format (нет — просто пробуем следующий клиент).
+            "ignore_no_formats_error": True,
             "extractor_args": {"youtube": {"player_client": clients}},
         },
     )
@@ -399,6 +407,13 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
                     info = result_info
                     success = True
                     break
+                if result_info:
+                    # Клиент ответил, но пригодного формата нет (обычно
+                    # PO-token: URL-ы форматов отсутствуют) — это проблема
+                    # конкретного клиента, а не ролика. Считаем временной,
+                    # иначе трек попал бы в негативный кэш «недоступен» на
+                    # 10 минут и «не грузился вообще».
+                    transient = True
                 saw_transient = saw_transient or transient
             if success:
                 break
@@ -477,7 +492,7 @@ async def _resolve_cached(
     для заведомо свежей ссылки и не терять на нём время при холодном старте.
     """
     key = f"ytdlp:resolve:v2:{video_id}"
-    cached = None if force else get_cache(key)
+    cached = None if force else await get_cache_async(key)
     if cached:
         if cached.get("transient"):
             raise TransientResolveError(video_id)
@@ -511,13 +526,13 @@ async def _resolve_and_cache(
         # Временный сбой — короткий негативный кэш отдельным маркером, чтобы
         # скорый повтор от того же клиента не долбил yt-dlp, но чтобы вызывающий
         # код (и в итоге HTTP-статус) не путал это с «трек реально недоступен».
-        set_cache(key, {"transient": True}, expire=_TRANSIENT_TTL)
+        await set_cache_async(key, {"transient": True}, expire=_TRANSIENT_TTL)
         raise
     except Exception as exc:  # noqa: BLE001 — TrackUnavailable и прочее
-        set_cache(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
+        await set_cache_async(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
         raise TrackUnavailable(video_id) from exc
 
-    set_cache(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
+    await set_cache_async(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
     return url, ext, total, True
 
 
@@ -544,9 +559,136 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 def _cached_file(video_id: str) -> Optional[str]:
     """Путь к готовому кэш-файлу трека (любое расширение) или None."""
     for path in glob.glob(os.path.join(CACHE_DIR, f"{video_id}.*")):
-        if not path.endswith(".part") and os.path.getsize(path) > 0:
+        if (
+            not path.endswith(".part")
+            and not path.endswith(".warm")
+            and os.path.getsize(path) > 0
+        ):
             return path
     return None
+
+
+def _warm_file(cache_id: str, ext: str) -> str:
+    """Путь к warm-файлу (первые байты трека, скачанные при префетче)."""
+    return os.path.join(CACHE_DIR, f"{cache_id}{ext}.warm")
+
+
+# Сколько первых байт трека скачиваем при префетче. 2 MiB — хватает на
+# ~1 минуту звука при 256kbps: старт воспроизведения идёт целиком с диска,
+# пока живой proxy догоняет хвост.
+_WARM_BYTES = 2 * 1024 * 1024
+
+# Ограничитель конкуренции резолва ТОЛЬКО для фоновых прогревов: фронт может
+# прогреть сразу несколько треков очереди, и без лимита это означало бы залп
+# параллельных yt-dlp extract_info в сторону YouTube (риск 429). Реальные
+# /stream-запросы семафор не проходят — воспроизведение не троттлится.
+_PREFETCH_SEM = asyncio.Semaphore(2)
+# Скачивание первых байт — просто GET к CDN, узкое место не оно: параллелизм
+# можно держать заметно выше, чем у yt-dlp-резолвов.
+_WARM_SEM = asyncio.Semaphore(8)
+
+# Фоновая очередь прогрева: эндпоинт /prefetch отвечает сразу, работа идёт в
+# asyncio-задаче. Прогрев — best-effort, поэтому при переполнении очереди
+# новые заявки молча отбрасываются (играть трек это не мешает, а «протухший»
+# прогрев, доехавший через минуты, всё равно бесполезен). _prefetch_pending
+# заодно дедуплицирует заявки на один и тот же трек. Сильные ссылки на задачи
+# держим в _prefetch_tasks, иначе asyncio может собрать их до завершения.
+_PREFETCH_QUEUE_LIMIT = 64
+_prefetch_pending: set[str] = set()
+_prefetch_tasks: set[asyncio.Task] = set()
+
+
+async def _prefetch_job(cache_id: str, resolver, cache_key: str, ttl: int) -> None:
+    try:
+        async with _PREFETCH_SEM:
+            url, ext, total, _ = await resolver(False)
+        async with _WARM_SEM:
+            warmed_total = await _warm_first_chunk(cache_id, url, ext)
+        if warmed_total is not None and total is None:
+            # Content-Range warm-запроса дал точный размер — дописываем его в
+            # кэш резолва, чтобы стрим мог пропустить probe (см. движок).
+            await set_cache_async(
+                cache_key, {"url": url, "ext": ext, "total": warmed_total}, expire=ttl
+            )
+    except (TrackUnavailable, TransientResolveError):
+        pass  # негативный результат уже закэширован резолвером
+    except Exception:  # noqa: BLE001 — прогрев не должен шуметь стектрейсами
+        logger.warning("prefetch job failed for %s", cache_id, exc_info=True)
+    finally:
+        _prefetch_pending.discard(cache_id)
+
+
+def schedule_prefetch(cache_id: str, resolver, cache_key: str, ttl: int) -> str:
+    """Ставит прогрев трека в фоновую очередь; возвращает статус для ответа.
+
+    Не ждёт ни резолва, ни скачивания — вызывающий эндпоинт отвечает мгновенно
+    и не держит HTTP-соединение открытым, пока очередь прогрева занята.
+    """
+    if _cached_file(cache_id):
+        return "cached"
+    if cache_id in _prefetch_pending:
+        return "queued"
+    if len(_prefetch_pending) >= _PREFETCH_QUEUE_LIMIT:
+        return "dropped"
+    _prefetch_pending.add(cache_id)
+    task = asyncio.create_task(_prefetch_job(cache_id, resolver, cache_key, ttl))
+    _prefetch_tasks.add(task)
+    task.add_done_callback(_prefetch_tasks.discard)
+    return "queued"
+
+
+async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
+    """Скачивает первые _WARM_BYTES трека в кэш-файл ``{cache_id}{ext}.warm``.
+
+    Вызывается из префетча best-effort: тогда первый play отдаёт начало трека
+    мгновенно с диска (и без валидирующего probe — URL проверен здесь), а
+    живой proxy подхватывает с позиции warm-файла. Возвращает полный размер
+    файла из Content-Range (авторитетный, годится для Content-Length) или
+    None, если прогрев не удался/не нужен.
+    """
+    warm_path = _warm_file(cache_id, ext)
+    if os.path.exists(warm_path) or _cached_file(cache_id):
+        return None
+    total: Optional[int] = None
+    fd, tmp_path = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part")
+    ok = False
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=30.0)) as client:
+            async with client.stream(
+                "GET", url, headers={"Range": f"bytes=0-{_WARM_BYTES - 1}"}
+            ) as resp:
+                # Только 206: сервер, игнорирующий Range (200), отдал бы весь
+                # файл — не хотим качать его целиком на префетче.
+                if resp.status_code != 206:
+                    logger.info(
+                        "first-chunk warm skipped for %s: upstream %s",
+                        cache_id, resp.status_code,
+                    )
+                    return None
+                cr = resp.headers.get("content-range")
+                if cr and "/" in cr:
+                    tail = cr.rsplit("/", 1)[-1].strip()
+                    if tail.isdigit():
+                        total = int(tail)
+                with os.fdopen(fd, "wb") as fh:
+                    fd = None
+                    async for chunk in resp.aiter_bytes(65536):
+                        fh.write(chunk)
+        os.replace(tmp_path, warm_path)
+        ok = True
+        _enforce_cache_limit()
+        return total
+    except (httpx.HTTPError, OSError) as exc:
+        logger.info("first-chunk warm failed for %s: %s", cache_id, exc)
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if not ok and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def _enforce_cache_limit() -> None:
@@ -698,8 +840,19 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     #
     # Если URL только что получен от yt-dlp (fresh=True), он заведомо рабочий —
     # probe для него лишний RTT на холодном старте, пропускаем при известном
-    # точном размере. Probe нужен только для URL, отданного из Redis-кэша.
-    if fresh and total is not None:
+    # точном размере. То же для прогретого трека: warm-файл скачан по этому же
+    # URL при префетче (URL уже проверен), а первые байты отдаём с диска —
+    # probe нужен только для непрогретого URL из Redis-кэша.
+    def _warm_size(path: str) -> int:
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    warm_path = _warm_file(cache_id, ext)
+    early_start, _ = _parse_range(request.headers.get("range"), None)
+    warm_size = _warm_size(warm_path) if early_start == 0 else 0
+    if (fresh or warm_size > 0) and total is not None:
         status, probed = 200, None
     else:
         status, probed = await _probe(client, direct_url)
@@ -723,6 +876,9 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
             logger.exception("re-resolve failed: %s", cache_id)
             raise HTTPException(status_code=502, detail="Не удалось получить аудио")
         media_type = MEDIA_TYPES.get(ext, "audio/mp4")
+        # После пере-резолва расширение (и warm-путь) могли смениться.
+        warm_path = _warm_file(cache_id, ext)
+        warm_size = _warm_size(warm_path) if early_start == 0 else 0
         if total is not None:
             status, probed = 200, None
         else:
@@ -762,6 +918,26 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                 tmp = None
         try:
             pos = req_start
+            # Прогретое начало трека (см. _warm_first_chunk) отдаём с диска —
+            # первые байты уходят клиенту мгновенно, живой proxy подхватывает
+            # с позиции warm-файла. Только для запросов с начала файла (pos=0),
+            # остальные Range идут прежним чистым proxy-путём.
+            if pos == 0 and warm_size > 0:
+                try:
+                    with open(warm_path, "rb") as wf:
+                        while req_end is None or pos <= req_end:
+                            chunk = wf.read(_FILE_CHUNK)
+                            if not chunk:
+                                break
+                            if req_end is not None and pos + len(chunk) > req_end + 1:
+                                chunk = chunk[: req_end + 1 - pos]
+                            if tmp is not None:
+                                tmp.write(chunk)
+                            pos += len(chunk)
+                            yield chunk
+                except OSError:
+                    # Warm-файл не дочитался — продолжаем живым proxy с pos.
+                    pass
             # Если размер неизвестен — качаем до конца (end=None) одним потоком
             # с ретраями по мере продвижения.
             while req_end is None or pos <= req_end:
@@ -806,6 +982,11 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                 tmp = None
                 os.replace(tmp_path, cache_final)
                 committed = True
+                # Полная копия на диске — warm-огрызок больше не нужен.
+                try:
+                    os.remove(warm_path)
+                except OSError:
+                    pass
                 _enforce_cache_limit()
         finally:
             await client.aclose()
@@ -848,18 +1029,17 @@ async def stream_ytmusic(video_id: str, request: Request):
 
 @router.post("/prefetch/{video_id}")
 async def prefetch_ytmusic(video_id: str):
-    """Заранее резолвит URL следующего трека (кладёт в Redis), чтобы старт
-    воспроизведения был мгновенным. Фронт зовёт это для следующего в очереди."""
+    """Ставит трек в фоновую очередь прогрева (резолв в Redis + первые байты
+    на диск, см. schedule_prefetch) и отвечает сразу. Фронт зовёт это для
+    кликнутого и следующих в очереди треков."""
     if _ytmusic is None:
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
-    if _cached_file(video_id):
-        return {"status": "cached"}
-    try:
-        await _resolve_cached(video_id)
-    except TrackUnavailable:
-        return {"status": "unavailable"}
-    except Exception:  # noqa: BLE001
-        return {"status": "error"}
-    return {"status": "ready"}
+    status = schedule_prefetch(
+        video_id,
+        lambda force=False: _resolve_cached(video_id, force=force),
+        f"ytdlp:resolve:v2:{video_id}",
+        _RESOLVE_TTL,
+    )
+    return {"status": status}

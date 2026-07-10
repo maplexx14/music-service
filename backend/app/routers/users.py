@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
+from app.cache import get_cache, set_cache
 from app.models import User
 from app.schemas import UserResponse
 from app.dependencies import get_current_active_user, get_current_admin_user
@@ -19,8 +20,13 @@ def get_user_count(
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
+    cached = get_cache("users:count")
+    if cached is not None:
+        return cached
     total = db.query(User).count()
-    return {"total": total}
+    result = {"total": total}
+    set_cache("users:count", result, expire=300)
+    return result
 
 
 @router.get("/{user_id}", response_model=UserResponse)

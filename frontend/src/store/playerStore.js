@@ -199,7 +199,10 @@ const usePlayerStore = create((set, get) => ({
     // Кликнутый трек прогреваем немедленно — не дожидаясь, пока до него
     // дойдёт очередь через prefetchNext(). Дедуп на бэке (single-flight в
     // _resolve_cached) не даёт этому конкурировать с реальным <audio>-GET.
-    get().prefetchTracks([track], 1)
+    // Заодно греем 2 следующих по очереди (с учётом шаффла) — переключение
+    // вперёд стартует мгновенно даже сразу после клика.
+    const upcoming = [track, get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean)
+    get().prefetchTracks(upcoming, upcoming.length)
   },
 
   // --- Персональный поток («Моя волна») ---
@@ -278,7 +281,10 @@ const usePlayerStore = create((set, get) => ({
       source,
       flowActive: source === 'flow',
     })
-    get().prefetchTracks([tracks[actualIndex]], 1)
+    get().prefetchTracks(
+      [tracks[actualIndex], get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean),
+      3
+    )
   },
 
   toggleRepeatOne: () => {

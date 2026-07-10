@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
-from app.cache import get_cache, set_cache
+from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
@@ -244,7 +244,7 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
     """Радио-пул от сида с кэшем в Redis (включая негативный — не у каждого
     videoId есть радио, и не гоняем неудачные сиды повторно)."""
     key = f"flow:radio:{seed_video_id}"
-    cached = get_cache(key)
+    cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
 
@@ -252,7 +252,7 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
         raw = await asyncio.to_thread(_fetch_radio, seed_video_id)
     except Exception:  # noqa: BLE001
         logger.warning("flow radio failed for seed %s", seed_video_id)
-        set_cache(key, [], expire=600)  # негативный кэш — сид без радио
+        await set_cache_async(key, [], expire=600)  # негативный кэш — сид без радио
         return []
 
     pool = []
@@ -262,7 +262,7 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
         if t:
             pool.append(t)
 
-    set_cache(key, [t.model_dump() for t in pool], expire=_RADIO_TTL)
+    await set_cache_async(key, [t.model_dump() for t in pool], expire=_RADIO_TTL)
     return pool
 
 
@@ -275,7 +275,7 @@ async def _soundcloud_pool(
     артиста. Кэшируем на артиста, чтобы не дёргать yt-dlp на каждую подгрузку.
     """
     key = f"flow:sc:{artist.lower()}"
-    cached = get_cache(key)
+    cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
 
@@ -285,10 +285,10 @@ async def _soundcloud_pool(
         )
     except Exception:  # noqa: BLE001
         logger.warning("flow soundcloud failed for artist %s", artist)
-        set_cache(key, [], expire=600)
+        await set_cache_async(key, [], expire=600)
         return []
 
-    set_cache(key, [t.model_dump() for t in pool], expire=_SC_EXPLORE_TTL)
+    await set_cache_async(key, [t.model_dump() for t in pool], expire=_SC_EXPLORE_TTL)
     return pool
 
 

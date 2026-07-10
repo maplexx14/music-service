@@ -308,3 +308,8 @@
     line-height: 1;
   }
 }
+
+.playlist-item.importing {
+  opacity: 0.6;
+  pointer-events: none;
+}

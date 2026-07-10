@@ -4,13 +4,17 @@ import { Play, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import { toast } from '../store/toastStore'
-import defaultCover from '../assets/default-cover.svg'
+import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './LikedSongs.css'
 
+const PAGE_SIZE = 20
+
 function LikedSongs() {
   const [tracks, setTracks] = useState([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [removingIds, setRemovingIds] = useState([])
   const { playPlaylist, removeLike } = usePlayerStore()
 
@@ -20,12 +24,36 @@ function LikedSongs() {
 
   const fetchLikedTracks = async () => {
     try {
-      const response = await api.get('/tracks/me/liked')
+      const response = await api.get('/tracks/me/liked', {
+        params: { skip: 0, limit: PAGE_SIZE },
+      })
       setTracks(response.data)
+      setTotal(Number(response.headers['x-total-count']) || response.data.length)
     } catch (error) {
       console.error('Error fetching liked tracks:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleLoadMore = async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    try {
+      const response = await api.get('/tracks/me/liked', {
+        params: { skip: tracks.length, limit: PAGE_SIZE },
+      })
+      setTotal(Number(response.headers['x-total-count']) || total)
+      setTracks((prev) => {
+        // Защита от дублей, если список изменился между запросами.
+        const known = new Set(prev.map((t) => t.id))
+        return [...prev, ...response.data.filter((t) => !known.has(t.id))]
+      })
+    } catch (error) {
+      console.error('Error loading more liked tracks:', error)
+      toast.error('Не удалось загрузить треки')
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -47,11 +75,13 @@ function LikedSongs() {
     const previous = tracks
     // Оптимистично убираем из списка; при ошибке возвращаем.
     setTracks((prev) => prev.filter((t) => t.id !== track.id))
+    setTotal((prev) => Math.max(0, prev - 1))
     try {
       await removeLike(track.id)
     } catch (error) {
       console.error('Error removing liked track:', error)
       setTracks(previous)
+      setTotal((prev) => prev + 1)
       toast.error('Не удалось убрать трек из понравившихся')
     } finally {
       setRemovingIds((prev) => prev.filter((id) => id !== track.id))
@@ -76,7 +106,7 @@ function LikedSongs() {
           <div className="liked-type">Плейлист</div>
           <h1 className="liked-title">Понравившиеся</h1>
           <div className="liked-meta">
-            <span>{tracks.length} треков</span>
+            <span>{total} треков</span>
           </div>
           <div className="liked-actions">
             <button className="play-button-large" onClick={handlePlay}>
@@ -89,7 +119,8 @@ function LikedSongs() {
 
       <div className="liked-tracks">
         {tracks.length > 0 ? (
-          <table className="tracks-table">
+          <>
+            <table className="tracks-table">
             <thead>
               <tr>
                 <th>#</th>
@@ -139,6 +170,19 @@ function LikedSongs() {
               ))}
             </tbody>
           </table>
+            {tracks.length < total && (
+              <div className="load-more-wrapper">
+                <button
+                  type="button"
+                  className="load-more-btn"
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? 'Загрузка...' : 'Показать ещё'}
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <div className="empty-liked">
             <p>У вас пока нет понравившихся треков</p>

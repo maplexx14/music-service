@@ -7,15 +7,19 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.cache import get_cache, set_cache
+from app.cache import get_cache_async, set_cache_async
 from app.routers.ytdlp import (
     TrackUnavailable,
-    _cached_file,
     cached_ydl,
     clean_title,
+    schedule_prefetch,
     stream_cached_audio,
 )
-from app.schemas import ExternalTrackResponse
+from app.schemas import (
+    ExternalPlaylistDetail,
+    ExternalPlaylistResponse,
+    ExternalTrackResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +195,9 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
             # может не смэтчиться и упасть с "Requested format is not
             # available" ещё до того, как _pick_progressive выберет формат.
             "format": "bestaudio/best",
+            # И подстраховка: даже если селектор не смэтчился, не кидаем
+            # ошибку — формат всё равно выбирает _pick_progressive.
+            "ignore_no_formats_error": True,
         },
     )
     try:
@@ -215,7 +222,7 @@ async def _resolve_cached(
     Четвёртый элемент — ``fresh`` (см. аналогичное поле в ytdlp._resolve_cached).
     """
     key = f"soundcloud:resolve:{track_id}"
-    cached = None if force else get_cache(key)
+    cached = None if force else await get_cache_async(key)
     if cached:
         if cached.get("unavailable"):
             raise TrackUnavailable(track_id)
@@ -225,10 +232,10 @@ async def _resolve_cached(
     try:
         url, ext, total = await asyncio.to_thread(_resolve_blocking, permalink)
     except Exception as exc:  # noqa: BLE001
-        set_cache(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
+        await set_cache_async(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
         raise TrackUnavailable(track_id) from exc
 
-    set_cache(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
+    await set_cache_async(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
     return url, ext, total, True
 
 
@@ -239,6 +246,203 @@ async def search_endpoint(
     limit: int = Query(20, ge=1, le=50),
 ):
     return await search_soundcloud(request, q, limit)
+
+
+# ---------------------------------------------------------------------------
+# Поиск плейлистов (sets). yt-dlp'шный scsearch ищет только треки, поэтому
+# ходим в api-v2 напрямую. client_id добываем так же, как yt-dlp: скрейпим
+# скрипты с главной soundcloud.com; храним в Redis, при 401/403 обновляем.
+# ---------------------------------------------------------------------------
+
+_CLIENT_ID_KEY = "soundcloud:client_id"
+_CLIENT_ID_TTL = 24 * 3600
+_API_V2 = "https://api-v2.soundcloud.com"
+
+
+async def _scrape_client_id(client: "httpx.AsyncClient") -> Optional[str]:
+    try:
+        page = (await client.get("https://soundcloud.com/")).text
+        script_urls = re.findall(r'<script[^>]+src="([^"]+)"', page)
+        # client_id живёт в одном из последних бандлов — идём с конца.
+        for src in reversed(script_urls):
+            if not src.startswith("https://"):
+                continue
+            js = (await client.get(src)).text
+            match = re.search(r'client_id\s*:\s*"([0-9a-zA-Z]{32})"', js)
+            if match:
+                return match.group(1)
+    except Exception:  # noqa: BLE001 — сеть/разметка поменялась
+        logger.exception("SoundCloud client_id scrape failed")
+    return None
+
+
+async def _api_get(path: str, params: dict) -> Optional[dict | list]:
+    """GET к api-v2 с client_id из Redis; при 401/403 скрейпит новый и повторяет."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        client_id = await get_cache_async(_CLIENT_ID_KEY)
+        for attempt in range(2):
+            if not client_id:
+                client_id = await _scrape_client_id(client)
+                if not client_id:
+                    return None
+                await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
+            try:
+                resp = await client.get(
+                    f"{_API_V2}{path}", params={**params, "client_id": client_id}
+                )
+            except httpx.HTTPError:
+                logger.exception("SoundCloud api-v2 request failed: %s", path)
+                return None
+            if resp.status_code in (401, 403) and attempt == 0:
+                client_id = None  # протух — скрейпим заново и повторяем
+                continue
+            if resp.status_code != 200:
+                logger.warning("SoundCloud api-v2 %s: HTTP %s", path, resp.status_code)
+                return None
+            return resp.json()
+    return None
+
+
+def _upscale_artwork(url: Optional[str]) -> Optional[str]:
+    # api-v2 отдаёт превью 100x100 ("-large") — просим полноразмерную.
+    if url:
+        return url.replace("-large.", "-t500x500.")
+    return url
+
+
+def _normalize_playlist(item: dict) -> Optional[ExternalPlaylistResponse]:
+    pl_id = item.get("id")
+    permalink = item.get("permalink_url")
+    if not pl_id or not permalink or "soundcloud.com/" not in permalink:
+        return None
+    user = item.get("user") or {}
+    # artwork_url плейлиста часто пустой — берём обложку первого трека.
+    artwork = item.get("artwork_url")
+    if not artwork:
+        for t in item.get("tracks") or []:
+            if t.get("artwork_url"):
+                artwork = t["artwork_url"]
+                break
+    return ExternalPlaylistResponse(
+        id=f"soundcloud:playlist:{pl_id}",
+        source="soundcloud",
+        external_id=str(pl_id),
+        title=item.get("title") or "Unknown",
+        owner=user.get("username"),
+        cover_url=_upscale_artwork(artwork),
+        permalink_url=permalink,
+        track_count=int(item.get("track_count") or 0),
+    )
+
+
+def _track_from_api(request: Request, item: dict) -> Optional[ExternalTrackResponse]:
+    """Полный объект трека api-v2 → играбельный ExternalTrackResponse."""
+    track_id = item.get("id")
+    permalink = item.get("permalink_url")
+    if not track_id or not permalink or "soundcloud.com/" not in permalink:
+        return None
+    user = item.get("user") or {}
+    title = item.get("title") or "Unknown"
+    artist = user.get("username") or "Unknown Artist"
+    # Частый паттерн «Артист - Название» в title — раскладываем.
+    if " - " in title and (not user.get("username") or artist == title.partition(" - ")[0]):
+        maybe_artist, _, rest = title.partition(" - ")
+        if rest.strip():
+            artist, title = maybe_artist.strip(), rest.strip()
+
+    base_url = str(request.base_url).rstrip("/")
+    token = _encode_token(str(track_id), permalink)
+    return ExternalTrackResponse(
+        id=f"soundcloud:{track_id}",
+        source="soundcloud",
+        external_id=str(track_id),
+        title=clean_title(title),
+        artist=artist,
+        album=None,
+        duration=int((item.get("duration") or 0) / 1000),
+        cover_url=_upscale_artwork(item.get("artwork_url") or user.get("avatar_url")),
+        stream_url=f"{base_url}/api/soundcloud/stream/{token}",
+        download_url=None,
+        download_allowed=False,
+    )
+
+
+async def search_soundcloud_playlists(q: str, limit: int = 10) -> List[ExternalPlaylistResponse]:
+    """Поиск плейлистов (sets) в SoundCloud через api-v2."""
+    data = await _api_get("/search/playlists", {"q": q, "limit": limit})
+    items = (data or {}).get("collection") or []
+    results = []
+    for item in items:
+        pl = _normalize_playlist(item)
+        if pl:
+            results.append(pl)
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def get_playlist_tracks(
+    request: Request, playlist_id: str
+) -> tuple[Optional[ExternalPlaylistResponse], List[ExternalTrackResponse]]:
+    """Плейлист + полные метаданные всех его треков.
+
+    api-v2 в объекте плейлиста отдаёт полными только первые ~5 треков,
+    остальные — заглушки {id}. Дотягиваем их батчами через /tracks?ids=.
+    """
+    data = await _api_get(f"/playlists/{playlist_id}", {})
+    if not data:
+        return None, []
+    meta = _normalize_playlist(data)
+
+    raw_tracks = data.get("tracks") or []
+    full = {t["id"]: t for t in raw_tracks if t.get("permalink_url")}
+    missing = [t["id"] for t in raw_tracks if not t.get("permalink_url") and t.get("id")]
+    for i in range(0, len(missing), 50):
+        batch = missing[i : i + 50]
+        fetched = await _api_get("/tracks", {"ids": ",".join(map(str, batch))})
+        for t in fetched or []:
+            full[t["id"]] = t
+
+    tracks: List[ExternalTrackResponse] = []
+    for t in raw_tracks:  # исходный порядок плейлиста
+        item = full.get(t.get("id"))
+        if not item:
+            continue
+        track = _track_from_api(request, item)
+        if track:
+            tracks.append(track)
+    return meta, tracks
+
+
+async def resolve_playlist_url(
+    request: Request, url: str
+) -> tuple[Optional[ExternalPlaylistResponse], List[ExternalTrackResponse]]:
+    """permalink плейлиста → (метаданные, треки). Для импортера."""
+    data = await _api_get("/resolve", {"url": url})
+    pl_id = (data or {}).get("id") if isinstance(data, dict) else None
+    if not pl_id or (data or {}).get("kind") != "playlist":
+        return None, []
+    return await get_playlist_tracks(request, str(pl_id))
+
+
+@router.get("/search/playlists", response_model=List[ExternalPlaylistResponse])
+async def search_playlists_endpoint(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=30),
+):
+    return await search_soundcloud_playlists(q, limit)
+
+
+@router.get("/playlists/{playlist_id}", response_model=ExternalPlaylistDetail)
+async def playlist_detail_endpoint(playlist_id: str, request: Request):
+    if not playlist_id.isdigit():
+        raise HTTPException(status_code=400, detail="Некорректный id плейлиста")
+    meta, tracks = await get_playlist_tracks(request, playlist_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Плейлист не найден")
+    return ExternalPlaylistDetail(playlist=meta, tracks=tracks)
 
 
 @router.get("/stream/{token}")
@@ -253,14 +457,13 @@ async def stream_soundcloud(token: str, request: Request):
 
 @router.post("/prefetch/{token}")
 async def prefetch_soundcloud(token: str):
-    """Заранее резолвит URL следующего трека (кладёт в Redis)."""
+    """Ставит трек в фоновую очередь прогрева (резолв в Redis + первые байты
+    на диск, см. ytdlp.schedule_prefetch) и отвечает сразу."""
     track_id, permalink = _decode_token(token)
-    if _cached_file(f"sc{track_id}"):
-        return {"status": "cached"}
-    try:
-        await _resolve_cached(track_id, permalink)
-    except TrackUnavailable:
-        return {"status": "unavailable"}
-    except Exception:  # noqa: BLE001
-        return {"status": "error"}
-    return {"status": "ready"}
+    status = schedule_prefetch(
+        f"sc{track_id}",
+        lambda force=False: _resolve_cached(track_id, permalink, force=force),
+        f"soundcloud:resolve:{track_id}",
+        _RESOLVE_TTL,
+    )
+    return {"status": status}

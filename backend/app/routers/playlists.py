@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from typing import List
 import os
 import uuid
@@ -24,8 +24,10 @@ def get_playlists(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    # Get user's playlists and public playlists
-    playlists = db.query(Playlist).filter(
+    # Get user's playlists and public playlists.
+    # selectinload: PlaylistResponse встраивает tracks, без явной подгрузки
+    # ленивый relationship даёт N+1 (по запросу на каждый плейлист списка).
+    playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(
         (Playlist.owner_id == current_user.id) | (Playlist.is_public == True)
     ).offset(skip).limit(limit).all()
     return playlists
@@ -36,7 +38,12 @@ def get_my_playlists(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    playlists = db.query(Playlist).filter(Playlist.owner_id == current_user.id).all()
+    playlists = (
+        db.query(Playlist)
+        .options(selectinload(Playlist.tracks))
+        .filter(Playlist.owner_id == current_user.id)
+        .all()
+    )
     return playlists
 
 

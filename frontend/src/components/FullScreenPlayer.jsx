@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
-import defaultCover from '../assets/default-cover.svg'
+import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import './FullScreenPlayer.css'
 

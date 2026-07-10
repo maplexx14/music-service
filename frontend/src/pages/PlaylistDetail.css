@@ -199,3 +199,19 @@
   padding: 128px 32px;
   color: #b3b3b3;
 }
+
+/* Вторичная кнопка в шапке (напр. «Добавить в медиатеку» у внешнего плейлиста). */
+.play-button-large.secondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: inherit;
+}
+
+.play-button-large.secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.play-button-large.secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

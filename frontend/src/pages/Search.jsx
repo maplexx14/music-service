@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
-import defaultCover from '../assets/default-cover.svg'
+import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import './Search.css'
 
@@ -19,9 +20,11 @@ function sourceMeta(source) {
 }
 
 function Search() {
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
   const [externalTracks, setExternalTracks] = useState([])
+  const [externalPlaylists, setExternalPlaylists] = useState([])
   const [loading, setLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
 
@@ -34,6 +37,7 @@ function Search() {
     } else {
       setResults({ tracks: [], playlists: [], users: [] })
       setExternalTracks([])
+      setExternalPlaylists([])
     }
   }, [query])
 
@@ -41,12 +45,16 @@ function Search() {
     setLoading(true)
     setSearchError('')
     try {
-      const [localResult, externalResult] = await Promise.allSettled([
+      const [localResult, externalResult, externalPlaylistsResult] = await Promise.allSettled([
         api.get('/search', {
           params: { q: query, limit: 20 },
         }),
         api.get('/search/external', {
           params: { q: query, limit: 30 },
+          skipErrorToast: true,
+        }),
+        api.get('/search/external/playlists', {
+          params: { q: query, limit: 10 },
           skipErrorToast: true,
         }),
       ])
@@ -66,10 +74,17 @@ function Search() {
         console.error('External search error:', externalResult.reason)
         setExternalTracks([])
       }
+      if (externalPlaylistsResult.status === 'fulfilled') {
+        setExternalPlaylists(externalPlaylistsResult.value.data)
+      } else {
+        console.error('External playlist search error:', externalPlaylistsResult.reason)
+        setExternalPlaylists([])
+      }
     } catch (error) {
       console.error('Search error:', error)
       setResults({ tracks: [], playlists: [], users: [] })
       setExternalTracks([])
+      setExternalPlaylists([])
       setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
       setLoading(false)
@@ -86,10 +101,16 @@ function Search() {
     playTrack(track, externalTracks, 'external')
   }
 
+  const handleImportExternalPlaylist = (playlist) => {
+    // Открываем просмотр — импорт в библиотеку только по явной кнопке там.
+    navigate(`/external/soundcloud/playlists/${playlist.external_id}`)
+  }
+
   const hasResults =
     results.tracks.length > 0 ||
     externalTracks.length > 0 ||
     results.playlists.length > 0 ||
+    externalPlaylists.length > 0 ||
     results.users.length > 0
 
   return (
@@ -192,7 +213,11 @@ function Search() {
               <h2 className="results-title">Плейлисты</h2>
               <div className="playlists-list">
                 {results.playlists.map((playlist) => (
-                  <div key={playlist.id} className="playlist-item">
+                  <div
+                    key={playlist.id}
+                    className="playlist-item"
+                    onClick={() => navigate(`/playlists/${playlist.id}`)}
+                  >
                     <img
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
@@ -204,6 +229,35 @@ function Search() {
                       {playlist.description && (
                         <div className="playlist-item-description">{playlist.description}</div>
                       )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {externalPlaylists.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Плейлисты SoundCloud</h2>
+              <div className="playlists-list">
+                {externalPlaylists.map((playlist) => (
+                  <div
+                    key={playlist.id}
+                    className="playlist-item"
+                    onClick={() => handleImportExternalPlaylist(playlist)}
+                    title="Открыть плейлист"
+                  >
+                    <img
+                      src={playlist.cover_url || defaultCover}
+                      alt={playlist.title}
+                      className="playlist-item-cover"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-item-info">
+                      <div className="playlist-item-name">{playlist.title}</div>
+                      <div className="playlist-item-description">
+                        {`${playlist.owner ? playlist.owner + ' · ' : ''}${playlist.track_count} треков · SoundCloud`}
+                      </div>
                     </div>
                   </div>
                 ))}

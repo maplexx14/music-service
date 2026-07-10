@@ -154,3 +154,19 @@ class ExternalTrackResponse(BaseModel):
     stream_url: str
     download_url: Optional[str] = None
     download_allowed: bool = False
+
+
+class ExternalPlaylistResponse(BaseModel):
+    id: str
+    source: str
+    external_id: str
+    title: str
+    owner: Optional[str] = None
+    cover_url: Optional[str] = None
+    permalink_url: str  # ссылка для импорта через /api/import
+    track_count: int = 0
+
+
+class ExternalPlaylistDetail(BaseModel):
+    playlist: ExternalPlaylistResponse
+    tracks: List[ExternalTrackResponse] = []
