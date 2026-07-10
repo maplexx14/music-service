@@ -50,6 +50,9 @@ services:
       SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
       YTDLP_CACHE_DIR: /app/ytdlp_cache
       YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
+      INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
+      INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
+      INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
       # Конкурентность: пул БД и threadpool согласованы между собой.
       # pool_size + max_overflow не должно превышать Postgres max_connections
       # (по умолчанию 100) в сумме по всем воркерам.

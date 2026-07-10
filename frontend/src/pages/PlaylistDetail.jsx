@@ -9,11 +9,15 @@ import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 
+const TRACKS_PAGE_SIZE = 20
+
 function PlaylistDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [playlist, setPlaylist] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [totalTracks, setTotalTracks] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
   const {
@@ -40,13 +44,33 @@ function PlaylistDetail() {
 
   const fetchPlaylist = async () => {
     try {
-      const response = await api.get(`/playlists/${id}`)
+      const response = await api.get(`/playlists/${id}`, {
+        params: { skip: 0, limit: TRACKS_PAGE_SIZE },
+      })
       setPlaylist(response.data)
+      setTotalTracks(Number(response.headers['x-total-count']) || response.data.tracks.length)
     } catch (error) {
       console.error('Error fetching playlist:', error)
       navigate('/playlists')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleLoadMore = async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    try {
+      const response = await api.get(`/playlists/${id}`, {
+        params: { skip: playlist.tracks.length, limit: TRACKS_PAGE_SIZE },
+      })
+      setPlaylist((prev) => ({ ...prev, tracks: [...prev.tracks, ...response.data.tracks] }))
+      setTotalTracks(Number(response.headers['x-total-count']) || totalTracks)
+    } catch (error) {
+      console.error('Error loading more tracks:', error)
+      toast.error('Не удалось загрузить ещё треки')
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -134,10 +158,10 @@ function PlaylistDetail() {
           )}
           <div className="playlist-meta">
             <span>{playlist.owner?.username || 'Пользователь'}</span>
-            {playlist.tracks && playlist.tracks.length > 0 && (
+            {totalTracks > 0 && (
               <>
                 <span>•</span>
-                <span>{playlist.tracks.length} треков</span>
+                <span>{totalTracks} треков</span>
               </>
             )}
           </div>
@@ -253,6 +277,18 @@ function PlaylistDetail() {
         ) : (
           <div className="empty-playlist">
             <p>В этом плейлисте пока нет треков</p>
+          </div>
+        )}
+        {playlist.tracks.length < totalTracks && (
+          <div className="load-more-wrapper">
+            <button
+              type="button"
+              className="load-more-btn"
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Загрузка…' : 'Показать ещё'}
+            </button>
           </div>
         )}
       </div>

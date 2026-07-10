@@ -238,6 +238,78 @@ class TransientResolveError(Exception):
     """Временный сбой резолва (таймаут/429/сеть) — стоит повторить позже."""
 
 
+# Invidious-инстанс (self-hosted, с companion-сервисом для PO-token) отдаёт
+# уже готовый прямой URL аудио-потока без локального n-sig/cipher-расчёта —
+# резолв через него на порядок быстрее yt-dlp. Используется как основной путь
+# резолва (см. _resolve_audio), yt-dlp остаётся фолбэком на случай
+# недоступности/пустого ответа инстанса.
+_INVIDIOUS_ENABLED = os.getenv("INVIDIOUS_ENABLED", "0") == "1"
+_INVIDIOUS_API_BASES = [
+    b.strip().rstrip("/") for b in os.getenv("INVIDIOUS_API_BASE", "").split(",") if b.strip()
+]
+_INVIDIOUS_TIMEOUT = float(os.getenv("INVIDIOUS_TIMEOUT", "10"))
+
+
+async def _resolve_via_invidious(video_id: str) -> tuple[str, str, Optional[int]]:
+    """Резолвит прямой URL аудио через Invidious API (/api/v1/videos/{id}).
+
+    Пробует настроенные инстансы по очереди (первый удачный ответ побеждает).
+    Кидает TrackUnavailable, если инстанс явно сообщил о недоступности видео
+    (404) или явной ошибкой в теле ответа, и TransientResolveError на любую
+    другую проблему (сеть/таймаут/5xx/пустой список аудио-форматов) —
+    вызывающий код (см. _resolve_audio) в этом случае падает обратно на
+    yt-dlp, а не считает трек мёртвым.
+    """
+    if not _INVIDIOUS_API_BASES:
+        raise TransientResolveError(video_id)
+
+    last_exc: Optional[Exception] = None
+    async with httpx.AsyncClient(timeout=_INVIDIOUS_TIMEOUT) as client:
+        for base in _INVIDIOUS_API_BASES:
+            try:
+                resp = await client.get(f"{base}/api/v1/videos/{video_id}")
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                continue
+            if resp.status_code == 404:
+                raise TrackUnavailable(video_id)
+            if resp.is_error:
+                last_exc = RuntimeError(f"invidious {base} returned {resp.status_code}")
+                continue
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                last_exc = exc
+                continue
+            if data.get("error"):
+                # Инстанс жив, но явно сообщил о проблеме с видео (обычно
+                # companion недоступен или PO-token не провалидировался) —
+                # это сбой инстанса, а не факт недоступности ролика.
+                last_exc = RuntimeError(f"invidious error: {data['error']}")
+                continue
+            formats = data.get("adaptiveFormats") or []
+            streams = [
+                f for f in formats
+                if f.get("url") and str(f.get("type", "")).startswith("audio")
+            ]
+            if not streams:
+                last_exc = RuntimeError("invidious: no audio formats")
+                continue
+            streams.sort(key=lambda f: int(f.get("bitrate") or 0), reverse=True)
+            best = streams[0]
+            mime = str(best.get("type", "")).lower()
+            ext = ".m4a"
+            if "webm" in mime or "opus" in mime:
+                ext = ".opus" if "opus" in mime else ".webm"
+            elif "mp4" in mime or "m4a" in mime or "aac" in mime:
+                ext = ".m4a"
+            total = best.get("clen")
+            total = int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
+            return best["url"], ext, total
+
+    raise TransientResolveError(video_id) from last_exc
+
+
 # Маркеры в тексте ошибки yt-dlp, означающие ИМЕННО недоступность ролика, а не
 # временный сбой. Всё остальное (таймауты, 429, обрывы сети) считаем временным.
 _UNAVAILABLE_MARKERS = (
@@ -367,6 +439,28 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
 
 
 async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
+    """Резолвит прямой URL аудио: сперва пробует быстрый Invidious, при
+    неудаче — yt-dlp (см. _resolve_via_ytdlp).
+
+    Invidious (с companion, который сам добывает и валидирует PO-token) не
+    требует локального n-sig/cipher-расчёта и обычно отвечает быстрее yt-dlp,
+    поэтому используется как основной путь. Если Invidious выключен (нет
+    INVIDIOUS_API_BASE), недоступен или отдал временную ошибку — молча падаем
+    обратно на yt-dlp. Настоящую недоступность видео (TrackUnavailable)
+    Invidious определяет так же надёжно, как yt-dlp (404 от самого YouTube),
+    поэтому в этом случае fallback не нужен — сразу отдаём его наружу.
+    """
+    if _INVIDIOUS_ENABLED:
+        try:
+            return await _resolve_via_invidious(video_id)
+        except TrackUnavailable:
+            raise
+        except Exception:  # noqa: BLE001 — любой сбой Invidious: тихо уходим в yt-dlp
+            logger.info("invidious resolve failed for %s, falling back to yt-dlp", video_id)
+    return await _resolve_via_ytdlp(video_id)
+
+
+async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
     """Через yt-dlp достаёт прямой URL аудио, расширение и размер.
 
     Хеджирование вместо постоянного запуска всех наборов клиентов разом:

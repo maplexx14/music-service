@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.models import Track, User, user_liked_tracks, user_track_plays, user_track_skips
+from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import ExternalTrackResponse, TrackResponse
@@ -59,14 +59,17 @@ def _norm_key(artist: str, title: str) -> tuple:
 
 def _taste_profile(db: Session, user_id: int) -> dict:
     """Собирает профиль вкуса пользователя из лайков и истории (блокирующая)."""
+    liked_playlist_id = db.query(Playlist.id).filter(
+        Playlist.owner_id == user_id, Playlist.is_liked == True
+    ).scalar()
     liked = (
-        db.query(Track, user_liked_tracks.c.liked_at)
-        .join(user_liked_tracks, user_liked_tracks.c.track_id == Track.id)
-        .filter(user_liked_tracks.c.user_id == user_id)
-        .order_by(desc(user_liked_tracks.c.liked_at))
+        db.query(Track, playlist_tracks.c.added_at)
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .filter(playlist_tracks.c.playlist_id == liked_playlist_id)
+        .order_by(desc(playlist_tracks.c.position))
         .limit(60)
         .all()
-    )
+    ) if liked_playlist_id is not None else []
     played = (
         db.query(Track, user_track_plays.c.play_count)
         .join(user_track_plays, user_track_plays.c.track_id == Track.id)

@@ -1,25 +1,39 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Heart, Plus } from 'lucide-react'
+import { Play, Heart, MoreVertical, Plus } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
-import './LikedSongs.css'
 import './PlaylistDetail.css'
 
-const PAGE_SIZE = 20
+const TRACKS_PAGE_SIZE = 20
 
+// «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
+// интерфейс страницы полностью повторяет PlaylistDetail.
 function LikedSongs() {
-  const [tracks, setTracks] = useState([])
-  const [total, setTotal] = useState(0)
+  const navigate = useNavigate()
+  const [playlist, setPlaylist] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [totalTracks, setTotalTracks] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [removingIds, setRemovingIds] = useState([])
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
-  const { playPlaylist, removeLike, currentTrack, isPlaying } = usePlayerStore()
+  const {
+    playPlaylist,
+    currentTrack,
+    isPlaying,
+    likedTrackIds,
+    toggleTrackLike,
+    fetchLikedTracks,
+  } = usePlayerStore()
+
+  useEffect(() => {
+    fetchPlaylist()
+    fetchLikedTracks()
+  }, [])
 
   useEffect(() => {
     if (menuTrackId === null) return
@@ -28,19 +42,16 @@ function LikedSongs() {
     return () => document.removeEventListener('click', close)
   }, [menuTrackId])
 
-  useEffect(() => {
-    fetchLikedTracks()
-  }, [])
-
-  const fetchLikedTracks = async () => {
+  const fetchPlaylist = async () => {
     try {
-      const response = await api.get('/tracks/me/liked', {
-        params: { skip: 0, limit: PAGE_SIZE },
+      const response = await api.get('/playlists/me/liked', {
+        params: { skip: 0, limit: TRACKS_PAGE_SIZE },
       })
-      setTracks(response.data)
-      setTotal(Number(response.headers['x-total-count']) || response.data.length)
+      setPlaylist(response.data)
+      setTotalTracks(Number(response.headers['x-total-count']) || response.data.tracks.length)
     } catch (error) {
-      console.error('Error fetching liked tracks:', error)
+      console.error('Error fetching liked playlist:', error)
+      navigate('/playlists')
     } finally {
       setLoading(false)
     }
@@ -50,51 +61,41 @@ function LikedSongs() {
     if (loadingMore) return
     setLoadingMore(true)
     try {
-      const response = await api.get('/tracks/me/liked', {
-        params: { skip: tracks.length, limit: PAGE_SIZE },
+      const response = await api.get('/playlists/me/liked', {
+        params: { skip: playlist.tracks.length, limit: TRACKS_PAGE_SIZE },
       })
-      setTotal(Number(response.headers['x-total-count']) || total)
-      setTracks((prev) => {
-        // Защита от дублей, если список изменился между запросами.
-        const known = new Set(prev.map((t) => t.id))
-        return [...prev, ...response.data.filter((t) => !known.has(t.id))]
-      })
+      setPlaylist((prev) => ({ ...prev, tracks: [...prev.tracks, ...response.data.tracks] }))
+      setTotalTracks(Number(response.headers['x-total-count']) || totalTracks)
     } catch (error) {
-      console.error('Error loading more liked tracks:', error)
-      toast.error('Не удалось загрузить треки')
+      console.error('Error loading more tracks:', error)
+      toast.error('Не удалось загрузить ещё треки')
     } finally {
       setLoadingMore(false)
     }
   }
 
   const handlePlay = () => {
-    if (tracks.length > 0) {
-      playPlaylist(tracks, 0)
+    if (playlist.tracks && playlist.tracks.length > 0) {
+      playPlaylist(playlist.tracks, 0)
     }
   }
 
   const handlePlayTrack = (track, index) => {
-    playPlaylist(tracks, index)
+    playPlaylist(playlist.tracks, index)
   }
 
-  const handleRemove = async (track, e) => {
+  const handleToggleLike = async (track, e) => {
     e.stopPropagation()
-    if (removingIds.includes(track.id)) return
-
-    setRemovingIds((prev) => [...prev, track.id])
-    const previous = tracks
-    // Оптимистично убираем из списка; при ошибке возвращаем.
-    setTracks((prev) => prev.filter((t) => t.id !== track.id))
-    setTotal((prev) => Math.max(0, prev - 1))
     try {
-      await removeLike(track.id)
+      await toggleTrackLike(track.id)
+      setPlaylist((prev) => ({
+        ...prev,
+        tracks: prev.tracks.filter((t) => t.id !== track.id),
+      }))
+      setTotalTracks((prev) => Math.max(0, prev - 1))
     } catch (error) {
-      console.error('Error removing liked track:', error)
-      setTracks(previous)
-      setTotal((prev) => prev + 1)
-      toast.error('Не удалось убрать трек из понравившихся')
-    } finally {
-      setRemovingIds((prev) => prev.filter((id) => id !== track.id))
+      console.error('Error toggling like:', error)
+      toast.error('Не удалось обновить понравившиеся')
     }
   }
 
@@ -141,31 +142,48 @@ function LikedSongs() {
     )
   }
 
+  if (!playlist) {
+    return null
+  }
+
   return (
     <div className="page-container">
-      <div className="liked-header">
-        <div className="liked-cover">
-          <Heart size={64} fill="currentColor" />
-        </div>
-        <div className="liked-info">
-          <div className="liked-type">Плейлист</div>
-          <h1 className="liked-title">Понравившиеся</h1>
-          <div className="liked-meta">
-            <span>{total} треков</span>
+      <div className="playlist-header">
+        <img
+          src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+          alt={playlist.name}
+          className="playlist-header-cover"
+          onError={handleCoverError}
+        />
+        <div className="playlist-header-info">
+          <div className="playlist-type">Плейлист</div>
+          <h1 className="playlist-title">{playlist.name}</h1>
+          {playlist.description && (
+            <p className="playlist-description">{playlist.description}</p>
+          )}
+          <div className="playlist-meta">
+            {totalTracks > 0 && (
+              <span>{totalTracks} треков</span>
+            )}
           </div>
-          <div className="liked-actions">
+          <div className="playlist-actions">
             <button className="play-button-large" onClick={handlePlay}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
+            </button>
+            <button className="action-button">
+              <Heart size={20} fill="currentColor" />
+            </button>
+            <button className="action-button">
+              <MoreVertical size={20} />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="liked-tracks">
-        {tracks.length > 0 ? (
-          <>
-            <table className="tracks-table">
+      <div className="playlist-tracks">
+        {playlist.tracks && playlist.tracks.length > 0 ? (
+          <table className="tracks-table">
             <thead>
               <tr>
                 <th>#</th>
@@ -176,8 +194,9 @@ function LikedSongs() {
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track, index) => {
+              {playlist.tracks.map((track, index) => {
                 const isCurrent = currentTrack?.id === track.id
+                const isLiked = likedTrackIds.includes(track.id)
                 return (
                 <tr
                   key={track.id}
@@ -209,16 +228,15 @@ function LikedSongs() {
                   <td className="track-duration">
                     {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
                   </td>
-                  <td className="track-remove-cell">
+                  <td className="track-actions-cell">
                     <button
                       type="button"
-                      className="track-remove-btn"
-                      onClick={(e) => handleRemove(track, e)}
-                      disabled={removingIds.includes(track.id)}
-                      title="Убрать из понравившихся"
-                      aria-label="Убрать из понравившихся"
+                      className={`track-action-btn${isLiked ? ' liked' : ''}`}
+                      onClick={(e) => handleToggleLike(track, e)}
+                      title={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
+                      aria-label={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
                     >
-                      <Heart size={18} fill="currentColor" />
+                      <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
                     </button>
                     <div className="add-to-playlist">
                       <button
@@ -255,23 +273,21 @@ function LikedSongs() {
               })}
             </tbody>
           </table>
-            {tracks.length < total && (
-              <div className="load-more-wrapper">
-                <button
-                  type="button"
-                  className="load-more-btn"
-                  onClick={handleLoadMore}
-                  disabled={loadingMore}
-                >
-                  {loadingMore ? 'Загрузка...' : 'Показать ещё'}
-                </button>
-              </div>
-            )}
-          </>
         ) : (
-          <div className="empty-liked">
-            <p>У вас пока нет понравившихся треков</p>
-            <p className="empty-liked-subtitle">Нажмите на сердечко, чтобы добавить трек</p>
+          <div className="empty-playlist">
+            <p>В этом плейлисте пока нет треков</p>
+          </div>
+        )}
+        {playlist.tracks.length < totalTracks && (
+          <div className="load-more-wrapper">
+            <button
+              type="button"
+              className="load-more-btn"
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Загрузка…' : 'Показать ещё'}
+            </button>
           </div>
         )}
       </div>

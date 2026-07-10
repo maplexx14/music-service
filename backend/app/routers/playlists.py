@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
 from typing import List
 import os
@@ -6,9 +6,49 @@ import uuid
 import aiofiles
 from pathlib import Path
 from app.database import get_db
-from app.models import Playlist, Track, User
-from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate
+from app.models import Playlist, Track, User, playlist_tracks
+from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
 from app.dependencies import get_current_active_user
+from app.routers.tracks import get_or_create_liked_playlist
+
+# Дефолт для страницы плейлиста: показываем DEFAULT_TRACKS_LIMIT треков,
+# остальное подгружается кнопкой «Показать ещё» (см. get_playlist/
+# get_my_liked_playlist) постранично тем же limit-ом.
+DEFAULT_TRACKS_LIMIT = 20
+
+
+def _paginated_playlist_response(
+    db: Session, playlist: Playlist, response: Response, skip: int, limit: int
+) -> PlaylistResponse:
+    """Строит PlaylistResponse с треками playlist, подгруженными постранично.
+
+    Не трогает playlist.tracks (ORM-relationship) напрямую — присвоение ему
+    пометило бы объект dirty и при случайном commit() где-то ещё в запросе
+    могло бы разъехаться с реальным составом плейлиста. Вместо этого треки
+    запрашиваются отдельным запросом с order_by(position)/offset/limit, а
+    метаданные плейлиста берутся из самого ORM-объекта.
+    """
+    tracks_query = (
+        db.query(Track)
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .filter(playlist_tracks.c.playlist_id == playlist.id)
+        .order_by(playlist_tracks.c.position)
+    )
+    response.headers["X-Total-Count"] = str(tracks_query.count())
+    tracks = tracks_query.offset(skip).limit(limit).all()
+
+    return PlaylistResponse(
+        id=playlist.id,
+        owner_id=playlist.owner_id,
+        name=playlist.name,
+        description=playlist.description,
+        cover_url=playlist.cover_url,
+        is_public=playlist.is_public,
+        is_liked=playlist.is_liked,
+        created_at=playlist.created_at,
+        updated_at=playlist.updated_at,
+        tracks=[TrackResponse.model_validate(t) for t in tracks],
+    )
 
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
@@ -29,7 +69,7 @@ def get_playlists(
     # ленивый relationship даёт N+1 (по запросу на каждый плейлист списка).
     playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(
         (Playlist.owner_id == current_user.id) | (Playlist.is_public == True)
-    ).offset(skip).limit(limit).all()
+    ).filter(Playlist.is_liked == False).offset(skip).limit(limit).all()
     return playlists
 
 
@@ -41,27 +81,43 @@ def get_my_playlists(
     playlists = (
         db.query(Playlist)
         .options(selectinload(Playlist.tracks))
-        .filter(Playlist.owner_id == current_user.id)
+        .filter(Playlist.owner_id == current_user.id, Playlist.is_liked == False)
         .all()
     )
     return playlists
 
 
+@router.get("/me/liked", response_model=PlaylistResponse)
+def get_my_liked_playlist(
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_TRACKS_LIMIT, ge=1, le=100),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    playlist = get_or_create_liked_playlist(db, current_user)
+    db.refresh(playlist)
+    return _paginated_playlist_response(db, playlist, response, skip, limit)
+
+
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 def get_playlist(
     playlist_id: int,
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_TRACKS_LIMIT, ge=1, le=100),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    
+
     # Check if user has access
     if not playlist.is_public and playlist.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    return playlist
+
+    return _paginated_playlist_response(db, playlist, response, skip, limit)
 
 
 @router.post("/", response_model=PlaylistResponse, status_code=status.HTTP_201_CREATED)
@@ -151,7 +207,10 @@ def delete_playlist(
     
     if playlist.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+
+    if playlist.is_liked:
+        raise HTTPException(status_code=400, detail="Cannot delete liked songs playlist")
+
     db.delete(playlist)
     db.commit()
     return None

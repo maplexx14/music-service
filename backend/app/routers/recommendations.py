@@ -4,7 +4,7 @@ from sqlalchemy import func, desc
 from typing import List
 from app.database import get_db
 from app.cache import get_cache, set_cache
-from app.models import Track, Playlist, User, user_track_plays, user_liked_tracks
+from app.models import Track, Playlist, User, user_track_plays, playlist_tracks
 from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse
 from app.dependencies import get_current_active_user
 
@@ -27,7 +27,16 @@ def get_recommendations(
         return RecommendationResponse(**cached)
 
     # Get user's liked tracks and frequently played tracks
-    liked_track_ids = [track.id for track in current_user.liked_tracks]
+    liked_playlist_id = db.query(Playlist.id).filter(
+        Playlist.owner_id == current_user.id, Playlist.is_liked == True
+    ).scalar()
+    liked_track_ids = []
+    if liked_playlist_id is not None:
+        liked_track_ids = [
+            t[0] for t in db.query(playlist_tracks.c.track_id).filter(
+                playlist_tracks.c.playlist_id == liked_playlist_id
+            ).all()
+        ]
     
     # Get frequently played tracks by this user
     played_tracks = db.query(user_track_plays.c.track_id).filter(

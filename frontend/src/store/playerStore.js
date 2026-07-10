@@ -195,10 +195,14 @@ const usePlayerStore = create((set, get) => ({
   },
 
   // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы
-  // переключение началось мгновенно (без ожидания yt-dlp). Греем 2 трека
-  // вперёд — при быстром next-next второй тоже успевает попасть в Redis.
+  // переключение началось мгновенно (без ожидания yt-dlp/Piped). Греем
+  // PREFETCH_WINDOW треков вперёд — при быстром пролистывании очереди (не
+  // только next-next) следующие треки тоже успевают попасть в Redis-кэш.
+  // Бэк сам ограничивает конкуренцию (_PREFETCH_SEM/_WARM_SEM в ytdlp.py),
+  // так что расширение окна безопасно и не перегружает воркеры.
   prefetchNext: () => {
-    const upcoming = [get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean)
+    const PREFETCH_WINDOW = 4
+    const upcoming = Array.from({ length: PREFETCH_WINDOW }, (_, i) => get().getNextTrack(i + 1)).filter(Boolean)
     get().prefetchTracks(upcoming, upcoming.length)
   },
 
