@@ -1,0 +1,8 @@
+# Скрипты и конфиги, исполняемые внутри Linux-контейнеров, всегда с LF,
+# иначе на Windows появляется CRLF и exec падает с "no such file or directory".
+*.sh            text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile      text eol=lf
+*.conf          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
