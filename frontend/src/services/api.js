@@ -16,8 +16,10 @@ const api = axios.create({
   baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
-    // Обход предупреждения Tuna при доступе к бэкенду через tuna.am
+    // Обход предупреждающих страниц туннелей (tuna.am / ngrok free): без этих
+    // заголовков свежий браузер получает HTML-заглушку вместо JSON/аудио.
     'tuna-skip-browser-warning': '1',
+    'ngrok-skip-browser-warning': '1',
   },
 })
 

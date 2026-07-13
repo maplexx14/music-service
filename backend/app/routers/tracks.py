@@ -129,7 +129,15 @@ def stream_track(
         if prefix and track.external_id:
             return RedirectResponse(url=f"{prefix}{track.external_id}", status_code=307)
         if track.stream_url:
-            return RedirectResponse(url=track.stream_url, status_code=307)
+            # stream_url мог быть сохранён с абсолютным (старым) хостом — при
+            # переносе деплоя/смене туннеля он протухает. Если это наш же прокси
+            # (…/api/…), редиректим на относительный путь: он разрешится против
+            # текущего хоста. Прямой CDN-URL провайдера (напр. jamendo) — как есть.
+            url = track.stream_url
+            api_idx = url.find("/api/")
+            if api_idx > 0 and "://" in url[:api_idx]:
+                url = url[api_idx:]
+            return RedirectResponse(url=url, status_code=307)
         raise HTTPException(status_code=404, detail="External stream unavailable")
 
     # Get full file path - handle both absolute and relative paths
@@ -200,6 +208,7 @@ def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> T
         source=payload.source,
         external_id=payload.external_id,
         stream_url=payload.stream_url,
+        genre=payload.genre,
     )
     db.add(track)
     try:

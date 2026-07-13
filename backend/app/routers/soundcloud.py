@@ -10,9 +10,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.cache import get_cache_async, set_cache_async
 from app.routers.ytdlp import (
     TrackUnavailable,
+    TransientResolveError,
     cached_ydl,
     clean_title,
     schedule_prefetch,
+    single_flight_resolve,
     stream_cached_audio,
 )
 from app.schemas import (
@@ -28,9 +30,16 @@ router = APIRouter()
 # Резолв SoundCloud идёт через yt-dlp (тот же движок, что и YouTube Music).
 # Отдельного SDK/ключа не нужно — yt-dlp сам добывает client_id.
 
-# googlevideo-аналог у SoundCloud тоже живёт ограниченно — кэшируем прямой URL.
-_RESOLVE_TTL = 3 * 3600
+# Подписанный cf-media URL SoundCloud живёт всего ~4-5 минут (в отличие от
+# googlevideo-ссылок YouTube, живущих часами). Кэшировать его на часы нельзя:
+# из кэша прилетал бы заведомо протухший URL → 403 от CDN → трек, «который
+# только что играл», переставал запускаться. TTL держим заметно ниже срока
+# подписи, чтобы отданный из кэша URL всегда имел запас валидности на старт
+# стрима и докачку (полностью проигранный трек оседает в диск-кэше и дальше
+# отдаётся с диска, без CDN). Дедуп прогрев→клик (секунды) этот TTL сохраняет.
+_RESOLVE_TTL = 120
 _UNAVAILABLE_TTL = 600
+_TRANSIENT_TTL = 25
 
 
 def _artist(entry: dict) -> str:
@@ -92,6 +101,7 @@ def _normalize(request: Request, entry: dict) -> Optional[ExternalTrackResponse]
         stream_url=f"{base_url}/api/soundcloud/stream/{token}",
         download_url=None,
         download_allowed=False,
+        genre=entry.get("genre") or None,
     )
 
 
@@ -115,21 +125,74 @@ def entry_to_import(request: Request, entry: dict) -> Optional["ExternalTrackImp
         duration=track.duration,
         cover_url=track.cover_url,
         stream_url=track.stream_url,
+        genre=track.genre,
     )
 
 
-def _search_blocking(q: str, limit: int) -> list:
-    import yt_dlp
+# --- Быстрый поиск через api-v2 -------------------------------------------
+# SoundcloudSearchIE в yt-dlp делает по HTTP-запросу на каждый найденный трек
+# (~0.3с/трек → ~10с на выдачу из 30), из-за чего весь агрегатный поиск ждал
+# SoundCloud. Прямой запрос к api-v2 /search/tracks отдаёт ту же выдачу одним
+# запросом (~0.4с) через уже имеющийся _api_get (client_id в Redis, авто-
+# обновление при 401/403). yt-dlp остаётся фолбэком на случай смены API.
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,  # только метаданные, без резолва аудио (быстро)
-        "skip_download": True,
-        "noplaylist": True,
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
+
+def _normalize_api(request: Request, item: dict) -> Optional[ExternalTrackResponse]:
+    """Трек из api-v2 /search/tracks → ExternalTrackResponse."""
+    track_id = item.get("id")
+    permalink = item.get("permalink_url") or ""
+    if not track_id or "soundcloud.com/" not in permalink:
+        return None
+    artwork = item.get("artwork_url") or (item.get("user") or {}).get("avatar_url")
+    if artwork:
+        # api отдаёт превью -large (100x100) — просим 500x500.
+        artwork = artwork.replace("-large.", "-t500x500.")
+    base_url = str(request.base_url).rstrip("/")
+    token = _encode_token(str(track_id), permalink)
+    return ExternalTrackResponse(
+        id=f"soundcloud:{track_id}",
+        source="soundcloud",
+        external_id=str(track_id),
+        title=clean_title(item.get("title") or "Unknown"),
+        artist=(item.get("user") or {}).get("username") or "Unknown Artist",
+        album=None,
+        duration=int((item.get("duration") or 0) / 1000),
+        cover_url=artwork,
+        stream_url=f"{base_url}/api/soundcloud/stream/{token}",
+        download_url=None,
+        download_allowed=False,
+        genre=item.get("genre") or None,
+    )
+
+
+async def _search_api(request: Request, q: str, limit: int) -> List[ExternalTrackResponse]:
+    data = await _api_get("/search/tracks", {"q": q, "limit": limit})
+    if not isinstance(data, dict):
+        raise RuntimeError("SoundCloud api-v2 search returned no data")
+    results: List[ExternalTrackResponse] = []
+    for item in data.get("collection") or []:
+        track = _normalize_api(request, item)
+        if track:
+            results.append(track)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _search_blocking(q: str, limit: int) -> list:
+    # Переиспользуем YoutubeDL в рамках потока (см. ytdlp.cached_ydl) —
+    # конструктор на каждый поиск заново грузил бы реестр экстракторов.
+    ydl = cached_ydl(
+        "soundcloud:search",
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,  # только метаданные, без резолва аудио (быстро)
+            "skip_download": True,
+            "noplaylist": True,
+        },
+    )
+    info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
     return (info or {}).get("entries") or []
 
 
@@ -138,7 +201,12 @@ async def search_soundcloud(
     q: str,
     limit: int = 20,
 ) -> List[ExternalTrackResponse]:
-    """Поиск по SoundCloud через yt-dlp. Возвращает source=soundcloud."""
+    """Поиск по SoundCloud: быстрый api-v2, при сбое — фолбэк на yt-dlp."""
+    try:
+        return await _search_api(request, q, limit)
+    except Exception as exc:  # noqa: BLE001 — сменилась разметка/API, идём в yt-dlp
+        logger.warning("SoundCloud api-v2 search failed (%s), falling back to yt-dlp", exc)
+
     try:
         raw = await asyncio.to_thread(_search_blocking, q, limit)
     except Exception:  # noqa: BLE001 — нет сети / yt-dlp не установлен
@@ -217,7 +285,10 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
 async def _resolve_cached(
     track_id: str, permalink: str, force: bool = False
 ) -> tuple[str, str, Optional[int], bool]:
-    """Резолв прямого URL с кэшем в Redis. Кидает TrackUnavailable при неудаче.
+    """Резолв прямого URL с кэшем в Redis.
+
+    Явно недоступный трек даёт TrackUnavailable, остальные ошибки резолва —
+    TransientResolveError: сбой yt-dlp или сети не должен превращаться в 404.
 
     Четвёртый элемент — ``fresh`` (см. аналогичное поле в ytdlp._resolve_cached).
     """
@@ -225,15 +296,51 @@ async def _resolve_cached(
     cached = None if force else await get_cache_async(key)
     if cached:
         if cached.get("unavailable"):
-            raise TrackUnavailable(track_id)
+            # Не используем отрицательный кэш старых версий: он мог быть
+            # записан из-за 404 yt-dlp, хотя трек доступен в SoundCloud.
+            logger.info("ignoring legacy unavailable cache entry for SoundCloud track %s", track_id)
+        if cached.get("transient"):
+            raise TransientResolveError(track_id)
         if cached.get("url"):
             return cached["url"], cached.get("ext", ".mp3"), cached.get("total"), False
 
+    # Однополётность (см. ytdlp.single_flight_resolve): прогрев и настоящий
+    # /stream-GET часто метят в один и тот же трек почти одновременно — не
+    # гоняем два параллельных yt-dlp-резолва.
+    return await single_flight_resolve(
+        f"soundcloud:{track_id}",
+        lambda: _resolve_and_cache(track_id, permalink, key),
+    )
+
+
+async def _resolve_and_cache(
+    track_id: str, permalink: str, key: str
+) -> tuple[str, str, Optional[int], bool]:
     try:
         url, ext, total = await asyncio.to_thread(_resolve_blocking, permalink)
-    except Exception as exc:  # noqa: BLE001
-        await set_cache_async(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
-        raise TrackUnavailable(track_id) from exc
+    except Exception as ytdlp_exc:  # noqa: BLE001
+        # yt-dlp получает метаданные по permalink. SoundCloud иногда отвечает
+        # на этот запрос 404, хотя трек с тем же числовым id воспроизводится в
+        # веб-плеере. В таком случае API v2 и его transcodings — независимый
+        # и более устойчивый способ получить аудио.
+        try:
+            url, ext, total = await _resolve_via_api(track_id)
+            logger.info("SoundCloud API fallback resolved track %s after yt-dlp failure", track_id)
+        except Exception as api_exc:  # noqa: BLE001
+            # Не превращаем ошибку метаданных yt-dlp в «трек удалён»: это как
+            # раз тот ложный 404, который наблюдался у существующих треков.
+            # Подтверждённый TrackUnavailable возможен только от API fallback.
+            if isinstance(api_exc, TrackUnavailable):
+                raise api_exc from ytdlp_exc
+            logger.warning(
+                "SoundCloud resolve failed for %s; yt-dlp: %s; API fallback: %s",
+                track_id,
+                ytdlp_exc,
+                api_exc,
+                exc_info=True,
+            )
+            await set_cache_async(key, {"transient": True}, expire=_TRANSIENT_TTL)
+            raise TransientResolveError(track_id) from api_exc
 
     await set_cache_async(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
     return url, ext, total, True
@@ -305,6 +412,94 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     return None
 
 
+async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
+    """Получает HTTP-поток трека через api-v2, минуя web-метаданные yt-dlp.
+
+    HLS здесь намеренно не выбираем: общий stream-прокси работает с byte-range
+    HTTP-аудио, а не с m3u8-плейлистами. Если SoundCloud оставил только HLS,
+    это временная ошибка интеграции, а не доказательство удаления трека.
+    """
+    import httpx
+
+    track = await _api_get(f"/tracks/{track_id}", {})
+    if not isinstance(track, dict):
+        raise RuntimeError("SoundCloud API did not return track metadata")
+    if track.get("access") == "blocked":
+        raise TrackUnavailable(track_id)
+
+    transcodings = ((track.get("media") or {}).get("transcodings") or [])
+    # Монетизированные (policy=MONETIZE) треки SoundCloud раздаёт только как
+    # посегментно зашифрованный HLS (протоколы ctr-/cbc-encrypted-hls) — это
+    # DRM: yt-dlp его намеренно не расшифровывает ("This video is DRM
+    # protected"), а наш byte-range-прокси m3u8 играть не умеет. Прогрессивный
+    # mp3-пресет у таких треков ещё числится в метаданных, но его эндпоинт
+    # мёртв (404). Флаг отличает «DRM, играть реально нечем» (→ TrackUnavailable
+    # → 404 → чистый скип на фронте) от случайного 404 у обычного трека
+    # (→ transient → 503 с ретраем).
+    has_drm = any(
+        str(item.get("format", {}).get("protocol", "")).startswith(("ctr-", "cbc-"))
+        for item in transcodings
+    )
+    progressive = [
+        item for item in transcodings
+        if item.get("url") and item.get("format", {}).get("protocol") == "progressive"
+    ]
+    if not progressive:
+        if has_drm:
+            raise TrackUnavailable(track_id)
+        raise RuntimeError("SoundCloud API returned no progressive audio stream")
+    progressive.sort(
+        key=lambda item: (
+            "mpeg" in str(item.get("format", {}).get("mime_type", "")),
+            item.get("preset") == "mp3_1_0",
+        ),
+        reverse=True,
+    )
+
+    # Транскодер может ответить JSON с ``url`` либо 302 сразу на CDN. Редирект
+    # здесь нельзя проходить автоматически: CDN-URL одноразовый/короткоживущий,
+    # и его 404 не является ответом эндпоинта транскодирования.
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+        client_id = await get_cache_async(_CLIENT_ID_KEY)
+        for attempt in range(2):
+            if not client_id:
+                client_id = await _scrape_client_id(client)
+                if not client_id:
+                    raise RuntimeError("could not obtain SoundCloud client_id")
+                await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
+            try:
+                response = await client.get(progressive[0]["url"], params={"client_id": client_id})
+            except httpx.HTTPError as exc:
+                raise RuntimeError("SoundCloud transcoding request failed") from exc
+            if response.status_code in (401, 403) and attempt == 0:
+                client_id = None
+                continue
+            if response.status_code == 404:
+                if has_drm:
+                    # У DRM-трека прогрессивный mp3-пресет числится в
+                    # метаданных, но эндпоинт отдаёт 404 (реально остался только
+                    # зашифрованный HLS). Играть нечем — трек недоступен.
+                    raise TrackUnavailable(track_id)
+                # У обычного трека URL транскодирования может устареть/меняться
+                # независимо от самого трека — это не повод помечать удалённым.
+                raise RuntimeError("SoundCloud transcoding returned HTTP 404")
+            if response.is_error:
+                raise RuntimeError(f"SoundCloud transcoding returned HTTP {response.status_code}")
+            direct_url = response.headers.get("location") if response.is_redirect else None
+            if not direct_url:
+                try:
+                    direct_url = response.json().get("url")
+                except ValueError as exc:
+                    raise RuntimeError("SoundCloud transcoding returned invalid response") from exc
+            if not direct_url:
+                raise RuntimeError("SoundCloud transcoding response has no audio URL")
+            mime = str(progressive[0].get("format", {}).get("mime_type", "")).lower()
+            ext = ".mp3" if "mpeg" in mime else ".m4a"
+            return direct_url, ext, None
+
+    raise RuntimeError("SoundCloud client_id was rejected")
+
+
 def _upscale_artwork(url: Optional[str]) -> Optional[str]:
     # api-v2 отдаёт превью 100x100 ("-large") — просим полноразмерную.
     if url:
@@ -366,6 +561,7 @@ def _track_from_api(request: Request, item: dict) -> Optional[ExternalTrackRespo
         stream_url=f"{base_url}/api/soundcloud/stream/{token}",
         download_url=None,
         download_allowed=False,
+        genre=item.get("genre") or None,
     )
 
 

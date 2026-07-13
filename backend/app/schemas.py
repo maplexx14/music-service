@@ -70,6 +70,7 @@ class ExternalTrackImport(BaseModel):
     duration: int = 0
     cover_url: Optional[str] = None
     stream_url: Optional[str] = None
+    genre: Optional[str] = None
 
 
 class PlaylistBase(BaseModel):
@@ -155,6 +156,7 @@ class ExternalTrackResponse(BaseModel):
     stream_url: str
     download_url: Optional[str] = None
     download_allowed: bool = False
+    genre: Optional[str] = None
 
 
 class ExternalPlaylistResponse(BaseModel):

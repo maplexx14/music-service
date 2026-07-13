@@ -69,7 +69,9 @@ function Search() {
         setExternalTracks(externalResult.value.data)
         // Прогреваем резолв топ-нескольких результатов заранее — большинство
         // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
-        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 4)
+        // С Invidious прогрев дешёвый, так что греем пошире — клик почти в
+        // любой видимый результат стартует с диска, без паузы на резолв.
+        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 8)
       } else {
         console.error('External search error:', externalResult.reason)
         setExternalTracks([])

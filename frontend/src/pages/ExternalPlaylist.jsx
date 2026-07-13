@@ -49,7 +49,7 @@ function ExternalPlaylist() {
       setPlaylist(response.data.playlist)
       setTracks(response.data.tracks)
       // Прогреваем резолв первых треков — старт воспроизведения без паузы.
-      usePlayerStore.getState().prefetchTracks(response.data.tracks, 4)
+      usePlayerStore.getState().prefetchTracks(response.data.tracks, 8)
     } catch (error) {
       console.error('Error fetching external playlist:', error)
       toast.error('Не удалось загрузить плейлист')

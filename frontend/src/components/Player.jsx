@@ -31,6 +31,12 @@ const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
 // текущего трека, и для ленивой подгрузки следующего.
 function resolveRawUrl(track, isExternal) {
   if (!track) return undefined
+  // Материализованный в БД трек (числовой id) — всегда через свой бэкенд-эндпоинт
+  // стрима: он реконструирует URL провайдера против ТЕКУЩЕГО хоста. Сохранённый
+  // в track.stream_url хост зашит на момент сохранения и умирает при переносе
+  // деплоя/смене туннеля. У результатов поиска id строковый ("ytmusic:...") —
+  // они не в БД, для них stream_url свежий, с текущим хостом.
+  if (typeof track.id === 'number') return `${API_URL}/tracks/${track.id}/stream`
   if (isExternal) return track.stream_url
   if (track.id) return `${API_URL}/tracks/${track.id}/stream`
   if (track.file_path?.startsWith('http')) return track.file_path
@@ -79,6 +85,10 @@ function Player() {
   // не запускать её повторно на каждом timeupdate.
   const preloadTriggeredForRef = useRef(null)
   const lastRecordedTrackIdRef = useRef(null)
+  // Токен актуальности резолва audioSrc (см. эффект ниже) — защита от того,
+  // что устаревший (для уже пропущенного трека) fetch применит свой результат
+  // позже, чем актуальный.
+  const resolveTokenRef = useRef({})
   // Счётчик тихих ретраев текущего трека и хендл отложенного повтора —
   // при ошибке внешнего трека не скипаем сразу, а даём 1-2 попытки.
   const retryCountRef = useRef(0)
@@ -128,7 +138,7 @@ function Player() {
     const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
     nextAudio.preload = 'auto'
     if (isOurApi && !swActive) {
-      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
+      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' } })
         .then((r) => r.blob())
         .then((blob) => {
           const url = URL.createObjectURL(blob)
@@ -196,8 +206,18 @@ function Player() {
   // играть почти сразу, без ожидания полной закачки). Пока SW ещё не взял
   // страницу под контроль (самый первый визит до активации) — как и раньше,
   // подстраховываемся ручным fetch+blob с нужным заголовком.
+  //
+  // При быстром скипе несколько таких резолвов оказываются в полёте
+  // одновременно (fetch трека A ещё не завершился, а currentTrack уже B,
+  // потом C). Без проверки актуальности резолв A мог применить свой blob
+  // через setAudioSrc уже ПОСЛЕ того как currentTrack стал C — визуально это
+  // выглядело как "проскочивший" (уже пропущенный) трек на миг заигрывает,
+  // а потом резко обрывается, когда его перебивает следующий резолв.
+  // resolveTokenRef фиксирует, какой резолв последний актуальный — устаревшие
+  // просто игнорируют свой результат.
   useEffect(() => {
     if (!currentTrack) {
+      resolveTokenRef.current = {}
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current)
         blobUrlRef.current = null
@@ -209,6 +229,7 @@ function Player() {
     const rawUrl = resolveRawUrl(currentTrack, isExternalTrack)
 
     if (!rawUrl) {
+      resolveTokenRef.current = {}
       setAudioSrc(undefined)
       return
     }
@@ -221,16 +242,26 @@ function Player() {
       blobUrlRef.current = null
     }
 
+    const token = {}
+    resolveTokenRef.current = token
+
     if (isOurApi && !swActive) {
       setAudioSrc(null)
-      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1' } })
+      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' } })
         .then((r) => r.blob())
         .then((blob) => {
+          if (resolveTokenRef.current !== token) {
+            // Трек уже сменился, пока грузился этот blob — не применяем
+            // устаревший результат, иначе на миг заиграет пропущенный трек.
+            return
+          }
           const url = URL.createObjectURL(blob)
           blobUrlRef.current = url
           setAudioSrc(url)
         })
-        .catch(() => setAudioSrc(rawUrl))
+        .catch(() => {
+          if (resolveTokenRef.current === token) setAudioSrc(rawUrl)
+        })
     } else {
       setAudioSrc(rawUrl)
     }
@@ -562,10 +593,10 @@ function Player() {
     }
   }
 
-  // Ошибка <audio> у внешнего трека: если бэк уже вернул финальный вердикт
-  // (404 — трек мёртв, или бразуер прямо говорит "формат не поддерживается")
-  // — скипаем сразу, ретраить нечего. Иначе (503/сетевой обрыв/таймаут CDN)
-  // даём треку MAX_TRACK_RETRIES тихих попыток: перечитываем src через
+  // Ошибка <audio> у внешнего трека: только подтверждённый бэком 404 означает,
+  // что трек действительно недоступен. 503/сетевой обрыв/таймаут CDN и ошибка
+  // декодирования не должны показываться пользователю как «трек недоступен».
+  // Для временных сбоев даём MAX_TRACK_RETRIES тихих попыток: перечитываем src через
   // audio.load(), показывая спиннер, и только когда попытки исчерпаны —
   // сдаёмся и переходим к следующему треку.
   const handleAudioError = () => {
@@ -580,15 +611,14 @@ function Player() {
     const mediaError = audio.error
     const isFatal = mediaError?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
 
-    const giveUp = () => {
+    const giveUp = (unavailable = false) => {
       setIsBuffering(false)
-      toast.error(`Трек недоступен: ${trackAtError.title}`)
+      toast.error(
+        unavailable
+          ? `Трек недоступен: ${trackAtError.title}`
+          : `Не удалось воспроизвести трек: ${trackAtError.title}`
+      )
       nextTrack()
-    }
-
-    if (isFatal) {
-      giveUp()
-      return
     }
 
     if (retryCountRef.current >= MAX_TRACK_RETRIES) {
@@ -620,6 +650,12 @@ function Player() {
         clearTimeout(probeTimer)
         res.body?.cancel().catch(() => {})
         if (res.status === 404) {
+          giveUp(true)
+          return
+        }
+        // MEDIA_ERR_SRC_NOT_SUPPORTED может быть следствием 503/502 с HTML
+        // вместо аудио. Это не «трек недоступен», но повтор формата бессмысленен.
+        if (isFatal) {
           giveUp()
           return
         }
@@ -629,8 +665,10 @@ function Player() {
       .catch(() => {
         clearTimeout(probeTimer)
         // Запрос не прошёл (сеть/CORS/таймаут) — не знаем причину, считаем
-        // временной и всё равно ретраим, а не скипаем молча.
-        scheduleRetry()
+        // временной и всё равно ретраим, а не скипаем молча. Для неподдержи-
+        // ваемого формата повтор бессмысленен, но его статус мы не получили.
+        if (isFatal) giveUp()
+        else scheduleRetry()
       })
   }
 

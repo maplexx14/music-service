@@ -249,63 +249,75 @@ _INVIDIOUS_API_BASES = [
 ]
 _INVIDIOUS_TIMEOUT = float(os.getenv("INVIDIOUS_TIMEOUT", "10"))
 
+# Один клиент с keep-alive на все резолвы: инстанс Invidious всегда один и
+# тот же, так что переиспользование соединения убирает TCP/TLS-хендшейк из
+# каждого резолва (и накладные расходы на создание клиента).
+_invidious_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_invidious_client() -> httpx.AsyncClient:
+    global _invidious_client
+    if _invidious_client is None:
+        _invidious_client = httpx.AsyncClient(timeout=_INVIDIOUS_TIMEOUT)
+    return _invidious_client
+
 
 async def _resolve_via_invidious(video_id: str) -> tuple[str, str, Optional[int]]:
     """Резолвит прямой URL аудио через Invidious API (/api/v1/videos/{id}).
 
     Пробует настроенные инстансы по очереди (первый удачный ответ побеждает).
-    Кидает TrackUnavailable, если инстанс явно сообщил о недоступности видео
-    (404) или явной ошибкой в теле ответа, и TransientResolveError на любую
-    другую проблему (сеть/таймаут/5xx/пустой список аудио-форматов) —
-    вызывающий код (см. _resolve_audio) в этом случае падает обратно на
-    yt-dlp, а не считает трек мёртвым.
+    Любая ошибка Invidious, включая HTTP 404, считается временной: публичный
+    инстанс может вернуть 404 из-за своего прокси, региона или companion, хотя
+    ролик доступен на YouTube. Вызывающий код всегда проверит такой случай
+    через yt-dlp.
     """
     if not _INVIDIOUS_API_BASES:
         raise TransientResolveError(video_id)
 
     last_exc: Optional[Exception] = None
-    async with httpx.AsyncClient(timeout=_INVIDIOUS_TIMEOUT) as client:
-        for base in _INVIDIOUS_API_BASES:
-            try:
-                resp = await client.get(f"{base}/api/v1/videos/{video_id}")
-            except httpx.HTTPError as exc:
-                last_exc = exc
-                continue
-            if resp.status_code == 404:
-                raise TrackUnavailable(video_id)
-            if resp.is_error:
-                last_exc = RuntimeError(f"invidious {base} returned {resp.status_code}")
-                continue
-            try:
-                data = resp.json()
-            except ValueError as exc:
-                last_exc = exc
-                continue
-            if data.get("error"):
-                # Инстанс жив, но явно сообщил о проблеме с видео (обычно
-                # companion недоступен или PO-token не провалидировался) —
-                # это сбой инстанса, а не факт недоступности ролика.
-                last_exc = RuntimeError(f"invidious error: {data['error']}")
-                continue
-            formats = data.get("adaptiveFormats") or []
-            streams = [
-                f for f in formats
-                if f.get("url") and str(f.get("type", "")).startswith("audio")
-            ]
-            if not streams:
-                last_exc = RuntimeError("invidious: no audio formats")
-                continue
-            streams.sort(key=lambda f: int(f.get("bitrate") or 0), reverse=True)
-            best = streams[0]
-            mime = str(best.get("type", "")).lower()
+    client = _get_invidious_client()
+    for base in _INVIDIOUS_API_BASES:
+        try:
+            resp = await client.get(f"{base}/api/v1/videos/{video_id}")
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            continue
+        if resp.status_code == 404:
+            last_exc = RuntimeError(f"invidious {base} returned 404")
+            continue
+        if resp.is_error:
+            last_exc = RuntimeError(f"invidious {base} returned {resp.status_code}")
+            continue
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            last_exc = exc
+            continue
+        if data.get("error"):
+            # Инстанс жив, но явно сообщил о проблеме с видео (обычно
+            # companion недоступен или PO-token не провалидировался) —
+            # это сбой инстанса, а не факт недоступности ролика.
+            last_exc = RuntimeError(f"invidious error: {data['error']}")
+            continue
+        formats = data.get("adaptiveFormats") or []
+        streams = [
+            f for f in formats
+            if f.get("url") and str(f.get("type", "")).startswith("audio")
+        ]
+        if not streams:
+            last_exc = RuntimeError("invidious: no audio formats")
+            continue
+        streams.sort(key=lambda f: int(f.get("bitrate") or 0), reverse=True)
+        best = streams[0]
+        mime = str(best.get("type", "")).lower()
+        ext = ".m4a"
+        if "webm" in mime or "opus" in mime:
+            ext = ".opus" if "opus" in mime else ".webm"
+        elif "mp4" in mime or "m4a" in mime or "aac" in mime:
             ext = ".m4a"
-            if "webm" in mime or "opus" in mime:
-                ext = ".opus" if "opus" in mime else ".webm"
-            elif "mp4" in mime or "m4a" in mime or "aac" in mime:
-                ext = ".m4a"
-            total = best.get("clen")
-            total = int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
-            return best["url"], ext, total
+        total = best.get("clen")
+        total = int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
+        return best["url"], ext, total
 
     raise TransientResolveError(video_id) from last_exc
 
@@ -313,21 +325,32 @@ async def _resolve_via_invidious(video_id: str) -> tuple[str, str, Optional[int]
 # Маркеры в тексте ошибки yt-dlp, означающие ИМЕННО недоступность ролика, а не
 # временный сбой. Всё остальное (таймауты, 429, обрывы сети) считаем временным.
 _UNAVAILABLE_MARKERS = (
-    "video unavailable",
     "private video",
-    "who has blocked it",
     "removed",
     "no longer available",
-    "not available in your",
-    "sign in to confirm",
-    "content isn't available",
     "account associated with this video has been terminated",
 )
 
 
-def _is_unavailable_error(exc: Exception) -> bool:
+def is_track_unavailable_error(exc: Exception) -> bool:
+    """True only when yt-dlp explicitly reports that the source is unavailable."""
     msg = str(exc).lower()
     return any(m in msg for m in _UNAVAILABLE_MARKERS)
+
+
+def _needs_auth(info: dict) -> bool:
+    """Age-gate / login-only ролик: yt-dlp вернул метаданные, но форматов нет,
+    т.к. YouTube требует авторизацию (availability=needs_auth, age_limit>=18).
+    Без cookies это перманентно — ретрай бесполезен, поэтому такой трек надо
+    отдавать как недоступный (404), а не временный (503, с бесконечным ретраем
+    на фронте). Invidious на такие ролики отвечает 500 «inappropriate…»."""
+    if info.get("availability") == "needs_auth":
+        return True
+    try:
+        age = int(info.get("age_limit") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    return age >= 18 and not (info.get("formats") or [])
 
 
 # Создание YoutubeDL — это не только выделение объекта: конструктор грузит
@@ -430,7 +453,7 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
     try:
         return ydl.extract_info(url, download=False), False
     except yt_dlp.utils.DownloadError as exc:
-        transient = not _is_unavailable_error(exc)
+        transient = not is_track_unavailable_error(exc)
         logger.info(
             "resolve via %s failed for %s (%s): %s",
             clients, video_id, "transient" if transient else "unavailable", exc,
@@ -439,25 +462,46 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
 
 
 async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
-    """Резолвит прямой URL аудио: сперва пробует быстрый Invidious, при
-    неудаче — yt-dlp (см. _resolve_via_ytdlp).
+    """Резолвит прямой URL через быстрый Invidious с hedged fallback yt-dlp.
 
-    Invidious (с companion, который сам добывает и валидирует PO-token) не
-    требует локального n-sig/cipher-расчёта и обычно отвечает быстрее yt-dlp,
-    поэтому используется как основной путь. Если Invidious выключен (нет
-    INVIDIOUS_API_BASE), недоступен или отдал временную ошибку — молча падаем
-    обратно на yt-dlp. Настоящую недоступность видео (TrackUnavailable)
-    Invidious определяет так же надёжно, как yt-dlp (404 от самого YouTube),
-    поэтому в этом случае fallback не нужен — сразу отдаём его наружу.
+    Invidious обычно отвечает быстрее, поэтому получает короткую фору. Если
+    он зависает, yt-dlp стартует параллельно, а не после его 10-секундного
+    таймаута. Это сокращает паузу между появлением карточки трека и первыми
+    байтами аудио при проблемном Invidious.
     """
-    if _INVIDIOUS_ENABLED:
+    if not _INVIDIOUS_ENABLED:
+        return await _resolve_via_ytdlp(video_id)
+
+    invidious_task = asyncio.create_task(_resolve_via_invidious(video_id))
+    try:
         try:
-            return await _resolve_via_invidious(video_id)
-        except TrackUnavailable:
-            raise
-        except Exception:  # noqa: BLE001 — любой сбой Invidious: тихо уходим в yt-dlp
-            logger.info("invidious resolve failed for %s, falling back to yt-dlp", video_id)
-    return await _resolve_via_ytdlp(video_id)
+            return await asyncio.wait_for(asyncio.shield(invidious_task), timeout=_HEDGE_DELAY)
+        except asyncio.TimeoutError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — сразу пробуем yt-dlp
+            logger.info("invidious resolve failed for %s: %s", video_id, exc)
+
+        ytdlp_task = asyncio.create_task(_resolve_via_ytdlp(video_id))
+        pending = {invidious_task, ytdlp_task}
+        failures: list[Exception] = []
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    return task.result()
+                except Exception as exc:  # noqa: BLE001 — второй источник ещё может сработать
+                    failures.append(exc)
+                    logger.info("audio resolver failed for %s: %s", video_id, exc)
+        # yt-dlp — авторитетный источник: если ОН сказал «недоступно» (age-gate/
+        # удалено/приватно), не понижаем это до transient (иначе фронт уйдёт в
+        # бесконечный ретрай по 503). Invidious же всегда кидает transient, так
+        # что его сбой сюда не попадёт как TrackUnavailable.
+        if any(isinstance(f, TrackUnavailable) for f in failures):
+            raise TrackUnavailable(video_id) from failures[-1]
+        raise TransientResolveError(video_id) from (failures[-1] if failures else None)
+    finally:
+        if not invidious_task.done():
+            invidious_task.cancel()
 
 
 async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
@@ -479,6 +523,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
     hedged = False
     info = None
     saw_transient = False
+    saw_needs_auth = False
     try:
         while pending:
             done, pending = await asyncio.wait(
@@ -502,12 +547,17 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                     success = True
                     break
                 if result_info:
-                    # Клиент ответил, но пригодного формата нет (обычно
-                    # PO-token: URL-ы форматов отсутствуют) — это проблема
-                    # конкретного клиента, а не ролика. Считаем временной,
-                    # иначе трек попал бы в негативный кэш «недоступен» на
-                    # 10 минут и «не грузился вообще».
-                    transient = True
+                    # Age-gate/login-only ролик — форматов не будет ни у одного
+                    # клиента (проверено). Это перманентно, ретрай бесполезен.
+                    if _needs_auth(result_info):
+                        saw_needs_auth = True
+                    else:
+                        # Клиент ответил, но пригодного формата нет (обычно
+                        # PO-token: URL-ы форматов отсутствуют) — это проблема
+                        # конкретного клиента, а не ролика. Считаем временной,
+                        # иначе трек попал бы в негативный кэш «недоступен» на
+                        # 10 минут и «не грузился вообще».
+                        transient = True
                 saw_transient = saw_transient or transient
             if success:
                 break
@@ -528,6 +578,10 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                 t.cancel()
 
     if info is None:
+        # Age-gate важнее «временного»: если хоть один клиент показал needs_auth,
+        # это перманентная недоступность (→404, чистый скип), а не 503 с ретраем.
+        if saw_needs_auth:
+            raise TrackUnavailable(video_id)
         if saw_transient:
             raise TransientResolveError(video_id)
         raise TrackUnavailable(video_id)
@@ -560,12 +614,32 @@ _TRANSIENT_TTL = 25
 
 # Однополётность резолва: с прогревом (prefetch текущего/следующих треков во
 # flow) стало обычным делом, что несколько вызовов (прогрев + сам <audio>-GET,
-# либо несколько прогревов подряд) метят в один и тот же video_id почти
+# либо несколько прогревов подряд) метят в один и тот же трек почти
 # одновременно. Без дедупликации это означало бы несколько параллельных
-# yt-dlp extract_info на одно и то же видео — лишняя нагрузка на YouTube и
-# трата воркеров. Держим по одной in-flight задаче на video_id: все опоздавшие
-# вызовы просто дожидаются результата первой.
+# yt-dlp extract_info на один и тот же трек — лишняя нагрузка на источник и
+# трата воркеров. Держим по одной in-flight задаче на ключ: все опоздавшие
+# вызовы просто дожидаются результата первой. Ключи неймспейсим по источнику
+# ("ytmusic:...", "soundcloud:..."), словарь общий для всех yt-dlp-провайдеров.
 _inflight_resolves: dict[str, asyncio.Task] = {}
+
+
+async def single_flight_resolve(key: str, factory):
+    """Выполняет ``factory()`` с дедупликацией параллельных вызовов по ключу.
+
+    Если резолв с тем же ключом уже идёт — не запускает второй, а дожидается
+    результата первого (исключение первого получат все ожидающие). Отмена
+    ожидающего не отменяет саму задачу — остальные ожидающие не страдают.
+    """
+    existing = _inflight_resolves.get(key)
+    if existing is not None:
+        return await existing
+    task = asyncio.ensure_future(factory())
+    _inflight_resolves[key] = task
+    try:
+        return await task
+    finally:
+        if _inflight_resolves.get(key) is task:
+            del _inflight_resolves[key]
 
 
 async def _resolve_cached(
@@ -591,24 +665,18 @@ async def _resolve_cached(
         if cached.get("transient"):
             raise TransientResolveError(video_id)
         if cached.get("unavailable"):
-            raise TrackUnavailable(video_id)
+            # Старые версии записывали сюда любой сбой резолва, включая ложные
+            # 404 от Invidious. Не доверяем такой записи и резолвим заново.
+            logger.info("ignoring legacy unavailable cache entry for %s", video_id)
         if cached.get("url"):
             return cached["url"], cached.get("ext", ".m4a"), cached.get("total"), False
 
     # Однополётность: если резолв этого video_id уже идёт (например, прогрев
     # прогремел на долю секунды раньше настоящего запроса на стрим) — просто
     # дожидаемся его вместо запуска второго extract_info.
-    existing = _inflight_resolves.get(video_id)
-    if existing is not None:
-        return await existing
-
-    task = asyncio.ensure_future(_resolve_and_cache(video_id, key))
-    _inflight_resolves[video_id] = task
-    try:
-        return await task
-    finally:
-        if _inflight_resolves.get(video_id) is task:
-            del _inflight_resolves[video_id]
+    return await single_flight_resolve(
+        f"ytmusic:{video_id}", lambda: _resolve_and_cache(video_id, key)
+    )
 
 
 async def _resolve_and_cache(
@@ -622,9 +690,18 @@ async def _resolve_and_cache(
         # код (и в итоге HTTP-статус) не путал это с «трек реально недоступен».
         await set_cache_async(key, {"transient": True}, expire=_TRANSIENT_TTL)
         raise
-    except Exception as exc:  # noqa: BLE001 — TrackUnavailable и прочее
-        await set_cache_async(key, {"unavailable": True}, expire=_UNAVAILABLE_TTL)
-        raise TrackUnavailable(video_id) from exc
+    except TrackUnavailable:
+        # Не кэшируем 404: даже явный ответ YouTube может зависеть от IP,
+        # авторизации и выбранного player client. Следующий запуск сможет
+        # повторить резолв с другим контекстом, а не 10 минут показывать ошибку.
+        raise
+    except Exception as exc:  # noqa: BLE001 — не маскируем сбои под 404
+        # Непредвиденная ошибка резолва (сеть, yt-dlp, формат) не доказывает,
+        # что ролик удалён. Короткий transient-кэш сохраняет сервис от шквала
+        # повторов, а warning со стеком даёт диагностировать первопричину.
+        logger.warning("audio resolve failed for %s", video_id, exc_info=True)
+        await set_cache_async(key, {"transient": True}, expire=_TRANSIENT_TTL)
+        raise TransientResolveError(video_id) from exc
 
     await set_cache_async(key, {"url": url, "ext": ext, "total": total}, expire=_RESOLVE_TTL)
     return url, ext, total, True
@@ -676,7 +753,10 @@ _WARM_BYTES = 2 * 1024 * 1024
 # прогреть сразу несколько треков очереди, и без лимита это означало бы залп
 # параллельных yt-dlp extract_info в сторону YouTube (риск 429). Реальные
 # /stream-запросы семафор не проходят — воспроизведение не троттлится.
-_PREFETCH_SEM = asyncio.Semaphore(2)
+# С Invidious как основным резолвером (лёгкий локальный HTTP-запрос) прогрев
+# заметно дешевле, чем во времена чистого yt-dlp, — параллелизм чуть выше,
+# чтобы расширенное окно префетча (поиск/плейлисты) прогревалось быстрее.
+_PREFETCH_SEM = asyncio.Semaphore(3)
 # Скачивание первых байт — просто GET к CDN, узкое место не оно: параллелизм
 # можно держать заметно выше, чем у yt-dlp-резолвов.
 _WARM_SEM = asyncio.Semaphore(8)
@@ -873,6 +953,11 @@ async def _probe(client: httpx.AsyncClient, url: str) -> tuple[int, Optional[int
         resp = await client.get(url, headers={"Range": "bytes=0-0"})
     except httpx.HTTPError:
         return 599, None
+    # Некоторые CDN отвечают 206, но закрывают соединение без единого байта.
+    # Такой URL нельзя передавать в StreamingResponse: первый же Range от
+    # браузера закончится short segment. httpx уже дочитал тело ответа.
+    if 200 <= resp.status_code < 300 and not resp.content:
+        return 599, None
     cr = resp.headers.get("content-range")  # 'bytes 0-0/12345'
     total = None
     if cr and "/" in cr:
@@ -893,8 +978,8 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     фронта: 404 значит «трек мёртв, скипай», 503 — «попробуй ещё раз», и
     смешивать их приводило к тому, что обычный таймаут yt-dlp выглядел как
     недоступный трек и трек автоматически пропускался. ``fresh`` — True, если
-    URL только что получен от yt-dlp (пропускаем валидирующий probe), False —
-    если отдан из кэша. ``cache_id`` — безопасное для файловой системы имя
+    URL только что получен от резолвера, False — если отдан из кэша. ``cache_id``
+    — безопасное для файловой системы имя
     (используется как имя кэш-файла и должно быть уникальным между источниками).
     """
     # Уже качали этот трек — отдаём с диска, минуя yt-dlp и CDN источника.
@@ -925,18 +1010,16 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     media_type = MEDIA_TYPES.get(ext, "audio/mp4")
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=60.0))
-    # Content-Length должен ТОЧНО совпадать с тем, что реально отдаст эта
-    # googlevideo-ссылка, иначе Starlette падает с "content shorter than
-    # Content-Length". Авторитетный размер — из content-range самого googlevideo
-    # (probe), а filesize из yt-dlp может расходиться. Probe заодно валидирует
+    # Размер нужен для корректного Range и дискового кэша. Авторитетный размер
+    # — из content-range самого googlevideo (probe), а filesize из yt-dlp может
+    # расходиться. Probe заодно валидирует
     # ссылку: кэшированный URL мог протухнуть (403) — тогда резолвим заново
     # и пробуем ещё раз, ДО отправки заголовков клиенту.
     #
-    # Если URL только что получен от yt-dlp (fresh=True), он заведомо рабочий —
-    # probe для него лишний RTT на холодном старте, пропускаем при известном
-    # точном размере. То же для прогретого трека: warm-файл скачан по этому же
-    # URL при префетче (URL уже проверен), а первые байты отдаём с диска —
-    # probe нужен только для непрогретого URL из Redis-кэша.
+    # Проверяем даже свежий URL: Invidious/yt-dlp могут вернуть ссылку, которую
+    # CDN сразу закрывает пустым 206. Один range 0-0 дешевле, чем запускать
+    # StreamingResponse с нерабочим источником и заставлять браузер повторять
+    # запросы.
     def _warm_size(path: str) -> int:
         try:
             return os.path.getsize(path)
@@ -946,7 +1029,14 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     warm_path = _warm_file(cache_id, ext)
     early_start, _ = _parse_range(request.headers.get("range"), None)
     warm_size = _warm_size(warm_path) if early_start == 0 else 0
-    if (fresh or warm_size > 0) and total is not None:
+    if (warm_size > 0 or fresh) and total is not None:
+        # Probe не нужен, когда ссылке и размеру можно верить и так:
+        #   * прогретый префетчем трек — URL уже провалидирован при скачивании
+        #     warm-головы, авторитетный total лежит в кэше резолва;
+        #   * свежий (только что полученный от резолвера) URL с точным total.
+        # Пропуск экономит целый RTT до CDN перед первым байтом. Если ссылка
+        # всё же окажется мёртвой (протухла, редкий пустой 206 от CDN) — живой
+        # proxy пере-резолвит её на лету (см. try_reresolve), не роняя стрим.
         status, probed = 200, None
     else:
         status, probed = await _probe(client, direct_url)
@@ -973,10 +1063,7 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
         # После пере-резолва расширение (и warm-путь) могли смениться.
         warm_path = _warm_file(cache_id, ext)
         warm_size = _warm_size(warm_path) if early_start == 0 else 0
-        if total is not None:
-            status, probed = 200, None
-        else:
-            status, probed = await _probe(client, direct_url)
+        status, probed = await _probe(client, direct_url)
         if status >= 400:
             await client.aclose()
             logger.warning("fresh url also dead for %s (probe %s)", cache_id, status)
@@ -1001,6 +1088,13 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     async def proxy():
         # Тянем сегментами по _SEGMENT байт с повтором при обрыве — googlevideo
         # надёжно отдаёт короткие range-запросы, но рвёт длинные потоки.
+        nonlocal direct_url
+        # Одна попытка пере-резолва протухшей ссылки прямо посреди стрима:
+        # заголовки уже отправлены, но содержимое файла у нового URL то же,
+        # так что можно продолжить с той же позиции. Покрывает и пропущенный
+        # probe у прогретых треков, и длинные стримы, переживающие срок жизни
+        # googlevideo-ссылки (раньше такой стрим просто молча обрывался).
+        reresolved = False
         tmp = None
         tmp_path = None
         committed = False
@@ -1012,6 +1106,38 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                 tmp = None
         try:
             pos = req_start
+            got = 0
+
+            async def try_reresolve(reason: str) -> bool:
+                """Одна попытка добыть свежую ссылку, не роняя начатый стрим.
+
+                Содержимое файла у нового URL то же (при том же формате),
+                поэтому можно продолжить с текущей позиции — уже отправленные
+                заголовки и байты остаются валидными.
+                """
+                nonlocal direct_url, reresolved
+                if reresolved:
+                    return False
+                reresolved = True
+                try:
+                    new_url, new_ext, _nt, _nf = await resolver(True)
+                except Exception:  # noqa: BLE001
+                    logger.warning("mid-stream re-resolve failed for %s", cache_id)
+                    return False
+                if new_ext != ext:
+                    # Другое расширение = другой формат и другие байты —
+                    # доклеивать их с середины нельзя.
+                    logger.warning(
+                        "mid-stream re-resolve changed format for %s (%s -> %s)",
+                        cache_id, ext, new_ext,
+                    )
+                    return False
+                logger.info(
+                    "mid-stream re-resolve for %s (%s @%d)", cache_id, reason, pos + got
+                )
+                direct_url = new_url
+                return True
+
             # Прогретое начало трека (см. _warm_first_chunk) отдаём с диска —
             # первые байты уходят клиенту мгновенно, живой proxy подхватывает
             # с позиции warm-файла. Только для запросов с начала файла (pos=0),
@@ -1039,33 +1165,64 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                 if req_end is not None:
                     seg_end = min(seg_end, req_end)
                 headers = {"Range": f"bytes={pos}-{seg_end}"}
+                expected = seg_end - pos + 1
 
                 got = 0
                 for attempt in range(_SEGMENT_RETRIES):
                     try:
                         async with client.stream("GET", direct_url, headers=headers) as up:
                             if up.status_code >= 400:
+                                if await try_reresolve(f"upstream {up.status_code}"):
+                                    continue
                                 logger.warning("upstream %s for %s", up.status_code, cache_id)
                                 return
                             async for chunk in up.aiter_bytes(chunk_size=65536):
+                                # CDN иногда игнорирует конец Range и шлёт
+                                # больше запрошенного. Не отдаём байты другого
+                                # сегмента: следующая итерация заберёт их
+                                # правильным Range-запросом.
+                                remaining = expected - got
+                                if remaining <= 0:
+                                    break
+                                if len(chunk) > remaining:
+                                    chunk = chunk[:remaining]
                                 # Пишем в кэш только новые (за пределами уже
                                 # полученных got) байты сегмента.
                                 if tmp is not None:
                                     tmp.write(chunk)
                                 got += len(chunk)
                                 yield chunk
-                        break
+                                if got == expected:
+                                    break
+                        if got == expected:
+                            break
+                        # Нормально закрывшееся соединение с неполным Range —
+                        # это такой же обрыв, как HTTPError. Дособираем хвост,
+                        # иначе Content-Length не совпадёт с телом ответа.
+                        if req_end is None:
+                            break  # настоящий EOF у потока без известной длины
+                        if attempt == _SEGMENT_RETRIES - 1:
+                            # Ретраи не помогли — возможно, ссылка мертва (CDN
+                            # отвечает 2xx, но закрывает соединение без байтов).
+                            # break: outer while повторит остаток сегмента уже
+                            # с пере-резолвленной ссылкой.
+                            if await try_reresolve("short segment"):
+                                break
+                            logger.warning("short segment %s @%d (%d/%d bytes)", cache_id, pos, got, expected)
+                            return
+                        headers = {"Range": f"bytes={pos + got}-{seg_end}"}
                     except httpx.HTTPError as exc:
                         # Частичный сегмент — досбираем оставшийся хвост.
                         if got:
                             headers = {"Range": f"bytes={pos + got}-{seg_end}"}
                         if attempt == _SEGMENT_RETRIES - 1:
+                            if await try_reresolve(f"segment error: {exc}"):
+                                break
                             logger.warning("segment failed %s @%d: %s", cache_id, pos, exc)
                             return
 
-                advanced = (seg_end - pos + 1)
-                pos += advanced
-                if req_end is None and advanced < _SEGMENT:
+                pos += got
+                if req_end is None and got < expected:
                     break
 
             # Дошли до конца файла без обрыва — фиксируем кэш атомарно.
@@ -1093,7 +1250,16 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                     pass
 
     status_code = 200
-    headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-store"}
+    # Содержимое трека для данного cache_id неизменно, так что при известном
+    # размере ответ можно кэшировать браузеру. Это критично за медленным
+    # туннелем (ngrok): скрытый preload-<audio> следующего трека буферизует
+    # байты заранее, и при переключении браузер переиспользует их из HTTP-кэша
+    # вместо повторной перекачки через узкий туннель. С no-store каждый старт
+    # качал те же байты дважды. private — кэш только в браузере слушателя.
+    # Без известного total остаёмся на no-store: не хотим закэшированных
+    # обрывков от стрима неизвестной длины.
+    cache_control = "private, max-age=3600" if total is not None else "no-store"
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
     if total is not None:
         if request.headers.get("range"):
             status_code = 206

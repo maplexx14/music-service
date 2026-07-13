@@ -15,6 +15,22 @@ function shuffleArray(arr) {
 // (это нормально: кэш на бэке в Redis всё равно тёплый).
 const requestedPrefetchIds = new Set()
 
+// Запись скипа — негативный сигнал для рекомендаций, поэтому важно не терять
+// его молча на сетевой ошибке (как было раньше с голым .catch(() => {})).
+// Несколько попыток с небольшой задержкой; skipErrorToast, чтобы фоновая
+// телеметрия не спамила пользователя тостами при временных сбоях сети.
+function postSkipWithRetry(dbId, attemptsLeft = 3, delayMs = 500) {
+  api
+    .post(`/tracks/${dbId}/skip`, null, { skipErrorToast: true })
+    .catch((error) => {
+      if (attemptsLeft > 1) {
+        setTimeout(() => postSkipWithRetry(dbId, attemptsLeft - 1, delayMs * 2), delayMs)
+      } else {
+        console.error('Failed to record skip after retries:', error)
+      }
+    })
+}
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -65,7 +81,7 @@ const usePlayerStore = create((set, get) => ({
     const { currentTrack } = get()
     if (!currentTrack) return null
     if (typeof currentTrack.id === 'number') return currentTrack.id
-
+  
     const externalId =
       currentTrack.external_id ?? String(currentTrack.id).split(':').slice(1).join(':')
     const { data } = await api.post('/tracks/import', {
@@ -239,7 +255,7 @@ const usePlayerStore = create((set, get) => ({
     if (get().flowLoading) return
     set({ flowLoading: true })
     try {
-      const { data } = await api.get('/recommendations/flow', { params: { limit: 20 } })
+      const { data } = await api.get('/recommendations/flow', { params: { limit: 15 } })
       if (!data || data.length === 0) return false
       get().playPlaylist(data, 0, 'flow')
       // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
@@ -265,7 +281,7 @@ const usePlayerStore = create((set, get) => ({
       // Исключаем то, что уже в очереди (хвост до 100 треков).
       const exclude = queue.slice(-100).map((t) => t.id).join(',')
       const { data } = await api.get('/recommendations/flow', {
-        params: { limit: 20, exclude },
+        params: { limit: 15, exclude },
       })
       const known = new Set(get().queue.map((t) => t.id))
       const fresh = (data || []).filter((t) => !known.has(t.id))
@@ -347,15 +363,22 @@ const usePlayerStore = create((set, get) => ({
   // Скип как негативный сигнал: если переключили, прослушав <25% трека.
   // nextTrack вызывается и при естественном окончании — там прогресс ~100%,
   // так что порог отсекает его сам собой.
+  //
+  // Важно: если duration ещё не известна (быстрое переключение — метаданные
+  // не успели прогрузиться), это НЕ повод молчать. Раз duration не пришла,
+  // значит с момента старта трека прошло совсем немного — то есть точно
+  // меньше 25%. Раньше здесь был ранний return при неизвестной duration, из-за
+  // чего при быстром проматывании самые очевидные скипы (переключили почти
+  // сразу) массово не записывались.
   _recordSkipIfNeeded: () => {
     const { currentTrack, currentTime, duration, isPlaying } = get()
     if (!currentTrack || !isPlaying) return
-    if (!duration || isNaN(duration) || duration <= 0) return
-    if (currentTime / duration >= 0.25) return
+    const durationKnown = duration && !isNaN(duration) && duration > 0
+    if (durationKnown && currentTime / duration >= 0.25) return
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
     if (!dbId) return // внешний трек ещё не материализован — сигнал пропускаем
-    api.post(`/tracks/${dbId}/skip`).catch(() => {})
+    postSkipWithRetry(dbId)
   },
 
   nextTrack: () => {

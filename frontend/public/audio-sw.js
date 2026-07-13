@@ -21,6 +21,7 @@ self.addEventListener('fetch', (event) => {
 
   const headers = new Headers(request.headers)
   headers.set('tuna-skip-browser-warning', '1')
+  headers.set('ngrok-skip-browser-warning', '1')
 
   event.respondWith(
     fetch(new Request(request, { headers })).catch(() => fetch(request)),
