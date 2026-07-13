@@ -136,11 +136,46 @@
   text-decoration: none;
   transition: all 0.2s;
   display: block;
+  position: relative;
+}
+
+.playlist-delete-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: all 0.2s;
+}
+
+.playlist-card:hover .playlist-delete-btn {
+  opacity: 1;
+}
+
+.playlist-delete-btn:hover {
+  background-color: #e53935;
+  transform: scale(1.1);
 }
 
 .playlist-card:hover {
   background-color: #282828;
   transform: translateY(-4px);
+}
+
+.playlist-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
 }
 
 .playlist-cover {

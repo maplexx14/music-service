@@ -579,6 +579,23 @@ async def search_soundcloud_playlists(q: str, limit: int = 10) -> List[ExternalP
     return results
 
 
+async def tracks_by_ids(request: Request, ids: List) -> dict:
+    """Батч-дотяжка полных метаданных треков по числовым id через api-v2
+    /tracks?ids= → {str(id): ExternalTrackResponse}. Используется, когда есть
+    только id треков (плоский yt-dlp даёт лишь id/permalink без названия,
+    артиста и длительности → иначе импорт помечает треки Unknown/0)."""
+    numeric = [str(i) for i in ids if str(i).isdigit()]
+    out: dict = {}
+    for i in range(0, len(numeric), 50):
+        batch = numeric[i : i + 50]
+        fetched = await _api_get("/tracks", {"ids": ",".join(batch)})
+        for t in fetched or []:
+            track = _track_from_api(request, t)
+            if track:
+                out[str(t.get("id"))] = track
+    return out
+
+
 async def get_playlist_tracks(
     request: Request, playlist_id: str
 ) -> tuple[Optional[ExternalPlaylistResponse], List[ExternalTrackResponse]]:

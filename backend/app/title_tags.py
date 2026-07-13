@@ -17,6 +17,16 @@ _STOPWORDS = {
     "remastered", "remaster", "version", "prod", "mix", "original",
     "featuring", "type", "beat", "instrumental", "the", "and",
     "официальный", "клип", "текст", "слова", "аудио",
+    # Модификаторы формата, а не темы/жанра (см. genre_keywords.MODIFIER_KEYWORDS)
+    # — "ремикс"/"remix" встречается почти в каждом названии у любителей
+    # ремиксов конкретного жанра/темы и без этого превращался в тег,
+    # матчащий ЛЮБОЙ трек с "Remix" в названии независимо от темы/жанра.
+    "remix", "ремикс", "mashup", "мэшап", "bootleg", "ver", "тикток", "tiktok",
+    # Слова стиля-обработки ("... Slowed + Reverb", "Sped Up", "Nightcore") —
+    # тоже формат, а не вкус: как тег матчат ЛЮБОЙ замедленный/ускоренный трек
+    # (напр. постороннее UK-drill "LV Sandals (Slowed)").
+    "slowed", "reverb", "реверб", "sped", "spedup", "nightcore", "найткор",
+    "slow", "speed", "boosted",
 }
 _WORD_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 _MIN_WORD_LEN = 3
@@ -54,8 +64,30 @@ def build_title_tag_profile(weighted_titles: Iterable[tuple]) -> dict:
     return dict(top)
 
 
-def build_tag_filters(title_col, tags: Iterable[str]) -> list:
-    """SQL-условия (title ILIKE %tag%) для переданных тегов."""
-    from sqlalchemy import func
+def build_tag_filters(title_col, tags: Iterable[str], min_matches: int = 2) -> list:
+    """SQL-условия для переданных тегов вкуса — совпадение НЕСКОЛЬКИХ
+    (min_matches) тегов в одном названии ОДНОВРЕМЕННО.
 
-    return [func.lower(title_col).like(f"%{tag.lower()}%") for tag in tags]
+    Одно совпадающее слово само по себе не значит "тот же дух" — теги
+    вытаскиваются статистически из истории и часто содержат неоднозначные
+    "тематические" слова (например "гей"), которые встречаются и в
+    совершенно посторонних треках на ту же тему (серьёзные песни про геев,
+    иностранные совпадения по подстроке "Gây"), а не только в русском
+    мем-контенте, который пользователь реально слушает.
+
+    Поэтому лоне-тег НЕ используется как самостоятельный фильтр-пылесос:
+    если у юзера меньше min_matches значимых тегов — тег-матчинг не даёт
+    условий вовсе (return []), и подбор опирается на артистов + радио-сиды.
+    Когда тегов хватает, требуем пару (напр. "сво" И "гей") — это отсекает
+    случайные одиночные совпадения и оставляет специфичный русский мем."""
+    from itertools import combinations
+
+    from sqlalchemy import and_, func
+
+    tags = list(tags)
+    if len(tags) < min_matches:
+        return []
+    return [
+        and_(*(func.lower(title_col).like(f"%{tag.lower()}%") for tag in combo))
+        for combo in combinations(tags, min_matches)
+    ]

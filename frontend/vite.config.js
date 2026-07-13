@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      usePolling: true,
       allowedHosts: true,
       port: 3000,
       proxy: {

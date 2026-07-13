@@ -23,8 +23,15 @@ from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.artist_genre import artists_matching_keywords
-from app.genre_keywords import build_keyword_filters, infer_genre_from_text, top_genre_keywords
+from app.genre_keywords import (
+    build_keyword_filters,
+    genre_is_compatible,
+    infer_genre_from_text,
+    top_genre_keywords,
+)
+from app.lang import is_foreign_script
 from app.title_tags import build_tag_filters, build_title_tag_profile
+from app.diversity import cap_per_artist
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
@@ -47,12 +54,20 @@ _RADIO_LIMIT = 50
 _SC_EXPLORE_ARTISTS = 6
 _SC_EXPLORE_LIMIT = 15
 _SC_EXPLORE_TTL = 1800
+# Сколько из SC-разведочных слотов ГАРАНТИРОВАННО отдаём артистам из
+# импортированных плейлистов — независимо от их весового ранга. Без этого
+# история прослушиваний (более высокий вес) вытесняет плейлистных артистов из
+# разведки целиком, и импортированный плейлист не влияет на волну.
+_SC_PLAYLIST_ARTISTS = 3
 # Разведка по пользовательским тегам (title_tags) — поиск НОВЫХ треков (не
 # обязательно от уже знакомых артистов) прямо у провайдеров по словам, которые
 # пользователь сам "выбрал" своей историей прослушивания.
 _TAG_EXPLORE_TAGS = 3
 _TAG_EXPLORE_LIMIT = 15
 _TAG_EXPLORE_TTL = 1800
+# Максимум треков одного артиста в "эксплуатации" — иначе сортировка по
+# play_count раз за разом выдаёт одних и тех же самых заигранных артистов.
+_MAX_PER_ARTIST = 2
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого окна «последние N записей» — иначе у активных
 # пользователей (сотни прослушиваний за сессию) более ранний, но всё ещё
@@ -100,6 +115,19 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         .limit(_TASTE_QUERY_LIMIT)
         .all()
     ) if liked_playlist_id is not None else []
+    # Треки из СОБСТВЕННЫХ (не is_liked) плейлистов — юзер их сам курировал,
+    # это положительный сигнал вкуса (и источник радио-сидов). Дедуп по
+    # Track.id (трек может быть в нескольких плейлистах), свежие первыми.
+    playlisted = (
+        db.query(Track, func.max(playlist_tracks.c.added_at).label("added_at"))
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user_id, Playlist.is_liked == False)
+        .group_by(Track.id)
+        .order_by(desc("added_at"))
+        .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
     # Часто играемые: только с реальным весом (>=2 проигрываний), иначе разовые
     # клики (тест/случайный запуск) создают сигнал вкуса из шума — особенно
     # заметно на SC-разведке, которая ищет по имени артиста напрямую.
@@ -134,6 +162,14 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     weighted_titles: list = []  # (title, decay_weight) — для build_title_tag_profile
     seeds: List[str] = []  # video_id ytmusic-треков, свежие первыми
     seen_seed = set()
+    # Плейлист-ПРОИЗВОДНЫЕ сигналы — отдельно от весового топа, чтобы дать им
+    # ГАРАНТИРОВАННУЮ долю в разведке. Иначе импортированный плейлист (особенно
+    # SoundCloud, чьи треки не могут сеять YT-радио) полностью вытесняется
+    # историей прослушиваний: play_count перевешивает +2.0 за курирование, и
+    # плейлистные артисты не попадают ни в топ-сидов, ни в топ-SC-разведки.
+    playlist_artist_keys: List[str] = []  # порядок = свежесть добавления
+    seen_pl_artist = set()
+    playlist_seeds: List[str] = []  # ytmusic video_id из плейлистов, свежие первыми
 
     def _artist_key(name: str) -> str:
         return re.sub(r"\s+", " ", (name or "").strip().lower())
@@ -151,6 +187,25 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
+
+    # Плейлистные треки — вес чуть ниже явных лайков (2.0 против 3.0), но выше
+    # обычного прослушивания: курирование сильный сигнал.
+    for track, added_at in playlisted:
+        key = _artist_key(track.artist)
+        artist_weight[key] = artist_weight.get(key, 0) + 2.0 * _decay(added_at)
+        artist_display.setdefault(key, track.artist)
+        genre = track.genre or infer_genre_from_text(track.title, track.artist)
+        if genre:
+            genres.append(genre)
+        weighted_titles.append((track.title, 2.0 * _decay(added_at)))
+        if key not in seen_pl_artist:
+            playlist_artist_keys.append(key)
+            seen_pl_artist.add(key)
+        if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
+            seeds.append(track.external_id)
+            seen_seed.add(track.external_id)
+        if track.source == "ytmusic" and track.external_id:
+            playlist_seeds.append(track.external_id)
 
     for track, play_count, last_played in played:
         w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
@@ -193,20 +248,35 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         .limit(_RECENT_PLAYS_EXCLUDE)
         .all()
     )
-    recent_ids = {t.id for t in recent} | skipped_ids
-    recent_keys = {_norm_key(t.artist, t.title) for t in recent} | skipped_keys
-    recent_video_ids = {t.external_id for t in recent if t.external_id} | skipped_video_ids
+    # Плейлистные треки уже в коллекции — тоже исключаем из потока.
+    pl_tracks = [t for t, _ in playlisted]
+    recent_ids = {t.id for t in recent} | skipped_ids | {t.id for t in pl_tracks}
+    recent_keys = (
+        {_norm_key(t.artist, t.title) for t in recent}
+        | skipped_keys
+        | {_norm_key(t.artist, t.title) for t in pl_tracks}
+    )
+    recent_video_ids = (
+        {t.external_id for t in recent if t.external_id}
+        | skipped_video_ids
+        | {t.external_id for t in pl_tracks if t.external_id}
+    )
 
     # Холодный старт: нет своих сидов — берём популярные ytmusic-треки сервиса.
+    # НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых юзеров волна одинаковая —
+    # одни и те же сиды → один и тот же radio-пул), а случайная выборка из
+    # широкого пула популярного: у каждого юзера (и на каждую подгрузку) свой
+    # набор сидов → свой поток.
     if not seeds:
         popular_yt = (
-            db.query(Track)
+            db.query(Track.external_id)
             .filter(Track.source == "ytmusic", Track.external_id.isnot(None))
             .order_by(desc(Track.play_count))
-            .limit(5)
+            .limit(60)
             .all()
         )
-        seeds = [t.external_id for t in popular_yt if t.external_id not in skipped_video_ids]
+        pool = [r[0] for r in popular_yt if r[0] not in skipped_video_ids]
+        seeds = random.sample(pool, min(5, len(pool)))
 
     # В топ идут только артисты с положительным итоговым весом.
     top_artist_keys = [
@@ -218,8 +288,20 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
 
+    # Плейлистные артисты для ГАРАНТИРОВАННОЙ SC-разведки: свежие первыми,
+    # заскипанные в минус — исключаем (их пользователь явно не хочет).
+    playlist_artists = [
+        artist_display.get(k, k)
+        for k in playlist_artist_keys
+        if k not in banned_artists
+    ]
+    # Сиды-производные плейлистов (ytmusic) — исключаем скипнутые.
+    playlist_seeds = [s for s in playlist_seeds if s not in skipped_video_ids]
+
     return {
         "seeds": seeds,
+        "playlist_artists": playlist_artists,
+        "playlist_seeds": playlist_seeds,
         "artists": top_artists,
         "artist_keys": top_artist_keys,
         "genres": list(dict.fromkeys(genres)),
@@ -251,34 +333,67 @@ def _local_candidates(db: Session, profile: dict, limit: int) -> List[Track]:
         # Слова, которые пользователь сам "выбрал" тем, что регулярно слушает
         # треки с ними в названии ("гей ремикс" и т.п.) — не привязаны ни к
         # какому заранее прописанному жанру, в отличие от genre_keywords выше.
-        filters.append(or_(*build_tag_filters(Track.title, profile["title_tags"])))
+        # Одиночное неоднозначное слово ("гей") как фильтр НЕ используется —
+        # build_tag_filters требует пару тегов и вернёт [] на одном.
+        tag_conditions = build_tag_filters(Track.title, profile["title_tags"])
+        if tag_conditions:
+            filters.append(or_(*tag_conditions))
 
     # Привязка жанра/темы к артисту целиком (см. artist_genre.py): если хотя
     # бы часть каталога артиста в базе матчит нужные слова, подтягиваем ВСЕ
     # его треки — а не только тот единственный, где слово буквально есть в
     # названии. Без этого при тестовом прослушивании нескольких "гей"-треков
     # в рекомендации попадал только один трек с этим словом в заголовке.
-    artist_bound_keywords = top_genre_keywords(profile.get("genre_counts", {})) + list(
-        profile.get("title_tags") or []
-    )
-    genre_artist_keys = artists_matching_keywords(db, artist_bound_keywords)
+    # Жанровые слова однозначны — хватает одного совпадения; теги вкуса
+    # (title_tags) могут быть неоднозначным словом на тему ("гей") — там
+    # требуем пару тегов разом, иначе один случайный серьёзный трек с тем же
+    # словом у постороннего артиста тянет весь его чужой каталог.
+    genre_artist_keys = artists_matching_keywords(db, top_genre_keywords(profile.get("genre_counts", {})))
+    genre_artist_keys |= artists_matching_keywords(db, profile.get("title_tags") or [], min_matches=2)
     if genre_artist_keys:
         filters.append(func.lower(Track.artist).in_(genre_artist_keys))
+
+    artist_keys = set(profile["artist_keys"])
+    user_genres = set(profile.get("genres") or [])
+
+    def _keep(t: Track) -> bool:
+        # Артисты, которых пользователь уже реально слушает, — доверенный
+        # сигнал сам по себе, жанр не сверяем. Остальное (совпадение по
+        # ключевому слову/тегу в названии) само по себе не значит "тот же
+        # дух" — трек мог попасть в кандидаты по случайному слову в
+        # заголовке, будучи из совсем другого жанра.
+        key = re.sub(r"\s+", " ", (t.artist or "").strip().lower())
+        if key in artist_keys:
+            return True
+        # Иностранное (вьетнам/CJK/деванагари…) юзер стабильно скипает.
+        if is_foreign_script(t.title):
+            return False
+        return genre_is_compatible(t.genre, t.title, t.artist, user_genres)
 
     candidates: List[Track] = []
     if filters:
         q = db.query(Track).filter(or_(*filters))
         if profile["recent_ids"]:
             q = q.filter(~Track.id.in_(profile["recent_ids"]))
-        candidates = q.order_by(desc(Track.play_count)).limit(limit * 3).all()
+        candidates = q.order_by(desc(Track.play_count)).limit(limit * 6).all()
+        candidates = [t for t in candidates if _keep(t)]
+        candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
 
-    # Добор популярным, если по вкусу нашлось мало.
+    # Добор популярным, если по вкусу нашлось мало. Даже глобально популярное
+    # НЕ должно быть иностранным (вьетнам/CJK/…) — юзер такое стабильно скипает,
+    # а этот путь идёт мимо тег-матчинга, так что без фильтра сюда протекали
+    # нерелевантные иностранные хиты вообще без совпадения по тегам. И берём
+    # СЛУЧАЙНУЮ выборку из широкого пула популярного, а не фиксированный топ —
+    # иначе у всех юзеров с тонким вкусом добор одинаковый (не «свой у каждого»).
     if len(candidates) < limit:
         skip = {t.id for t in candidates} | profile["recent_ids"]
         q = db.query(Track)
         if skip:
             q = q.filter(~Track.id.in_(skip))
-        candidates.extend(q.order_by(desc(Track.play_count)).limit(limit * 2).all())
+        pool = [t for t in q.order_by(desc(Track.play_count)).limit(limit * 10).all()
+                if not is_foreign_script(t.title)]
+        random.shuffle(pool)
+        candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
 
     return candidates
 
@@ -476,12 +591,18 @@ async def get_flow(
     ]
 
     def _matches_taste(t: ExternalTrackResponse) -> bool:
+        # Иностранное (вьетнам/CJK/…) юзер стабильно скипает — режем из радио.
+        if is_foreign_script(t.title):
+            return False
         if not taste_keywords:
             return True
         text = f"{t.title} {t.artist}".lower()
         return any(kw in text for kw in taste_keywords)
 
-    seeds = profile["seeds"][:10]
+    # Сиды из ytmusic-плейлистов идут ПЕРВЫМИ (гарантированная доля радио от
+    # курированного), затем остальные по свежести. dict.fromkeys дедупит,
+    # сохраняя приоритет плейлистных.
+    seeds = list(dict.fromkeys(profile["playlist_seeds"] + profile["seeds"]))[:10]
     if seeds:
         order = random.sample(seeds, len(seeds))
         for wave in range(0, min(len(order), 6), 2):
@@ -497,22 +618,34 @@ async def get_flow(
     # Уже целевой источник (сам артист — часть вкуса), доп. фильтр по теме не
     # нужен — иначе выкинули бы легитимные треки любимого артиста без тега в
     # заголовке.
-    sc_artists = profile["artists"][:_SC_EXPLORE_ARTISTS]
+    # Гарантированная доля плейлистным артистам + добор весовым топом. Плейлист
+    # (особенно SoundCloud, чьи треки не сеют YT-радио) иначе не влияет на
+    # разведку вообще: его артисты по весу проигрывают истории прослушиваний.
+    sc_artists = list(
+        dict.fromkeys(
+            profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"]
+        )
+    )[:_SC_EXPLORE_ARTISTS]
     if sc_artists:
         sc_pools = await asyncio.gather(
             *(_soundcloud_pool(request, a) for a in sc_artists)
         )
         merged.extend(t for pool in sc_pools for t in pool)
 
-    # Разведка по тегам вкуса: не только каталог знакомых артистов, но и
-    # реально новые треки (в т.ч. от незнакомых авторов), совпадающие по
-    # слову, которое пользователь сам "выбрал" своей историей прослушивания.
+    # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
+    # авторов). НЕ ищем по одиночному неоднозначному слову ("гей") — провайдеры
+    # отдают серьёзные/иностранные треки на тему. Ищем комбинацию top-тегов
+    # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
+    # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
     tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
-    if tag_words:
-        tag_pools = await asyncio.gather(
-            *(_tag_pool(request, tag) for tag in tag_words)
-        )
-        merged.extend(t for pool in tag_pools for t in pool)
+    if len(tag_words) >= 2:
+        query = " ".join(tag_words[:2])
+        tag_tracks = [
+            t
+            for t in await _tag_pool(request, query)
+            if not is_foreign_script(t.title)
+        ]
+        merged.extend(tag_tracks)
 
     if merged:
         random.shuffle(merged)

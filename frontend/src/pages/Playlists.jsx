@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Download } from 'lucide-react'
+import { Plus, Download, Trash2 } from 'lucide-react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
@@ -102,6 +102,20 @@ function Playlists() {
       toast.error(detail)
     } finally {
       setImporting(false)
+    }
+  }
+
+  const handleDeletePlaylist = async (e, playlist) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!window.confirm(`Удалить плейлист «${playlist.name}»?`)) return
+    try {
+      await api.delete(`/playlists/${playlist.id}`)
+      setPlaylists((prev) => prev.filter((p) => p.id !== playlist.id))
+      toast.success('Плейлист удалён')
+    } catch (error) {
+      const detail = error.response?.data?.detail || 'Не удалось удалить плейлист'
+      toast.error(detail)
     }
   }
 
@@ -240,23 +254,32 @@ function Playlists() {
       ) : (
         <div className="playlists-grid">
           {playlists.map((playlist) => (
-            <Link key={playlist.id} to={`/playlists/${playlist.id}`} className="playlist-card">
-              <img
-                src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                alt={playlist.name}
-                className="playlist-cover"
-                onError={handleCoverError}
-              />
-              <div className="playlist-info">
-                <div className="playlist-name">{playlist.name}</div>
-                {playlist.description && (
-                  <div className="playlist-description">{playlist.description}</div>
-                )}
-                <div className="playlist-tracks-count">
-                  {playlist.tracks?.length || 0} треков
+            <div key={playlist.id} className="playlist-card">
+              <button
+                className="playlist-delete-btn"
+                title="Удалить плейлист"
+                onClick={(e) => handleDeletePlaylist(e, playlist)}
+              >
+                <Trash2 size={18} />
+              </button>
+              <Link to={`/playlists/${playlist.id}`} className="playlist-card-link">
+                <img
+                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                  alt={playlist.name}
+                  className="playlist-cover"
+                  onError={handleCoverError}
+                />
+                <div className="playlist-info">
+                  <div className="playlist-name">{playlist.name}</div>
+                  {playlist.description && (
+                    <div className="playlist-description">{playlist.description}</div>
+                  )}
+                  <div className="playlist-tracks-count">
+                    {playlist.tracks?.length || 0} треков
+                  </div>
                 </div>
-              </div>
-            </Link>
+              </Link>
+            </div>
           ))}
         </div>
       )}

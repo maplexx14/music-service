@@ -4,15 +4,19 @@ from sqlalchemy import func, desc, or_
 from typing import List
 from datetime import datetime, timezone
 from collections import Counter
+import math
 import re
+import random
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User, user_track_plays, user_track_skips, playlist_tracks
 from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse
 from app.dependencies import get_current_active_user
-from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords
+from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords, genre_is_compatible
+from app.lang import is_foreign_script
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
+from app.diversity import cap_per_artist
 
 router = APIRouter()
 
@@ -28,6 +32,37 @@ _RECS_TTL = 300
 # лимит выборки — защита от неограниченного запроса, не смысловая отсечка.
 _TASTE_HALF_LIFE_DAYS = 14.0
 _TASTE_QUERY_LIMIT = 300
+
+# Сколько треков одного артиста максимум допускать подряд в выдаче — без
+# этого сортировка по play_count раз за разом выдаёт одних и тех же
+# нескольких самых заигранных артистов вкуса.
+_MAX_PER_ARTIST = 2
+
+# Порог, с которого артист считается «доверенным» по одному лишь
+# ПОЛОЖИТЕЛЬНОМУ сигналу (лайк/плейлист/повторы), без учёта скипов. Равен
+# весу одного явного лайка (3.0) — т.е. одного явного «Мне нравится» или
+# нескольких повторных прослушиваний достаточно. У доверенного артиста скипы
+# больше не режут весь каталог (см. ниже) — только сам скипнутый трек, и он и
+# так исключается из выдачи. У ещё НЕ доверенного скипы сильно влияют: он
+# попадает в сид, только если положительный сигнал перевешивает скипы.
+_ARTIST_TRUST_THRESHOLD = 3.0
+
+
+def _varied_popular(db: Session, exclude_ids: set, need: int) -> list:
+    """Случайная выборка из широкого пула популярного (без иностранного).
+    Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
+    старта, и для добора тонкой выдачи, чтобы рекомендации были свои у
+    каждого, а не один и тот же глобальный список."""
+    if need <= 0:
+        return []
+    q = db.query(Track)
+    if exclude_ids:
+        q = q.filter(~Track.id.in_(exclude_ids))
+    pool = [
+        t for t in q.order_by(desc(Track.play_count)).limit(max(need * 5, 100)).all()
+    ]
+    random.shuffle(pool)
+    return cap_per_artist(pool, _MAX_PER_ARTIST)[:need]
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -66,6 +101,22 @@ def get_recommendations(
         )
     liked_track_ids = [t.id for t, _added_at in liked]
 
+    # Треки из СОБСТВЕННЫХ (не is_liked) плейлистов юзера — он их сам курировал,
+    # это тоже положительный сигнал вкуса. Учитываем наравне с лайками и
+    # исключаем из выдачи (уже в коллекции). Трек может быть в нескольких
+    # плейлистах — дедуп по Track.id, берём самое свежее добавление.
+    playlisted = (
+        db.query(Track, func.max(playlist_tracks.c.added_at).label("added_at"))
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == current_user.id, Playlist.is_liked == False)
+        .group_by(Track.id)
+        .order_by(desc("added_at"))
+        .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
+    playlisted_track_ids = [t.id for t, _ in playlisted]
+
     # Часто играемые: только с реальным весом (>=2 проигрываний), иначе разовые
     # клики из поиска засоряют сид и тянут в выдачу случайных артистов.
     played = (
@@ -93,8 +144,9 @@ def get_recommendations(
     )
     skipped_track_ids = {row[0] for row in skipped}
 
-    # Combine liked and played track IDs
-    user_track_ids = list(set(liked_track_ids + played_track_ids))
+    # Combine liked, played and playlisted track IDs (всё это уже в коллекции
+    # юзера — исключаем из выдачи и используем как сигнал вкуса).
+    user_track_ids = list(set(liked_track_ids + played_track_ids + playlisted_track_ids))
 
     recommended_tracks = []
 
@@ -108,27 +160,58 @@ def get_recommendations(
         def _artist_key(name: str) -> str:
             return re.sub(r"\s+", " ", (name or "").strip().lower())
 
-        artist_weight: dict = {}
+        # Положительный сигнал вкуса (лайк/плейлист/повторы) и штраф за скипы
+        # считаем РАЗДЕЛЬНО — чтобы порог доверия применять к чистому плюсу.
+        # Интенсивность учитывается симметрично лог-масштабом (иначе любимый,
+        # но мемно-«пролистываемый» артист уходил в минус: play_count раньше
+        # игнорировался, а скип вычитал полный skip_count). Веса как во flow.py:
+        # лайк +3, плейлист +2, прослушивание 1+log1p(play_count), скип
+        # −1.5·log1p(skip_count).
+        artist_positive: dict = {}
+        artist_skip_penalty: dict = {}
         genres = []
         weighted_titles = []  # (title, decay_weight) — для build_title_tag_profile
+        # Лайки и треки из собственных плейлистов — сигнал курирования; лайк
+        # весомее (юзер явно добавил в «Мне нравится»).
         for t, added_at in liked:
             key = _artist_key(t.artist)
-            artist_weight[key] = artist_weight.get(key, 0) + 1 * _decay(added_at)
+            artist_positive[key] = artist_positive.get(key, 0) + 3.0 * _decay(added_at)
             genre = t.genre or infer_genre_from_text(t.title, t.artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, 1 * _decay(added_at)))
-        for t, _play_count, last_played in played:
+            weighted_titles.append((t.title, 3.0 * _decay(added_at)))
+        for t, added_at in playlisted:
             key = _artist_key(t.artist)
-            artist_weight[key] = artist_weight.get(key, 0) + 1 * _decay(last_played)
+            artist_positive[key] = artist_positive.get(key, 0) + 2.0 * _decay(added_at)
             genre = t.genre or infer_genre_from_text(t.title, t.artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, 1 * _decay(last_played)))
+            weighted_titles.append((t.title, 2.0 * _decay(added_at)))
+        for t, play_count, last_played in played:
+            w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
+            key = _artist_key(t.artist)
+            artist_positive[key] = artist_positive.get(key, 0) + w
+            genre = t.genre or infer_genre_from_text(t.title, t.artist)
+            if genre:
+                genres.append(genre)
+            weighted_titles.append((t.title, w))
         for _tid, artist, skip_count, last_skipped in skipped:
             key = _artist_key(artist)
-            artist_weight[key] = artist_weight.get(key, 0) - (skip_count or 1) * _decay(last_skipped)
-        artist_keys = [a for a, w in artist_weight.items() if w > 0]
+            artist_skip_penalty[key] = (
+                artist_skip_penalty.get(key, 0) + 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
+            )
+
+        # Доверенный артист: положительный сигнал сам по себе уверенный
+        # (>= порога) — тогда скипы НЕ бьют по всему каталогу, работают только
+        # на уровне скипнутого трека (он и так в exclude_ids). Ещё НЕ
+        # доверенный — скипы влияют сильно: пускаем в сид, только если плюс
+        # перевешивает штраф за скипы.
+        artist_keys = [
+            key
+            for key, pos in artist_positive.items()
+            if pos >= _ARTIST_TRUST_THRESHOLD
+            or pos - artist_skip_penalty.get(key, 0) > 0
+        ]
 
         # Кандидаты по вкусу; скипнутые треки исключаем целиком. Условия строим
         # только для непустых списков — у внешних треков жанра нет, и пустой
@@ -145,11 +228,13 @@ def get_recommendations(
             if kw_conditions:
                 taste_filters.append(or_(*kw_conditions))
         title_tags = list(build_title_tag_profile(weighted_titles).keys())
-        if title_tags:
-            # Слова, которые пользователь сам "выбрал" тем, что регулярно
-            # слушает треки с ними в названии — не привязаны ни к какому
-            # заранее прописанному жанру (в отличие от genre_keywords выше).
-            taste_filters.append(or_(*build_tag_filters(Track.title, title_tags)))
+        # Слова, которые пользователь сам "выбрал" тем, что регулярно слушает
+        # треки с ними в названии. Одиночное неоднозначное слово ("гей") как
+        # фильтр НЕ используется (тянет серьёзные/иностранные треки на ту же
+        # тему) — build_tag_filters требует пару тегов и вернёт [] на одном.
+        tag_conditions = build_tag_filters(Track.title, title_tags)
+        if tag_conditions:
+            taste_filters.append(or_(*tag_conditions))
         if artist_keys:
             taste_filters.append(func.lower(Track.artist).in_(artist_keys))
 
@@ -157,27 +242,58 @@ def get_recommendations(
         # артиста в базе матчит нужные слова, подтягиваем ВСЕ его треки — не
         # только тот единственный, где слово буквально есть в названии (иначе
         # тестовое прослушивание нескольких "гей"-треков даёт в рекомендациях
-        # только один совпавший по заголовку трек).
-        artist_bound_keywords = top_genre_keywords(Counter(genres)) + title_tags
-        genre_artist_keys = artists_matching_keywords(db, artist_bound_keywords)
+        # только один совпавший по заголовку трек). Жанровые слова однозначны
+        # — им хватает одного совпадения; теги вкуса (title_tags) могут быть
+        # неоднозначным словом на тему ("гей") — там требуем пару тегов
+        # разом, иначе один случайный серьёзный трек с тем же словом у
+        # постороннего артиста тянет весь его чужой каталог.
+        genre_artist_keys = artists_matching_keywords(db, top_genre_keywords(Counter(genres)))
+        genre_artist_keys |= artists_matching_keywords(db, title_tags, min_matches=2)
         if genre_artist_keys:
             taste_filters.append(func.lower(Track.artist).in_(genre_artist_keys))
 
+        exclude_ids = set(user_track_ids) | skipped_track_ids
         if taste_filters:
-            exclude_ids = set(user_track_ids) | skipped_track_ids
-            recommended_tracks = db.query(Track).filter(
+            # Берём с запасом (limit*3) — после genre-фильтра и cap_per_artist
+            # часть кандидатов отсеется.
+            pool = db.query(Track).filter(
                 or_(*taste_filters)
             ).filter(~Track.id.in_(exclude_ids)).order_by(
                 desc(Track.play_count)
-            ).limit(limit).all()
+            ).limit(limit * 3).all()
+            # Совпадение по слову в названии/теге само по себе не значит
+            # "тот же дух" — трек мог попасть в выдачу по случайному слову в
+            # заголовке, будучи из совсем другого жанра. Артистов, которых
+            # пользователь уже реально слушает, из проверки исключаем — это
+            # доверенный сигнал сам по себе.
+            user_genres = set(genres)
+            pool = [
+                t for t in pool
+                if _artist_key(t.artist) in artist_keys
+                or genre_is_compatible(t.genre, t.title, t.artist, user_genres)
+            ]
+            # Иностранное (вьетнам/CJK/деванагари и т.п.) юзер стабильно
+            # скипает — режем, кроме треков уже слушаемых им артистов.
+            pool = [
+                t for t in pool
+                if _artist_key(t.artist) in artist_keys or not is_foreign_script(t.title)
+            ]
+            recommended_tracks = cap_per_artist(pool, _MAX_PER_ARTIST)[:limit]
+
+        # Добор варьируемым популярным, если вкусовых нашлось мало ИЛИ вообще
+        # не набралось фильтров (напр. у юзера один played-трек, чей артист
+        # ушёл в минус из-за скипов → taste_filters пуст). Без этого такие
+        # юзеры видели ПУСТУЮ выдачу. Активных не задевает: у них уже >= limit.
+        if len(recommended_tracks) < limit:
+            got = {t.id for t in recommended_tracks}
+            recommended_tracks += _varied_popular(
+                db, exclude_ids | got, limit - len(recommended_tracks)
+            )
     else:
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
         # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных
         # юзеров место релевантного занимали глобальные хиты — это и убрано.)
-        cold = db.query(Track)
-        if skipped_track_ids:
-            cold = cold.filter(~Track.id.in_(skipped_track_ids))
-        recommended_tracks = cold.order_by(desc(Track.play_count)).limit(limit).all()
+        recommended_tracks = _varied_popular(db, skipped_track_ids, limit)
 
     # Get popular playlists (selectinload: ответ встраивает tracks — иначе N+1)
     popular_playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(

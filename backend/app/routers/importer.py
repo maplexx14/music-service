@@ -120,7 +120,7 @@ def _user_fallback_artist(url: str, info: dict) -> Optional[str]:
 
 
 async def _extract_collection(
-    url: str, source: str, kind: str
+    request: Request, url: str, source: str, kind: str
 ) -> Tuple[Optional[str], Optional[str], List[dict]]:
     """(title, cover, entries) коллекции/трека. Кидает 502 при сбое извлечения."""
     try:
@@ -137,6 +137,25 @@ async def _extract_collection(
         # Одиночный трек — сам info является «треком».
         entries = [info]
     entries = [e for e in entries if e][:_MAX_TRACKS]
+
+    # Плоский yt-dlp по SoundCloud-плейлисту отдаёт лишь id/url (без названия,
+    # артиста, длительности) — из-за этого треки импортировались как
+    # Unknown/Unknown Artist/0. Дотягиваем полные метаданные батчами через
+    # api-v2 по числовым id и проставляем их прямо в entry.
+    if source == "soundcloud":
+        full = await soundcloud.tracks_by_ids(request, [e.get("id") for e in entries])
+        for e in entries:
+            tr = full.get(str(e.get("id")))
+            if not tr:
+                continue
+            e["title"] = tr.title
+            e["artists"] = [tr.artist]
+            e["duration"] = tr.duration
+            e["webpage_url"] = e.get("url") or e.get("webpage_url")
+            if tr.cover_url:
+                e["thumbnails"] = [{"url": tr.cover_url}]
+            if tr.genre:
+                e["genre"] = tr.genre
 
     # Плоские entries плейлиста/профиля несут лишь id/title/url — без артиста.
     # Для профиля автор = сам владелец страницы; для остального пытаемся вытащить
@@ -259,7 +278,7 @@ async def import_preview(
                 tracks=tracks,
             )
 
-    title, cover, entries = await _extract_collection(payload.url, source, kind)
+    title, cover, entries = await _extract_collection(request, payload.url, source, kind)
 
     tracks = [
         ImportPreviewTrack(
@@ -304,7 +323,7 @@ async def import_collection(
     if native:
         title, cover, imports = native
     else:
-        title, cover, entries = await _extract_collection(payload.url, source, kind)
+        title, cover, entries = await _extract_collection(request, payload.url, source, kind)
         if not entries:
             raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
 
