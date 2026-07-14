@@ -71,6 +71,25 @@ const useAuthStore = create((set, get) => ({
         }
       },
       
+      updatePreferences: async (preferredGenres, preferredArtists) => {
+        try {
+          const response = await api.put('/users/me/preferences', {
+            preferred_genres: preferredGenres || [],
+            preferred_artists: preferredArtists || [],
+          })
+          const newUser = response.data
+          set({ user: newUser })
+          const token = get().token
+          setStoredAuth({ token, user: newUser })
+          return { success: true }
+        } catch (error) {
+          return {
+            success: false,
+            error: error.response?.data?.detail || 'Не удалось сохранить предпочтения',
+          }
+        }
+      },
+
       logout: () => {
         setApiAuthToken(null)
         set({

@@ -37,7 +37,8 @@ function Register() {
     setLoading(false)
 
     if (result.success) {
-      navigate('/')
+      // После регистрации — необязательный выбор любимых жанров/артистов.
+      navigate('/onboarding')
     } else {
       setError(result.error)
     }

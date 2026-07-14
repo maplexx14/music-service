@@ -6,6 +6,7 @@ import Spinner from './components/Spinner'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
+const PreferencesOnboarding = lazy(() => import('./pages/PreferencesOnboarding'))
 const Home = lazy(() => import('./pages/Home'))
 const Search = lazy(() => import('./pages/Search'))
 const Playlists = lazy(() => import('./pages/Playlists'))
@@ -43,6 +44,18 @@ function App() {
               </Suspense>
             ) : (
               <Navigate to="/" />
+            )
+          }
+        />
+        <Route
+          path="/onboarding"
+          element={
+            isAuthenticated ? (
+              <Suspense fallback={<Spinner />}>
+                <PreferencesOnboarding />
+              </Suspense>
+            ) : (
+              <Navigate to="/login" />
             )
           }
         />

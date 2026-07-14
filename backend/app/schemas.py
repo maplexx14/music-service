@@ -18,10 +18,24 @@ class UserResponse(UserBase):
     avatar_url: Optional[str] = None
     is_active: bool
     is_admin: bool = False
+    preferred_genres: List[str] = []
+    preferred_artists: List[str] = []
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    """Обновление явных музыкальных предпочтений (онбординг/настройки)."""
+    preferred_genres: List[str] = []
+    preferred_artists: List[str] = []
+
+
+class GenreOption(BaseModel):
+    """Пункт списка жанров для выбора: технический ключ + подпись."""
+    key: str
+    label: str
 
 
 class Token(BaseModel):

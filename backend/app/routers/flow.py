@@ -258,6 +258,62 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         )
         artist_display.setdefault(key, track.artist)
 
+    # --- Явные предпочтения пользователя (онбординг/настройки) ---
+    # Встраиваем ПЕРЕД финализацией профиля как сильный позитивный
+    # сигнал. Ключевой смысл — «холодный старт»: у нового юзера нет
+    # истории, и без этого поток свёлся бы к глобально популярному.
+    # Явные артисты/жанры ведут себя как курированные (лайки/плейлисты):
+    # попадают в гарантированную квоту локальных кандидатов и в SC-разведку.
+    pref = (
+        db.query(User.preferred_genres, User.preferred_artists)
+        .filter(User.id == user_id)
+        .first()
+    )
+    pref_genres = list(pref[0] or []) if pref else []
+    pref_artists = list(pref[1] or []) if pref else []
+
+    for name in pref_artists:
+        key = _artist_key(name)
+        if not key:
+            continue
+        # Вес сопоставим с курированием (плейлист=2.0); не затухает по
+        # времени — это осознанный устойчивый выбор пользователя.
+        artist_weight[key] = artist_weight.get(key, 0) + 2.5
+        artist_display.setdefault(key, name)
+        if key not in seen_curated_artist:
+            curated_artist_keys.append(key)
+            seen_curated_artist.add(key)
+        if key not in seen_pl_artist:
+            playlist_artist_keys.append(key)
+            seen_pl_artist.add(key)
+
+    # Явные жанры — добавляем с частотой (даёт вес в genre_counts и
+    # приоритет ключевых слов при подборе локальных кандидатов).
+    for g in pref_genres:
+        genres.extend([g, g])
+
+    # Сиды-радио от треков любимых артистов, уже присутствующих в
+    # каталоге как ytmusic (усиливает «холодный старт»: радио строится
+    # вокруг выбора юзера, а не глобального топа).
+    if pref_artists:
+        pref_keys = [k for k in (_artist_key(n) for n in pref_artists) if k]
+        if pref_keys:
+            pref_seed_rows = (
+                db.query(Track.external_id)
+                .filter(
+                    Track.source == "ytmusic",
+                    Track.external_id.isnot(None),
+                    func.lower(Track.artist).in_(pref_keys),
+                )
+                .order_by(desc(Track.play_count))
+                .limit(20)
+                .all()
+            )
+            for (vid,) in pref_seed_rows:
+                if vid and vid not in seen_seed and vid not in skipped_video_ids:
+                    seeds.append(vid)
+                    seen_seed.add(vid)
+
     # Сиды от скипнутых треков не годятся — радио от них тянет то же самое.
     seeds = [s for s in seeds if s not in skipped_video_ids]
 

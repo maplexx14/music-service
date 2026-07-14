@@ -1,0 +1,178 @@
+.pref-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  width: 100%;
+}
+
+.pref-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pref-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.pref-subtitle {
+  font-size: 13px;
+  color: #b3b3b3;
+  margin: 0 0 8px;
+}
+
+/* --- Жанры: чипы --- */
+.pref-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #e6e6e6;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pref-chip:hover {
+  border-color: #a259ff;
+}
+
+.pref-chip.active {
+  background: #a259ff;
+  border-color: #a259ff;
+  color: #ffffff;
+}
+
+/* --- Артисты: теги + ввод + подсказки --- */
+.pref-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.pref-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: rgba(162, 89, 255, 0.18);
+  border: 1px solid rgba(162, 89, 255, 0.5);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pref-tag button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.pref-tag button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.pref-artist-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 0 10px;
+  transition: border-color 0.15s ease;
+}
+
+.pref-artist-input:focus-within {
+  border-color: #a259ff;
+}
+
+.pref-artist-icon {
+  color: #888;
+  flex-shrink: 0;
+}
+
+.pref-artist-input input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-size: 14px;
+  padding: 12px 0;
+}
+
+.pref-artist-input input::placeholder {
+  color: #777;
+}
+
+.pref-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #a259ff;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.pref-add-btn:hover {
+  background: #b578ff;
+}
+
+.pref-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pref-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: transparent;
+  color: #cfcfcf;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.pref-suggestion:hover {
+  border-color: #a259ff;
+  color: #ffffff;
+}

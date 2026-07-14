@@ -1,12 +1,34 @@
 import { useState } from 'react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
+import { useAuthStore } from '../store/authStore'
+import { toast } from '../store/toastStore'
+import PreferencePicker from '../components/PreferencePicker'
 import './Settings.css'
 
 function Settings() {
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
   const { liteMode, toggleLiteMode } = useUiSettingsStore()
+  const { user, updatePreferences } = useAuthStore()
   const [gifError, setGifError] = useState('')
+
+  // Музыкальные предпочтения (инициализируем из профиля пользователя).
+  const [prefs, setPrefs] = useState({
+    genres: user?.preferred_genres || [],
+    artists: user?.preferred_artists || [],
+  })
+  const [savingPrefs, setSavingPrefs] = useState(false)
+
+  const handleSavePrefs = async () => {
+    setSavingPrefs(true)
+    const result = await updatePreferences(prefs.genres, prefs.artists)
+    setSavingPrefs(false)
+    if (result.success) {
+      toast.success('Предпочтения сохранены')
+    } else {
+      toast.error(result.error)
+    }
+  }
 
   const handleGifChange = (event) => {
     const file = event.target.files?.[0]
@@ -33,6 +55,24 @@ function Settings() {
       <div className="settings-header">
         <h1>Настройки</h1>
         <p>Оформление и поведение виджетов</p>
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-section-title">Музыкальные предпочтения</div>
+        <p className="settings-hint settings-section-hint">
+          Влияют на рекомендации и ваш персональный поток
+        </p>
+        <PreferencePicker value={prefs} onChange={setPrefs} />
+        <div className="settings-prefs-actions">
+          <button
+            type="button"
+            className="settings-save-btn"
+            onClick={handleSavePrefs}
+            disabled={savingPrefs}
+          >
+            {savingPrefs ? 'Сохранение...' : 'Сохранить предпочтения'}
+          </button>
+        </div>
       </div>
 
       <div className="settings-card">

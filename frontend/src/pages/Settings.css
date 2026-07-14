@@ -22,6 +22,10 @@
   max-width: 600px;
 }
 
+.settings-card + .settings-card {
+  margin-top: 20px;
+}
+
 .settings-card h2 {
   font-size: 18px;
   color: #ffffff;
@@ -173,4 +177,54 @@
 .settings-error {
   color: #ff6b6b;
   font-size: 12px;
+}
+
+/* --- Секция музыкальных предпочтений --- */
+.settings-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.settings-section-hint {
+  margin-top: 4px;
+  margin-bottom: 20px;
+  max-width: 100%;
+}
+
+.settings-prefs-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.settings-save-btn {
+  padding: 12px 22px;
+  background: #a259ff;
+  border: none;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.settings-save-btn:hover:not(:disabled) {
+  background: #b578ff;
+}
+
+.settings-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .settings-prefs-actions {
+    justify-content: stretch;
+  }
+
+  .settings-save-btn {
+    width: 100%;
+  }
 }

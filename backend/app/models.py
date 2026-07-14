@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -93,6 +93,10 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Явные музыкальные предпочтения, выбранные при онбординге/в настройках.
+    # Списки строк: ключи жанров (из GENRE_KEYWORDS) и имена артистов.
+    preferred_genres = Column(JSON, nullable=False, default=list, server_default="[]")
+    preferred_artists = Column(JSON, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

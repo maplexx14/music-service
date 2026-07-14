@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.cache import get_cache, set_cache
-from app.models import User
-from app.schemas import UserResponse
+from app.models import User, Track
+from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
+from app.genre_keywords import GENRE_KEYWORDS, GENRE_LABELS
 from app.dependencies import get_current_active_user, get_current_admin_user
 
 router = APIRouter()
@@ -12,6 +14,68 @@ router = APIRouter()
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
+    return current_user
+
+
+# --- Музыкальные предпочтения (онбординг / настройки) ---
+# NB: эти GET-маршруты обязаны идти ДО /{user_id}, иначе "genres"
+# будет попадать в параметр user_id: int и давать 422.
+@router.get("/genres", response_model=List[GenreOption])
+def list_genres():
+    """Список доступных жанров из встроенного словаря."""
+    return [
+        GenreOption(key=key, label=GENRE_LABELS.get(key, key.title()))
+        for key in GENRE_KEYWORDS.keys()
+    ]
+
+
+@router.get("/artists/suggest", response_model=List[str])
+def suggest_artists(
+    q: str = "",
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Подсказки артистов из каталога, отсортированные по популярности."""
+    query = db.query(Track.artist).filter(Track.artist.isnot(None))
+    term = (q or "").strip()
+    if term:
+        query = query.filter(Track.artist.ilike(f"%{term}%"))
+    rows = (
+        query.group_by(Track.artist)
+        .order_by(func.coalesce(func.sum(Track.play_count), 0).desc())
+        .limit(min(max(limit, 1), 50))
+        .all()
+    )
+    return [r[0] for r in rows if r[0]]
+
+
+@router.put("/me/preferences", response_model=UserResponse)
+def update_preferences(
+    prefs: UserPreferencesUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Обновляет явные предпочтения пользователя.
+
+    Жанры валидируются по словарю (храним только известные ключи),
+    артисты — чистятся от пустых/дублей и ограничиваются.
+    """
+    valid_genres = [
+        g for g in dict.fromkeys(prefs.preferred_genres) if g in GENRE_KEYWORDS
+    ]
+    artists: List[str] = []
+    seen = set()
+    for raw in prefs.preferred_artists:
+        name = (raw or "").strip()
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            artists.append(name)
+    current_user.preferred_genres = valid_genres[:20]
+    current_user.preferred_artists = artists[:50]
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 
