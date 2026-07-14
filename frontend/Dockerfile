@@ -20,4 +20,4 @@ EXPOSE 3000
 ENTRYPOINT ["/docker-entrypoint.sh"]
 # Serve a stable production build. Vite dev/HMR can reload an installed PWA
 # whenever bind-mounted files change, which destroys the audio element.
-CMD ["sh", "-c", "npm run build && npm run preview -- --host 0.0.0.0 --port 3000 --strictPort"]
+CMD ["sh", "-c", "npm run dev && npm run preview -- --host 0.0.0.0 --port 3000 --strictPort"]
