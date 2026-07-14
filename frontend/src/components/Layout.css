@@ -21,7 +21,7 @@
 
   .main-content {
     margin-left: 0;
-    padding-bottom: 140px;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
     background: transparent;
   }
 
@@ -76,30 +76,53 @@
 
   .mobile-nav-global {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: 12px;
+    right: 12px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) - 2px);
     height: 72px;
-    background: rgba(0, 0, 0, 0.95);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 0 8px;
+    background: #131316;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 22px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
     display: flex;
     align-items: center;
-    justify-content: space-evenly;
+    justify-content: space-between;
     z-index: 1002;
   }
- 
+
   .mobile-nav-global-item {
-    color: #cfcfcf;
+    flex: 1;
+    color: rgba(255, 255, 255, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    border-radius: 16px;
+    transition: color 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-nav-global-icon {
     display: grid;
     place-items: center;
-    text-decoration: none;
-    width: 44px;
+    width: 52px;
     height: 44px;
-    border-radius: 12px;
+    border-radius: 999px;
+    transition: background 0.2s ease, color 0.2s ease;
   }
-  
 
-  .mobile-nav-global-item:hover {
-    background: rgba(255, 255, 255, 0.08);
+  .mobile-nav-global-item:active {
+    transform: scale(0.92);
+  }
+
+  /* Активный пункт: акцентная пилюля под иконкой + подсветка. */
+  .mobile-nav-global-item.active {
+    color: #c084fc;
+  }
+
+  .mobile-nav-global-item.active .mobile-nav-global-icon {
+    background: rgba(168, 85, 247, 0.22);
+    color: #c084fc;
   }
 }

@@ -407,10 +407,11 @@
 
 @media (max-width: 768px) {
   .player {
-    left: 0;
-    right: 0;
-    bottom: 80px;
-    height: 64px;
+    left: 12px;
+    right: 12px;
+    /* Такой же размер, как меню; выше меню с зазором. */
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+    height: 72px;
     padding: 0 12px;
   }
 
@@ -489,3 +490,4 @@
 .volume-slider:hover::-moz-range-thumb {
   background: #a259ff;
 }
+

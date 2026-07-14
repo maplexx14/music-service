@@ -15,7 +15,7 @@ from app.models import Track, User, Playlist, playlist_tracks, user_track_plays,
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from pydantic import BaseModel, Field
 from app.dependencies import get_current_active_user, get_current_admin_user
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 import mimetypes
 
 logger = logging.getLogger(__name__)
@@ -110,9 +110,23 @@ EXTERNAL_STREAM_PREFIX = {
 }
 
 
+def iter_file_range(file_path: Path, start: int, end: int, chunk_size: int = 256 * 1024):
+    """Yield exactly the requested inclusive byte range without loading the file."""
+    remaining = end - start + 1
+    with file_path.open("rb") as audio_file:
+        audio_file.seek(start)
+        while remaining > 0:
+            chunk = audio_file.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
 @router.get("/{track_id}/stream")
 def stream_track(
     track_id: int,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -164,15 +178,57 @@ def stream_track(
     if not mime_type or not mime_type.startswith('audio/'):
         mime_type = "audio/mpeg"
     
-    # тут отдает файл с музыкой
-    return FileResponse(
-        path=str(file_path),
+    # iOS активирует системный scrubber только если сам медиаресурс честно
+    # отвечает 206 на byte-range запросы. Одного Accept-Ranges недостаточно.
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get("range")
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600",
+    }
+
+    if range_header:
+        try:
+            unit, raw_range = range_header.strip().split("=", 1)
+            if unit.lower() != "bytes" or "," in raw_range:
+                raise ValueError
+            raw_start, raw_end = raw_range.split("-", 1)
+
+            if raw_start:
+                start = int(raw_start)
+                end = int(raw_end) if raw_end else file_size - 1
+            else:
+                suffix_length = int(raw_end)
+                if suffix_length <= 0:
+                    raise ValueError
+                start = max(file_size - suffix_length, 0)
+                end = file_size - 1
+
+            if start < 0 or start >= file_size or end < start:
+                raise ValueError
+            end = min(end, file_size - 1)
+        except (ValueError, TypeError):
+            return Response(
+                status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+            )
+
+        content_length = end - start + 1
+        return StreamingResponse(
+            iter_file_range(file_path, start, end),
+            status_code=status.HTTP_206_PARTIAL_CONTENT,
+            media_type=mime_type,
+            headers={
+                **common_headers,
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(content_length),
+            },
+        )
+
+    return StreamingResponse(
+        iter_file_range(file_path, 0, file_size - 1),
         media_type=mime_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Content-Type": mime_type,
-            "Cache-Control": "public, max-age=3600",
-        }
+        headers={**common_headers, "Content-Length": str(file_size)},
     )
 
 

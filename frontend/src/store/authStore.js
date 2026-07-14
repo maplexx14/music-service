@@ -112,6 +112,14 @@ useAuthStore.subscribe((state) => {
 
 // Initialize auth on load
 if (typeof window !== 'undefined') {
+  window.addEventListener('auth:unauthorized', () => {
+    useAuthStore.setState({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+    })
+  })
+
   // Load initial state from storage
   const stored = getStoredAuth()
   if (stored) {

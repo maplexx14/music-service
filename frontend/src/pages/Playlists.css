@@ -316,3 +316,81 @@
   flex-shrink: 0;
   color: #888;
 }
+
+/* --- Мобильная адаптация (Моя музыка) --- */
+@media (max-width: 768px) {
+  .playlists-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .playlists-header h1 {
+    font-size: 26px;
+    text-align: center;
+  }
+
+  /* Кнопки в колонку на всю ширину. */
+  .playlists-header-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .import-playlist-btn,
+  .create-playlist-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Форма импорта: поле и кнопка друг под другом. */
+  .import-input-row {
+    flex-direction: column;
+  }
+
+  .import-input-row .submit-btn {
+    width: 100%;
+  }
+
+  .import-playlist-form,
+  .create-playlist-form {
+    padding: 16px;
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .form-actions .submit-btn,
+  .form-actions .cancel-btn {
+    width: 100%;
+  }
+
+  /* Сетка плейлистов — 2 колонки на телефоне. */
+  .playlists-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+
+  .playlist-card {
+    padding: 10px;
+  }
+
+  .playlist-name {
+    font-size: 14px;
+  }
+
+  .playlist-delete-btn {
+    top: 14px;
+    right: 14px;
+    width: 32px;
+    height: 32px;
+    opacity: 1;
+  }
+}
+
+@media (max-width: 400px) {
+  .playlists-grid {
+    grid-template-columns: 1fr;
+  }
+}

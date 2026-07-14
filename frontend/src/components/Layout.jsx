@@ -82,23 +82,31 @@ function Layout({ children }) {
       {isFullScreen && <FullScreenPlayer />}
       {isMobile && (
         <nav className="mobile-nav-global" aria-label="Нижняя навигация">
-          <Link to="/" className="mobile-nav-global-item">
-            <Home size={20} />
-          </Link>
-          <Link to="/search" className="mobile-nav-global-item">
-            <Search size={20} />
-          </Link>
-          <Link to="/upload" className="mobile-nav-global-item">
-            <Upload size={20} />
-          </Link>
-          <Link to="/liked" className="mobile-nav-global-item">
-            <Heart size={20} />
-          </Link>
-          <Link to="/playlists" className="mobile-nav-global-item">
-            <Library size={20} />
-          </Link>
-         
-         
+          {[
+            { to: '/', icon: Home, label: 'Главная' },
+            { to: '/search', icon: Search, label: 'Поиск' },
+            { to: '/upload', icon: Upload, label: 'Загрузка' },
+            { to: '/liked', icon: Heart, label: 'Любимое' },
+            { to: '/playlists', icon: Library, label: 'Моя музыка' },
+          ].map(({ to, icon: Icon, label }) => {
+            const isActive =
+              to === '/'
+                ? location.pathname === '/'
+                : location.pathname.startsWith(to)
+            return (
+              <Link
+                key={to}
+                to={to}
+                className={`mobile-nav-global-item ${isActive ? 'active' : ''}`}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={label}
+              >
+                <span className="mobile-nav-global-icon">
+                  <Icon size={22} />
+                </span>
+              </Link>
+            )
+          })}
         </nav>
       )}
     </div>

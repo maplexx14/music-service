@@ -21,15 +21,38 @@ function App() {
 
   return (
     <Router>
-      <Suspense fallback={<Spinner />}>
-        <Routes>
-          <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
-          <Route path="/register" element={!isAuthenticated ? <Register /> : <Navigate to="/" />} />
-          <Route
-            path="/*"
-            element={
-              isAuthenticated ? (
-                <Layout>
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            !isAuthenticated ? (
+              <Suspense fallback={<Spinner />}>
+                <Login />
+              </Suspense>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            !isAuthenticated ? (
+              <Suspense fallback={<Spinner />}>
+                <Register />
+              </Suspense>
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
+        <Route
+          path="/*"
+          element={
+            isAuthenticated ? (
+              <Layout>
+                {/* Suspense внутри Layout: при подгрузке lazy-чанка оболочка (меню, плеер) остаётся на месте. */}
+                <Suspense fallback={<Spinner />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/search" element={<Search />} />
@@ -41,14 +64,14 @@ function App() {
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/admin" element={user?.is_admin ? <Admin /> : <Navigate to="/" />} />
                   </Routes>
-                </Layout>
-              ) : (
-                <Navigate to="/login" />
-              )
-            }
-          />
-        </Routes>
-      </Suspense>
+                </Suspense>
+              </Layout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+      </Routes>
     </Router>
   )
 }

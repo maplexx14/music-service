@@ -84,16 +84,17 @@ function Player() {
   } = usePlayerStore()
 
   const audioRef = useRef(null)
-  const blobUrlRef = useRef(null)
+  // Оставлены только как guards для старой логики preload; второго <audio>
+  // больше нет, поэтому iOS сохраняет единственного media-session владельца.
+  const nextAudioRef = useRef(null)
+  const nextBlobUrlRef = useRef(null)
+  const preloadTriggeredForRef = useRef(null)
   // Скрытый <audio preload="none">, который буферизирует следующий трек
   // очереди, когда текущий подходит к концу — без него оставался бы только
   // фоновый прогрев резолва на бэке (prefetchNext), а не реальная буферизация
   // байтов в браузере.
-  const nextAudioRef = useRef(null)
-  const nextBlobUrlRef = useRef(null)
   // id трека, для которого уже запущена ленивая подгрузка следующего — чтобы
   // не запускать её повторно на каждом timeupdate.
-  const preloadTriggeredForRef = useRef(null)
   const lastRecordedTrackIdRef = useRef(null)
   // Токен актуальности резолва audioSrc (см. эффект ниже) — защита от того,
   // что устаревший (для уже пропущенного трека) fetch применит свой результат
@@ -167,8 +168,25 @@ function Player() {
     const audio = audioRef.current
     if (!audio) return
 
+    const syncPositionState = () => {
+      if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
+      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : Number(currentTrack?.duration)
+      if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: mediaDuration,
+          position: Math.min(Math.max(audio.currentTime, 0), mediaDuration),
+          playbackRate: audio.playbackRate || 1,
+        })
+      } catch {
+        /* Источник мог смениться между событиями media element. */
+      }
+    }
     const updateTime = () => {
       setCurrentTime(audio.currentTime)
+      syncPositionState()
       const remainingWindow = Math.min(
         PRELOAD_NEXT_REMAINING_SEC,
         audio.duration * PRELOAD_NEXT_REMAINING_RATIO
@@ -181,7 +199,22 @@ function Player() {
         triggerNextPreload()
       }
     }
-    const updateDuration = () => setDuration(audio.duration)
+    const updateDuration = () => {
+      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : Number(currentTrack?.duration)
+      if (Number.isFinite(mediaDuration) && mediaDuration > 0) {
+        setDuration(mediaDuration)
+        syncPositionState()
+      }
+    }
+    const syncSystemPlaybackState = (state) => {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = state
+      }
+    }
+    const handlePlay = () => syncSystemPlaybackState('playing')
+    const handlePause = () => syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     const handleEnded = () => {
       if (usePlayerStore.getState().isRepeatOne) {
         audio.currentTime = 0
@@ -193,11 +226,23 @@ function Player() {
 
     audio.addEventListener('timeupdate', updateTime)
     audio.addEventListener('loadedmetadata', updateDuration)
+    audio.addEventListener('durationchange', updateDuration)
+    audio.addEventListener('canplay', updateDuration)
+    audio.addEventListener('seeked', syncPositionState)
+    audio.addEventListener('ratechange', syncPositionState)
+    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
 
     return () => {
       audio.removeEventListener('timeupdate', updateTime)
       audio.removeEventListener('loadedmetadata', updateDuration)
+      audio.removeEventListener('durationchange', updateDuration)
+      audio.removeEventListener('canplay', updateDuration)
+      audio.removeEventListener('seeked', syncPositionState)
+      audio.removeEventListener('ratechange', syncPositionState)
+      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('ended', handleEnded)
     }
   }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
@@ -210,79 +255,13 @@ function Player() {
     }
   }, [dbTrackId, fetchLikedTracks])
 
-  // Resolve audio URL. audio-sw.js подставляет заголовок для обхода
-  // предупреждения Tuna на уровне сети, так что <audio> обычно может грузить
-  // src напрямую и стримить файл нативными Range-запросами (трек начинает
-  // играть почти сразу, без ожидания полной закачки). Пока SW ещё не взял
-  // страницу под контроль (самый первый визит до активации) — как и раньше,
-  // подстраховываемся ручным fetch+blob с нужным заголовком.
-  //
-  // При быстром скипе несколько таких резолвов оказываются в полёте
-  // одновременно (fetch трека A ещё не завершился, а currentTrack уже B,
-  // потом C). Без проверки актуальности резолв A мог применить свой blob
-  // через setAudioSrc уже ПОСЛЕ того как currentTrack стал C — визуально это
-  // выглядело как "проскочивший" (уже пропущенный) трек на миг заигрывает,
-  // а потом резко обрывается, когда его перебивает следующий резолв.
-  // resolveTokenRef фиксирует, какой резолв последний актуальный — устаревшие
-  // просто игнорируют свой результат.
+  // Всегда отдаём URL непосредственно постоянному <audio>. Blob-источник не
+  // имеет HTTP Range/Content-Range, поэтому iOS считает его неперематываемым и
+  // отключает системную шкалу времени и часть remote-команд.
   useEffect(() => {
-    if (!currentTrack) {
-      resolveTokenRef.current = {}
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current)
-        blobUrlRef.current = null
-      }
-      setAudioSrc(undefined)
-      return
-    }
-
-    const rawUrl = resolveRawUrl(currentTrack, isExternalTrack)
-
-    if (!rawUrl) {
-      resolveTokenRef.current = {}
-      setAudioSrc(undefined)
-      return
-    }
-
-    const isOurApi = !isExternalTrack && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
-    const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
-
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current)
-      blobUrlRef.current = null
-    }
-
-    const token = {}
-    resolveTokenRef.current = token
-
-    if (isOurApi && !swActive) {
-      setAudioSrc(null)
-      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' } })
-        .then((r) => r.blob())
-        .then((blob) => {
-          if (resolveTokenRef.current !== token) {
-            // Трек уже сменился, пока грузился этот blob — не применяем
-            // устаревший результат, иначе на миг заиграет пропущенный трек.
-            return
-          }
-          const url = URL.createObjectURL(blob)
-          blobUrlRef.current = url
-          setAudioSrc(url)
-        })
-        .catch(() => {
-          if (resolveTokenRef.current === token) setAudioSrc(rawUrl)
-        })
-    } else {
-      setAudioSrc(rawUrl)
-    }
-
-    return () => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current)
-        blobUrlRef.current = null
-      }
-    }
-  }, [currentTrack?.id, currentTrack?.file_path, currentTrack?.stream_url, isExternalTrack, API_URL, SERVER_URL])
+    resolveTokenRef.current = {}
+    setAudioSrc(resolveRawUrl(currentTrack, isExternalTrack))
+  }, [currentTrack, isExternalTrack])
 
   // Reload audio when track changes
   useEffect(() => {
@@ -438,6 +417,12 @@ function Player() {
     if (!('mediaSession' in navigator)) return
     if (!currentTrack) {
       navigator.mediaSession.metadata = null
+      navigator.mediaSession.playbackState = 'none'
+      try {
+        navigator.mediaSession.setPositionState()
+      } catch {
+        /* Не все реализации поддерживают очистку позиции без аргументов. */
+      }
       return
     }
     const artwork = isExternalTrack
@@ -451,9 +436,9 @@ function Player() {
       title: currentTrack.title || 'Неизвестный трек',
       artist: currentTrack.artist || '',
       album: currentTrack.album || '',
-      artwork: [
-        { src: artworkUrl, sizes: '512x512', type: 'image/png' },
-      ],
+      // WebKit стабильнее принимает одно изображение, чем несколько записей
+      // с одним и тем же URL, но разными заявленными размерами.
+      artwork: [{ src: artworkUrl }],
     })
   }, [
     currentTrack?.id,
@@ -468,38 +453,90 @@ function Player() {
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
     const ms = navigator.mediaSession
+    const syncPositionState = (audio) => {
+      const fallbackDuration = Number(usePlayerStore.getState().duration)
+        || Number(usePlayerStore.getState().currentTrack?.duration)
+      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : fallbackDuration
+      if (!ms.setPositionState || !Number.isFinite(mediaDuration) || mediaDuration <= 0) return
+      try {
+        ms.setPositionState({
+          duration: mediaDuration,
+          position: Math.min(Math.max(audio.currentTime, 0), mediaDuration),
+          playbackRate: audio.playbackRate || 1,
+        })
+      } catch {
+        /* iOS может отклонить позицию во время смены источника */
+      }
+    }
     const seekBy = (offset) => {
       const audio = audioRef.current
       if (!audio) return
-      audio.currentTime = Math.min(
-        audio.duration || Infinity,
-        Math.max(0, audio.currentTime + offset),
+      const nextTime = Math.min(
+        Math.max(audio.currentTime + offset, 0),
+        Number.isFinite(audio.duration) ? audio.duration : audio.currentTime + offset,
       )
+      audio.currentTime = nextTime
+      setCurrentTime(nextTime)
+      syncPositionState(audio)
     }
     const handlers = {
-      play: () => {
-        if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+      play: async () => {
+        const audio = audioRef.current
+        if (!audio) return
+        try {
+          await audio.play()
+          if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+        } catch (error) {
+          console.error('System play action failed:', error)
+        }
       },
       pause: () => {
+        audioRef.current?.pause()
         if (usePlayerStore.getState().isPlaying) togglePlayPause()
       },
-      previoustrack: () => previousTrack(),
-      nexttrack: () => nextTrack(),
-      seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
-      seekforward: (d) => seekBy(d.seekOffset || 10),
-      seekto: (d) => {
+      previoustrack: () => {
+        usePlayerStore.getState().previousTrack()
+      },
+      nexttrack: () => {
+        usePlayerStore.getState().nextTrack()
+      },
+      seekto: (details) => {
         const audio = audioRef.current
-        if (audio && d.seekTime != null) audio.currentTime = d.seekTime
+        if (!audio || !Number.isFinite(details.seekTime)) return
+
+        const seekTime = Math.min(
+          Math.max(details.seekTime, 0),
+          Number.isFinite(audio.duration) ? audio.duration : details.seekTime,
+        )
+        if (details.fastSeek && typeof audio.fastSeek === 'function') {
+          audio.fastSeek(seekTime)
+        } else {
+          audio.currentTime = seekTime
+        }
+        setCurrentTime(seekTime)
+        syncPositionState(audio)
       },
     }
-    for (const [action, handler] of Object.entries(handlers)) {
-      try {
-        ms.setActionHandler(action, handler)
-      } catch {
-        // Некоторые действия могут не поддерживаться браузером — игнорируем.
+    const registerHandlers = () => {
+      for (const [action, handler] of Object.entries(handlers)) {
+        try {
+          ms.setActionHandler(action, handler)
+        } catch {
+          // Некоторые действия могут не поддерживаться браузером — игнорируем.
+        }
       }
     }
+
+    // iOS определяет набор кнопок Control Center в момент начала нативного
+    // воспроизведения. Ранняя регистрация часто оставляет next/previous серыми.
+    registerHandlers()
+    const audio = audioRef.current
+    audio?.addEventListener('playing', registerHandlers)
+
     return () => {
+      audio?.removeEventListener('playing', registerHandlers)
       for (const action of Object.keys(handlers)) {
         try {
           ms.setActionHandler(action, null)
@@ -508,7 +545,7 @@ function Player() {
         }
       }
     }
-  }, [togglePlayPause, previousTrack, nextTrack])
+  }, [togglePlayPause, setCurrentTime])
 
   // Статус воспроизведения в виджете (play/pause индикатор).
   useEffect(() => {
@@ -520,20 +557,25 @@ function Player() {
       : 'none'
   }, [isPlaying, currentTrack?.id])
 
-  // Позиция/длительность — прогресс-бар в системном виджете.
+  // Позиция/длительность — прогресс-бар в системном виджете. Берём позицию
+  // непосредственно из <audio>, чтобы системная перемотка не ждала обновления store.
   useEffect(() => {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
-    if (!duration || isNaN(duration) || !isFinite(duration)) return
+    const audio = audioRef.current
+    const mediaDuration = Number.isFinite(audio?.duration) && audio.duration > 0
+      ? audio.duration
+      : Number(duration) || Number(currentTrack?.duration)
+    if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return
     try {
       navigator.mediaSession.setPositionState({
-        duration,
-        position: Math.min(currentTime, duration),
-        playbackRate: 1,
+        duration: mediaDuration,
+        position: Math.min(Math.max(audio?.currentTime ?? currentTime, 0), mediaDuration),
+        playbackRate: audio?.playbackRate || 1,
       })
     } catch {
       /* значения вне диапазона — пропускаем */
     }
-  }, [currentTime, duration])
+  }, [currentTime, duration, currentTrack?.id, currentTrack?.duration])
 
   if (!currentTrack) {
     return null
@@ -623,10 +665,7 @@ function Player() {
     console.error('Track:', trackAtError)
     console.error('Audio src:', audio?.src)
 
-    if (!isExternalTrack || !audio?.src) return
-
-    const mediaError = audio.error
-    const isFatal = mediaError?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+    if (!audio?.src) return
 
     const giveUp = (unavailable = false) => {
       setIsBuffering(false)
@@ -656,7 +695,16 @@ function Player() {
         if (usePlayerStore.getState().currentTrack?.id !== trackAtError?.id) return
         const el = audioRef.current
         if (!el) return
-        el.load()
+        // Повтор с новым URL обходит закэшированный сетевой ответ и заставляет
+        // backend заново разрешить временный URL внешнего провайдера.
+        const rawRetryUrl = resolveRawUrl(trackAtError, isExternalTrack)
+        if (rawRetryUrl) {
+          const retryUrl = new URL(rawRetryUrl, window.location.href)
+          retryUrl.searchParams.set('_media_retry', String(Date.now()))
+          setAudioSrc(retryUrl.href)
+        } else {
+          el.load()
+        }
       }, RETRY_DELAY_MS * retryCountRef.current)
     }
 
@@ -670,22 +718,15 @@ function Player() {
           giveUp(true)
           return
         }
-        // MEDIA_ERR_SRC_NOT_SUPPORTED может быть следствием 503/502 с HTML
-        // вместо аудио. Это не «трек недоступен», но повтор формата бессмысленен.
-        if (isFatal) {
-          giveUp()
-          return
-        }
-        // 503 (временный сбой резолва) или любой другой код — повторяем.
+        // MEDIA_ERR_SRC_NOT_SUPPORTED также возникает, если CDN URL истёк или
+        // 502/503 вернул HTML. Новый URL может восстановить такой поток.
         scheduleRetry()
       })
       .catch(() => {
         clearTimeout(probeTimer)
         // Запрос не прошёл (сеть/CORS/таймаут) — не знаем причину, считаем
-        // временной и всё равно ретраим, а не скипаем молча. Для неподдержи-
-        // ваемого формата повтор бессмысленен, но его статус мы не получили.
-        if (isFatal) giveUp()
-        else scheduleRetry()
+        // временной и всё равно ретраим с новым URL, а не скипаем молча.
+        scheduleRetry()
       })
   }
 
@@ -707,6 +748,7 @@ function Player() {
         ref={audioRef}
         src={audioSrc || undefined}
         preload="auto"
+        playsInline
         crossOrigin="anonymous"
         onError={handleAudioError}
         onCanPlay={() => {
@@ -723,10 +765,6 @@ function Player() {
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
       />
-      {/* Скрытый плеер для ленивой буферизации следующего трека — начинает
-          грузиться только когда triggerNextPreload() выставит ему src. */}
-      <audio ref={nextAudioRef} preload="none" crossOrigin="anonymous" style={{ display: 'none' }} />
-
       <div className="player-left">
         <button
           type="button"

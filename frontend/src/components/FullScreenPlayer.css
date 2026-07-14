@@ -1,13 +1,15 @@
 .fullscreen-player {
   position: fixed;
   inset: 0;
+  /* Динамическая высота вьюпорта: учитывает адресную строку/панели на мобильных. */
+  height: 100dvh;
   background:
     radial-gradient(circle at top, rgba(162, 89, 255, 0.18), transparent 34%),
     linear-gradient(180deg, #1a1a1a 0%, #050505 62%, #000000 100%);
   color: #ffffff;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto auto;
-  padding: 22px 24px 32px;
+  padding: calc(env(safe-area-inset-top, 0px) + 22px) 24px calc(env(safe-area-inset-bottom, 0px) + 24px);
   z-index: 1200;
   overflow: hidden;
 }
@@ -85,6 +87,7 @@
   align-self: center;
   margin: 26px 0 34px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .fullscreen-art img {
@@ -203,7 +206,19 @@
 
 @media (max-width: 768px) {
   .fullscreen-player {
-    padding: 18px 18px max(28px, env(safe-area-inset-bottom));
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
+  .fullscreen-art {
+    margin: 18px 0 22px;
+  }
+
+  .fullscreen-progress {
+    margin-top: 16px;
+  }
+
+  .fullscreen-controls {
+    margin-top: 20px;
   }
 
   .fullscreen-header {
@@ -285,3 +300,4 @@
     margin-top: 20px;
   }
 }
+

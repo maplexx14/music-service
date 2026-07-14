@@ -356,3 +356,126 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* --- Мобильная адаптация (Понравившиеся / детали плейлиста) --- */
+@media (max-width: 768px) {
+  .playlist-header {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+    padding: 16px 0 8px;
+  }
+
+  .playlist-header-cover {
+    width: 160px;
+    height: 160px;
+  }
+
+  .playlist-header-cover.placeholder {
+    font-size: 64px;
+  }
+
+  .playlist-header-info {
+    align-items: center;
+    width: 100%;
+  }
+
+  .playlist-title {
+    font-size: clamp(28px, 9vw, 44px);
+    margin-bottom: 12px;
+  }
+
+  .playlist-description {
+    font-size: 14px;
+  }
+
+  .playlist-meta {
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .playlist-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .play-button-large {
+    flex: 1;
+    justify-content: center;
+    padding: 12px 20px;
+  }
+
+  .playlist-tracks {
+    margin-top: 20px;
+  }
+
+  /* Прячем шапку таблицы и превращаем строки во флекс-ряды. */
+  .tracks-table thead {
+    display: none;
+  }
+
+  .tracks-table,
+  .tracks-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .tracks-table tr.track-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 4px;
+    border-bottom: 1px solid #222;
+  }
+
+  .track-row td {
+    padding: 0;
+  }
+
+  /* Второстепенные колонки скрываем на узких экранах. */
+  .track-row .track-number,
+  .track-row .track-album,
+  .track-row .track-duration {
+    display: none;
+  }
+
+  .track-row .track-name-cell {
+    flex: 1;
+    min-width: 0;
+    gap: 12px;
+  }
+
+  .track-row .track-name-cell > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .track-row .track-name,
+  .track-row .track-artist {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-row .track-actions-cell {
+    flex-shrink: 0;
+    width: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .track-table-cover {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+  }
+
+  /* Меню «в плейлист» не должно вылезать за правый край. */
+  .add-to-playlist-menu {
+    right: 0;
+    min-width: 180px;
+    max-width: 70vw;
+  }
+}

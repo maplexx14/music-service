@@ -42,9 +42,11 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     if (status === 401) {
-      // Clear auth on 401
+      // Не делаем полный reload: он уничтожает <audio>, очередь и Media Session.
+      // Store обработает событие и React Router покажет экран входа без перезагрузки.
       localStorage.removeItem('auth-storage')
-      window.location.href = '/login'
+      setApiAuthToken(null)
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'))
     } else if (error.config?.skipErrorToast !== true) {
       const detail = error.response?.data?.detail
       const message =

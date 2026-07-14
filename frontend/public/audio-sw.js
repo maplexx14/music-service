@@ -5,7 +5,7 @@
 // не докачается целиком. С этим SW браузер стримит файл напрямую по src с
 // нативными Range-запросами (перемотка/старт почти мгновенные), а заголовок
 // добавляется прозрачно на уровне сети.
-const STREAM_PATTERN = /\/api\/(tracks\/\d+\/stream|ytdlp\/stream\/|soundcloud\/stream\/|soulseek\/stream\/)/
+const STREAM_PATTERN = /\/(stream|audio)(\/|$)/i
 
 self.addEventListener('install', () => {
   self.skipWaiting()
@@ -17,13 +17,31 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event
-  if (!STREAM_PATTERN.test(new URL(request.url).pathname)) return
 
-  const headers = new Headers(request.headers)
-  headers.set('tuna-skip-browser-warning', '1')
-  headers.set('ngrok-skip-browser-warning', '1')
+  if (!STREAM_PATTERN.test(new URL(request.url).pathname)) {
+    return
+  }
 
   event.respondWith(
-    fetch(new Request(request, { headers })).catch(() => fetch(request)),
+    (async () => {
+      try {
+        const headers = new Headers(request.headers)
+
+        headers.set('tuna-skip-browser-warning', '1')
+        headers.set('ngrok-skip-browser-warning', '1')
+
+        // Сохраняем Range и остальные параметры media-запроса.
+        // Для cross-origin/no-cors потока пользовательские заголовки могут
+        // быть запрещены, поэтому в таком случае повторяем исходный запрос.
+        return await fetch(
+          new Request(request, {
+            headers,
+            cache: 'no-store',
+          }),
+        )
+      } catch {
+        return fetch(request)
+      }
+    })(),
   )
 })
