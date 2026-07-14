@@ -14,8 +14,6 @@ import re
 from collections import Counter
 from typing import Optional
 
-from sqlalchemy import func
-
 GENRE_KEYWORDS: dict = {
     "phonk": ["phonk", "фонк", "drift phonk", "funk"],
     "trap": ["trap", "трэп", "треп"],
@@ -54,8 +52,15 @@ MODIFIER_KEYWORDS: dict = {
     ],
 }
 
+# Матчим ключевое слово ТОЛЬКО как отдельное слово (границы \b), а не как
+# подстроку: без этого "techno" ловил "Ayo Technology" (50 Cent → electronic),
+# "house" — "warehouse", "pop" — "popular", "rap" — "grape" и т.п. Именно эти
+# ложные срабатывания раздували редкий жанр (electronic) до топового и тянули
+# в выдачу нерелевантные треки (afro/club house слушателю рэпа).
 _KEYWORD_PATTERNS = {
-    genre: re.compile(r"|".join(re.escape(kw) for kw in kws), re.IGNORECASE)
+    genre: re.compile(
+        r"\b(?:" + "|".join(re.escape(kw) for kw in kws) + r")\b", re.IGNORECASE
+    )
     for genre, kws in GENRE_KEYWORDS.items()
 }
 
@@ -94,9 +99,13 @@ def top_genre_keywords(genre_counts: dict, top_n: int = 3) -> list:
 
 
 def build_keyword_filters(title_col, genre_counts: dict, top_n: int = 3) -> list:
-    """SQL-условия (title ILIKE %keyword%) для top_n самых частых жанров вкуса."""
+    """SQL-условия для top_n самых частых жанров вкуса.
+
+    Матчим по ГРАНИЦЕ СЛОВА (Postgres regex ~* с \\y), а не подстрокой LIKE
+    %kw%: иначе "house" совпадал с "warehouse", "techno" с "technology" и т.п.,
+    протаскивая в кандидаты нерелевантные треки (см. _KEYWORD_PATTERNS)."""
     return [
-        func.lower(title_col).like(f"%{kw.lower()}%")
+        title_col.op("~*")(r"\y" + kw.lower() + r"\y")
         for kw in top_genre_keywords(genre_counts, top_n)
     ]
 

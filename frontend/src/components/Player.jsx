@@ -27,6 +27,16 @@ const PRELOAD_NEXT_REMAINING_SEC = 20
 const PRELOAD_NEXT_REMAINING_RATIO = 0.4
 const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
 
+// Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
+// реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
+// поданный трек получал +play независимо от вовлечённости — и скипнутые/
+// фоновые треки накапливали play_count, попадали в профиль вкуса и волна
+// подавала их ещё чаще (петля обратной связи). Порог симметричен скипу
+// (<25% → skip): засчитываем на ≥50% ИЛИ ≥60с (для длинных треков), 25–50%
+// остаётся нейтральной зоной — ни плюс, ни минус.
+const PLAY_RECORD_RATIO = 0.5
+const PLAY_RECORD_MIN_SEC = 60
+
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
 // текущего трека, и для ленивой подгрузки следующего.
 function resolveRawUrl(track, isExternal) {
@@ -380,9 +390,16 @@ function Player() {
     usePlayerStore.getState().extendFlowIfNeeded()
   }, [currentTrack?.id, prefetchNext])
 
+  // Запись play — не на старте, а по достижении порога реального прослушивания
+  // (см. PLAY_RECORD_RATIO). Эффект гоняется на каждом тике currentTime, но до
+  // порога выходит рано, а после — один раз на трек (guard по ref).
   useEffect(() => {
     if (!isPlaying || !currentTrack) return
     if (!canInteract) return
+    const listenedEnough =
+      currentTime >= PLAY_RECORD_MIN_SEC ||
+      (duration > 0 && !isNaN(duration) && currentTime / duration >= PLAY_RECORD_RATIO)
+    if (!listenedEnough) return
     // Стабильный ключ: у внешних трек id меняется после материализации.
     const playKey = currentTrack.external_id ?? currentTrack.id
     if (lastRecordedTrackIdRef.current === playKey) return
@@ -395,7 +412,7 @@ function Player() {
         console.error('Error recording play:', error)
       }
     })()
-  }, [currentTrack?.id, currentTrack?.external_id, isPlaying, canInteract, dbTrackId, materializeCurrentTrack])
+  }, [currentTime, duration, currentTrack?.id, currentTrack?.external_id, isPlaying, canInteract, dbTrackId, materializeCurrentTrack])
 
   useEffect(() => {
     const audio = audioRef.current
