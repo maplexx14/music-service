@@ -31,6 +31,24 @@ function postSkipWithRetry(dbId, attemptsLeft = 3, delayMs = 500) {
     })
 }
 
+// Событие прослушивания с финальной долей дослушивания (0..1) и локальным
+// часом клиента — питает completion-веса и контекст времени суток в
+// рекомендациях (POST /tracks/{id}/listen). Фоновая телеметрия: ошибки
+// не показываем и не ретраим агрессивно (в отличие от скипа, сигнал
+// не бинарный и следующее событие быстро компенсирует потерю).
+function postListenEvent(dbId, completion) {
+  api
+    .post(
+      `/tracks/${dbId}/listen`,
+      {
+        completion: Math.max(0, Math.min(1, completion)),
+        client_hour: new Date().getHours(),
+      },
+      { skipErrorToast: true },
+    )
+    .catch(() => {})
+}
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -269,12 +287,14 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Подгружает следующую порцию потока, когда очередь подходит к концу.
+  // Подгружает следующую порцию заранее. Запас в 8 треков маскирует сетевую
+  // задержку даже при нескольких быстрых пропусках подряд; flowLoading не даёт
+  // запустить параллельные дублирующие запросы.
   extendFlowIfNeeded: async () => {
     const { flowActive, flowLoading, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
     if (!flowActive || flowLoading) return
     const pos = isShuffle ? currentShuffleIndex : currentIndex
-    if (pos < queue.length - 3) return
+    if (pos < queue.length - 8) return
 
     set({ flowLoading: true })
     try {
@@ -381,8 +401,24 @@ const usePlayerStore = create((set, get) => ({
     postSkipWithRetry(dbId)
   },
 
+  // Финальная доля прослушивания при КАЖДОМ уходе с трека (переключение
+  // вперёд/назад, естественный конец — там прогресс ~100%). В отличие от
+  // бинарных /play (>=50%) и /skip (<25%) покрывает и «серую зону» 25-50%:
+  // трек, регулярно бросаемый на трети, — мягкий негатив для рекомендаций.
+  _recordListenProgress: () => {
+    const { currentTrack, currentTime, duration } = get()
+    if (!currentTrack) return
+    const durationKnown = duration && !isNaN(duration) && duration > 0
+    if (!durationKnown || currentTime <= 0) return // не успел начаться — не событие
+    const dbId =
+      currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
+    if (!dbId) return // внешний трек ещё не материализован — сигнал пропускаем
+    postListenEvent(dbId, currentTime / duration)
+  },
+
   nextTrack: () => {
     get()._recordSkipIfNeeded()
+    get()._recordListenProgress()
     const { queue, currentIndex, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     if (isShuffle && shuffledOrder.length > 0) {
       if (currentShuffleIndex < shuffledOrder.length - 1) {
@@ -412,6 +448,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   previousTrack: () => {
+    get()._recordListenProgress()
     const { currentIndex, queue, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     if (isShuffle && shuffledOrder.length > 0) {
       if (currentShuffleIndex > 0) {

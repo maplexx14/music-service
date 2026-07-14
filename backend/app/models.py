@@ -43,6 +43,45 @@ user_track_skips = Table(
 )
 
 
+# Лог СОБЫТИЙ прослушивания (в отличие от агрегата user_track_plays):
+# каждое событие хранит финальную долю дослушивания (completion 0..1) и
+# локальный час клиента. Питает сигналы «дослушал/бросил» и контекст
+# времени суток в рекомендациях. Пишется эндпоинтом POST /tracks/{id}/listen.
+user_play_events = Table(
+    'user_play_events',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), nullable=False),
+    Column('played_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column('completion', Float, nullable=True),
+    Column('client_hour', Integer, nullable=True),
+)
+
+# Показы трека в рекомендациях. Трек, показанный несколько раз и ни разу не
+# сыгранный, — негативный сигнал: выдача не должна «залипать» на нём до
+# бесконечности. Строка удаляется при реальном прослушивании (см. /play).
+rec_impressions = Table(
+    'rec_impressions',
+    Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('shown_count', Integer, nullable=False, default=1),
+    Column('last_shown', DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+# Предрассчитанная item-item похожесть (co-occurrence по сигналам всех
+# юзеров) — пересчитывается фоновой задачей (см. app/cooccurrence.py).
+track_cooccurrence = Table(
+    'track_cooccurrence',
+    Base.metadata,
+    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('other_track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('score', Float, nullable=False),
+    Column('updated_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+
 class User(Base):
     __tablename__ = "users"
 

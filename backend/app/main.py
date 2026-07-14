@@ -83,6 +83,40 @@ async def _configure_threadpool() -> None:
 
 
 @app.on_event("startup")
+async def _cooccurrence_rebuild_loop() -> None:
+    # Периодический пересчёт item-item co-occurrence для коллаборативных
+    # рекомендаций (см. app/cooccurrence.py). Считать на каждый запрос дорого
+    # (self-join по всем сигналам всех юзеров), меняется матрица медленно —
+    # раз в час в фоне достаточно. Первый пересчёт — сразу на старте (матрица
+    # могла устареть, пока сервис лежал), в треде — не блокируем event loop.
+    import logging
+
+    from app.cooccurrence import rebuild_cooccurrence
+    from app.database import SessionLocal
+
+    logger = logging.getLogger("cooccurrence")
+    interval = int(os.getenv("COOCCURRENCE_REBUILD_INTERVAL_SEC", "3600"))
+
+    def _rebuild_once() -> None:
+        db = SessionLocal()
+        try:
+            pairs = rebuild_cooccurrence(db)
+            logger.info("cooccurrence rebuilt: %d pairs", pairs)
+        finally:
+            db.close()
+
+    async def _loop() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(_rebuild_once)
+            except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
+                logger.exception("cooccurrence rebuild failed")
+            await asyncio.sleep(interval)
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
 async def _warmup_ytdlp() -> None:
     # Первый резолв YouTube Music в свежем процессе платит cold-start за
     # импорт yt_dlp и загрузку реестра экстракторов/плагинов (~0.5-0.7с) —

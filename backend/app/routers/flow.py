@@ -43,8 +43,10 @@ router = APIRouter()
 
 # Сколько последних прослушиваний исключаем из потока (свежесть).
 _RECENT_PLAYS_EXCLUDE = 40
-# Доля «разведки» (радио-кандидаты) в миксе.
-_EXPLORE_RATIO = 0.6
+# Доля «разведки» (радио-кандидаты) в миксе. Внешнее радио полезно для
+# открытия нового, но не должно составлять большинство выдачи: на дальних
+# переходах оно жанрово дрейфует (русский рэп → поп/техно/ретро).
+_EXPLORE_RATIO = 0.03
 # Кэш радио-пула на сид: радио YT Music стабильно на коротком горизонте,
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
@@ -77,6 +79,15 @@ _MAX_PER_ARTIST = 2
 # смысловая отсечка.
 _TASTE_HALF_LIFE_DAYS = 14.0
 _TASTE_QUERY_LIMIT = 300
+# Краткосрочная серверная история не даёт новому запуску волны сразу вернуть
+# тот же исчерпанный пул в другом порядке. Хвоста достаточно для нескольких
+# длинных сессий, TTL позже разрешает старым трекам естественно вернуться.
+_FLOW_HISTORY_LIMIT = 500
+_FLOW_HISTORY_TTL = 6 * 60 * 60
+# Continuation-сиды превращают фиксированный набор radio-пулов в ограниченный
+# обход графа YT Music. Больше сидов за запрос заметно увеличит внешние вызовы.
+_CONTINUATION_SEEDS = 6
+_PROFILE_SEEDS = 4
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -169,6 +180,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # плейлистные артисты не попадают ни в топ-сидов, ни в топ-SC-разведки.
     playlist_artist_keys: List[str] = []  # порядок = свежесть добавления
     seen_pl_artist = set()
+    # Курированные артисты (лайки + собственные плейлисты) — самый надёжный
+    # доступный жанровый сигнал. У импортированных треков genre обычно пуст,
+    # поэтому нельзя выдавать «14 жанровых» только на основании Track.genre.
+    curated_artist_keys: List[str] = []
+    seen_curated_artist = set()
     playlist_seeds: List[str] = []  # ytmusic video_id из плейлистов, свежие первыми
 
     def _artist_key(name: str) -> str:
@@ -178,6 +194,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = _artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + 3.0 * _decay(added_at)
         artist_display.setdefault(key, track.artist)
+        if key and key not in seen_curated_artist:
+            curated_artist_keys.append(key)
+            seen_curated_artist.add(key)
         # Genre почти всегда пуст у внешних треков — как дополнительный сигнал
         # разбираем ключевые слова прямо в названии ("... Phonk Remix" и т.п.).
         genre = track.genre or infer_genre_from_text(track.title, track.artist)
@@ -194,6 +213,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = _artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + 2.0 * _decay(added_at)
         artist_display.setdefault(key, track.artist)
+        if key and key not in seen_curated_artist:
+            curated_artist_keys.append(key)
+            seen_curated_artist.add(key)
         genre = track.genre or infer_genre_from_text(track.title, track.artist)
         if genre:
             genres.append(genre)
@@ -304,6 +326,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "playlist_seeds": playlist_seeds,
         "artists": top_artists,
         "artist_keys": top_artist_keys,
+        "curated_artist_keys": curated_artist_keys,
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
@@ -314,8 +337,14 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     }
 
 
-def _local_candidates(db: Session, profile: dict, limit: int) -> List[Track]:
+def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids: Optional[set] = None) -> List[Track]:
     """Локальные кандидаты: треки любимых артистов/жанров + популярное (блокирующая)."""
+    # Исключаем не только недавнее/скипнутое (recent_ids), но и то, что УЖЕ в
+    # очереди фронта (exclude из запроса) — иначе окно limit*6 по play_count
+    # раз за разом выдаёт одних и тех же кандидатов, они целиком отсеиваются
+    # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
+    # на первых 15 треках»).
+    exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
     filters = []
     if profile["artist_keys"]:
         # Регистронезависимо: SoundCloud и YT Music отдают имя одного и того же
@@ -353,17 +382,16 @@ def _local_candidates(db: Session, profile: dict, limit: int) -> List[Track]:
     if genre_artist_keys:
         filters.append(func.lower(Track.artist).in_(genre_artist_keys))
 
-    artist_keys = set(profile["artist_keys"])
+    curated_artist_keys = set(profile.get("curated_artist_keys") or [])
     user_genres = set(profile.get("genres") or [])
 
     def _keep(t: Track) -> bool:
-        # Артисты, которых пользователь уже реально слушает, — доверенный
-        # сигнал сам по себе, жанр не сверяем. Остальное (совпадение по
-        # ключевому слову/тегу в названии) само по себе не значит "тот же
-        # дух" — трек мог попасть в кандидаты по случайному слову в
-        # заголовке, будучи из совсем другого жанра.
+        # Для гарантированной квоты доверяем только артистам, которых юзер сам
+        # добавил в лайки/плейлисты, либо явному совместимому genre. Обычная
+        # история могла загрязниться предыдущими ошибочными рекомендациями —
+        # считать любого сыгранного артиста «жанром пользователя» нельзя.
         key = re.sub(r"\s+", " ", (t.artist or "").strip().lower())
-        if key in artist_keys:
+        if key in curated_artist_keys:
             return True
         # Иностранное (вьетнам/CJK/деванагари…) юзер стабильно скипает.
         if is_foreign_script(t.title):
@@ -373,25 +401,24 @@ def _local_candidates(db: Session, profile: dict, limit: int) -> List[Track]:
     candidates: List[Track] = []
     if filters:
         q = db.query(Track).filter(or_(*filters))
-        if profile["recent_ids"]:
-            q = q.filter(~Track.id.in_(profile["recent_ids"]))
+        if exclude_ids:
+            q = q.filter(~Track.id.in_(exclude_ids))
         candidates = q.order_by(desc(Track.play_count)).limit(limit * 6).all()
         candidates = [t for t in candidates if _keep(t)]
         candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
 
-    # Добор популярным, если по вкусу нашлось мало. Даже глобально популярное
-    # НЕ должно быть иностранным (вьетнам/CJK/…) — юзер такое стабильно скипает,
-    # а этот путь идёт мимо тег-матчинга, так что без фильтра сюда протекали
-    # нерелевантные иностранные хиты вообще без совпадения по тегам. И берём
-    # СЛУЧАЙНУЮ выборку из широкого пула популярного, а не фиксированный топ —
-    # иначе у всех юзеров с тонким вкусом добор одинаковый (не «свой у каждого»).
+    # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
+    # жанровой проверки попадал случайный глобальный top по play_count — именно
+    # этот путь подмешивал любителю русского рэпа поп, техно и музыку 90-х.
     if len(candidates) < limit:
-        skip = {t.id for t in candidates} | profile["recent_ids"]
+        skip = {t.id for t in candidates} | exclude_ids
         q = db.query(Track)
         if skip:
             q = q.filter(~Track.id.in_(skip))
-        pool = [t for t in q.order_by(desc(Track.play_count)).limit(limit * 10).all()
-                if not is_foreign_script(t.title)]
+        pool = [
+            t for t in q.order_by(desc(Track.play_count)).limit(limit * 20).all()
+            if _keep(t)
+        ]
         random.shuffle(pool)
         candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
 
@@ -538,17 +565,29 @@ async def _tag_pool(request: Request, tag: str) -> List[ExternalTrackResponse]:
 
 
 def _parse_exclude(exclude: str) -> tuple:
-    """'12,ytmusic:abc,...' → (numeric_ids, video_ids)."""
-    numeric, videos = set(), set()
+    """Разбирает exclude, не смешивая id разных провайдеров.
+
+    Чистые числа — id локальной БД. Только ``ytmusic:*`` можно использовать
+    как videoId и continuation-сид; ``soundcloud:*`` и неизвестные источники
+    остаются внешними исключениями, но никогда не передаются в YT Music radio.
+    """
+    numeric, yt_videos, external_ids = set(), [], set()
     for part in (exclude or "").split(","):
         part = part.strip()
         if not part:
             continue
         if part.isdigit():
             numeric.add(int(part))
-        elif ":" in part:
-            videos.add(part.split(":", 1)[1])
-    return numeric, videos
+            continue
+        if ":" not in part:
+            continue
+        source, external_id = part.split(":", 1)
+        if not external_id:
+            continue
+        external_ids.add(f"{source}:{external_id}")
+        if source == "ytmusic" and external_id not in yt_videos:
+            yt_videos.append(external_id)
+    return numeric, yt_videos, external_ids
 
 
 @router.get("/flow")
@@ -561,18 +600,70 @@ async def get_flow(
 ):
     """Порция персонального потока. exclude — id уже находящихся в очереди."""
     base_url = str(request.base_url).rstrip("/")
-    excl_ids, excl_videos = _parse_exclude(exclude)
+    excl_ids, client_yt_videos, external_exclude = _parse_exclude(exclude)
+
+    # Сначала сохраняем клиентские YT id как continuation-сиды, затем добавляем
+    # серверную историю к строгим исключениям. История не должна сама бесконечно
+    # раздувать список сетевых сидов.
+    continuation_seeds = client_yt_videos[-_CONTINUATION_SEEDS:]
+    # v2 сбрасывает чрезмерно строгую историю прошлой версии, из-за которой
+    # после нескольких запусков весь небольшой локальный пул оказывался исключён.
+    history_key = f"flow:history:v2:{current_user.id}"
+    history = await get_cache_async(history_key) or {}
+    history_ids = set(history.get("ids") or [])
+    history_keys = {
+        tuple(key) for key in (history.get("keys") or [])
+        if isinstance(key, list) and len(key) == 2
+    }
 
     profile = await asyncio.to_thread(_taste_profile, db, current_user.id)
     excl_ids |= profile["recent_ids"]
-    excl_videos |= profile["recent_video_ids"]
+    excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
+    for item_id in history_ids:
+        # Локальный каталог конечен: не блокируем его на 6 часов. Уже стоящие в
+        # очереди id всё равно приходят в exclude, а recent_ids защищает от
+        # немедленного повтора. Долгая блокировка была причиной выдачи из 1 трека.
+        if item_id.startswith("ytmusic:"):
+            excl_videos.add(item_id.split(":", 1)[1])
+        elif not item_id.startswith("local:"):
+            external_exclude.add(item_id)
+    # Долгая history_keys также блокировала локальные треки по artist/title даже
+    # после того, как local:id перестал исключаться. Для текущей очереди хватает
+    # client exclude, а от немедленных повторов защищает недавняя история БД.
     seen_keys = set(profile["recent_keys"])
 
     # --- разведка: радио YT Music от сидов + поиск SoundCloud по любимым артистам ---
     # Не у каждого videoId есть радио, поэтому перебираем сиды волнами по 2,
-    # пока не соберём хотя бы один непустой пул (максимум 3 волны).
+    # пока не наберём достаточно СВЕЖИХ (после исключений) кандидатов.
     explore: List[ExternalTrackResponse] = []
-    merged: List[ExternalTrackResponse] = []
+    banned = profile["banned_artists"]
+
+    def _add_explore(tracks) -> None:
+        # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
+        # ещё волна радио» должно приниматься по числу свежих кандидатов.
+        # Раньше волны останавливались на первом непустом СЫРОМ пуле, а
+        # фильтрация исключений шла в самом конце — при подгрузке продолжения
+        # кэшированный радио-пул (TTL 30 мин) целиком оказывался уже в очереди,
+        # explore выходил пустым, и волна «замирала» на первых ~15 треках.
+        for t in tracks:
+            key = _norm_key(t.artist, t.title)
+            external_key = f"{t.source}:{t.external_id}"
+            if (
+                t.external_id in excl_videos
+                or external_key in external_exclude
+                or key in seen_keys
+            ):
+                continue
+            # Артист, заскипанный в минус, не попадает в волну и из радио.
+            if banned and any(a.strip().lower() in banned for a in t.artist.split(",")):
+                continue
+            seen_keys.add(key)
+            excl_videos.add(t.external_id)
+            # ytmusic отдаёт пустой stream_url (нужен base_url); у soundcloud он
+            # уже проставлен search-ом с токеном — не перетираем.
+            if t.source == "ytmusic":
+                t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+            explore.append(t)
 
     # YT Music радио — это чужой алгоритм "похожести" от YouTube, никак не
     # завязанный на наши жанр/тег-фильтры. Когда у пользователя уже есть
@@ -590,28 +681,55 @@ async def get_flow(
         )
     ]
 
+    trusted_artist_keys = set(profile.get("curated_artist_keys") or [])
+    user_genres = set(profile.get("genres") or [])
+
     def _matches_taste(t: ExternalTrackResponse) -> bool:
         # Иностранное (вьетнам/CJK/…) юзер стабильно скипает — режем из радио.
         if is_foreign_script(t.title):
             return False
-        if not taste_keywords:
+        artist_key = re.sub(r"\s+", " ", (t.artist or "").strip().lower())
+        # Любимый артист — сильный сигнал даже без заполненного genre.
+        if artist_key in trusted_artist_keys:
             return True
-        text = f"{t.title} {t.artist}".lower()
-        return any(kw in text for kw in taste_keywords)
+        # Для незнакомого артиста требуется жанровая совместимость. Проверка
+        # только по наличию отдельных taste_keywords была слишком слабой и
+        # пропускала омонимы/случайные слова из поп-, техно- и ретро-треков.
+        if user_genres:
+            return genre_is_compatible(None, t.title, t.artist, user_genres)
+        # Если жанр из метаданных определить не удалось, не открываем шлюз всему
+        # радио: допускаем незнакомое только по явным тематическим словам.
+        if taste_keywords:
+            text = f"{t.title} {t.artist}".lower()
+            return any(kw in text for kw in taste_keywords)
+        return not trusted_artist_keys
 
-    # Сиды из ytmusic-плейлистов идут ПЕРВЫМИ (гарантированная доля радио от
-    # курированного), затем остальные по свежести. dict.fromkeys дедупит,
-    # сохраняя приоритет плейлистных.
-    seeds = list(dict.fromkeys(profile["playlist_seeds"] + profile["seeds"]))[:10]
+    # Сиды всегда берём из подтверждённого профиля пользователя. Переходы от
+    # рекомендованного трека к его radio создавали жанровый дрейф на каждом
+    # следующем hop. Случайная ротация по широкому набору профильных сидов даёт
+    # новые пулы без ухода от русского рэпа к поп/техно/ретро.
+    # Плейлистные сиды имеют абсолютный приоритет. seeds из истории допускаем
+    # только если курированных YT-сидов вообще нет: история могла уже успеть
+    # загрязниться нерелевантными рекомендациями прошлой версии алгоритма.
+    profile_seeds = list(dict.fromkeys(profile["playlist_seeds"]))
+    if not profile_seeds:
+        profile_seeds = list(dict.fromkeys(profile["seeds"]))
+    random.shuffle(profile_seeds)
+    seeds = profile_seeds[:_PROFILE_SEEDS]
+    logger.debug(
+        "flow seeds user=%s continuation=%d profile=%d history=%d",
+        current_user.id,
+        len(continuation_seeds),
+        min(len(profile_seeds), _PROFILE_SEEDS),
+        len(history_ids),
+    )
     if seeds:
-        order = random.sample(seeds, len(seeds))
-        for wave in range(0, min(len(order), 6), 2):
-            batch = order[wave : wave + 2]
-            pools = await asyncio.gather(*(_radio_pool(s) for s in batch))
-            radio_tracks = [t for pool in pools for t in pool if _matches_taste(t)]
-            merged.extend(radio_tracks)
-            if merged:
-                break
+        order = seeds
+        # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
+        # волнами по два: при большом exclude каждая пустая волна добавляла полный
+        # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
+        pools = await asyncio.gather(*(_radio_pool(seed) for seed in order))
+        _add_explore(t for pool in pools for t in pool if _matches_taste(t))
 
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
     # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.
@@ -626,11 +744,15 @@ async def get_flow(
             profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"]
         )
     )[:_SC_EXPLORE_ARTISTS]
-    if sc_artists:
+    # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT
+    # уже дал полную порцию свежих кандидатов.
+    if sc_artists and len(explore) < limit:
         sc_pools = await asyncio.gather(
             *(_soundcloud_pool(request, a) for a in sc_artists)
         )
-        merged.extend(t for pool in sc_pools for t in pool)
+        _add_explore(
+            t for pool in sc_pools for t in pool if _matches_taste(t)
+        )
 
     # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
     # авторов). НЕ ищем по одиночному неоднозначному слову ("гей") — провайдеры
@@ -638,35 +760,27 @@ async def get_flow(
     # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
     # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
     tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
-    if len(tag_words) >= 2:
+    # Теговый поиск также остаётся fallback: последовательное ожидание трёх
+    # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
+    if len(tag_words) >= 2 and len(explore) < limit:
         query = " ".join(tag_words[:2])
-        tag_tracks = [
+        _add_explore(
             t
             for t in await _tag_pool(request, query)
-            if not is_foreign_script(t.title)
-        ]
-        merged.extend(tag_tracks)
+            if _matches_taste(t)
+        )
 
-    if merged:
-        random.shuffle(merged)
-        banned = profile["banned_artists"]
-        for t in merged:
-            key = _norm_key(t.artist, t.title)
-            if t.external_id in excl_videos or key in seen_keys:
-                continue
-            # Артист, заскипанный в минус, не попадает в волну и из радио.
-            if banned and any(a.strip().lower() in banned for a in t.artist.split(",")):
-                continue
-            seen_keys.add(key)
-            excl_videos.add(t.external_id)
-            # ytmusic отдаёт пустой stream_url (нужен base_url); у soundcloud он
-            # уже проставлен search-ом с токеном — не перетираем.
-            if t.source == "ytmusic":
-                t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
-            explore.append(t)
+    logger.debug(
+        "flow explore user=%s fresh_candidates=%d excluded_external=%d",
+        current_user.id,
+        len(explore),
+        len(external_exclude) + len(excl_videos),
+    )
+    # Порядок внутри выдачи случайный, как и раньше (shuffle шёл по merged).
+    random.shuffle(explore)
 
     # --- эксплуатация: локальная библиотека по вкусу ---
-    local = await asyncio.to_thread(_local_candidates, db, profile, limit)
+    local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
     exploit: List[Track] = []
     for t in local:
         key = _norm_key(t.artist, t.title)
@@ -680,16 +794,81 @@ async def get_flow(
         excl_ids.add(t.id)
         exploit.append(t)
 
-    # --- микс: ~60% разведка / 40% знакомое, добор из того, что осталось ---
-    n_explore = min(len(explore), round(limit * _EXPLORE_RATIO))
-    n_exploit = min(len(exploit), limit - n_explore)
-    n_explore = min(len(explore), limit - n_exploit)  # добор разведкой
+    # --- жанровая квота ---
+    # Все элементы exploit прошли локальный _keep, а explore — _matches_taste.
+    # Для стандартной порции из 15 сначала резервируем 14 жанрово проверенных
+    # позиций. Пятнадцатая остаётся разведочной, но она тоже проходит жанровый
+    # фильтр: квота гарантирует минимум 14/15, а обычно релевантны все 15.
+    genre_quota = min(limit, 14 if limit == 15 else max(0, limit - 1))
 
     random.shuffle(exploit)
-    mix: List[dict] = []
-    mix.extend(t.model_dump() for t in explore[:n_explore])
-    mix.extend(
-        TrackResponse.model_validate(t).model_dump(mode="json") for t in exploit[:n_exploit]
-    )
+    relevant_local = exploit[:genre_quota]
+
+    mix: List[dict] = [
+        TrackResponse.model_validate(t).model_dump(mode="json")
+        for t in relevant_local
+    ]
+
+    # Добираем обязательные 14 мест внешними кандидатами, которые уже прошли
+    # _matches_taste и пришли из radio подтверждённых плейлистных сидов. Раньше
+    # внешний добор был полностью запрещён, а локальный каталог часто содержал
+    # лишь один подходящий трек — поэтому поток заканчивался сразу и Home
+    # переходил к секции «Рекомендуем новинки».
+    missing_genre = genre_quota - len(mix)
+    relevant_external = explore[:missing_genre]
+    mix.extend(t.model_dump() for t in relevant_external)
+    used_external = len(relevant_external)
+
+    # Пятнадцатое место — разведка. Оно также проходит базовый taste-фильтр, но
+    # не участвует в гарантированных 14 жанровых позициях.
+    remaining = limit - len(mix)
+    if remaining:
+        discovery = explore[used_external:used_external + remaining]
+        mix.extend(t.model_dump() for t in discovery)
+        used_external += len(discovery)
+        remaining = limit - len(mix)
+    if remaining:
+        extra_local = exploit[len(relevant_local):len(relevant_local) + remaining]
+        mix.extend(
+            TrackResponse.model_validate(t).model_dump(mode="json")
+            for t in extra_local
+        )
+
+    n_explore = used_external
+    n_exploit = len(mix) - n_explore
     random.shuffle(mix)
+
+    # Запоминаем только реально отданные элементы. Нормализованные ключи режут
+    # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
+    returned_ids = []
+    returned_keys = []
+    for item in mix:
+        source = item.get("source")
+        external_id = item.get("external_id")
+        if source and external_id:
+            returned_ids.append(f"{source}:{external_id}")
+        elif item.get("id") is not None:
+            returned_ids.append(f"local:{item['id']}")
+        returned_keys.append(list(_norm_key(item.get("artist", ""), item.get("title", ""))))
+
+    old_ids = list(history.get("ids") or [])
+    old_keys = list(history.get("keys") or [])
+    await set_cache_async(
+        history_key,
+        {
+            "ids": list(dict.fromkeys(old_ids + returned_ids))[-_FLOW_HISTORY_LIMIT:],
+            "keys": [list(k) for k in dict.fromkeys(
+                tuple(k) for k in old_keys + returned_keys
+                if isinstance(k, (list, tuple)) and len(k) == 2
+            )][-_FLOW_HISTORY_LIMIT:],
+        },
+        expire=_FLOW_HISTORY_TTL,
+    )
+    logger.debug(
+        "flow result user=%s explore=%d exploit=%d returned=%d",
+        current_user.id,
+        n_explore,
+        n_exploit,
+        len(mix),
+    )
     return mix

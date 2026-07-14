@@ -10,9 +10,10 @@ import aiofiles
 from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
-from app.cache import get_cache, set_cache
-from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
+from app.cache import get_cache, set_cache, clear_pattern
+from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips, user_play_events, rec_impressions
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
+from pydantic import BaseModel, Field
 from app.dependencies import get_current_active_user, get_current_admin_user
 from fastapi.responses import FileResponse, RedirectResponse
 import mimetypes
@@ -387,6 +388,9 @@ def like_track(
         position=max_position + 1,
     ))
     db.commit()
+    # Лайк — сильный явный сигнал: сбрасываем кэш рекомендаций сразу, а не
+    # ждём истечения TTL (иначе юзер лайкает и 5 минут видит старую выдачу).
+    clear_pattern(f"recs:{current_user.id}:*")
     return {"message": "Track liked successfully"}
 
 
@@ -414,6 +418,8 @@ def unlike_track(
         (playlist_tracks.c.track_id == track_id)
     ))
     db.commit()
+    # Явное действие — инвалидируем кэш рекомендаций (см. like_track).
+    clear_pattern(f"recs:{current_user.id}:*")
     return {"message": "Track unliked successfully"}
 
 
@@ -494,6 +500,15 @@ def record_track_play(
     
     try:
         db.execute(stmt)
+        # Сыгранный трек больше не «непринятая рекомендация» — сбрасываем его
+        # счётчик показов, чтобы он не ушёл в impression-fatigue (см.
+        # recommendations.py) из-за показов ДО того, как юзер его послушал.
+        db.execute(
+            rec_impressions.delete().where(
+                (rec_impressions.c.user_id == current_user.id)
+                & (rec_impressions.c.track_id == track_id)
+            )
+        )
         db.commit()
     except IntegrityError as e:
         db.rollback()
@@ -537,7 +552,45 @@ def record_track_skip(
     )
     db.execute(stmt)
     db.commit()
+    # Скип — явный негативный сигнал: кэш рекомендаций сбрасываем сразу.
+    clear_pattern(f"recs:{current_user.id}:*")
     return {"message": "Skip recorded"}
+
+
+class ListenEventPayload(BaseModel):
+    # Финальная доля прослушивания трека (0..1) на момент переключения/конца.
+    completion: float = Field(..., ge=0.0, le=1.0)
+    # Локальный час клиента 0-23 — таймзона юзера серверу неизвестна.
+    client_hour: Optional[int] = Field(None, ge=0, le=23)
+
+
+@router.post("/{track_id}/listen", status_code=status.HTTP_200_OK)
+def record_listen_event(
+    track_id: int,
+    payload: ListenEventPayload,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Событие прослушивания с финальной долей дослушивания.
+
+    Фронт шлёт его при КАЖДОМ уходе с трека (переключение/естественный
+    конец), в отличие от /play (порог >=50%) и /skip (<25%): зона 25-50%
+    иначе не видна рекомендациям вовсе. Лог питает completion-веса и
+    контекст времени суток (см. recommendations.py)."""
+    exists = db.query(Track.id).filter(Track.id == track_id).scalar()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    db.execute(
+        user_play_events.insert().values(
+            user_id=current_user.id,
+            track_id=track_id,
+            completion=payload.completion,
+            client_hour=payload.client_hour,
+        )
+    )
+    db.commit()
+    return {"message": "Listen recorded"}
 
 
 @router.delete("/{track_id}", status_code=status.HTTP_200_OK)

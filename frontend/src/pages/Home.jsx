@@ -31,7 +31,10 @@ function Home() {
   const fetchData = async () => {
     try {
       const [recResponse, tracksResponse] = await Promise.all([
-        api.get('/recommendations'),
+        // Локальный час клиента — для контекста времени суток в рекомендациях
+        // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
+        // «утреннему» вкусу, вечерняя — к вечернему.
+        api.get('/recommendations', { params: { hour: new Date().getHours() } }),
         api.get('/tracks?limit=20'),
       ])
       setRecommendations(recResponse.data)
