@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { Search, Play, Pause, Settings, Shield, Home as HomeIcon, History } from 'lucide-react'
-import { usePlayerStore } from '../store/playerStore'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Play, Pause, Settings, Shield, LogOut, Home as HomeIcon, History } from 'lucide-react'
+import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
+import { useAuthStore } from '../store/authStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import api from '../services/api'
@@ -11,6 +12,37 @@ import Grainient from '../components/Grainient'
 import Spinner from '../components/Spinner'
 import './Home.css'
 
+// Не зависит от состояния компонента — вынесено на уровень модуля, чтобы
+// ссылка была стабильной и не ломала мемоизацию TrackCard.
+function handlePlayTrack(track, queue) {
+  usePlayerStore.getState().playTrack(track, queue, 'wave')
+}
+
+// Мемоизированная карточка трека: при перерисовках Home (смена
+// isPlaying/source и т.д.) карточки со стабильными пропсами не
+// пересобираются. intent-префетч (hover/pointerdown) прогревает резолв
+// на бэке до клика — старт воспроизведения почти мгновенный.
+const TrackCard = memo(function TrackCard({ track, queue }) {
+  return (
+    <div
+      className="track-card"
+      onClick={() => handlePlayTrack(track, queue)}
+      {...trackIntentHandlers(track)}
+    >
+      <img
+        src={resolveCoverUrl(track.cover_url) || defaultCover}
+        alt={track.title}
+        className="track-cover"
+        onError={handleCoverError}
+      />
+      <div className="track-info">
+        <div className="track-title">{track.title}</div>
+        <div className="track-artist">{track.artist}</div>
+      </div>
+    </div>
+  )
+})
+
 function Home() {
   const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
   const [trending, setTrending] = useState([])
@@ -18,14 +50,33 @@ function Home() {
   const [loading, setLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('home')
-  const { playPlaylist, isPlaying, source, togglePlayPause } = usePlayerStore()
+  // Атомарные селекторы: подписка на весь store перерисовывала всю главную
+  // (со всеми списками карточек) на каждом тике currentTime — 4 раза/сек
+  // всё время воспроизведения.
+  const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const source = usePlayerStore((s) => s.source)
+  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
-  const navigate = useNavigate()
+  // Профиль в верхней шапке — единственное место выхода из аккаунта
+  // на мобильных (сайдбар скрыт, в нижней навигации профиля нет).
+  const user = useAuthStore((s) => s.user)
+  const logout = useAuthStore((s) => s.logout)
+
+  const handleLogout = () => {
+    setIsProfileMenuOpen(false)
+    logout()
+    window.location.href = '/login'
+  }
 
   useEffect(() => {
     fetchData()
+    // Предзагружаем поток рекомендаций сразу при открытии главной:
+    // к клику по «потоку» список уже получен, а резолв первых треков
+    // прогрет на бэке — старт воспроизведения почти мгновенный.
+    usePlayerStore.getState().preloadFlow()
   }, [])
 
   const fetchData = async () => {
@@ -58,11 +109,6 @@ function Home() {
     }
   }
 
-  const handlePlayTrack = (track, queue) => {
-    const { playTrack } = usePlayerStore.getState()
-    playTrack(track, queue, 'wave')
-  }
-
   const handlePlayPlaylist = (playlist) => {
     if (playlist.tracks && playlist.tracks.length > 0) {
       playPlaylist(playlist.tracks, 0, 'wave')
@@ -76,6 +122,14 @@ function Home() {
     if (!waveTracks.length) return ''
     return waveTracks.slice(0, 4).map((track) => track.title).join(', ')
   }, [waveTracks])
+  // Страховка на случай долгого пребывания на странице (TTL предзагрузки
+  // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
+  // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
+  const waveIntentHandlers = {
+    onMouseEnter: () => usePlayerStore.getState().preloadFlow(),
+    onPointerDown: () => usePlayerStore.getState().preloadFlow(),
+  }
+
   const handleWaveClick = async () => {
     if (isWavePlaying) {
       togglePlayPause()
@@ -108,35 +162,51 @@ function Home() {
   return (
     <div className="page-container">
       <div className="mobile-header">
-        <button
-          className="icon-btn"
-          type="button"
-          aria-label="Поиск"
-          onClick={() => navigate('/search')}
-        >
-          <Search size={20} />
-        </button>
-
         <span className="mobile-logo">BoltMusic</span>
         <div className="mobile-profile">
           <button
             className="mobile-avatar"
             type="button"
-            aria-label="Профиль"
+            aria-label="Меню профиля"
+            aria-expanded={isProfileMenuOpen}
+            aria-haspopup="true"
             onClick={() => setIsProfileMenuOpen((prev) => !prev)}
           >
-            <span>BM</span>
+            {user?.avatar_url ? (
+              <img src={user.avatar_url} alt="" className="mobile-avatar-img" />
+            ) : (
+              <span>{(user?.username || 'U').charAt(0).toUpperCase()}</span>
+            )}
           </button>
           {isProfileMenuOpen && (
-            <div className="mobile-profile-menu">
-              <Link to="/settings" className="mobile-profile-item">
+            <div className="mobile-profile-menu" role="menu">
+              <Link
+                to="/settings"
+                className="mobile-profile-item"
+                role="menuitem"
+                onClick={() => setIsProfileMenuOpen(false)}
+              >
                 <Settings size={20} />
                 Настройки
               </Link>
-              <Link to="/admin" className="mobile-profile-item">
+              <Link
+                to="/admin"
+                className="mobile-profile-item"
+                role="menuitem"
+                onClick={() => setIsProfileMenuOpen(false)}
+              >
                 <Shield size={20} />
                 Админ
               </Link>
+              <button
+                type="button"
+                className="mobile-profile-item"
+                role="menuitem"
+                onClick={handleLogout}
+              >
+                <LogOut size={20} />
+                Выйти
+              </button>
             </div>
           )}
         </div>
@@ -176,7 +246,13 @@ function Home() {
         <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
           <div className="wave-center">
             {waveGif ? (
-              <button type="button" onClick={handleWaveClick} className="wave-gif-button" aria-label="поток рекомендаций">
+              <button
+                type="button"
+                onClick={handleWaveClick}
+                className="wave-gif-button"
+                aria-label="поток рекомендаций"
+                {...waveIntentHandlers}
+              >
                 <img
                   src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
                   alt="поток рекомендаций"
@@ -186,7 +262,12 @@ function Home() {
                 </span>
               </button>
             ) : (
-              <button type="button" onClick={handleWaveClick} className="wave-title">
+              <button
+                type="button"
+                onClick={handleWaveClick}
+                className="wave-title"
+                {...waveIntentHandlers}
+              >
                 {isWavePlaying ? <Pause size={20} /> : <Play size={20} />}
                 <span>поток</span>
               </button>
@@ -235,18 +316,7 @@ function Home() {
             <h2 className="section-title">Рекомендуем новинки</h2>
             <div className="tracks-grid">
               {recommendations.tracks.slice(0, 12).map((track) => (
-                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, recommendations.tracks)}>
-                  <img
-                    src={resolveCoverUrl(track.cover_url) || defaultCover}
-                    alt={track.title}
-                    className="track-cover"
-                    onError={handleCoverError}
-                  />
-                  <div className="track-info">
-                    <div className="track-title">{track.title}</div>
-                    <div className="track-artist">{track.artist}</div>
-                  </div>
-                </div>
+                <TrackCard key={track.id} track={track} queue={recommendations.tracks} />
               ))}
             </div>
           </div>
@@ -255,18 +325,7 @@ function Home() {
             <h2 className="section-title">Тренды</h2>
             <div className="tracks-grid">
               {trending.slice(0, 12).map((track) => (
-                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, trending)}>
-                  <img
-                    src={resolveCoverUrl(track.cover_url) || defaultCover}
-                    alt={track.title}
-                    className="track-cover"
-                    onError={handleCoverError}
-                  />
-                  <div className="track-info">
-                    <div className="track-title">{track.title}</div>
-                    <div className="track-artist">{track.artist}</div>
-                  </div>
-                </div>
+                <TrackCard key={track.id} track={track} queue={trending} />
               ))}
             </div>
           </div>
@@ -309,18 +368,7 @@ function Home() {
           ) : (
             <div className="tracks-grid">
               {history.map((track) => (
-                <div key={track.id} className="track-card" onClick={() => handlePlayTrack(track, history)}>
-                  <img
-                    src={resolveCoverUrl(track.cover_url) || defaultCover}
-                    alt={track.title}
-                    className="track-cover"
-                    onError={handleCoverError}
-                  />
-                  <div className="track-info">
-                    <div className="track-title">{track.title}</div>
-                    <div className="track-artist">{track.artist}</div>
-                  </div>
-                </div>
+                <TrackCard key={track.id} track={track} queue={history} />
               ))}
             </div>
           )}

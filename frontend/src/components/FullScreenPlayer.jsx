@@ -5,28 +5,71 @@ import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
 import './FullScreenPlayer.css'
 
+function formatTime(seconds) {
+  if (!seconds || isNaN(seconds)) return '0:00'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+// Прогресс-блок вынесен в отдельный компонент: только он подписан на
+// currentTime (тикает ~4 раза/сек). Остальной полноэкранный плеер (обложка,
+// кнопки, жесты) не перерисовывается на каждом тике воспроизведения.
+function FullScreenProgress() {
+  const currentTime = usePlayerStore((s) => s.currentTime)
+  const duration = usePlayerStore((s) => s.duration)
+  const seekTo = usePlayerStore((s) => s.seekTo)
+
+  const progressPercent = duration ? Math.min(100, (currentTime / duration) * 100) : 0
+
+  const handleSeek = (e) => {
+    if (!duration) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    seekTo(ratio * duration)
+  }
+
+  return (
+    <div className="fullscreen-progress">
+      <div
+        className="fullscreen-progress-bar"
+        onClick={handleSeek}
+        role="slider"
+        aria-label="Перемотка"
+        aria-valuemin={0}
+        aria-valuemax={Math.floor(duration || 0)}
+        aria-valuenow={Math.floor(currentTime || 0)}
+      >
+        <div className="fullscreen-progress-fill" style={{ width: `${progressPercent}%` }} />
+      </div>
+      <div className="fullscreen-progress-time">
+        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(duration)}</span>
+      </div>
+    </div>
+  )
+}
+
 function FullScreenPlayer() {
-  const {
-    currentTrack,
-    isPlaying,
-    currentTime,
-    duration,
-    togglePlayPause,
-    previousTrack,
-    nextTrack,
-    closeFullScreen,
-    isRepeatOne,
-    isShuffle,
-    toggleRepeatOne,
-    toggleShuffle,
-    queue,
-    currentIndex,
-    likedTrackIds,
-    fetchLikedTracks,
-    toggleTrackLike,
-    materializeCurrentTrack,
-    seekTo,
-  } = usePlayerStore()
+  // Атомарные селекторы вместо подписки на весь store — без currentTime/
+  // duration, чтобы компонент не перерисовывался на каждом тике
+  // воспроизведения (см. FullScreenProgress выше).
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
+  const previousTrack = usePlayerStore((s) => s.previousTrack)
+  const nextTrack = usePlayerStore((s) => s.nextTrack)
+  const closeFullScreen = usePlayerStore((s) => s.closeFullScreen)
+  const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
+  const isShuffle = usePlayerStore((s) => s.isShuffle)
+  const toggleRepeatOne = usePlayerStore((s) => s.toggleRepeatOne)
+  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle)
+  const queue = usePlayerStore((s) => s.queue)
+  const currentIndex = usePlayerStore((s) => s.currentIndex)
+  const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
+  const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
+  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const [loadingLike, setLoadingLike] = useState(false)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
@@ -79,11 +122,6 @@ function FullScreenPlayer() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || isExternalTrack
 
-  const progressPercent = useMemo(() => {
-    if (!duration) return 0
-    return Math.min(100, (currentTime / duration) * 100)
-  }, [currentTime, duration])
-
   const coverUrl = useMemo(
     () => {
       if (isExternalTrack) {
@@ -109,13 +147,6 @@ function FullScreenPlayer() {
 
   if (!currentTrack) return null
 
-  const formatTime = (seconds) => {
-    if (!seconds || isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
   const handleLike = async () => {
     if (!canInteract || loadingLike) return
 
@@ -132,13 +163,6 @@ function FullScreenPlayer() {
 
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
-
-  const handleSeek = (e) => {
-    if (!duration) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-    seekTo(ratio * duration)
-  }
 
   // Лёгкое затемнение по мере перетаскивания вниз — визуальный отклик жеста.
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)
@@ -203,23 +227,7 @@ function FullScreenPlayer() {
         </div>
       </div>
 
-      <div className="fullscreen-progress">
-        <div
-          className="fullscreen-progress-bar"
-          onClick={handleSeek}
-          role="slider"
-          aria-label="Перемотка"
-          aria-valuemin={0}
-          aria-valuemax={Math.floor(duration || 0)}
-          aria-valuenow={Math.floor(currentTime || 0)}
-        >
-          <div className="fullscreen-progress-fill" style={{ width: `${progressPercent}%` }} />
-        </div>
-        <div className="fullscreen-progress-time">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
-        </div>
-      </div>
+      <FullScreenProgress />
 
       <div className="fullscreen-controls">
         <button

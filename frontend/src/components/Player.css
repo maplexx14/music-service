@@ -6,16 +6,18 @@
   height: 76px;
   transition: left 0.3s ease;
   background: #1e1e1e;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  /* Более выразительная акцентная обводка вместо еле заметной. */
+  border: 1px solid rgba(162, 89, 255, 0.35);
+  /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 18px;
   z-index: 1000;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  /* Мягкое фиолетовое свечение под обводкой. */
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(162, 89, 255, 0.12);
   overflow: visible;
-
 }
 
 .player-progress-top {
@@ -412,7 +414,9 @@
     /* Такой же размер, как меню; выше меню с зазором. */
     bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
     height: 72px;
-    padding: 0 12px;
+    padding: 0 16px;
+    /* Полностью круглые края на мобильных под увеличенную высоту. */
+    border-radius: 999px;
   }
 
   .player-left {
@@ -432,6 +436,13 @@
   .player-right,
   .like-btn,
   .add-btn {
+    display: none;
+  }
+
+  /* На мобильных остаётся только плей/пауза: шафл, пред./след. трек
+     и повтор (все .control-btn) скрыты — переключение треков доступно
+     свайпом по обложке и из полноэкранного плеера. */
+  .player-controls .control-btn {
     display: none;
   }
 
@@ -490,4 +501,3 @@
 .volume-slider:hover::-moz-range-thumb {
   background: #a259ff;
 }
-

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Download } from 'lucide-react'
-import { usePlayerStore } from '../store/playerStore'
+import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.png'
@@ -158,6 +158,7 @@ function Search() {
                     key={track.id}
                     className="track-item"
                     onClick={() => handlePlayTrack(track)}
+                    {...trackIntentHandlers(track)}
                   >
                     <img
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
@@ -182,10 +183,14 @@ function Search() {
               <h2 className="results-title">Внешний каталог</h2>
               <div className="tracks-list">
                 {externalTracks.map((track) => (
+                  // intent-префетч: наведение/касание строки прогревает резолв на
+                  // бэке до клика — важно для результатов ниже топ-4 (их автопрогрев
+                  // не покрывает, см. performSearch).
                   <div
                     key={track.id}
                     className="track-item"
                     onClick={() => handlePlayExternalTrack(track)}
+                    {...trackIntentHandlers(track)}
                   >
                     <img
                       src={upscaleCover(track.cover_url) || defaultCover}

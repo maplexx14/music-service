@@ -1029,17 +1029,19 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     warm_path = _warm_file(cache_id, ext)
     early_start, _ = _parse_range(request.headers.get("range"), None)
     warm_size = _warm_size(warm_path) if early_start == 0 else 0
-    if (warm_size > 0 or fresh) and total is not None:
-        # Probe не нужен, когда ссылке и размеру можно верить и так:
-        #   * прогретый префетчем трек — URL уже провалидирован при скачивании
-        #     warm-головы, авторитетный total лежит в кэше резолва;
-        #   * свежий (только что полученный от резолвера) URL с точным total.
-        # Пропуск экономит целый RTT до CDN перед первым байтом. Если ссылка
-        # всё же окажется мёртвой (протухла, редкий пустой 206 от CDN) — живой
-        # proxy пере-резолвит её на лету (см. try_reresolve), не роняя стрим.
-        status, probed = 200, None
-    else:
-        status, probed = await _probe(client, direct_url)
+    # Probe выполняем ВСЕГДА — и для кэшированных, и для свежих ссылок.
+    # Кэшированные могли протухнуть за часы с момента прогрева, а свежие
+    # Invidious/yt-dlp иногда выдают ссылку, которую CDN сразу закрывает
+    # пустым 206. Раньше fast-path пропускал probe для свежих URL — мёртвая
+    # ссылка обнаруживалась УЖЕ после отправки заголовков с Content-Length:
+    # стрим обрывался, тело оказывалось короче заявленного и uvicorn падал
+    # с «Exception in ASGI application» на некоторых треках. Один range 0-0
+    # (десятки мс) дешевле оборванного ответа: мёртвая ссылка ловится ДО
+    # ответа клиенту и чисто пере-резолвится ниже (либо клиент получает
+    # честный 502 и может повторить запрос). Заодно probe даёт
+    # авторитетный total от самого CDN (filesize из yt-dlp может врать —
+    # ещё один источник расхождения тела с Content-Length).
+    status, probed = await _probe(client, direct_url)
     if status >= 400:
         logger.info("stale direct url for %s (probe %s), re-resolving", cache_id, status)
         try:
@@ -1089,12 +1091,15 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
         # Тянем сегментами по _SEGMENT байт с повтором при обрыве — googlevideo
         # надёжно отдаёт короткие range-запросы, но рвёт длинные потоки.
         nonlocal direct_url
-        # Одна попытка пере-резолва протухшей ссылки прямо посреди стрима:
+        # Пере-резолв протухшей ссылки прямо посреди стрима:
         # заголовки уже отправлены, но содержимое файла у нового URL то же,
-        # так что можно продолжить с той же позиции. Покрывает и пропущенный
-        # probe у прогретых треков, и длинные стримы, переживающие срок жизни
-        # googlevideo-ссылки (раньше такой стрим просто молча обрывался).
-        reresolved = False
+        # так что можно продолжить с той же позиции. Покрывает длинные стримы,
+        # переживающие срок жизни googlevideo-ссылки (раньше такой стрим
+        # просто молча обрывался). Разрешён ОДИН раз на позицию (а не один
+        # на весь стрим): очень длинный стрим может пережить НЕСКОЛЬКО
+        # протуханий ссылки. Зацикливание исключено: без прогресса с момента
+        # последнего пере-резолва повторная попытка не даётся.
+        last_reresolve_pos = -1
         tmp = None
         tmp_path = None
         committed = False
@@ -1115,12 +1120,15 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                 поэтому можно продолжить с текущей позиции — уже отправленные
                 заголовки и байты остаются валидными.
                 """
-                nonlocal direct_url, reresolved
-                if reresolved:
+                nonlocal direct_url, last_reresolve_pos
+                cur = pos + got
+                if cur <= last_reresolve_pos:
+                    # С прошлого пере-резолва не продвинулись ни на байт —
+                    # свежая ссылка тоже мертва, повторять бессмысленно.
                     return False
-                reresolved = True
+                last_reresolve_pos = cur
                 try:
-                    new_url, new_ext, _nt, _nf = await resolver(True)
+                    new_url, new_ext, new_total, _nf = await resolver(True)
                 except Exception:  # noqa: BLE001
                     logger.warning("mid-stream re-resolve failed for %s", cache_id)
                     return False
@@ -1130,6 +1138,16 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
                     logger.warning(
                         "mid-stream re-resolve changed format for %s (%s -> %s)",
                         cache_id, ext, new_ext,
+                    )
+                    return False
+                if total is not None and new_total is not None and new_total != total:
+                    # То же расширение, но другой размер файла — YouTube пересобрал
+                    # вариант (другой itag/битрейт). Байты несовместимы с уже
+                    # отправленными, а хвост за new_total вообще не существует —
+                    # продолжение дало бы битый звук или вечные 416 от CDN.
+                    logger.warning(
+                        "mid-stream re-resolve changed size for %s (%d -> %d)",
+                        cache_id, total, new_total,
                     )
                     return False
                 logger.info(

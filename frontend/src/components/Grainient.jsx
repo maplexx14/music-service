@@ -133,11 +133,18 @@ const Grainient = ({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // prefers-reduced-motion: анимацию не крутим — рендерим один статичный
+    // кадр градиента и останавливаемся (доступность + экономия GPU).
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+
     const renderer = new Renderer({
       webgl: 2,
       alpha: true,
       antialias: false,
-      dpr: Math.min(window.devicePixelRatio || 1, 2)
+      // DPR cap 1.5 вместо 2: фон — мягкий размытый градиент без мелких
+      // деталей, визуальной разницы нет, а пикселей для шейдера на
+      // retina-экранах почти вдвое меньше (1.5² vs 2²).
+      dpr: Math.min(window.devicePixelRatio || 1, 1.5)
     });
 
     const gl = renderer.gl;
@@ -218,7 +225,29 @@ const Grainient = ({
     let lastT = null;
 
     let raf = 0;
+    // Управление циклом рендера: rAF крутится только когда вкладка видима
+    // И контейнер во вьюпорте. Скрытая вкладка / фон за пределами экрана —
+    // ноль работы GPU и CPU вместо постоянного полноэкранного шейдера.
+    let running = false;
+    let pageVisible = !document.hidden;
+    let inViewport = true;
+
+    const startLoop = () => {
+      if (running || reducedMotion) return;
+      if (!pageVisible || !inViewport) return;
+      running = true;
+      lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
+      raf = requestAnimationFrame(loop);
+    };
+
+    const stopLoop = () => {
+      if (!running) return;
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+
     const loop = (t) => {
+      if (!running) return;
       const now = t * 0.001;
       const deltaTime = lastT !== null ? Math.min(now - lastT, 0.1) : 0;
       lastT = now;
@@ -246,10 +275,32 @@ const Grainient = ({
       renderer.render({ scene: mesh });
       raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
+
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (pageVisible) startLoop();
+      else stopLoop();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    const io = new IntersectionObserver((entries) => {
+      inViewport = entries[0]?.isIntersecting ?? true;
+      if (inViewport) startLoop();
+      else stopLoop();
+    });
+    io.observe(container);
+
+    if (reducedMotion) {
+      // Один статичный кадр вместо бесконечного цикла.
+      renderer.render({ scene: mesh });
+    } else {
+      startLoop();
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      stopLoop();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      io.disconnect();
       ro.disconnect();
       try {
         container.removeChild(canvas);

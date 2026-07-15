@@ -414,6 +414,14 @@
   color: #ffffff;
   text-decoration: none;
   font-size: 13px;
+  /* Пункт «Выйти» — <button>: сбрасываем нативные стили, чтобы он
+     выглядел как соседние ссылки. */
+  background: none;
+  border: none;
+  width: 100%;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
 }
 
 .mobile-profile-item:hover {
@@ -444,11 +452,22 @@
   height: 36px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
+  border: none;
   display: grid;
   place-items: center;
   color: #ffffff;
   font-weight: 600;
   font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+/* Реальный аватар пользователя внутри круглой кнопки. */
+.mobile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .mobile-player-info {

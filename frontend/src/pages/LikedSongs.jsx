@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { usePlayerStore } from '../store/playerStore'
+import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { Play, Heart, MoreVertical, Plus } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
@@ -21,14 +21,14 @@ function LikedSongs() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
-  const {
-    playPlaylist,
-    currentTrack,
-    isPlaying,
-    likedTrackIds,
-    toggleTrackLike,
-    fetchLikedTracks,
-  } = usePlayerStore()
+  // Атомарные селекторы вместо подписки на весь store: страница со списком
+  // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
+  const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
+  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
 
   useEffect(() => {
     fetchPlaylist()
@@ -202,6 +202,7 @@ function LikedSongs() {
                   key={track.id}
                   className={`track-row${isCurrent ? ' playing' : ''}`}
                   onClick={() => handlePlayTrack(track, index)}
+                  {...trackIntentHandlers(track)}
                 >
                   <td className="track-number">
                     {isCurrent ? (

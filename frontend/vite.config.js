@@ -21,7 +21,13 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      usePolling: true,
+      // Явно событийный file-watcher (без поллинга): поллинг опрашивает
+      // весь дерево файлов по таймеру и постоянно грузит CPU/диск даже
+      // в простое. (Ранее здесь был недействующий server.usePolling —
+      // опция читается только из server.watch.usePolling.)
+      watch: {
+        usePolling: false,
+      },
       allowedHosts: true,
       port: 3000,
       proxy: {

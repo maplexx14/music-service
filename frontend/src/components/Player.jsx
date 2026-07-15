@@ -38,6 +38,16 @@ const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
 const PLAY_RECORD_RATIO = 0.5
 const PLAY_RECORD_MIN_SEC = 60
 
+// Зеркало EXTERNAL_STREAM_PREFIX из backend/app/routers/tracks.py: сюда
+// stream_track сам редиректит (307) материализованные внешние треки.
+// Строя этот URL сразу на фронте, экономим полный round-trip редиректа
+// (через ngrok/tuna-туннель — десятки-сотни мс) плюс SQL-запрос на бэке
+// при КАЖДОМ старте внешнего трека.
+const DIRECT_STREAM_PREFIX = {
+  ytmusic: '/ytdlp/stream/',
+  soulseek: '/soulseek/stream/',
+}
+
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
 // текущего трека, и для ленивой подгрузки следующего.
 function resolveRawUrl(track, isExternal) {
@@ -47,7 +57,16 @@ function resolveRawUrl(track, isExternal) {
   // в track.stream_url хост зашит на момент сохранения и умирает при переносе
   // деплоя/смене туннеля. У результатов поиска id строковый ("ytmusic:...") —
   // они не в БД, для них stream_url свежий, с текущим хостом.
-  if (typeof track.id === 'number') return `${API_URL}/tracks/${track.id}/stream`
+  if (typeof track.id === 'number') {
+    // Внешний источник с известным external_id — минуем /tracks/{id}/stream
+    // и его 307-редирект, идём сразу на эндпоинт провайдера (тот же путь,
+    // куда редиректит бэк). Фолбэк на старый путь, если external_id нет.
+    const directPrefix = DIRECT_STREAM_PREFIX[track.source]
+    if (directPrefix && track.external_id) {
+      return `${API_URL}${directPrefix}${track.external_id}`
+    }
+    return `${API_URL}/tracks/${track.id}/stream`
+  }
   if (isExternal) return track.stream_url
   if (track.id) return `${API_URL}/tracks/${track.id}/stream`
   if (track.file_path?.startsWith('http')) return track.file_path
@@ -57,32 +76,77 @@ function resolveRawUrl(track, isExternal) {
   return undefined
 }
 
+function formatTime(seconds) {
+  if (!seconds || isNaN(seconds)) return '0:00'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+// Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
+// currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
+// этой подписки не перерисовывается на каждом тике — обложка, кнопки,
+// лайки и панель плейлистов остаются статичными во время воспроизведения.
+function PlayerProgress({ audioRef }) {
+  const currentTime = usePlayerStore((s) => s.currentTime)
+  const duration = usePlayerStore((s) => s.duration)
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
+
+  const handleSeek = (e) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const percentage = x / rect.width
+    const newTime = percentage * duration
+    audio.currentTime = newTime
+    setCurrentTime(newTime)
+  }
+
+  return (
+    <div className="player-progress-top" onClick={handleSeek}>
+      <div className="player-progress-top-track">
+        <div
+          className="player-progress-top-fill"
+          style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+        >
+          <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
+          <span className="player-progress-thumb" />
+        </div>
+      </div>
+      <span className="player-progress-duration">{formatTime(duration)}</span>
+    </div>
+  )
+}
+
 function Player() {
-  const {
-    currentTrack,
-    isPlaying,
-    volume,
-    currentTime,
-    duration,
-    togglePlayPause,
-    nextTrack,
-    previousTrack,
-    setCurrentTime,
-    setDuration,
-    setVolume,
-    openFullScreen,
-    isRepeatOne,
-    isShuffle,
-    toggleRepeatOne,
-    toggleShuffle,
-    likedTrackIds,
-    fetchLikedTracks,
-    toggleTrackLike,
-    materializeCurrentTrack,
-    prefetchNext,
-    seekRequest,
-    clearSeekRequest,
-  } = usePlayerStore()
+  // Атомарные селекторы вместо деструктуризации всего store: подписка на
+  // весь store означала перерисовку всего Player на КАЖДОМ изменении любого
+  // поля — включая currentTime, тикающий 4 раза/сек всё время
+  // воспроизведения. currentTime здесь сознательно НЕ выбирается — он нужен
+  // только PlayerProgress (см. выше); экшены в zustand стабильны по ссылке.
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const volume = usePlayerStore((s) => s.volume)
+  const duration = usePlayerStore((s) => s.duration)
+  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
+  const nextTrack = usePlayerStore((s) => s.nextTrack)
+  const previousTrack = usePlayerStore((s) => s.previousTrack)
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
+  const setDuration = usePlayerStore((s) => s.setDuration)
+  const setVolume = usePlayerStore((s) => s.setVolume)
+  const openFullScreen = usePlayerStore((s) => s.openFullScreen)
+  const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
+  const isShuffle = usePlayerStore((s) => s.isShuffle)
+  const toggleRepeatOne = usePlayerStore((s) => s.toggleRepeatOne)
+  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle)
+  const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
+  const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
+  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
+  const prefetchNext = usePlayerStore((s) => s.prefetchNext)
+  const seekRequest = usePlayerStore((s) => s.seekRequest)
+  const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
 
   const audioRef = useRef(null)
   // Оставлены только как guards для старой логики preload; второго <audio>
@@ -195,8 +259,20 @@ function Player() {
         /* Источник мог смениться между событиями media element. */
       }
     }
+    // Троттлинг timeupdate до ~1 раза/сек: браузер шлёт событие ~4 раза/сек,
+    // но прогресс-бару и системному виджету хватает секундной точности —
+    // минус 3/4 store-апдейтов и React-рендеров во время воспроизведения.
+    // В скрытой вкладке setCurrentTime пропускаем совсем (прогресс не виден,
+    // рендеры в фоне жгут CPU/батарею зря), а syncPositionState оставляем —
+    // он питает виджет на экране блокировки. При возврате на вкладку
+    // позиция синхронизируется через visibilitychange ниже.
+    let lastTickSecond = -1
     const updateTime = () => {
-      setCurrentTime(audio.currentTime)
+      maybeRecordPlay(audio)
+      const sec = Math.floor(audio.currentTime)
+      if (sec === lastTickSecond) return
+      lastTickSecond = sec
+      if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
       const remainingWindow = Math.min(
         PRELOAD_NEXT_REMAINING_SEC,
@@ -209,6 +285,10 @@ function Player() {
       ) {
         triggerNextPreload()
       }
+    }
+    // Вкладка снова видима — догоняем прогресс-бар до актуальной позиции.
+    const handleVisibility = () => {
+      if (!document.hidden) setCurrentTime(audio.currentTime)
     }
     const updateDuration = () => {
       const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
@@ -236,6 +316,7 @@ function Player() {
     }
 
     audio.addEventListener('timeupdate', updateTime)
+    document.addEventListener('visibilitychange', handleVisibility)
     audio.addEventListener('loadedmetadata', updateDuration)
     audio.addEventListener('durationchange', updateDuration)
     audio.addEventListener('canplay', updateDuration)
@@ -247,6 +328,7 @@ function Player() {
 
     return () => {
       audio.removeEventListener('timeupdate', updateTime)
+      document.removeEventListener('visibilitychange', handleVisibility)
       audio.removeEventListener('loadedmetadata', updateDuration)
       audio.removeEventListener('durationchange', updateDuration)
       audio.removeEventListener('canplay', updateDuration)
@@ -338,9 +420,9 @@ function Player() {
     }
 
     const handleCanPlay = () => {
-      if (isPlaying) {
+      if (isPlaying && audio.paused) {
         audio.play().catch(err => {
-          console.error('Error playing audio:', err)
+          if (err?.name !== 'AbortError') console.error('Error playing audio:', err)
         })
       }
     }
@@ -357,11 +439,22 @@ function Player() {
     audio.addEventListener('canplay', handleCanPlay)
     audio.addEventListener('error', handleError)
 
-    if (isPlaying && audio.readyState >= 2) {
+    if (isPlaying) {
+      // play() вызываем СРАЗУ, не дожидаясь canplay и без проверки readyState.
+      // Раньше при смене трека readyState сбрасывался в 0, ветка с
+      // readyState >= 2 не срабатывала, и старт целиком зависел от события
+      // canplay. Но в ФОНОВОЙ вкладке браузер откладывает загрузку медиа
+      // до явного play() — canplay без него не наступал, и перелистывание
+      // трека из системного виджета зависало (взаимная блокировка:
+      // play ждал canplay, canplay ждал play). Немедленный play() форсирует
+      // загрузку и сам стартует, как только данные готовы (промис висит
+      // до готовности). AbortError гасим: он означает штатное прерывание
+      // висящего play() новой сменой src (быстрое перелистывание треков),
+      // а handleCanPlay выше остаётся страховкой и повторит попытку.
       audio.play().catch(err => {
-        console.error('Error playing audio:', err)
+        if (err?.name !== 'AbortError') console.error('Error playing audio:', err)
       })
-    } else if (!isPlaying) {
+    } else {
       audio.pause()
     }
 
@@ -381,28 +474,36 @@ function Player() {
   }, [currentTrack?.id, prefetchNext])
 
   // Запись play — не на старте, а по достижении порога реального прослушивания
-  // (см. PLAY_RECORD_RATIO). Эффект гоняется на каждом тике currentTime, но до
-  // порога выходит рано, а после — один раз на трек (guard по ref).
-  useEffect(() => {
-    if (!isPlaying || !currentTrack) return
-    if (!canInteract) return
+  // (см. PLAY_RECORD_RATIO). Вызывается из timeupdate-листенера (а НЕ из
+  // эффекта с зависимостью от currentTime) — благодаря этому Player больше
+  // не подписан на currentTime и не перерисовывается 4 раза/сек.
+  // Состояние читаем императивно из store и самого <audio>; guard по ref
+  // гарантирует одну запись на трек.
+  const maybeRecordPlay = (audio) => {
+    const state = usePlayerStore.getState()
+    const track = state.currentTrack
+    if (!state.isPlaying || !track) return
+    const dbId = track.db_id ?? (typeof track.id === 'number' ? track.id : null)
+    const external = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(track.source)
+    if (dbId === null && !external) return
+    const dur = audio.duration
     const listenedEnough =
-      currentTime >= PLAY_RECORD_MIN_SEC ||
-      (duration > 0 && !isNaN(duration) && currentTime / duration >= PLAY_RECORD_RATIO)
+      audio.currentTime >= PLAY_RECORD_MIN_SEC ||
+      (Number.isFinite(dur) && dur > 0 && audio.currentTime / dur >= PLAY_RECORD_RATIO)
     if (!listenedEnough) return
     // Стабильный ключ: у внешних трек id меняется после материализации.
-    const playKey = currentTrack.external_id ?? currentTrack.id
+    const playKey = track.external_id ?? track.id
     if (lastRecordedTrackIdRef.current === playKey) return
     lastRecordedTrackIdRef.current = playKey
     ;(async () => {
       try {
-        const id = dbTrackId ?? (await materializeCurrentTrack())
+        const id = dbId ?? (await state.materializeCurrentTrack())
         if (id) await api.post(`/tracks/${id}/play`)
       } catch (error) {
         console.error('Error recording play:', error)
       }
     })()
-  }, [currentTime, duration, currentTrack?.id, currentTrack?.external_id, isPlaying, canInteract, dbTrackId, materializeCurrentTrack])
+  }
 
   useEffect(() => {
     const audio = audioRef.current
@@ -575,8 +676,10 @@ function Player() {
       : 'none'
   }, [isPlaying, currentTrack?.id])
 
-  // Позиция/длительность — прогресс-бар в системном виджете. Берём позицию
-  // непосредственно из <audio>, чтобы системная перемотка не ждала обновления store.
+  // Позиция/длительность — прогресс-бар в системном виджете. Потиковую
+  // синхронизацию делает timeupdate-листенер (syncPositionState в updateTime);
+  // этот эффект покрывает только смену трека/длительности — без зависимости
+  // от currentTime, чтобы не перерисовывать Player на каждом тике.
   useEffect(() => {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
     const audio = audioRef.current
@@ -587,34 +690,19 @@ function Player() {
     try {
       navigator.mediaSession.setPositionState({
         duration: mediaDuration,
-        position: Math.min(Math.max(audio?.currentTime ?? currentTime, 0), mediaDuration),
+        position: Math.min(
+          Math.max(audio?.currentTime ?? usePlayerStore.getState().currentTime, 0),
+          mediaDuration,
+        ),
         playbackRate: audio?.playbackRate || 1,
       })
     } catch {
       /* значения вне диапазона — пропускаем */
     }
-  }, [currentTime, duration, currentTrack?.id, currentTrack?.duration])
+  }, [duration, currentTrack?.id, currentTrack?.duration])
 
   if (!currentTrack) {
     return null
-  }
-
-  const formatTime = (seconds) => {
-    if (!seconds || isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const handleSeek = (e) => {
-    const audio = audioRef.current
-    if (!audio) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const percentage = x / rect.width
-    const newTime = percentage * duration
-    audio.currentTime = newTime
-    setCurrentTime(newTime)
   }
 
   const handleLike = async () => {
@@ -750,18 +838,7 @@ function Player() {
 
   return (
     <div className="player">
-      <div className="player-progress-top" onClick={handleSeek}>
-        <div className="player-progress-top-track">
-          <div
-            className="player-progress-top-fill"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-          >
-            <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
-            <span className="player-progress-thumb" />
-          </div>
-        </div>
-        <span className="player-progress-duration">{formatTime(duration)}</span>
-      </div>
+      <PlayerProgress audioRef={audioRef} />
       <audio
         ref={audioRef}
         src={audioSrc || undefined}

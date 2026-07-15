@@ -15,6 +15,11 @@ function shuffleArray(arr) {
 // (это нормально: кэш на бэке в Redis всё равно тёплый).
 const requestedPrefetchIds = new Set()
 
+// Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
+// дедуп летящего запроса + TTL свежести предзагруженного списка.
+let flowPreloadPromise = null
+const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
+
 // Запись скипа — негативный сигнал для рекомендаций, поэтому важно не терять
 // его молча на сетевой ошибке (как было раньше с голым .catch(() => {})).
 // Несколько попыток с небольшой задержкой; skipErrorToast, чтобы фоновая
@@ -268,11 +273,64 @@ const usePlayerStore = create((set, get) => ({
   // --- Персональный поток («Моя волна») ---
   flowActive: false,
   flowLoading: false,
+  // Предзагруженный список потока: { tracks, ts }. Заполняется preloadFlow()
+  // (монтирование главной / hover по кнопке), потребляется startFlow().
+  flowPreload: null,
+
+  // Фоновая предзагрузка потока. Без неё клик по «потоку» ждал ДВЕ
+  // последовательные операции: расчёт рекомендаций на бэке
+  // (GET /recommendations/flow), а ЗАТЕМ холодный резолв первого трека
+  // (yt-dlp — единицы секунд). Теперь и список, и резолв первых треков
+  // греются заранее, и клик стартует почти мгновенно.
+  // Дедуп через flowPreloadPromise; TTL защищает от устаревшей выдачи
+  // (лайки/скипы после предзагрузки меняют рекомендации).
+  preloadFlow: () => {
+    const { flowActive, flowPreload } = get()
+    if (flowActive) return
+    if (flowPreload && Date.now() - flowPreload.ts < FLOW_PRELOAD_TTL_MS) return
+    if (flowPreloadPromise) return
+    flowPreloadPromise = api
+      .get('/recommendations/flow', { params: { limit: 15 }, skipErrorToast: true })
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          set({ flowPreload: { tracks: data, ts: Date.now() } })
+          // Греем резолв первых двух треков заранее — к клику Redis уже тёплый.
+          get().prefetchTracks(data.slice(0, 2), 2)
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        flowPreloadPromise = null
+      })
+  },
 
   startFlow: async () => {
     if (get().flowLoading) return
     set({ flowLoading: true })
     try {
+      // Если предзагрузка ещё летит (клик сразу после открытия страницы) —
+      // дожидаемся её вместо запуска дублирующего запроса.
+      if (flowPreloadPromise) {
+        try {
+          await flowPreloadPromise
+        } catch {
+          /* предзагрузка упала — ниже сходим за списком сами */
+        }
+      }
+
+      // Мгновенный старт из предзагруженного списка: без ожидания
+      // расчёта рекомендаций, а резолв первого трека уже прогрет.
+      // Список потребляется (обнуляется), чтобы следующий запуск потока
+      // получил свежую выдачу с учётом новых сигналов.
+      const preload = get().flowPreload
+      if (preload && Date.now() - preload.ts < FLOW_PRELOAD_TTL_MS && preload.tracks.length > 0) {
+        set({ flowPreload: null })
+        get().playPlaylist(preload.tracks, 0, 'flow')
+        get().prefetchTracks(preload.tracks.slice(0, 4), 4)
+        set({ flowActive: true })
+        return true
+      }
+
       const { data } = await api.get('/recommendations/flow', { params: { limit: 15 } })
       if (!data || data.length === 0) return false
       get().playPlaylist(data, 0, 'flow')
@@ -513,4 +571,43 @@ const usePlayerStore = create((set, get) => ({
   },
 }))
 
-export { usePlayerStore }
+// --- Intent-префетч (hover/pointerdown по строке трека) ---
+// Запускает прогрев резолва на бэке ЗАРАНЕЕ — в момент, когда пользователь
+// только навёл курсор / коснулся строки, за 200–1000 мс до реального
+// клика. К моменту, когда <audio> запросит поток, резолв уже в Redis —
+// старт воспроизведения почти мгновенный. Дедуп: requestedPrefetchIds
+// на фронте + single-flight на бэке, так что повторные наведения бесплатны.
+//
+// hover дебаунсим (~120 мс), чтобы быстрое пролистывание списка мышью
+// не спамило бэк префетчами всех задетых строк. pointerdown — без
+// задержки: касание/нажатие почти всегда предшествует клику.
+let intentHoverTimer = null
+
+function prefetchOnIntent(track, { immediate = false } = {}) {
+  if (!track) return
+  const fire = () => usePlayerStore.getState().prefetchTracks([track], 1)
+  if (immediate) {
+    if (intentHoverTimer) {
+      clearTimeout(intentHoverTimer)
+      intentHoverTimer = null
+    }
+    fire()
+    return
+  }
+  if (intentHoverTimer) clearTimeout(intentHoverTimer)
+  intentHoverTimer = setTimeout(() => {
+    intentHoverTimer = null
+    fire()
+  }, 120)
+}
+
+// Готовые пропсы для строки/карточки трека: распылить через
+// {...trackIntentHandlers(track)} на кликабельный элемент.
+function trackIntentHandlers(track) {
+  return {
+    onMouseEnter: () => prefetchOnIntent(track),
+    onPointerDown: () => prefetchOnIntent(track, { immediate: true }),
+  }
+}
+
+export { usePlayerStore, prefetchOnIntent, trackIntentHandlers }
