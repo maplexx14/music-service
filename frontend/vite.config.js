@@ -9,6 +9,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      target: 'es2020',
+      cssCodeSplit: true,
+      sourcemap: false,
+
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

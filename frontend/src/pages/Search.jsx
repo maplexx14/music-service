@@ -29,35 +29,45 @@ function Search() {
   const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
-    if (query.trim().length > 0) {
-      const timeoutId = setTimeout(() => {
-        performSearch()
-      }, 500)
-      return () => clearTimeout(timeoutId)
-    } else {
-      setResults({ tracks: [], playlists: [], users: [] })
-      setExternalTracks([])
-      setExternalPlaylists([])
+    const searchQuery = query.trim()
+    if (searchQuery.length > 0) {
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => {
+        performSearch(searchQuery, controller.signal)
+      }, 300)
+      return () => {
+        window.clearTimeout(timeoutId)
+        controller.abort()
+      }
     }
+
+    setResults({ tracks: [], playlists: [], users: [] })
+    setExternalTracks([])
+    setExternalPlaylists([])
+    setLoading(false)
   }, [query])
 
-  const performSearch = async () => {
+  const performSearch = async (searchQuery, signal) => {
     setLoading(true)
     setSearchError('')
     try {
       const [localResult, externalResult, externalPlaylistsResult] = await Promise.allSettled([
         api.get('/search', {
-          params: { q: query, limit: 20 },
+          params: { q: searchQuery, limit: 20 },
+          signal,
         }),
         api.get('/search/external', {
-          params: { q: query, limit: 30 },
+          params: { q: searchQuery, limit: 30 },
           skipErrorToast: true,
+          signal,
         }),
         api.get('/search/external/playlists', {
-          params: { q: query, limit: 10 },
+          params: { q: searchQuery, limit: 10 },
           skipErrorToast: true,
+          signal,
         }),
       ])
+      if (signal.aborted) return
       if (localResult.status === 'fulfilled') {
         setResults(localResult.value.data)
       } else {
@@ -69,9 +79,9 @@ function Search() {
         setExternalTracks(externalResult.value.data)
         // Прогреваем резолв топ-нескольких результатов заранее — большинство
         // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
-        // С Invidious прогрев дешёвый, так что греем пошире — клик почти в
-        // любой видимый результат стартует с диска, без паузы на резолв.
-        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 8)
+        // Ограничиваем прогрев видимой верхушкой, чтобы поиск не создавал
+        // всплеск фоновых запросов на слабом клиенте или под нагрузкой.
+        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 4)
       } else {
         console.error('External search error:', externalResult.reason)
         setExternalTracks([])
@@ -83,13 +93,14 @@ function Search() {
         setExternalPlaylists([])
       }
     } catch (error) {
+      if (signal.aborted) return
       console.error('Search error:', error)
       setResults({ tracks: [], playlists: [], users: [] })
       setExternalTracks([])
       setExternalPlaylists([])
       setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
-      setLoading(false)
+      if (!signal.aborted) setLoading(false)
     }
   }
 
@@ -153,6 +164,8 @@ function Search() {
                       alt={track.title}
                       className="track-item-cover"
                       onError={handleCoverError}
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>

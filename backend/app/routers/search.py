@@ -21,12 +21,13 @@ def search(
 ):
     # Кэш зависит от пользователя: в выдачу попадают его приватные плейлисты.
     user_key = current_user.id if current_user else "anon"
-    cache_key = f"search:{q.lower().strip()}:{limit}:{user_key}"
+    normalized_q = " ".join(q.lower().split())
+    cache_key = f"search:{normalized_q}:{limit}:{user_key}"
     cached = get_cache(cache_key)
     if cached is not None:
         return SearchResponse(**cached)
 
-    search_term = f"%{q}%"
+    search_term = f"%{normalized_q}%"
     
     # Search tracks
     tracks = db.query(Track).filter(

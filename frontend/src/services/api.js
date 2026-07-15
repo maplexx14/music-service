@@ -14,6 +14,7 @@ try {
 
 const api = axios.create({
   baseURL: API_URL,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
     // Обход предупреждающих страниц туннелей (tuna.am / ngrok free): без этих
@@ -65,6 +66,31 @@ export const setApiAuthToken = (token) => {
   } else {
     delete api.defaults.headers.common.Authorization
   }
+}
+
+// Reuse identical concurrent GET requests. This prevents route remounts and
+// neighbouring components from issuing duplicate work while preserving Axios' API.
+const pendingGets = new Map()
+const rawGet = api.get.bind(api)
+
+api.get = (url, config = {}) => {
+  if (config.signal || config.dedupe === false) {
+    const { dedupe: _dedupe, ...axiosConfig } = config
+    return rawGet(url, axiosConfig)
+  }
+
+  const params = new URLSearchParams()
+  Object.entries(config.params || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([key, value]) => params.append(key, String(value)))
+  const key = `${authToken || 'anonymous'}:${url}?${params.toString()}`
+  const pending = pendingGets.get(key)
+  if (pending) return pending
+
+  const { dedupe: _dedupe, ...axiosConfig } = config
+  const request = rawGet(url, axiosConfig).finally(() => pendingGets.delete(key))
+  pendingGets.set(key, request)
+  return request
 }
 
 export default api

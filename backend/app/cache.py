@@ -52,10 +52,15 @@ def delete_cache(key: str):
 
 
 def clear_pattern(pattern: str):
-    """Clear all keys matching pattern"""
+    """Clear matching keys incrementally without blocking Redis with KEYS."""
     try:
-        keys = redis_client.keys(pattern)
-        if keys:
-            redis_client.delete(*keys)
+        batch = []
+        for key in redis_client.scan_iter(match=pattern, count=200):
+            batch.append(key)
+            if len(batch) >= 200:
+                redis_client.delete(*batch)
+                batch.clear()
+        if batch:
+            redis_client.delete(*batch)
     except Exception:
         pass

@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Защита от абьюза: сколько треков максимум тянем из одной коллекции/профиля.
-_MAX_TRACKS = 200
+# Safety ceiling; providers are paged until exhaustion below this high bound.
+_MAX_TRACKS = 10_000
 # Одновременных резолвов/матчей — чтобы большой плейлист не завалил yt-dlp/ytmusic.
 _CONCURRENCY = 8
 

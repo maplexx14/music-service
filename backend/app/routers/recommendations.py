@@ -27,7 +27,7 @@ from app.lang import is_foreign_script
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import similar_track_ids
-from app.diversity import cap_per_artist
+from app.diversity import cap_per_artist, interleave_artists
 
 router = APIRouter()
 
@@ -196,7 +196,7 @@ def get_recommendations(
     # Кэш сегментируем по временному интервалу: утренняя и вечерняя выдачи
     # различаются и не должны перетирать друг друга.
     bucket = _hour_bucket(hour)
-    cache_key = f"recs:{current_user.id}:{limit}:{bucket or 'any'}"
+    cache_key = f"recs:v3-library:{current_user.id}:{limit}:{bucket or 'any'}"
     cached = get_cache(cache_key)
     if cached is not None:
         return RecommendationResponse(**cached)
@@ -521,7 +521,7 @@ def get_recommendations(
         # юзеров место релевантного занимали глобальные хиты — это и убрано.)
         recommended_tracks = _varied_popular(db, skipped_track_ids | fatigued_ids, limit)
 
-    recommended_tracks = recommended_tracks[:limit]
+    recommended_tracks = interleave_artists(recommended_tracks)[:limit]
 
     # Фиксируем показы (для сигнала «показан N раз — не сыгран»). Пока ответ
     # живёт в кэше, повторные отдачи того же списка показом не считаются —

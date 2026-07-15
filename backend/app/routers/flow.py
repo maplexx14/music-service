@@ -31,7 +31,7 @@ from app.genre_keywords import (
 )
 from app.lang import is_foreign_script
 from app.title_tags import build_tag_filters, build_title_tag_profile
-from app.diversity import cap_per_artist
+from app.diversity import cap_per_artist, interleave_artists
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
@@ -893,6 +893,7 @@ async def get_flow(
     n_explore = used_external
     n_exploit = len(mix) - n_explore
     random.shuffle(mix)
+    mix = interleave_artists(mix, artist_getter=lambda item: item.get("artist"))
 
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
