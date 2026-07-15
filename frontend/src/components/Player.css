@@ -417,6 +417,9 @@
     padding: 0 16px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;
+    background: rgba(10, 10, 14, 0.65);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
   }
 
   .player-left {

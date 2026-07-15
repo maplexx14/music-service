@@ -31,6 +31,24 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    container_name: music_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # веб-консоль
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -40,6 +58,17 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-music_user}:${POSTGRES_PASSWORD:-music_password}@postgres:5432/${POSTGRES_DB:-music_db}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Хранилище: minio (объектное, по умолчанию) или local (диск).
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      # Внутренний адрес MinIO в docker-сети (put/remove).
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      # Адрес, по которому БРАУЗЕР тянет аудио/обложки (presigned/публичные URL).
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+      MINIO_BUCKET_MUSIC: ${MINIO_BUCKET_MUSIC:-music}
+      MINIO_BUCKET_COVERS: ${MINIO_BUCKET_COVERS:-covers}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
@@ -71,6 +100,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     # --proxy-headers + --forwarded-allow-ips='*': доверяем X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
@@ -153,6 +184,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
   music_files:
   ytdlp_cache:
   frontend_node_modules:

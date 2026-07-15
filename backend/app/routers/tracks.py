@@ -16,6 +16,9 @@ from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from pydantic import BaseModel, Field
 from app.dependencies import get_current_active_user, get_current_admin_user
 from fastapi.responses import RedirectResponse, StreamingResponse
+from starlette.background import BackgroundTask
+from app import storage
+from app import external_archive
 import mimetypes
 
 logger = logging.getLogger(__name__)
@@ -138,11 +141,74 @@ def stream_track(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
+    # Заархивированный трек (в т.ч. изначально внешний ytmusic/soundcloud) лежит в
+    # объектном хранилище. Проксируем его через бэкенд (тот же origin/https,
+    # что и приложение), А НЕ редиректом на MINIO_PUBLIC_ENDPOINT: за https-
+    # туннелем прямой http://<minio>:9000 блокируется как mixed content, а
+    # localhost с другого устройства указывает на сам клиент. Внутренний клиент
+    # (minio:9000) доступен из контейнера всегда. Range поддерживаем вручную.
+    if storage.is_minio_path(track.file_path):
+        file_size, mime_type = storage.stat_music_object(track.file_path)
+        range_header = request.headers.get("range")
+        common_headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600",
+        }
+        if range_header:
+            try:
+                unit, raw_range = range_header.strip().split("=", 1)
+                if unit.lower() != "bytes" or "," in raw_range:
+                    raise ValueError
+                raw_start, raw_end = raw_range.split("-", 1)
+                if raw_start:
+                    start = int(raw_start)
+                    end = int(raw_end) if raw_end else file_size - 1
+                else:
+                    suffix_length = int(raw_end)
+                    if suffix_length <= 0:
+                        raise ValueError
+                    start = max(file_size - suffix_length, 0)
+                    end = file_size - 1
+                if start < 0 or start >= file_size or end < start:
+                    raise ValueError
+                end = min(end, file_size - 1)
+            except (ValueError, TypeError):
+                return Response(
+                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                    headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+                )
+            content_length = end - start + 1
+            return StreamingResponse(
+                storage.iter_music_object(track.file_path, offset=start, length=content_length),
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=mime_type,
+                headers={
+                    **common_headers,
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Content-Length": str(content_length),
+                },
+            )
+        return StreamingResponse(
+            storage.iter_music_object(track.file_path),
+            media_type=mime_type,
+            headers={**common_headers, "Content-Length": str(file_size)},
+        )
+
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
     if track.source and track.source != "local":
+        # Ленивое кэширование: при прослушивании ytmusic/soundcloud фоном
+        # скачиваем трек в MinIO. На следующих запросах верхняя проверка
+        # is_minio_path отдаст его напрямую из MinIO. Дедуп и лимит
+        # параллельности — внутри schedule_archive; ошибки не ломают стрим.
+        archive_bg = None
+        if track.source in external_archive.ARCHIVABLE_SOURCES:
+            archive_bg = BackgroundTask(external_archive.schedule_archive, track.id)
+
         prefix = EXTERNAL_STREAM_PREFIX.get(track.source)
         if prefix and track.external_id:
-            return RedirectResponse(url=f"{prefix}{track.external_id}", status_code=307)
+            return RedirectResponse(
+                url=f"{prefix}{track.external_id}", status_code=307, background=archive_bg
+            )
         if track.stream_url:
             # stream_url мог быть сохранён с абсолютным (старым) хостом — при
             # переносе деплоя/смене туннеля он протухает. Если это наш же прокси
@@ -152,7 +218,7 @@ def stream_track(
             api_idx = url.find("/api/")
             if api_idx > 0 and "://" in url[:api_idx]:
                 url = url[api_idx:]
-            return RedirectResponse(url=url, status_code=307)
+            return RedirectResponse(url=url, status_code=307, background=archive_bg)
         raise HTTPException(status_code=404, detail="External stream unavailable")
 
     # Get full file path - handle both absolute and relative paths
@@ -229,6 +295,29 @@ def stream_track(
         iter_file_range(file_path, 0, file_size - 1),
         media_type=mime_type,
         headers={**common_headers, "Content-Length": str(file_size)},
+    )
+
+
+@router.get("/cover/{key:path}")
+def stream_cover(key: str):
+    """Отдаёт обложку из MinIO через бэкенд-прокси (тот же origin, что и app).
+
+    Нужно, чтобы за https-туннелем обложки не ломались как mixed content
+    и были доступны с любых устройств (а не только с localhost).
+    """
+    if not storage.is_minio_backend():
+        raise HTTPException(status_code=404, detail="Cover not found")
+    try:
+        stream, content_type, size = storage.open_cover_object(key)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return StreamingResponse(
+        stream,
+        media_type=content_type,
+        headers={
+            "Content-Length": str(size),
+            "Cache-Control": "public, max-age=86400",
+        },
     )
 
 
@@ -338,9 +427,11 @@ async def upload_track(
             detail="File is not a valid audio file"
         )
     duration = int(audio.info.length)
-    
+
     # Save cover if provided
     cover_url = None
+    cover_path = None
+    cover_filename = None
     if cover and cover.filename:
         cover_ext = Path(cover.filename).suffix.lower()
         if cover_ext not in ALLOWED_IMAGE_EXTENSIONS:
@@ -353,8 +444,25 @@ async def upload_track(
         await save_upload(cover, cover_path, MAX_COVER_SIZE, "cover")
         cover_url = f"/cover_files/{cover_filename}"
 
-    # Create track record
     relative_path = f"/music_files/{filename}"
+
+    # Режим minio: файлы уже лежат на диске (нужны были для mutagen-
+    # валидации) — заливаем их в объектное хранилище и удаляем локальные
+    # копии. В БД уйдёт minio://… для аудио и прямой URL для обложки.
+    if storage.is_minio_backend():
+        audio_mime, _ = mimetypes.guess_type(str(file_path))
+        relative_path = storage.upload_music_file(
+            str(file_path), filename, audio_mime or "audio/mpeg"
+        )
+        file_path.unlink(missing_ok=True)
+        if cover_path is not None:
+            cover_mime, _ = mimetypes.guess_type(str(cover_path))
+            cover_url = storage.upload_cover_file(
+                str(cover_path), cover_filename, cover_mime or "image/jpeg"
+            )
+            cover_path.unlink(missing_ok=True)
+
+    # Create track record
     db_track = Track(
         title=title,
         artist=artist,
@@ -393,7 +501,16 @@ async def upload_track_cover(
     cover_path = COVER_DIR / cover_filename
     await save_upload(cover, cover_path, MAX_COVER_SIZE, "cover")
 
-    track.cover_url = f"/cover_files/{cover_filename}"
+    if storage.is_minio_backend():
+        # Старая обложка могла лежать в MinIO — чистим её, чтобы не копить сирот.
+        storage.remove_cover_url(track.cover_url)
+        cover_mime, _ = mimetypes.guess_type(str(cover_path))
+        track.cover_url = storage.upload_cover_file(
+            str(cover_path), cover_filename, cover_mime or "image/jpeg"
+        )
+        cover_path.unlink(missing_ok=True)
+    else:
+        track.cover_url = f"/cover_files/{cover_filename}"
     db.commit()
     db.refresh(track)
     return track
@@ -678,7 +795,16 @@ def delete_track(
             except OSError:
                 pass
 
-    safe_remove(file_path, MUSIC_DIR)
-    safe_remove(cover_path, COVER_DIR)
+    # Аудио и обложка могут быть как на диске, так и в MinIO (гибрид) —
+    # чистим по типу пути, а не по текущему backend.
+    if storage.is_minio_path(file_path):
+        storage.remove_object_path(file_path)
+    else:
+        safe_remove(file_path, MUSIC_DIR)
+
+    if cover_path and "://" in cover_path:
+        storage.remove_cover_url(cover_path)
+    else:
+        safe_remove(cover_path, COVER_DIR)
 
     return {"message": "Track deleted"}

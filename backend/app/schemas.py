@@ -1,6 +1,8 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from app import storage
 
 
 class UserBase(BaseModel):
@@ -69,6 +71,14 @@ class TrackResponse(TrackBase):
     source: str = "local"
     external_id: Optional[str] = None
     stream_url: Optional[str] = None
+
+    @field_validator("cover_url")
+    @classmethod
+    def _normalize_cover(cls, v: Optional[str]) -> Optional[str]:
+        # Приводим обложки из MinIO к относительному прокси-пути (тот же
+        # origin, что и app). Чинит и уже сохранённые legacy-записи со старым
+        # http://localhost:9000/covers/… без миграции БД.
+        return storage.normalize_cover_url(v)
 
     class Config:
         from_attributes = True
