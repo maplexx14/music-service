@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import defaultCover from '../assets/default-cover.png'
@@ -28,6 +28,52 @@ function FullScreenPlayer() {
     seekTo,
   } = usePlayerStore()
   const [loadingLike, setLoadingLike] = useState(false)
+  const [dragY, setDragY] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
+  const gestureRef = useRef(null)
+
+  // Тач-жесты (только сенсорные экраны — обработчики через onTouch*):
+  //  • свайп вниз «прилипает» к пальцу и закрывает плеер при достаточном сдвиге;
+  //  • горизонтальный свайп по любому месту (включая обложку) меняет трек.
+  // Ось жеста фиксируется по первому заметному сдвигу, чтобы вертикальное
+  // перетаскивание не путалось с горизонтальным переключением.
+  const handleTouchStart = (e) => {
+    if (e.touches.length !== 1) return
+    const t = e.touches[0]
+    gestureRef.current = { x: t.clientX, y: t.clientY, axis: null }
+  }
+
+  const handleTouchMove = (e) => {
+    const g = gestureRef.current
+    if (!g) return
+    const t = e.touches[0]
+    const dx = t.clientX - g.x
+    const dy = t.clientY - g.y
+    if (!g.axis && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      g.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      if (g.axis === 'y') setIsDragging(true)
+    }
+    // Тянем вниз — двигаем плеер за пальцем (вверх не уводим).
+    if (g.axis === 'y' && dy > 0) setDragY(dy)
+  }
+
+  const handleTouchEnd = (e) => {
+    const g = gestureRef.current
+    if (!g) return
+    const t = e.changedTouches[0]
+    const dx = t.clientX - g.x
+    const dy = t.clientY - g.y
+    gestureRef.current = null
+    setIsDragging(false)
+    setDragY(0)
+    if (g.axis === 'x' && Math.abs(dx) >= 60) {
+      if (dx < 0) nextTrack()
+      else previousTrack()
+    } else if (g.axis === 'y' && dy >= 120) {
+      closeFullScreen()
+    }
+  }
+
   const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
@@ -94,8 +140,21 @@ function FullScreenPlayer() {
     seekTo(ratio * duration)
   }
 
+  // Лёгкое затемнение по мере перетаскивания вниз — визуальный отклик жеста.
+  const dragOpacity = Math.max(0.4, 1 - dragY / 700)
+
   return (
-    <div className="fullscreen-player">
+    <div
+      className="fullscreen-player"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{
+        transform: dragY ? `translateY(${dragY}px)` : undefined,
+        opacity: dragY ? dragOpacity : undefined,
+        transition: isDragging ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+      }}
+    >
       <div className="fullscreen-header">
         <button className="fullscreen-icon" onClick={closeFullScreen} aria-label="Закрыть">
           <ChevronDown size={22} />

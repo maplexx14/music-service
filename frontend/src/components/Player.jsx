@@ -4,6 +4,7 @@ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, L
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
+import { useSwipe } from '../hooks/useSwipe'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
@@ -120,6 +121,16 @@ function Player() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
+
+  // Горизонтальный свайп по области трека переключает треки (только тач).
+  // ВАЖНО: хук вызывается здесь, до раннего `if (!currentTrack) return null`,
+  // иначе на рендере без трека он пропускается и число хуков «прыгает»
+  // (React error #310: Rendered more hooks than during the previous render).
+  const swipeHandlers = useSwipe({
+    onSwipeLeft: nextTrack,
+    onSwipeRight: previousTrack,
+    threshold: 60,
+  })
 
   // Ленивая подгрузка следующего трека: пока не наступил порог — буфер
   // остаётся пустым (preload="none"), браузер не трогает файл следующего
@@ -772,7 +783,7 @@ function Player() {
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
       />
-      <div className="player-left">
+      <div className="player-left" {...swipeHandlers}>
         <button
           type="button"
           className="player-cover-wrap"

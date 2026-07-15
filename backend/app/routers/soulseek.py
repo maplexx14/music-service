@@ -310,8 +310,12 @@ async def stream_soulseek(token: str):
         finally:
             pass  # общий _slskd_client не закрываем
 
+    # Без Content-Length: реально отданный объём может оказаться меньше
+    # заявленного size (обрыв трансфера, idle-timeout, пир ошибся в размере),
+    # а фиксированный Content-Length при коротком теле роняет ответ
+    # ("Response content shorter than Content-Length"). Отдаём chunked-поток:
+    # перемотки всё равно нет (Accept-Ranges: none), длина не нужна.
     headers = {
-        "Content-Length": str(size),
         "Accept-Ranges": "none",
         "Cache-Control": "no-store",
     }
