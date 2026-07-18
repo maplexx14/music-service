@@ -64,3 +64,8 @@ def clear_pattern(pattern: str):
             redis_client.delete(*batch)
     except Exception:
         pass
+
+
+async def clear_pattern_async(pattern: str):
+    """Async wrapper for clear_pattern — avoids blocking event loop."""
+    await asyncio.to_thread(clear_pattern, pattern)

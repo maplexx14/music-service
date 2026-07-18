@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
-import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -43,8 +43,13 @@ const PLAY_RECORD_MIN_SEC = 60
 // Строя этот URL сразу на фронте, экономим полный round-trip редиректа
 // (через ngrok/tuna-туннель — десятки-сотни мс) плюс SQL-запрос на бэке
 // при КАЖДОМ старте внешнего трека.
+// ytmusic СОЗНАТЕЛЬНО НЕ срезаем напрямую: его нужно вести через
+// /tracks/{id}/stream, чтобы бэкенд (а) при первом прослушивании фоном
+// закэшировал трек в MinIO, (б) на повторных отдавал его прямо из MinIO
+// (быстрее и надёжнее живого резолва yt-dlp). Для незакэшированных
+// бэкенд сам редиректит на /ytdlp/stream/ (один лишний hop до кэширования).
+// soulseek в MinIO не архивируется (P2P), поэтому его шорткат сохраняем.
 const DIRECT_STREAM_PREFIX = {
-  ytmusic: '/ytdlp/stream/',
   soulseek: '/soulseek/stream/',
 }
 
@@ -83,6 +88,20 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+// Длительность из БД (mutagen для локальных файлов, метаданные провайдера
+// для внешних) точнее оценки браузера audio.duration: для стриминговых
+// Opus/WebM (yt-dlp) и VBR-MP3 без заголовка Xing Chromium регулярно
+// определяет длительность неверно (часто ~2x от реальной) — именно отсюда
+// «трек в два раза длиннее». audio.currentTime при этом идёт в реальных
+// секундах, поэтому берём длительность из БД как источник истины, а
+// audio.duration — лишь как фолбэк, когда в БД длительности нет.
+function resolveTrackDuration(audio, track) {
+  const dbDuration = Number(track?.duration)
+  if (Number.isFinite(dbDuration) && dbDuration > 0) return dbDuration
+  const mediaDuration = audio?.duration
+  return Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : 0
+}
+
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
 // currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
 // этой подписки не перерисовывается на каждом тике — обложка, кнопки,
@@ -119,7 +138,7 @@ function PlayerProgress({ audioRef }) {
   )
 }
 
-function Player() {
+function PlayerInner() {
   // Атомарные селекторы вместо деструктуризации всего store: подписка на
   // весь store означала перерисовку всего Player на КАЖДОМ изменении любого
   // поля — включая currentTime, тикающий 4 раза/сек всё время
@@ -220,7 +239,7 @@ function Player() {
       nextBlobUrlRef.current = null
     }
 
-    const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith(SERVER_URL))
+    const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith('/'))
     const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
     nextAudio.preload = 'auto'
     if (isOurApi && !swActive) {
@@ -245,9 +264,7 @@ function Player() {
 
     const syncPositionState = () => {
       if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
-      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.duration
-        : Number(currentTrack?.duration)
+      const mediaDuration = resolveTrackDuration(audio, currentTrack)
       if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return
       try {
         navigator.mediaSession.setPositionState({
@@ -274,27 +291,34 @@ function Player() {
       lastTickSecond = sec
       if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
+      const effDuration = resolveTrackDuration(audio, currentTrack)
       const remainingWindow = Math.min(
         PRELOAD_NEXT_REMAINING_SEC,
-        audio.duration * PRELOAD_NEXT_REMAINING_RATIO
+        effDuration * PRELOAD_NEXT_REMAINING_RATIO
       )
       if (
-        audio.duration &&
-        (audio.duration - audio.currentTime <= remainingWindow ||
-          audio.currentTime / audio.duration >= PRELOAD_NEXT_PROGRESS_RATIO)
+        effDuration &&
+        (effDuration - audio.currentTime <= remainingWindow ||
+          audio.currentTime / effDuration >= PRELOAD_NEXT_PROGRESS_RATIO)
       ) {
         triggerNextPreload()
       }
     }
-    // Вкладка снова видима — догоняем прогресс-бар до актуальной позиции.
+    // Вкладка снова видима — догоняем прогресс-бар и возобновляем воспроизведение,
+    // если должно было играть. На мобильных браузерах audio может быть приостановлен
+    // при уходе в фон (переключение приложения, блокировка экрана).
     const handleVisibility = () => {
-      if (!document.hidden) setCurrentTime(audio.currentTime)
+      if (!document.hidden) {
+        setCurrentTime(audio.currentTime)
+        const { isPlaying: playing } = usePlayerStore.getState()
+        if (playing && audio.paused && !audio.ended) {
+          audio.play().catch(() => {})
+        }
+      }
     }
     const updateDuration = () => {
-      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.duration
-        : Number(currentTrack?.duration)
-      if (Number.isFinite(mediaDuration) && mediaDuration > 0) {
+      const mediaDuration = resolveTrackDuration(audio, currentTrack)
+      if (mediaDuration > 0) {
         setDuration(mediaDuration)
         syncPositionState()
       }
@@ -311,6 +335,40 @@ function Player() {
         audio.currentTime = 0
         audio.play().catch(() => {})
       } else {
+        // Вычисляем следующий трек СИНХРОННО и запускаем его play() прямо
+        // здесь, в контексте обработчика ended. Это критично для мобильных
+        // браузеров (особенно iOS): play() требует пользовательского жеста,
+        // и ended считается продолжением жеста, запустившего воспроизведение.
+        // Если nextTrack() → React-рендер → эффект → play(), контекст жеста
+        // уже потерян, и браузер блокирует play() (NotAllowedError).
+        const state = usePlayerStore.getState()
+        const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = state
+
+        let nextIdx = null
+        if (isShuffle && shuffledOrder.length > 0) {
+          if (currentShuffleIndex < shuffledOrder.length - 1) {
+            nextIdx = shuffledOrder[currentShuffleIndex + 1]
+          }
+        } else if (currentIndex < queue.length - 1) {
+          nextIdx = currentIndex + 1
+        }
+
+        if (nextIdx !== null) {
+          const nextData = queue[nextIdx]
+          const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(nextData.source)
+          const nextUrl = resolveRawUrl(nextData, nextIsExternal)
+          if (nextUrl) {
+            // Ставим src напрямую на элемент — до React-рендера, чтобы play()
+            // работал с уже актуальным источником в том же жестовом контексте.
+            audio.src = nextUrl
+            audio.load()
+            audio.play().catch(() => {})
+          }
+        }
+        // Обновляем store (UI, прогресс-бар, Media Session) — это запускает
+        // React-рендер и эффекты, которые подхватят то же состояние.
+        // Для UI-пути (setAudioSrc) это не страшно: src на элементе уже
+        // актуален, React просто синхронизирует атрибут.
         nextTrack()
       }
     }
@@ -416,13 +474,14 @@ function Player() {
     if (!audio || !currentTrack) return
 
     const handleLoad = () => {
-      setDuration(audio.duration)
+      setDuration(resolveTrackDuration(audio, currentTrack))
     }
 
     const handleCanPlay = () => {
       if (isPlaying && audio.paused) {
         audio.play().catch(err => {
-          if (err?.name !== 'AbortError') console.error('Error playing audio:', err)
+          if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
+            console.error('Error playing audio:', err)
         })
       }
     }
@@ -452,7 +511,12 @@ function Player() {
       // висящего play() новой сменой src (быстрое перелистывание треков),
       // а handleCanPlay выше остаётся страховкой и повторит попытку.
       audio.play().catch(err => {
-        if (err?.name !== 'AbortError') console.error('Error playing audio:', err)
+        // AbortError — штатное прерывание play() новой сменой src (быстрое
+        // перелистывание). NotAllowedError — браузер заблокировал play() из-за
+        // autoplay-политики (мобильный фон / отсутствие жеста); handleCanPlay
+        // или handleVisibility повторят попытку позже.
+        if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
+          console.error('Error playing audio:', err)
       })
     } else {
       audio.pause()
@@ -537,9 +601,7 @@ function Player() {
       }
       return
     }
-    const artwork = isExternalTrack
-      ? upscaleCover(currentTrack.cover_url)
-      : resolveCoverUrl(currentTrack.cover_url)
+    const artwork = resolveCoverUrl(currentTrack.cover_url)
     const artworkUrl = artwork
       ? new URL(artwork, window.location.origin).href
       : new URL(defaultCover, window.location.origin).href
@@ -566,11 +628,8 @@ function Player() {
     if (!('mediaSession' in navigator)) return
     const ms = navigator.mediaSession
     const syncPositionState = (audio) => {
-      const fallbackDuration = Number(usePlayerStore.getState().duration)
-        || Number(usePlayerStore.getState().currentTrack?.duration)
-      const mediaDuration = Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.duration
-        : fallbackDuration
+      const mediaDuration = resolveTrackDuration(audio, usePlayerStore.getState().currentTrack)
+        || Number(usePlayerStore.getState().duration)
       if (!ms.setPositionState || !Number.isFinite(mediaDuration) || mediaDuration <= 0) return
       try {
         ms.setPositionState({
@@ -683,9 +742,7 @@ function Player() {
   useEffect(() => {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
     const audio = audioRef.current
-    const mediaDuration = Number.isFinite(audio?.duration) && audio.duration > 0
-      ? audio.duration
-      : Number(duration) || Number(currentTrack?.duration)
+    const mediaDuration = resolveTrackDuration(audio, currentTrack) || Number(duration)
     if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return
     try {
       navigator.mediaSession.setPositionState({
@@ -853,7 +910,8 @@ function Player() {
           setIsBuffering(false)
           if (isPlaying) {
             audioRef.current?.play().catch(err => {
-              console.error('Play error:', err)
+              if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
+                console.error('Play error:', err)
             })
           }
         }}
@@ -868,7 +926,7 @@ function Player() {
           aria-label="Открыть плеер на весь экран"
         >
           <img
-            src={isExternalTrack ? upscaleCover(currentTrack.cover_url) || defaultCover : resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+            src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
             onError={handleCoverError}
@@ -1008,5 +1066,7 @@ function Player() {
     </div>
   )
 }
+
+const Player = React.memo(PlayerInner)
 
 export default Player

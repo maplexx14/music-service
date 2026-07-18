@@ -490,6 +490,8 @@ const usePlayerStore = create((set, get) => ({
           source,
           currentTime: 0,
         })
+      } else {
+        set({ isPlaying: false })
       }
       return
     }
@@ -502,6 +504,8 @@ const usePlayerStore = create((set, get) => ({
         source,
         currentTime: 0,
       })
+    } else {
+      set({ isPlaying: false })
     }
   },
 

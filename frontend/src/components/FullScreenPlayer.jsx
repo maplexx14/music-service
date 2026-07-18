@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import defaultCover from '../assets/default-cover.png'
-import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './FullScreenPlayer.css'
 
 function formatTime(seconds) {
@@ -123,13 +123,8 @@ function FullScreenPlayer() {
   const canInteract = dbTrackId !== null || isExternalTrack
 
   const coverUrl = useMemo(
-    () => {
-      if (isExternalTrack) {
-        return upscaleCover(currentTrack?.cover_url) || defaultCover
-      }
-      return resolveCoverUrl(currentTrack?.cover_url) || defaultCover
-    },
-    [currentTrack?.cover_url, isExternalTrack],
+    () => resolveCoverUrl(currentTrack?.cover_url) || defaultCover,
+    [currentTrack?.cover_url],
   )
 
   useEffect(() => {

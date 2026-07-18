@@ -6,14 +6,11 @@
 порядок (важные/популярные треки остаются впереди), но не даёт одному
 артисту занять больше max_per_artist мест.
 """
-import re
 from typing import Callable, List, TypeVar
 
+from app.artist_utils import artist_key
+
 T = TypeVar("T")
-
-
-def _artist_key(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip().lower())
 
 
 def interleave_artists(items, artist_getter=lambda item: getattr(item, "artist", None)):
@@ -49,7 +46,7 @@ def cap_per_artist(
     counts: dict = {}
     result: List[T] = []
     for item in items:
-        key = _artist_key(artist_of(item))
+        key = artist_key(artist_of(item))
         n = counts.get(key, 0)
         if n >= max_per_artist:
             continue

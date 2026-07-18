@@ -106,7 +106,7 @@ services:
     # --proxy-headers + --forwarded-allow-ips='*': доверяем X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
     # (mixed active content).
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips='*'"
+    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips='*'"
 
   slskd:
     image: slskd/slskd:latest

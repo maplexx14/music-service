@@ -334,6 +334,22 @@ def create_track(
     return db_track
 
 
+def _link_archived_object(db: Session, track: Track) -> None:
+    """Если внешний трек уже был заархивирован в MinIO лениво (игрался из
+    поиска/потока без DB-записи) — привязываем объект к только что
+    созданной записи, чтобы /tracks/{id}/stream отдавал его прямо из MinIO."""
+    if not storage.is_minio_backend():
+        return
+    if storage.is_minio_path(track.file_path) or track.source not in ("ytmusic", "soundcloud"):
+        return
+    if not track.external_id:
+        return
+    file_path = storage.find_music_object(f"external/{track.source}/{track.external_id}")
+    if file_path:
+        track.file_path = file_path
+        db.commit()
+
+
 def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> Track:
     """Идемпотентно апсертит внешний трек по (source, external_id)."""
     track = (
@@ -342,6 +358,7 @@ def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> T
         .first()
     )
     if track:
+        _link_archived_object(db, track)
         return track
 
     track = Track(

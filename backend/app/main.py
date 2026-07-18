@@ -117,6 +117,52 @@ async def _cooccurrence_rebuild_loop() -> None:
 
 
 @app.on_event("startup")
+async def _play_events_cleanup_loop() -> None:
+    """Периодическая очистка старых событий прослушивания.
+
+    user_play_events — лог, который растёт бесконечно: каждое переключение
+    трека пишет строку. Без очистки таблица раздувается и замедляет
+    рекомендации (GROUP BY completion в recommendations.py). Агрегированные
+    данные живут в user_track_plays — лог можно чистить без потери.
+    """
+    import logging
+
+    from app.database import SessionLocal
+    from sqlalchemy import text
+
+    logger = logging.getLogger("cleanup")
+    interval = int(os.getenv("PLAY_EVENTS_CLEANUP_INTERVAL_SEC", "3600"))
+    retention_days = int(os.getenv("PLAY_EVENTS_RETENTION_DAYS", "90"))
+
+    def _cleanup_once() -> None:
+        db = SessionLocal()
+        try:
+            result = db.execute(
+                text(
+                    "DELETE FROM user_play_events "
+                    "WHERE played_at < NOW() - INTERVAL '1 day' * :days"
+                ),
+                {"days": retention_days},
+            )
+            deleted = result.rowcount
+            if deleted:
+                db.commit()
+                logger.info("play_events cleanup: deleted %d rows older than %d days", deleted, retention_days)
+        finally:
+            db.close()
+
+    async def _loop() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(_cleanup_once)
+            except Exception:  # noqa: BLE001
+                logger.exception("play_events cleanup failed")
+            await asyncio.sleep(interval)
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
 async def _warmup_ytdlp() -> None:
     # Первый резолв YouTube Music в свежем процессе платит cold-start за
     # импорт yt_dlp и загрузку реестра экстракторов/плагинов (~0.5-0.7с) —

@@ -235,6 +235,24 @@ def normalize_cover_url(cover_url: Optional[str]) -> Optional[str]:
     return public_cover_url(key) if key else cover_url
 
 
+def find_music_object(prefix: str) -> Optional[str]:
+    """Первый аудио-объект с данным префиксом ключа в music-бакете.
+
+    Возвращает file_path (minio://…) или None. Нужно, чтобы понять, был ли
+    внешний трек уже заархивирован, не зная точного расширения
+    (external/<source>/<external_id>.<m4a|webm|opus|…>).
+    """
+    if not is_minio_backend():
+        return None
+    try:
+        client = _get_internal_client()
+        for obj in client.list_objects(MUSIC_BUCKET, prefix=prefix, recursive=True):
+            return make_object_path(MUSIC_BUCKET, obj.object_name)
+    except Exception:  # noqa: BLE001 — отсутствие объекта не должно ломать стрим
+        logger.exception("MinIO: list_objects по префиксу %s не удался", prefix)
+    return None
+
+
 def stat_music_object(file_path: str) -> tuple[int, str]:
     """(size, content_type) аудио-объекта по minio://bucket/key."""
     bucket, key = parse_object_path(file_path)

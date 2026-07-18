@@ -10,6 +10,10 @@ function getApiUrl() {
 }
 
 const API_URL = getApiUrl()
-const SERVER_URL = API_URL.replace(/\/api\/?$/, '') || API_URL
+// When API_URL is relative (e.g. "/api"), SERVER_URL must be "" so that
+// relative cover paths like "/api/tracks/cover/..." are not double-prefixed.
+const SERVER_URL = API_URL.startsWith('http')
+  ? (API_URL.replace(/\/api\/?$/, '') || API_URL)
+  : ''
 
 export { API_URL, SERVER_URL }

@@ -60,12 +60,17 @@ _DL_TIMEOUT = httpx.Timeout(20.0, read=120.0)
 
 # Ограничитель одновременных ленивых архиваций: несколько разных треков подряд
 # в плеере не должны запускать десяток параллельных скачиваний в процессе API.
-_LAZY_CONCURRENCY = int(os.getenv("ARCHIVE_LAZY_CONCURRENCY", "2"))
+# 5 — баланс между скоростью архивации и нагрузкой на сеть/MinIO.
+_LAZY_CONCURRENCY = int(os.getenv("ARCHIVE_LAZY_CONCURRENCY", "5"))
 _lazy_sem: Optional[asyncio.Semaphore] = None
 
 # Дедуп ленивых архиваций: пока трек качается, повторные прослушивания
 # не должны стартовать вторую задачу на тот же id.
 _inflight: set[int] = set()
+
+# Повторная попытка при транзиентных ошибках (сеть, таймаут).
+_MAX_RETRIES = 2
+_RETRY_DELAY = 2.0
 
 
 class ArchiveResult:
@@ -186,31 +191,47 @@ def _cover_ext(url: str, content_type: Optional[str]) -> str:
 
 
 async def _archive_cover(track: Track, external_key: str, client: httpx.AsyncClient) -> Optional[str]:
-    """Скачивает http(s)-обложку внешнего трека в публичный бакет. Возвращает новый URL или None."""
+    """Скачивает http(s)-обложку внешнего трека в публичный бакет. Возвращает новый URL или None.
+
+    Повторяет при сетевых ошибках (до _MAX_RETRIES раз), т.к. обложки —
+    маленькие файлы, и единичный таймаут не должен лишать трек обложки навсегда.
+    """
     cover_url = track.cover_url
     if not cover_url or not cover_url.startswith(("http://", "https://")):
         return None  # обложки нет или она уже локальная/в MinIO
-    try:
-        async with client.stream("GET", cover_url) as resp:
-            resp.raise_for_status()
-            ct = resp.headers.get("content-type")
-            ext = _cover_ext(cover_url, ct)
-            fd, tmp_path = tempfile.mkstemp(suffix=ext)
-            try:
-                with os.fdopen(fd, "wb") as fh:
-                    async for chunk in resp.aiter_bytes(128 * 1024):
-                        fh.write(chunk)
-                key = f"external/{external_key}{ext}"
-                return storage.upload_cover_file(tmp_path, key, ct or "image/jpeg")
-            finally:
-                if os.path.exists(tmp_path):
+    # Обложка — маленький файл; отдельный таймаут короче аудио-клиента.
+    cover_timeout = httpx.Timeout(10.0, read=15.0)
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=cover_timeout, follow_redirects=True) as c:
+                async with c.stream("GET", cover_url) as resp:
+                    resp.raise_for_status()
+                    ct = resp.headers.get("content-type")
+                    ext = _cover_ext(cover_url, ct)
+                    fd, tmp_path = tempfile.mkstemp(suffix=ext)
                     try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
-    except (httpx.HTTPError, OSError) as exc:
-        logger.info("archive: обложка не скачалась для %s: %s", track.id, exc)
-        return None
+                        with os.fdopen(fd, "wb") as fh:
+                            async for chunk in resp.aiter_bytes(128 * 1024):
+                                fh.write(chunk)
+                        key = f"external/{external_key}{ext}"
+                        return storage.upload_cover_file(tmp_path, key, ct or "image/jpeg")
+                    finally:
+                        if os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
+        except Exception as exc:
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    "archive: обложка для %s попытка %d/%d не удалась: %s, повтор",
+                    track.id, attempt + 1, _MAX_RETRIES, exc,
+                )
+                await asyncio.sleep(_RETRY_DELAY)
+            else:
+                logger.info("archive: обложка не скачалась для %s после %d попыток: %s",
+                            track.id, _MAX_RETRIES + 1, exc)
+    return None
 
 
 async def archive_track(
@@ -313,7 +334,16 @@ async def schedule_archive(track_id: int) -> None:
                     return
                 if track.source not in ARCHIVABLE_SOURCES:
                     return
-                status = await archive_track(db, track)
+                for attempt in range(_MAX_RETRIES + 1):
+                    status = await archive_track(db, track)
+                    if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
+                        break
+                    if attempt < _MAX_RETRIES:
+                        logger.warning(
+                            "lazy-archive: трек %s попытка %d/%d — %s, повтор через %.1fs",
+                            track_id, attempt + 1, _MAX_RETRIES, status, _RETRY_DELAY,
+                        )
+                        await asyncio.sleep(_RETRY_DELAY)
                 logger.info("lazy-archive: трек %s → %s", track_id, status)
             finally:
                 db.close()
@@ -321,3 +351,143 @@ async def schedule_archive(track_id: int) -> None:
         logger.exception("lazy-archive: ошибка для трека %s", track_id)
     finally:
         _inflight.discard(track_id)
+
+
+# Дедуп ленивой архивации по (source, external_id) — отдельно от _inflight
+# (тот по track_id): сюда приходят вызовы из стрим-эндпоинтов провайдера,
+# где DB-записи может ещё не быть (трек играется из поиска/потока).
+_inflight_ext: set[str] = set()
+
+
+async def _archive_external_core(
+    db: Session,
+    source: str,
+    external_id: str,
+    permalink: Optional[str],
+    track: Optional[Track],
+) -> str:
+    """Резолвит → скачивает → кладёт внешний трек в MinIO по (source, external_id).
+
+    Не требует DB-записи: ключ объекта детерминирован (external/<source>/<id>).
+    Если track передан — обновляет его file_path/cover_url, чтобы повторные
+    прослушивания шли через /tracks/{id}/stream уже из MinIO.
+    """
+    from app.routers.ytdlp import TrackUnavailable, TransientResolveError
+
+    client = httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
+    try:
+        try:
+            if source == "ytmusic":
+                from app.routers.ytdlp import _resolve_audio
+
+                url, ext, _total = await _resolve_audio(external_id)
+            elif source == "soundcloud":
+                if not permalink:
+                    return ArchiveResult.NO_PERMALINK
+                from app.routers.soundcloud import _resolve_cached
+
+                url, ext, _total, _fresh = await _resolve_cached(external_id, permalink)
+            else:
+                return ArchiveResult.UNSUPPORTED
+        except TrackUnavailable:
+            return ArchiveResult.UNAVAILABLE
+        except TransientResolveError:
+            return ArchiveResult.TRANSIENT
+
+        storage.ensure_buckets()
+        key = f"external/{source}/{external_id}{ext}"
+        try:
+            tmp_path, _size = await _download_to_temp(url, ext, client)
+        except _TooLarge:
+            logger.info("archive-ext: %s/%s превысил лимит размера, пропуск", source, external_id)
+            return ArchiveResult.TOO_LARGE
+
+        try:
+            file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        # Если трек уже материализован — привязываем объект к записи и архивируем
+        # обложку. Если записи нет (трек играется из поиска/потока) — объект
+        # просто лежит в MinIO и будет подхвачен при последующем импорте (find_music_object).
+        if track is not None and not storage.is_minio_path(track.file_path):
+            track.file_path = file_path
+            new_cover = await _archive_cover(track, f"{source}/{external_id}", client)
+            if new_cover:
+                track.cover_url = new_cover
+            db.commit()
+        return ArchiveResult.ARCHIVED
+    except Exception:
+        db.rollback()
+        logger.exception("archive-ext: не удалось заархивировать %s/%s", source, external_id)
+        return ArchiveResult.FAILED
+    finally:
+        await client.aclose()
+
+
+async def schedule_archive_external(
+    source: str,
+    external_id: str,
+    permalink: Optional[str] = None,
+) -> None:
+    """Ленивая фоновая архивация внешнего трека прямо из стрим-эндпоинта провайдера.
+
+    В отличие от schedule_archive (по track_id) работает без DB-записи: внешние
+    треки из поиска/потока играются прямо через /ytdlp/stream/{id} и не
+    проходят через /tracks/{id}/stream. Вызывается fire-and-forget из
+    эндпоинта провайдера на каждом стриме; дедуп по (source, external_id)
+    и быстрая проверка наличия объекта делают повторные вызовы (в т.ч. на
+    Range-запросы) дешёвыми. Ошибки не пробрасываются — воспроизведение важнее.
+    """
+    global _lazy_sem
+    if not storage.is_minio_backend():
+        return
+    if source not in ARCHIVABLE_SOURCES or not external_id:
+        return
+
+    dedup_key = f"{source}:{external_id}"
+    if dedup_key in _inflight_ext:
+        return
+
+    _inflight_ext.add(dedup_key)
+    if _lazy_sem is None:
+        _lazy_sem = asyncio.Semaphore(_LAZY_CONCURRENCY)
+
+    try:
+        async with _lazy_sem:
+            prefix = f"external/{source}/{external_id}"
+            # Проверка наличия объекта ПОД семафором: MinIO list_objects —
+            # сетевой вызов, до семафора он замедляет каждый стрим-запрос,
+            # а при высокой нагрузке и вовсе блокирует очередь архиваций.
+            if storage.find_music_object(prefix):
+                return
+            db = SessionLocal()
+            try:
+                track = (
+                    db.query(Track)
+                    .filter(Track.source == source, Track.external_id == external_id)
+                    .first()
+                )
+                if track is not None and storage.is_minio_path(track.file_path):
+                    return
+                for attempt in range(_MAX_RETRIES + 1):
+                    status = await _archive_external_core(db, source, external_id, permalink, track)
+                    if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
+                        break
+                    if attempt < _MAX_RETRIES:
+                        logger.warning(
+                            "lazy-archive-ext: %s/%s попытка %d/%d — %s, повтор через %.1fs",
+                            source, external_id, attempt + 1, _MAX_RETRIES, status, _RETRY_DELAY,
+                        )
+                        await asyncio.sleep(_RETRY_DELAY)
+                logger.info("lazy-archive-ext: %s/%s → %s", source, external_id, status)
+            finally:
+                db.close()
+    except Exception:
+        logger.exception("lazy-archive-ext: ошибка для %s/%s", source, external_id)
+    finally:
+        _inflight_ext.discard(dedup_key)

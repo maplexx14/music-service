@@ -661,6 +661,14 @@ async def playlist_detail_endpoint(playlist_id: str, request: Request):
 @router.get("/stream/{token}")
 async def stream_soundcloud(token: str, request: Request):
     track_id, permalink = _decode_token(token)
+    try:
+        from app import external_archive
+
+        asyncio.create_task(
+            external_archive.schedule_archive_external("soundcloud", track_id, permalink)
+        )
+    except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
+        logger.exception("lazy-archive-ext: не удалось запланировать архивацию sc/%s", track_id)
     return await stream_cached_audio(
         request,
         f"sc{track_id}",

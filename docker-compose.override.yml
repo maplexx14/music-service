@@ -1,0 +1,7 @@
+# Dev override: --reload для hot-reload при локальной разработке.
+# Автоматически подхватывается docker-compose up.
+version: '3.8'
+
+services:
+  backend:
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips='*'"

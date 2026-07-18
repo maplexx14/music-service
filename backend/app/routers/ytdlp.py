@@ -1300,6 +1300,18 @@ async def stream_ytmusic(video_id: str, request: Request):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
+    # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
+    # имеют строковой id и играются напрямую через этот эндпоинт, минуя
+    # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
+    # schedule_archive_external сам дедупит по (source, external_id) и быстро
+    # выходит, если объект уже в MinIO или бэкенд не minio, поэтому
+    # повторные вызовы (в т.ч. на Range-запросы) дешёвые.
+    try:
+        from app import external_archive
+
+        asyncio.create_task(external_archive.schedule_archive_external("ytmusic", video_id))
+    except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
+        logger.exception("lazy-archive-ext: не удалось запланировать архивацию %s", video_id)
     return await stream_cached_audio(
         request, video_id, lambda force: _resolve_cached(video_id, force=force)
     )
