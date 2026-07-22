@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("archive_external_to_minio")
 
 
-def _candidate_ids(limit: int | None) -> list[int]:
+def _candidate_ids(limit: int | None, playlists_only: bool = False) -> list[int]:
     """id внешних треков, которые ещё не в MinIO и относятся к архивируемым источникам."""
     db = SessionLocal()
     try:
@@ -53,6 +53,14 @@ def _candidate_ids(limit: int | None) -> list[int]:
             )
             .order_by(Track.id)
         )
+        if playlists_only:
+            # Только треки, лежащие хоть в одном плейлисте (включая
+            # «Понравившиеся») — то, что пользователи реально слушают.
+            # Полный прогон по всем внешним трекам БД в разы дольше и в
+            # основном греет треки, к которым никто не вернётся.
+            from app.models import playlist_tracks
+
+            q = q.join(playlist_tracks, playlist_tracks.c.track_id == Track.id).distinct()
         if limit:
             q = q.limit(limit)
         return [row[0] for row in q.all()]
@@ -87,14 +95,16 @@ async def _worker(
         logger.info("[%d/%d] %s → %s", counter["done"], total, title, status)
 
 
-async def _run(dry_run: bool, concurrency: int, limit: int | None) -> None:
+async def _run(
+    dry_run: bool, concurrency: int, limit: int | None, playlists_only: bool = False
+) -> None:
     if not storage.is_minio_backend():
         raise SystemExit(
             "STORAGE_BACKEND != minio — заливать некуда. "
             "Запустите с STORAGE_BACKEND=minio и настроенными MINIO_*."
         )
 
-    ids = _candidate_ids(limit)
+    ids = _candidate_ids(limit, playlists_only=playlists_only)
     total = len(ids)
     logger.info("Кандидатов на архивацию: %d (источники: %s)", total, ", ".join(sorted(ARCHIVABLE_SOURCES)))
 
@@ -145,8 +155,20 @@ def main() -> None:
         default=None,
         help="Ограничить число обрабатываемых треков (для пробного прогона)",
     )
+    parser.add_argument(
+        "--playlists-only",
+        action="store_true",
+        help="Только треки из плейлистов (включая «Понравившиеся»)",
+    )
     args = parser.parse_args()
-    asyncio.run(_run(dry_run=args.dry_run, concurrency=max(1, args.concurrency), limit=args.limit))
+    asyncio.run(
+        _run(
+            dry_run=args.dry_run,
+            concurrency=max(1, args.concurrency),
+            limit=args.limit,
+            playlists_only=args.playlists_only,
+        )
+    )
 
 
 if __name__ == "__main__":

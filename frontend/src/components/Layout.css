@@ -43,6 +43,14 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     z-index: 1003;
     backdrop-filter: blur(8px);
+    /* Только fade, без движения: панель не должна ощущаться анимацией. */
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+
+  @starting-style {
+    .mobile-topbar {
+      opacity: 0;
+    }
   }
 
   .mobile-back-btn {
@@ -83,7 +91,7 @@
     padding: 0 8px;
     background: rgba(10, 10, 14, 0.65);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 36px;
+    border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(20px) saturate(160%);
     -webkit-backdrop-filter: blur(20px) saturate(160%);
@@ -100,7 +108,7 @@
     align-items: center;
     justify-content: center;
     text-decoration: none;
-    border-radius: 16px;
+    border-radius: 12px;
     transition: color 0.2s ease;
     -webkit-tap-highlight-color: transparent;
   }

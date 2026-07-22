@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 from typing import List
 import os
 import uuid
@@ -7,7 +7,7 @@ import aiofiles
 from pathlib import Path
 from app.database import get_db
 from app.models import Playlist, Track, User, playlist_tracks
-from app.schemas import PlaylistResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
+from app.schemas import PlaylistResponse, PlaylistSummaryResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
 from app.dependencies import get_current_active_user
 from app.routers.tracks import get_or_create_liked_playlist
 
@@ -34,7 +34,8 @@ def _paginated_playlist_response(
         .filter(playlist_tracks.c.playlist_id == playlist.id)
         .order_by(playlist_tracks.c.position)
     )
-    response.headers["X-Total-Count"] = str(tracks_query.count())
+    total = tracks_query.count()
+    response.headers["X-Total-Count"] = str(total)
     tracks = tracks_query.offset(skip).limit(limit).all()
 
     return PlaylistResponse(
@@ -47,6 +48,7 @@ def _paginated_playlist_response(
         is_liked=playlist.is_liked,
         created_at=playlist.created_at,
         updated_at=playlist.updated_at,
+        track_count=total,
         tracks=[TrackResponse.model_validate(t) for t in tracks],
     )
 
@@ -57,7 +59,7 @@ COVER_DIR.mkdir(parents=True, exist_ok=True)
 router = APIRouter()
 
 
-@router.get("/", response_model=List[PlaylistResponse])
+@router.get("/", response_model=List[PlaylistSummaryResponse])
 def get_playlists(
     skip: int = 0,
     limit: int = 100,
@@ -65,22 +67,21 @@ def get_playlists(
     db: Session = Depends(get_db)
 ):
     # Get user's playlists and public playlists.
-    # selectinload: PlaylistResponse встраивает tracks, без явной подгрузки
-    # ленивый relationship даёт N+1 (по запросу на каждый плейлист списка).
-    playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(
+    # Summary-схема: без треков (их никто из потребителей списка не рендерит),
+    # track_count приходит из column_property в том же SELECT.
+    playlists = db.query(Playlist).filter(
         (Playlist.owner_id == current_user.id) | (Playlist.is_public == True)
     ).filter(Playlist.is_liked == False).offset(skip).limit(limit).all()
     return playlists
 
 
-@router.get("/me", response_model=List[PlaylistResponse])
+@router.get("/me", response_model=List[PlaylistSummaryResponse])
 def get_my_playlists(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     playlists = (
         db.query(Playlist)
-        .options(selectinload(Playlist.tracks))
         .filter(Playlist.owner_id == current_user.id, Playlist.is_liked == False)
         .all()
     )

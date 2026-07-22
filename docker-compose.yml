@@ -132,7 +132,7 @@ services:
       dockerfile: Dockerfile
       args:
         # Пусто по умолчанию: фронтенд возьмёт API как window.location.origin + /api,
-        # что нужно для доступа с других устройств через reverse proxy / ngrok.
+        # что нужно для доступа с других устройств через reverse proxy / tunnel.
         VITE_API_URL: ${VITE_API_URL:-}
     container_name: music_frontend
     environment:
@@ -156,28 +156,18 @@ services:
       - backend
       - frontend
 
-  # Публичный доступ через Cloudflare Tunnel (быстрее ngrok-free и без
-  # interstitial-страницы предупреждения). Туннель ходит к nginx:80 внутри
+  # Публичный доступ через Tuna tunnel. Туннель ходит к nginx:80 внутри
   # docker-сети — наружу порт открывать не нужно.
   #
-  # По умолчанию — Quick Tunnel: случайный https://<...>.trycloudflare.com,
-  # аккаунт не требуется (прямая замена `ngrok http 80`). URL печатается в лог:
-  #   docker compose logs cloudflared | grep trycloudflare.com
-  #
-  # Постоянный домен — Named Tunnel: создайте туннель в Cloudflare Zero Trust
-  # (Networks → Tunnels), направьте public hostname на http://nginx:80 и задайте
-  # в .env:  CLOUDFLARE_TUNNEL_CMD=run --token <ТОКЕН>
-  cloudflared:
-    # Пиновано (было :latest): образ с публичным туннелем наружу — не место
-    # для автоматического подхвата любого свежего тега. Обновлять осознанно.
-    image: cloudflare/cloudflared:2026.7.1
-    container_name: music_cloudflared
+  # URL печатается в лог:
+  #   docker compose logs tuna
+  tuna:
+    image: yuccastream/tuna:latest
+    container_name: music_tuna
     restart: unless-stopped
-    # --protocol http2: туннель по TCP 443 вместо QUIC/UDP 7844. Многие сети
-    # (в т.ч. частые домашние/мобильные) режут UDP 7844 — на QUIC cloudflared
-    # тогда бесконечно ловит "failed to dial to edge with quic: timeout" и
-    # туннель отвечает 530. http2 использует обычный TLS-порт и работает везде.
-    command: tunnel --no-autoupdate --protocol http2 ${CLOUDFLARE_TUNNEL_CMD:---url http://nginx:80}
+    environment:
+      TUNA_TOKEN: ${TUNA_TOKEN:?Set TUNA_TOKEN in .env}
+    command: http nginx:80
     depends_on:
       - nginx
 

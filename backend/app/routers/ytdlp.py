@@ -811,6 +811,22 @@ def schedule_prefetch(cache_id: str, resolver, cache_key: str, ttl: int) -> str:
     return "queued"
 
 
+async def prefetch_is_ready(cache_id: str, cache_key: str) -> bool:
+    """Готов ли трек к почти мгновенному старту воспроизведения.
+
+    В отличие от schedule_prefetch (fire-and-forget: ставит задачу и сразу
+    отвечает «queued»), это ПРОВЕРКА фактического результата прогрева, без
+    запуска какой-либо работы. Готово, если резолв прямого URL уже лежит в
+    Redis (валидная запись, а не transient-маркер) ИЛИ трек уже полностью
+    скачан в дисковый кэш. Фронт поллит это после /prefetch и снимает гейт
+    скипа вперёд только когда здесь True.
+    """
+    if _cached_file(cache_id):
+        return True
+    cached = await get_cache_async(cache_key)
+    return bool(cached and cached.get("url"))
+
+
 async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
     """Скачивает первые _WARM_BYTES трека в кэш-файл ``{cache_id}{ext}.warm``.
 
@@ -827,7 +843,11 @@ async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
     fd, tmp_path = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part")
     ok = False
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=30.0)) as client:
+        # follow_redirects: googlevideo может ответить 302 на другой edge-узел;
+        # без него прогрев видел 302 вместо 206 и молча пропускался.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, read=30.0), follow_redirects=True
+        ) as client:
             async with client.stream(
                 "GET", url, headers={"Range": f"bytes=0-{_WARM_BYTES - 1}"}
             ) as resp:
@@ -1009,7 +1029,13 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
 
     media_type = MEDIA_TYPES.get(ext, "audio/mp4")
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=60.0))
+    # follow_redirects обязателен: googlevideo нередко отвечает 302 на другой
+    # edge-узел (rr2---…). Без него probe возвращал 302 без размера, а каждый
+    # сегмент — 302 с пустым телом → 3 ретрая → пере-резолв → по кругу. Снаружи
+    # это выглядело как «трек грузится вечно», хотя ссылка живая.
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, read=60.0), follow_redirects=True
+    )
     # Размер нужен для корректного Range и дискового кэша. Авторитетный размер
     # — из content-range самого googlevideo (probe), а filesize из yt-dlp может
     # расходиться. Probe заодно валидирует
@@ -1041,7 +1067,19 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     # честный 502 и может повторить запрос). Заодно probe даёт
     # авторитетный total от самого CDN (filesize из yt-dlp может врать —
     # ещё один источник расхождения тела с Content-Length).
-    status, probed = await _probe(client, direct_url)
+    # Probe (range 0-0 к CDN) — это полный RTT до googlevideo (~1с и хуже),
+    # и он стоял ПЕРЕД первым байтом ответа даже у прогретых треков. Если
+    # первые байты уже на диске (warm-файл) И размер известен (Content-Range
+    # прогрева — авторитетный), probe не нужен: заголовки строим по total,
+    # старт уходит с диска мгновенно, а мёртвую ссылку живой proxy поймает
+    # уже ПОСЛЕ warm-куска и пере-резолвит через try_reresolve — клиент к
+    # этому моменту давно играет. Для остальных случаев (нет warm / нет
+    # total / Range с середины) probe обязателен: он даёт total для
+    # Content-Length и ловит пустые 206 до отправки заголовков.
+    if warm_size > 0 and total is not None:
+        status, probed = 200, None
+    else:
+        status, probed = await _probe(client, direct_url)
     if status >= 400:
         logger.info("stale direct url for %s (probe %s), re-resolving", cache_id, status)
         try:
@@ -1333,3 +1371,13 @@ async def prefetch_ytmusic(video_id: str):
         _RESOLVE_TTL,
     )
     return {"status": status}
+
+
+@router.get("/prefetch/{video_id}/ready")
+async def prefetch_ytmusic_ready(video_id: str):
+    """Готов ли прогрев трека (резолв в Redis или кэш-файл). Фронт поллит это
+    после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
+        raise HTTPException(status_code=400, detail="Некорректный id")
+    ready = await prefetch_is_ready(video_id, f"ytdlp:resolve:v2:{video_id}")
+    return {"ready": ready}

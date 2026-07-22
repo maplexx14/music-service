@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User
-from app.schemas import SearchResponse, TrackResponse, PlaylistResponse, UserResponse
+from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse, UserResponse
 from app.dependencies import get_current_user_optional
 
 router = APIRouter()
@@ -38,12 +38,12 @@ def search(
         )
     ).limit(limit).all()
     
-    # Search playlists (selectinload: ответ встраивает tracks — иначе N+1).
+    # Search playlists (summary-схема без треков — выдача их не рендерит).
     # Публичные — всем; приватные — только их владельцу.
     visibility = Playlist.is_public == True
     if current_user is not None:
         visibility = or_(visibility, Playlist.owner_id == current_user.id)
-    playlists = db.query(Playlist).options(selectinload(Playlist.tracks)).filter(
+    playlists = db.query(Playlist).filter(
         or_(
             Playlist.name.ilike(search_term),
             Playlist.description.ilike(search_term)
@@ -60,7 +60,7 @@ def search(
     
     response = SearchResponse(
         tracks=[TrackResponse.model_validate(t) for t in tracks],
-        playlists=[PlaylistResponse.model_validate(p) for p in playlists],
+        playlists=[PlaylistSummaryResponse.model_validate(p) for p in playlists],
         users=[UserResponse.model_validate(u) for u in users]
     )
     set_cache(cache_key, response.model_dump(mode="json"), expire=_SEARCH_TTL)

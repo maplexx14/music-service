@@ -34,6 +34,15 @@
   border-radius: 8px;
   margin-bottom: 24px;
   font-size: 14px;
+  transition: opacity 250ms var(--ease-out), transform 250ms var(--ease-out);
+}
+
+/* Успех загрузки — редкий момент: мягкое появление вместо плоского. */
+@starting-style {
+  .success-message {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
 
 .upload-section {
@@ -55,7 +64,8 @@
   padding: 48px;
   text-align: center;
   background-color: #181818;
-  transition: all 0.2s;
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
   color: #b3b3b3;
 }
 
@@ -128,7 +138,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
 }
 
 .remove-file-btn:hover {
@@ -163,10 +174,11 @@
   padding: 12px 16px;
   background-color: #1a1a1a;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: 14px;
-  transition: all 0.2s;
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
 }
 
 .form-group input:focus {
@@ -192,11 +204,13 @@
   background-color: transparent;
   color: #b3b3b3;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color var(--duration-base) var(--ease-out),
+              border-color var(--duration-base) var(--ease-out),
+              opacity var(--duration-base) var(--ease-out);
 }
 
 .cancel-btn:hover:not(:disabled) {
@@ -214,16 +228,23 @@
   background-color: #a259ff;
   color: #ffffff;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out),
+              opacity var(--duration-base) var(--ease-out);
 }
 
 .submit-btn:hover:not(:disabled) {
   background-color: #1ed760;
-  transform: scale(1.02);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .submit-btn:hover:not(:disabled) {
+    transform: scale(1.02);
+  }
 }
 
 .submit-btn:disabled {
@@ -235,7 +256,7 @@
   .form-row {
     grid-template-columns: 1fr;
   }
-  
+
   .file-selected {
     flex-direction: column;
     text-align: center;
@@ -245,7 +266,7 @@
 .upload-progress {
   position: relative;
   height: 22px;
-  border-radius: 11px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
   margin-bottom: 16px;

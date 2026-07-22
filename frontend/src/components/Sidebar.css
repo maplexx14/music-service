@@ -32,7 +32,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 40px; 
+  height: 40px;
 }
 
 .sidebar.collapsed .sidebar-header {
@@ -71,7 +71,7 @@
   font-size: 28px;
   padding: 8px;
   color: #000000;
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(70deg,#e0c3ff,#a259ff,#6a3093);
 }
 .logo-text:visited{
@@ -86,8 +86,9 @@
   padding: 6px;
   border-radius: 4px;
   display: flex;
-  
-  transition: all 0.2s;
+
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
   flex-shrink: 0;
 }
 
@@ -115,7 +116,8 @@
   color: #b3b3b3;
   text-decoration: none;
   border-radius: 8px;
-  transition: all 0.2s;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
   font-size: var(--text-base);
   font-weight: 600;
   font-size: 12px;
@@ -184,6 +186,16 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Вырастает от триггера снизу, а не появляется из ниоткуда. */
+  transform-origin: bottom center;
+  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+@starting-style {
+  .profile-dropdown {
+    opacity: 0;
+    transform: scale(0.96);
+  }
 }
 
 .profile-dropdown.collapsed {
@@ -203,7 +215,7 @@
   font-size: 14px;
   font-weight: 500;
   text-decoration: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background-color 0.2s;
   width: 100%;
@@ -297,7 +309,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
 }
 
 .logout-btn:hover {

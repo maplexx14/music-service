@@ -43,7 +43,8 @@
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+              transform var(--duration-fast) var(--ease-out);
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -51,10 +52,22 @@
   border-color: #a259ff;
 }
 
+.pref-chip:active {
+  transform: scale(0.96);
+}
+
 .pref-chip.active {
   background: #a259ff;
   border-color: #a259ff;
   color: #ffffff;
+  animation: prefChipPop 0.25s var(--ease-out);
+}
+
+/* Поп выбранного жанра: онбординг видят один раз — здесь уместна щедрость. */
+@keyframes prefChipPop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.06); }
+  100% { transform: scale(1); }
 }
 
 /* --- Артисты: теги + ввод + подсказки --- */
@@ -138,7 +151,7 @@
   flex-shrink: 0;
   padding: 8px 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   background: #a259ff;
   color: #ffffff;
   font-size: 13px;
@@ -169,10 +182,15 @@
   color: #cfcfcf;
   font-size: 13px;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease,
+              transform var(--duration-fast) var(--ease-out);
 }
 
 .pref-suggestion:hover {
   border-color: #a259ff;
   color: #ffffff;
+}
+
+.pref-suggestion:active {
+  transform: scale(0.96);
 }

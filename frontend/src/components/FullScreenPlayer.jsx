@@ -59,6 +59,9 @@ function FullScreenPlayer() {
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const previousTrack = usePlayerStore((s) => s.previousTrack)
   const nextTrack = usePlayerStore((s) => s.nextTrack)
+  // Подписка на счётчик резолвов — пересчитывает canSkipNext, когда прогрев
+  // следующего трека завершается (см. playerStore.isNextTrackReady).
+  const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
   const closeFullScreen = usePlayerStore((s) => s.closeFullScreen)
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
   const isShuffle = usePlayerStore((s) => s.isShuffle)
@@ -73,7 +76,15 @@ function FullScreenPlayer() {
   const [loadingLike, setLoadingLike] = useState(false)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
+  const [isClosing, setIsClosing] = useState(false)
   const gestureRef = useRef(null)
+
+  // Закрытие с анимацией: сначала уводим шторку вниз, затем размонтируем.
+  const startClose = () => {
+    if (isClosing) return
+    setIsClosing(true)
+    setTimeout(closeFullScreen, 350)
+  }
 
   // Тач-жесты (только сенсорные экраны — обработчики через onTouch*):
   //  • свайп вниз «прилипает» к пальцу и закрывает плеер при достаточном сдвиге;
@@ -83,7 +94,7 @@ function FullScreenPlayer() {
   const handleTouchStart = (e) => {
     if (e.touches.length !== 1) return
     const t = e.touches[0]
-    gestureRef.current = { x: t.clientX, y: t.clientY, axis: null }
+    gestureRef.current = { x: t.clientX, y: t.clientY, axis: null, t0: performance.now() }
   }
 
   const handleTouchMove = (e) => {
@@ -106,14 +117,19 @@ function FullScreenPlayer() {
     const t = e.changedTouches[0]
     const dx = t.clientX - g.x
     const dy = t.clientY - g.y
+    const elapsed = performance.now() - g.t0
     gestureRef.current = null
     setIsDragging(false)
-    setDragY(0)
     if (g.axis === 'x' && Math.abs(dx) >= 60) {
-      if (dx < 0) nextTrack()
+      setDragY(0)
+      if (dx < 0) handleSkipForward()
       else previousTrack()
-    } else if (g.axis === 'y' && dy >= 120) {
-      closeFullScreen()
+    } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
+      // Не сбрасываем dragY — .is-closing подхватит анимацию с текущей позиции.
+      startClose()
+    } else {
+      // Порог не пройден — плавно возвращаем шторку на место.
+      setDragY(0)
     }
   }
 
@@ -121,6 +137,17 @@ function FullScreenPlayer() {
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || isExternalTrack
+
+  // Гейт скипа вперёд: следующий трек готов, если его резолв на бэке завершён
+  // (или он локальный / конец очереди). resolvedPrefetchVersion в подписке
+  // выше форсит пересчёт при завершении резолва. handleSkipForward выполняет
+  // скип только когда готово — блокирует кнопку и свайп-влево, но не
+  // естественное окончание трека.
+  const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
+  const handleSkipForward = () => {
+    if (!usePlayerStore.getState().isNextTrackReady()) return
+    nextTrack()
+  }
 
   const coverUrl = useMemo(
     () => resolveCoverUrl(currentTrack?.cover_url) || defaultCover,
@@ -164,18 +191,18 @@ function FullScreenPlayer() {
 
   return (
     <div
-      className="fullscreen-player"
+      className={`fullscreen-player${isClosing ? ' is-closing' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-        transform: dragY ? `translateY(${dragY}px)` : undefined,
-        opacity: dragY ? dragOpacity : undefined,
-        transition: isDragging ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+        transform: dragY && !isClosing ? `translateY(${dragY}px)` : undefined,
+        opacity: dragY && !isClosing ? dragOpacity : undefined,
+        transition: isDragging ? 'none' : undefined,
       }}
     >
       <div className="fullscreen-header">
-        <button className="fullscreen-icon" onClick={closeFullScreen} aria-label="Закрыть">
+        <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
         <div className="fullscreen-title">
@@ -239,7 +266,13 @@ function FullScreenPlayer() {
         <button className="fullscreen-play" onClick={togglePlayPause} aria-label="Play/Pause">
           {isPlaying ? <Pause size={24} /> : <Play size={24} />}
         </button>
-        <button className="fullscreen-icon" onClick={nextTrack} aria-label="Вперёд">
+        <button
+          className="fullscreen-icon"
+          onClick={handleSkipForward}
+          disabled={!canSkipNext}
+          aria-label="Вперёд"
+          title={canSkipNext ? 'Вперёд' : 'Следующий трек ещё загружается'}
+        >
           <SkipForward size={20} />
         </button>
         <button

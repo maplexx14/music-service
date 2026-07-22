@@ -64,16 +64,22 @@
   background-color: #a259ff;
   color: #ffffff;
   border: none;
-  border-radius: 50px;
+  border-radius: 999px;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
 }
 
 .play-button-large:hover {
   background-color: #1ed760;
-  transform: scale(1.05);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .play-button-large:hover {
+    transform: scale(1.05);
+  }
 }
 
 .liked-tracks {
@@ -145,7 +151,7 @@
 
 .track-row {
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out);
   border-radius: 4px;
 }
 
@@ -338,7 +344,12 @@
 
 .load-more-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.1);
-  transform: scale(1.03);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .load-more-btn:hover:not(:disabled) {
+    transform: scale(1.03);
+  }
 }
 
 .load-more-btn:disabled {

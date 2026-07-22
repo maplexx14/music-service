@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON, select
+from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -142,6 +142,15 @@ class Playlist(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Число треков одним скалярным подзапросом в том же SELECT — списковые
+    # эндпоинты отдают счётчик, не загружая сами треки (см. PlaylistSummaryResponse).
+    track_count = column_property(
+        select(func.count(playlist_tracks.c.track_id))
+        .where(playlist_tracks.c.playlist_id == id)
+        .correlate_except(playlist_tracks)
+        .scalar_subquery()
+    )
 
     # Relationships
     owner = relationship("User", back_populates="playlists")

@@ -10,10 +10,21 @@ const useToastStore = create((set) => ({
     set((state) => ({ toasts: [...state.toasts, { id, message, type }] }))
     if (duration > 0) {
       setTimeout(() => {
-        useToastStore.getState().removeToast(id)
+        useToastStore.getState().dismissToast(id)
       }, duration)
     }
     return id
+  },
+
+  // Плавное скрытие: сначала помечаем toast как уходящий (CSS-анимация),
+  // затем удаляем из списка.
+  dismissToast: (id) => {
+    set((state) => ({
+      toasts: state.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)),
+    }))
+    setTimeout(() => {
+      useToastStore.getState().removeToast(id)
+    }, 180)
   },
 
   removeToast: (id) =>

@@ -10,7 +10,8 @@
   border-radius: 8px;
   color: #ffffff;
   font-size: 16px;
-  transition: all 0.2s;
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
 }
 
 .search-input:focus {
@@ -50,7 +51,7 @@
   background-color: #181818;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out);
   min-width: 0;
 }
 
@@ -170,7 +171,7 @@
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out);
 }
 
 .playlist-item:hover {
@@ -220,7 +221,7 @@
   background-color: #181818;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out);
 }
 
 .user-item:hover {

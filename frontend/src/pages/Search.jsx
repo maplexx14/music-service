@@ -50,54 +50,55 @@ function Search() {
   const performSearch = async (searchQuery, signal) => {
     setLoading(true)
     setSearchError('')
-    try {
-      const [localResult, externalResult, externalPlaylistsResult] = await Promise.allSettled([
-        api.get('/search', {
-          params: { q: searchQuery, limit: 20 },
-          signal,
-        }),
-        api.get('/search/external', {
-          params: { q: searchQuery, limit: 30 },
-          skipErrorToast: true,
-          signal,
-        }),
-        api.get('/search/external/playlists', {
-          params: { q: searchQuery, limit: 10 },
-          skipErrorToast: true,
-          signal,
-        }),
-      ])
-      if (signal.aborted) return
-      if (localResult.status === 'fulfilled') {
-        setResults(localResult.value.data)
-      } else {
-        console.error('Local search error:', localResult.reason)
-        setResults({ tracks: [], playlists: [], users: [] })
-        setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
-      }
-      if (externalResult.status === 'fulfilled') {
-        setExternalTracks(externalResult.value.data)
+    // Старые внешние результаты чистим сразу: они дорисуются позже и не
+    // должны миксоваться с новым запросом.
+    setExternalTracks([])
+    setExternalPlaylists([])
+
+    // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
+    // его секции дорисовываются по мере прихода ответов.
+    api
+      .get('/search/external', {
+        params: { q: searchQuery, limit: 30 },
+        skipErrorToast: true,
+        signal,
+      })
+      .then((response) => {
+        if (signal.aborted) return
+        setExternalTracks(response.data)
         // Прогреваем резолв топ-нескольких результатов заранее — большинство
         // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
         // Ограничиваем прогрев видимой верхушкой, чтобы поиск не создавал
         // всплеск фоновых запросов на слабом клиенте или под нагрузкой.
-        usePlayerStore.getState().prefetchTracks(externalResult.value.data, 4)
-      } else {
-        console.error('External search error:', externalResult.reason)
-        setExternalTracks([])
-      }
-      if (externalPlaylistsResult.status === 'fulfilled') {
-        setExternalPlaylists(externalPlaylistsResult.value.data)
-      } else {
-        console.error('External playlist search error:', externalPlaylistsResult.reason)
-        setExternalPlaylists([])
-      }
+        usePlayerStore.getState().prefetchTracks(response.data, 4)
+      })
+      .catch((error) => {
+        if (!signal.aborted) console.error('External search error:', error)
+      })
+    api
+      .get('/search/external/playlists', {
+        params: { q: searchQuery, limit: 10 },
+        skipErrorToast: true,
+        signal,
+      })
+      .then((response) => {
+        if (!signal.aborted) setExternalPlaylists(response.data)
+      })
+      .catch((error) => {
+        if (!signal.aborted) console.error('External playlist search error:', error)
+      })
+
+    try {
+      const response = await api.get('/search', {
+        params: { q: searchQuery, limit: 20 },
+        signal,
+      })
+      if (signal.aborted) return
+      setResults(response.data)
     } catch (error) {
       if (signal.aborted) return
-      console.error('Search error:', error)
+      console.error('Local search error:', error)
       setResults({ tracks: [], playlists: [], users: [] })
-      setExternalTracks([])
-      setExternalPlaylists([])
       setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
       if (!signal.aborted) setLoading(false)

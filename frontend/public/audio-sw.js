@@ -18,21 +18,26 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event
 
-  if (!STREAM_PATTERN.test(new URL(request.url).pathname)) {
+  const url = new URL(request.url)
+  if (!STREAM_PATTERN.test(url.pathname)) {
+    return
+  }
+
+  // Кросс-орIGIN запросы Service Worker не может модифицировать —
+  // fetch() внутри SW ломает CORS-контекст. Пропускаем: браузер
+  // обработает запрос напрямую с правильными CORS-заголовками от сервера.
+  if (url.origin !== self.location.origin) {
     return
   }
 
   event.respondWith(
     (async () => {
+
       try {
         const headers = new Headers(request.headers)
-
         headers.set('tuna-skip-browser-warning', '1')
         headers.set('ngrok-skip-browser-warning', '1')
 
-        // Сохраняем Range и остальные параметры media-запроса.
-        // Для cross-origin/no-cors потока пользовательские заголовки могут
-        // быть запрещены, поэтому в таком случае повторяем исходный запрос.
         return await fetch(
           new Request(request, {
             headers,

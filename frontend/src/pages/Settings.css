@@ -17,7 +17,7 @@
 .settings-card {
   background: #141418;
   border: 1px solid #242428;
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 20px;
   max-width: 600px;
 }
@@ -63,7 +63,7 @@
   gap: 10px;
   background: #111115;
   border: 1px solid #242428;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 10px;
 }
 
@@ -139,7 +139,7 @@
 .settings-gif-upload {
   background: #111115;
   border: 1px solid #242428;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 12px;
   color: #ffffff;
   font-size: 13px;

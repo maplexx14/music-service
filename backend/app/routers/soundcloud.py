@@ -14,6 +14,7 @@ from app.routers.ytdlp import (
     cached_ydl,
     clean_title,
     schedule_prefetch,
+    prefetch_is_ready,
     single_flight_resolve,
     stream_cached_audio,
 )
@@ -688,3 +689,12 @@ async def prefetch_soundcloud(token: str):
         _RESOLVE_TTL,
     )
     return {"status": status}
+
+
+@router.get("/prefetch/{token}/ready")
+async def prefetch_soundcloud_ready(token: str):
+    """Готов ли прогрев трека (резолв в Redis или кэш-файл). Фронт поллит это
+    после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
+    track_id, _permalink = _decode_token(token)
+    ready = await prefetch_is_ready(f"sc{track_id}", f"soundcloud:resolve:{track_id}")
+    return {"ready": ready}

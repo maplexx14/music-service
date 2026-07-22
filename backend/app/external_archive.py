@@ -463,8 +463,7 @@ async def schedule_archive_external(
             # Проверка наличия объекта ПОД семафором: MinIO list_objects —
             # сетевой вызов, до семафора он замедляет каждый стрим-запрос,
             # а при высокой нагрузке и вовсе блокирует очередь архиваций.
-            if storage.find_music_object(prefix):
-                return
+            existing = storage.find_music_object(prefix)
             db = SessionLocal()
             try:
                 track = (
@@ -473,6 +472,20 @@ async def schedule_archive_external(
                     .first()
                 )
                 if track is not None and storage.is_minio_path(track.file_path):
+                    return
+                if existing:
+                    # Объект заархивирован раньше, чем трек материализовался в
+                    # БД (играл строковым id из поиска). Ранний return без
+                    # линковки оставлял file_path пустым НАВСЕГДА — трек ходил
+                    # по медленному пути резолва провайдера, хотя байты давно
+                    # лежат в MinIO. Линкуем — следующий /tracks/{id}/stream
+                    # отдаст файл напрямую из MinIO.
+                    if track is not None:
+                        track.file_path = existing
+                        db.commit()
+                        logger.info(
+                            "lazy-archive-ext: %s/%s → linked existing object", source, external_id
+                        )
                     return
                 for attempt in range(_MAX_RETRIES + 1):
                     status = await _archive_external_core(db, source, external_id, permalink, track)

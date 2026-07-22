@@ -9,7 +9,7 @@ const icons = {
 }
 
 function ToastContainer() {
-  const { toasts, removeToast } = useToastStore()
+  const { toasts, dismissToast } = useToastStore()
 
   if (toasts.length === 0) return null
 
@@ -18,13 +18,13 @@ function ToastContainer() {
       {toasts.map((t) => {
         const Icon = icons[t.type] || Info
         return (
-          <div key={t.id} className={`toast toast-${t.type}`}>
+          <div key={t.id} className={`toast toast-${t.type}${t.leaving ? ' toast-leaving' : ''}`}>
             <Icon size={18} className="toast-icon" />
             <span className="toast-message">{t.message}</span>
             <button
               type="button"
               className="toast-close"
-              onClick={() => removeToast(t.id)}
+              onClick={() => dismissToast(t.id)}
               aria-label="Закрыть"
             >
               <X size={16} />

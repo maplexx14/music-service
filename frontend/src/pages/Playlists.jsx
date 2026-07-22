@@ -275,7 +275,7 @@ function Playlists() {
                     <div className="playlist-description">{playlist.description}</div>
                   )}
                   <div className="playlist-tracks-count">
-                    {playlist.tracks?.length || 0} треков
+                    {playlist.track_count ?? playlist.tracks?.length ?? 0} треков
                   </div>
                 </div>
               </Link>

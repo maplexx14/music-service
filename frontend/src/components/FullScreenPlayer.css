@@ -12,6 +12,18 @@
   padding: calc(env(safe-area-inset-top, 0px) + 22px) 24px calc(env(safe-area-inset-bottom, 0px) + 24px);
   z-index: 1200;
   overflow: hidden;
+  transition: transform 0.4s var(--ease-drawer), opacity 0.3s var(--ease-drawer);
+}
+
+@starting-style {
+  .fullscreen-player {
+    transform: translateY(100%);
+  }
+}
+.fullscreen-player.is-closing {
+  transform: translateY(100%);
+  opacity: 0.4;
+  transition: transform 0.3s var(--ease-drawer), opacity 0.3s var(--ease-drawer);
 }
 
 .fullscreen-header {
@@ -79,6 +91,14 @@
 
 .fullscreen-like.active {
   background: rgba(162, 89, 255, 0.14);
+  /* Поп при лайке — как у .like-btn в мини-плеере. */
+  animation: fullscreenLikePop 0.3s var(--ease-out);
+}
+
+@keyframes fullscreenLikePop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); }
 }
 
 .fullscreen-art {
@@ -95,7 +115,7 @@
   height: min(440px, 78vw, 48vh);
   border-radius: 12px;
   object-fit: cover;
-  box-shadow: 0 22px 52px rgba(0, 0, 0, 0.48);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   background: #181818;
 }
 
@@ -200,8 +220,13 @@
 }
 
 .fullscreen-play:hover {
-  transform: scale(1.04);
   box-shadow: 0 16px 38px rgba(162, 89, 255, 0.3);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fullscreen-play:hover {
+    transform: scale(1.04);
+  }
 }
 
 @media (max-width: 768px) {
@@ -300,4 +325,3 @@
     margin-top: 20px;
   }
 }
-

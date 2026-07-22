@@ -41,7 +41,7 @@ const PLAY_RECORD_MIN_SEC = 60
 // Зеркало EXTERNAL_STREAM_PREFIX из backend/app/routers/tracks.py: сюда
 // stream_track сам редиректит (307) материализованные внешние треки.
 // Строя этот URL сразу на фронте, экономим полный round-trip редиректа
-// (через ngrok/tuna-туннель — десятки-сотни мс) плюс SQL-запрос на бэке
+// (через tuna-туннель — десятки-сотни мс) плюс SQL-запрос на бэке
 // при КАЖДОМ старте внешнего трека.
 // ytmusic СОЗНАТЕЛЬНО НЕ срезаем напрямую: его нужно вести через
 // /tracks/{id}/stream, чтобы бэкенд (а) при первом прослушивании фоном
@@ -166,6 +166,9 @@ function PlayerInner() {
   const prefetchNext = usePlayerStore((s) => s.prefetchNext)
   const seekRequest = usePlayerStore((s) => s.seekRequest)
   const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
+  // Версия-счётчик резолвов растёт, когда прогрев следующего трека завершается —
+  // подписка заставляет пересчитать canSkipNext (гейт кнопки «следующий»).
+  const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
 
   const audioRef = useRef(null)
   // Оставлены только как guards для старой логики preload; второго <audio>
@@ -188,6 +191,16 @@ function PlayerInner() {
   // при ошибке внешнего трека не скипаем сразу, а даём 1-2 попытки.
   const retryCountRef = useRef(0)
   const retryTimeoutRef = useRef(null)
+  // «Беззвучный старт»: трек, начавший играть в скрытой вкладке, может идти
+  // без звука (конвейер работает, currentTime тикает, аудиовыход не
+  // подключён) — из JS это состояние НЕ детектируется. Лечит seek. Флаг
+  // помечает рискованный старт; nudge-ref — один авто-seek на трек.
+  const silentStartRiskRef = useRef(false)
+  const bgNudgeForRef = useRef(null)
+  // Кап перезапусков зависшей загрузки по событиям stalled/suspend: каждый
+  // kick качает трек с нуля — на честно медленной сети бесконечные рестарты
+  // сделали бы только хуже. Сбрасывается на 'playing' и на смене трека.
+  const stallKickCountRef = useRef(0)
   const [audioSrc, setAudioSrc] = useState(null)
   // Спиннер на время резолва/загрузки потока внешнего трека — иначе долгий
   // (но живой) резолв YouTube Music выглядит как зависший плеер.
@@ -205,12 +218,31 @@ function PlayerInner() {
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
 
+  // Гейт скипа вперёд: пока резолв следующего трека на бэке не завершён,
+  // кнопку «следующий»/свайп-влево/виджет блокируем — чтобы не прыгать на ещё
+  // не подгруженный трек. Подписка на resolvedPrefetchVersion выше заставляет
+  // пересчитать canSkipNext на завершении резолва; на смене трека — рендер
+  // и так происходит. Конец очереди/локальный трек — готов всегда (см.
+  // isNextTrackReady). Естественное окончание трека (handleEnded) гейт НЕ
+  // трогает — там переход штатный, не пользовательский скип.
+  // isNextTrackReady читает актуальный store; resolvedPrefetchVersion в
+  // зависимостях подписки гарантирует пересчёт при завершении резолва.
+  const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
+
+  // Пользовательский скип вперёд (кнопка/свайп): выполняем только если
+  // следующий трек готов. Готовность читаем из store в момент вызова —
+  // защита от устаревшего замыкания в обработчиках свайпа.
+  const handleSkipForward = () => {
+    if (!usePlayerStore.getState().isNextTrackReady()) return
+    nextTrack()
+  }
+
   // Горизонтальный свайп по области трека переключает треки (только тач).
   // ВАЖНО: хук вызывается здесь, до раннего `if (!currentTrack) return null`,
   // иначе на рендере без трека он пропускается и число хуков «прыгает»
   // (React error #310: Rendered more hooks than during the previous render).
   const swipeHandlers = useSwipe({
-    onSwipeLeft: nextTrack,
+    onSwipeLeft: handleSkipForward,
     onSwipeRight: previousTrack,
     threshold: 60,
   })
@@ -304,6 +336,30 @@ function PlayerInner() {
         triggerNextPreload()
       }
     }
+    // Зависший старт: play() уже принят (paused === false), а currentTime
+    // замер на нуле. Две разновидности, у каждой своё лекарство:
+    //   1) данные не загрузились (readyState < HAVE_CURRENT_DATA) — браузер
+    //      в фоне отложил/бросил загрузку нового src; лечит только
+    //      перезапуск загрузки load() + play();
+    //   2) данные ЕСТЬ, но конвейер декодирования замер (readyState >= 2,
+    //      paused false, время стоит) — так выглядит старт src в скрытой
+    //      вкладке; лечит микро-seek — ровно то, что делал ручной тык в
+    //      прогресс-бар. load() тут вреден: он сбрасывает уже загруженный
+    //      буфер и может застрять снова.
+    // «paused-ретраи» обе формы не видят: элемент формально «играет».
+    const isStalledStart = () => !audio.paused && audio.currentTime === 0
+    const kickStalled = () => {
+      if (audio.readyState >= audio.HAVE_CURRENT_DATA) {
+        try {
+          audio.currentTime = 0.01
+        } catch {
+          /* элемент мог быть в несовместимом состоянии — играем дальше */
+        }
+      } else {
+        audio.load()
+      }
+      audio.play().catch(() => {})
+    }
     // Вкладка снова видима — догоняем прогресс-бар и возобновляем воспроизведение,
     // если должно было играть. На мобильных браузерах audio может быть приостановлен
     // при уходе в фон (переключение приложения, блокировка экрана).
@@ -313,6 +369,19 @@ function PlayerInner() {
         const { isPlaying: playing } = usePlayerStore.getState()
         if (playing && audio.paused && !audio.ended) {
           audio.play().catch(() => {})
+        } else if (playing && isStalledStart()) {
+          kickStalled()
+        } else if (playing && silentStartRiskRef.current && !audio.paused) {
+          // Трек стартовал в фоне — мог играть беззвучно (см. silentStartRiskRef).
+          // Форграунд-seek на текущую позицию переподключает аудиовыход —
+          // автоматизация ручного «тыка в прогресс-бар». Слышимый эффект —
+          // микрозапинка ~50 мс, только один раз при возврате в приложение.
+          silentStartRiskRef.current = false
+          try {
+            audio.currentTime = Math.max(0.01, audio.currentTime - 0.05)
+          } catch {
+            /* noop */
+          }
         }
       }
     }
@@ -328,50 +397,94 @@ function PlayerInner() {
         navigator.mediaSession.playbackState = state
       }
     }
-    const handlePlay = () => syncSystemPlaybackState('playing')
+    // 'playing' (реально пошли кадры), а не 'play' (лишь вызвали play()):
+    // при зависшей загрузке play-событие стреляет сразу, и виджет врал бы
+    // «играет» про молчащий элемент — с тикающим временем от экстраполяции.
+    // Загрузка нового src перестала прогрессировать. Таймеры в фоне браузер
+    // троттлит до ~1 раза/мин, а события media-элемента приходят без
+    // задержек — это единственный быстрый сигнал «после ended ничего не
+    // грузится», из-за которого раньше следующий трек висел до ручного skip.
+    const handleLoadStall = () => {
+      if (!usePlayerStore.getState().isPlaying) return
+      if (!isStalledStart()) return
+      if (stallKickCountRef.current >= 3) return // дальше — вотчдог/пользователь
+      stallKickCountRef.current += 1
+      kickStalled()
+    }
+    const handlePlaying = () => {
+      stallKickCountRef.current = 0
+      syncSystemPlaybackState('playing')
+      // Старт в скрытой вкладке — риск беззвучного воспроизведения.
+      // Сразу пробуем авто-seek (то же, что ручной тык в прогресс-бар):
+      // если браузер честно исполняет фоновый seek — звук чинится ещё в
+      // фоне. Один nudge на трек: seek сам триггерит повторный 'playing',
+      // без guard'а получился бы цикл.
+      if (document.hidden) {
+        silentStartRiskRef.current = true
+        const trackId = usePlayerStore.getState().currentTrack?.id
+        if (trackId != null && bgNudgeForRef.current !== trackId) {
+          bgNudgeForRef.current = trackId
+          try {
+            audio.currentTime = Math.max(0.01, audio.currentTime - 0.05)
+          } catch {
+            /* noop */
+          }
+        }
+      } else {
+        // Видимый (заведомо здоровый) старт снимает флаг риска — иначе
+        // давний фоновый старт нуджил бы и все последующие треки.
+        silentStartRiskRef.current = false
+      }
+    }
     const handlePause = () => syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     const handleEnded = () => {
       if (usePlayerStore.getState().isRepeatOne) {
         audio.currentTime = 0
         audio.play().catch(() => {})
       } else {
-        // Вычисляем следующий трек СИНХРОННО и запускаем его play() прямо
-        // здесь, в контексте обработчика ended. Это критично для мобильных
-        // браузеров (особенно iOS): play() требует пользовательского жеста,
-        // и ended считается продолжением жеста, запустившего воспроизведение.
-        // Если nextTrack() → React-рендер → эффект → play(), контекст жеста
-        // уже потерян, и браузер блокирует play() (NotAllowedError).
-        const state = usePlayerStore.getState()
-        const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = state
-
-        let nextIdx = null
-        if (isShuffle && shuffledOrder.length > 0) {
-          if (currentShuffleIndex < shuffledOrder.length - 1) {
-            nextIdx = shuffledOrder[currentShuffleIndex + 1]
-          }
-        } else if (currentIndex < queue.length - 1) {
-          nextIdx = currentIndex + 1
-        }
-
-        if (nextIdx !== null) {
-          const nextData = queue[nextIdx]
-          const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(nextData.source)
-          const nextUrl = resolveRawUrl(nextData, nextIsExternal)
-          if (nextUrl) {
-            // Ставим src напрямую на элемент — до React-рендера, чтобы play()
-            // работал с уже актуальным источником в том же жестовом контексте.
-            audio.src = nextUrl
-            audio.load()
-            audio.play().catch(() => {})
-          }
-        }
-        // Обновляем store (UI, прогресс-бар, Media Session) — это запускает
-        // React-рендер и эффекты, которые подхватят то же состояние.
-        // Для UI-пути (setAudioSrc) это не страшно: src на элементе уже
-        // актуален, React просто синхронизирует атрибут.
+        // Следующий трек стартует СИНХРОННО, в контексте обработчика ended:
+        // ended — продолжение жеста, запустившего воспроизведение, и только
+        // такой play() мобильный браузер разрешает в фоне. Путь через
+        // nextTrack() → рендер → эффект → play() теряет жестовый контекст
+        // (NotAllowedError). Store обновляем следом — эффект src увидит тот
+        // же URL и не перезапустит воспроизведение.
+        playAdjacentNow(1)
         nextTrack()
       }
     }
+
+    // Вотчдог «переключился, но не заиграл». Две формы отказа:
+    // 1) play() отвергнут (paused === true) — просто повторяем play();
+    // 2) play() принят, но загрузка зависла (paused === false, данных нет) —
+    //    нужен load()+play(), см. isStalledStart. Форму 2 кикаем только после
+    //    2 подряд «застрявших» тиков (~6 с активной вкладки), чтобы не рвать
+    //    честную медленную буферизацию (холодный резолв — единицы секунд).
+    // Ретраим ТОЛЬКО старт с нуля (currentTime === 0): паузу от ОС посреди
+    // трека (звонок, аудиофокус у другого приложения) не трогаем.
+    // ponytail: в фоне интервал троттлится до ~1 раза/мин — авто-recovery там
+    // не мгновенный; мгновенный путь — кнопка ▶ виджета (жест).
+    let stalledTicks = 0
+    const watchdog = setInterval(() => {
+      const { isPlaying: playing } = usePlayerStore.getState()
+      if (!playing || !audio.src || audio.ended) {
+        stalledTicks = 0
+        return
+      }
+      if (audio.paused && audio.currentTime === 0) {
+        stalledTicks = 0
+        audio.play().catch(() => {})
+        return
+      }
+      if (isStalledStart()) {
+        stalledTicks += 1
+        if (stalledTicks >= 2) {
+          stalledTicks = 0
+          kickStalled()
+        }
+      } else {
+        stalledTicks = 0
+      }
+    }, 3000)
 
     audio.addEventListener('timeupdate', updateTime)
     document.addEventListener('visibilitychange', handleVisibility)
@@ -380,11 +493,14 @@ function PlayerInner() {
     audio.addEventListener('canplay', updateDuration)
     audio.addEventListener('seeked', syncPositionState)
     audio.addEventListener('ratechange', syncPositionState)
-    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('playing', handlePlaying)
     audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
+    audio.addEventListener('stalled', handleLoadStall)
+    audio.addEventListener('suspend', handleLoadStall)
 
     return () => {
+      clearInterval(watchdog)
       audio.removeEventListener('timeupdate', updateTime)
       document.removeEventListener('visibilitychange', handleVisibility)
       audio.removeEventListener('loadedmetadata', updateDuration)
@@ -392,9 +508,11 @@ function PlayerInner() {
       audio.removeEventListener('canplay', updateDuration)
       audio.removeEventListener('seeked', syncPositionState)
       audio.removeEventListener('ratechange', syncPositionState)
-      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('playing', handlePlaying)
       audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('ended', handleEnded)
+      audio.removeEventListener('stalled', handleLoadStall)
+      audio.removeEventListener('suspend', handleLoadStall)
     }
   }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
 
@@ -414,6 +532,53 @@ function PlayerInner() {
     setAudioSrc(resolveRawUrl(currentTrack, isExternalTrack))
   }, [currentTrack, isExternalTrack])
 
+  // src на <audio> ставим императивно и ТОЛЬКО при реальном изменении, а не
+  // JSX-атрибутом. Причина: handleEnded и хендлеры системного виджета
+  // выставляют src и зовут play() синхронно, в контексте жеста (ended /
+  // media-key) — только такой play() мобильный браузер разрешает в фоне.
+  // Если после этого React закоммитит src атрибутом (даже той же строкой),
+  // спека перезапускает media load algorithm — уже стартовавший play()
+  // абортируется, а повторный play() из эффекта идёт вне жеста →
+  // NotAllowedError → трек «переключился», но молчит. Проверка на равенство
+  // делает коммит того же src no-op'ом и не трогает живое воспроизведение.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (!audioSrc) {
+      if (audio.src) {
+        audio.removeAttribute('src')
+        audio.load()
+      }
+      return
+    }
+    const abs = new URL(audioSrc, window.location.href).href
+    if (audio.src !== abs) audio.src = abs
+    if (usePlayerStore.getState().isPlaying && audio.paused) {
+      audio.play().catch((err) => {
+        if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
+          console.error('Error playing audio:', err)
+      })
+    }
+  }, [audioSrc])
+
+  // Синхронный (в контексте текущего жеста/события) старт соседнего трека
+  // очереди прямо на <audio>-элементе — общий путь для естественного конца
+  // трека (ended) и кнопок next/prev системного виджета. Store после этого
+  // обновляется отдельно вызывающей стороной; эффект src выше увидит тот же
+  // URL и ничего не перезапустит.
+  const playAdjacentNow = (offset) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const next = usePlayerStore.getState().getNextTrack(offset)
+    if (!next) return
+    const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(next.source)
+    const url = resolveRawUrl(next, nextIsExternal)
+    if (!url) return
+    audio.src = url
+    audio.load()
+    audio.play().catch(() => {})
+  }
+
   // Reload audio when track changes
   useEffect(() => {
     const audio = audioRef.current
@@ -422,6 +587,7 @@ function PlayerInner() {
     // Новый трек — сбрасываем счётчик ретраев и отменяем висящий отложенный
     // повтор от предыдущего трека.
     retryCountRef.current = 0
+    stallKickCountRef.current = 0
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current)
       retryTimeoutRef.current = null
@@ -657,6 +823,21 @@ function PlayerInner() {
         const audio = audioRef.current
         if (!audio) return
         try {
+          // Зависший старт (play() принят, время замерло на нуле): повторный
+          // play() вернёт тот же висящий промис. С данными в буфере лечит
+          // микро-seek (как ручной тык в прогресс-бар), без данных — load()
+          // в жестовом контексте (см. kickStalled в эффекте плеера).
+          if (!audio.paused && audio.currentTime === 0) {
+            if (audio.readyState >= audio.HAVE_CURRENT_DATA) {
+              try {
+                audio.currentTime = 0.01
+              } catch {
+                /* noop */
+              }
+            } else {
+              audio.load()
+            }
+          }
           await audio.play()
           if (!usePlayerStore.getState().isPlaying) togglePlayPause()
         } catch (error) {
@@ -667,10 +848,18 @@ function PlayerInner() {
         audioRef.current?.pause()
         if (usePlayerStore.getState().isPlaying) togglePlayPause()
       },
+      // Как и в handleEnded: src+play() синхронно в контексте media-key
+      // события, ДО обновления store. Иначе play() уходил в React-эффект вне
+      // жестового контекста, фоновая вкладка его блокировала — трек в виджете
+      // «переключался», но не играл.
       previoustrack: () => {
+        playAdjacentNow(-1)
         usePlayerStore.getState().previousTrack()
       },
       nexttrack: () => {
+        // Тот же гейт, что и на кнопке: не прыгаем на ещё не подгруженный трек.
+        if (!usePlayerStore.getState().isNextTrackReady()) return
+        playAdjacentNow(1)
         usePlayerStore.getState().nextTrack()
       },
       seekto: (details) => {
@@ -726,13 +915,20 @@ function PlayerInner() {
   }, [currentTrack?.id, togglePlayPause, setCurrentTime])
 
   // Статус воспроизведения в виджете (play/pause индикатор).
+  // 'playing' здесь НЕ выставляем: это делает только реальное событие play
+  // элемента (handlePlay выше). Если после ended следующий трек не смог
+  // стартовать в фоне (NotAllowedError/стойл загрузки), store.isPlaying всё
+  // ещё true — форс 'playing' из него заставлял виджет показывать «играет»
+  // и тикать время (ОС экстраполирует positionState) при полной тишине.
+  // Честный 'paused' вдобавок даёт на экране блокировки рабочую кнопку ▶:
+  // её нажатие — жест, audio.play() в нём разрешён и звук возвращается.
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
-    navigator.mediaSession.playbackState = currentTrack
-      ? isPlaying
-        ? 'playing'
-        : 'paused'
-      : 'none'
+    if (!currentTrack) {
+      navigator.mediaSession.playbackState = 'none'
+    } else if (!isPlaying) {
+      navigator.mediaSession.playbackState = 'paused'
+    }
   }, [isPlaying, currentTrack?.id])
 
   // Позиция/длительность — прогресс-бар в системном виджете. Потиковую
@@ -881,14 +1077,17 @@ function PlayerInner() {
           giveUp(true)
           return
         }
-        // MEDIA_ERR_SRC_NOT_SUPPORTED также возникает, если CDN URL истёк или
-        // 502/503 вернул HTML. Новый URL может восстановить такой поток.
+        // 2xx/3xx: URL живой, бэкенд отвечает валидным аудио.
+        // НЕ делаем retry — он убьёт текущий <audio> load и создаст
+        // бесконечный цикл: probe OK → retry → new src → error → probe OK → ...
+        if (res.status < 400) return
+        // 4xx/5xx: CDN URL мог протухнуть или сервер упал —
+        // новый URL может восстановить поток.
         scheduleRetry()
       })
       .catch(() => {
         clearTimeout(probeTimer)
-        // Запрос не прошёл (сеть/CORS/таймаут) — не знаем причину, считаем
-        // временной и всё равно ретраим с новым URL, а не скипаем молча.
+        // Запрос не прошёл (сеть/CORS/таймаут) — пробуем с другим URL.
         scheduleRetry()
       })
   }
@@ -896,12 +1095,13 @@ function PlayerInner() {
   return (
     <div className="player">
       <PlayerProgress audioRef={audioRef} />
+      {/* src намеренно НЕ атрибут JSX: им управляет эффект audioSrc выше,
+          чтобы React-коммит не перезапускал media load поверх синхронного
+          старта из handleEnded/виджета. */}
       <audio
         ref={audioRef}
-        src={audioSrc || undefined}
         preload="auto"
         playsInline
-        crossOrigin="anonymous"
         onError={handleAudioError}
         onCanPlay={() => {
           // Раз дошли до canplay — источник рабочий, ретраи для этой сессии
@@ -1035,7 +1235,14 @@ function PlayerInner() {
               <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
             )}
           </button>
-          <button type="button" className="control-btn" onClick={nextTrack} aria-label="Следующий">
+          <button
+            type="button"
+            className="control-btn"
+            onClick={handleSkipForward}
+            disabled={!canSkipNext}
+            aria-label="Следующий"
+            title={canSkipNext ? 'Следующий' : 'Следующий трек ещё загружается'}
+          >
             <SkipForward size={20} />
           </button>
           <button

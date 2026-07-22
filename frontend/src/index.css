@@ -28,6 +28,18 @@
   --icon-lg: 20px;
   --icon-xl: 24px;
   --icon-2xl: 48px;
+  /* Motion tokens */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  /* Radius family (Spotify-reference: не смешивать семейства) */
+  --radius-sm: 4px;      /* мелкие чипы, progress-thumb */
+  --radius-card: 8px;    /* карточки, инпуты, строки — базовый контент */
+  --radius-lg: 12px;     /* крупные поверхности: панели, обложки, модалки */
+  --radius-pill: 999px;  /* кнопки, теги */
+  --radius-avatar: 50%;  /* аватары, круглые иконки */
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -98,7 +110,7 @@ code {
 
 ::-webkit-scrollbar-thumb {
   background: #333;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -189,6 +201,51 @@ code {
 body{
   font-family: 'Unbounded', sans-serif;
   font-weight: 400;
+}
+
+/* Уменьшенная анимация: убираем движение и декоративные циклы,
+   оставляем цвет/прозрачность и спиннеры состояния. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+  .wave-widget.is-playing,
+  .now-playing-bars span,
+  .tracks-grid > *,
+  .playlists-grid > *,
+  .like-btn.liked,
+  .fullscreen-like.active,
+  .pref-chip.active {
+    animation: none !important;
+  }
+}
+
+/* Меньше прозрачности: убираем blur, делаем translucent-поверхности плотными. */
+@media (prefers-reduced-transparency: reduce) {
+  .mobile-topbar,
+  .mobile-player,
+  .mobile-nav,
+  .playlist-add-panel,
+  .toast,
+  .fullscreen-player {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #0a0a0e !important;
+  }
+}
+
+/* Больше контраста: плотный фон + чёткая граница на плавающих поверхностях. */
+@media (prefers-contrast: more) {
+  .mobile-topbar,
+  .mobile-player,
+  .mobile-nav,
+  .playlist-add-panel,
+  .profile-dropdown,
+  .mobile-profile-menu,
+  .toast {
+    background: #0a0a0e !important;
+    border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  }
 }
 
 /* Облегчённый режим: отключает анимации, переходы и дорогие эффекты (blur/shadow) для снижения нагрузки на CPU/GPU */

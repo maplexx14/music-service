@@ -635,6 +635,20 @@ def get_liked_tracks(
     return query.all()
 
 
+@router.get("/me/liked/ids", response_model=List[int])
+def get_liked_track_ids(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    # Только id — для playerStore.likedTrackIds (состояние сердечек).
+    # Полный /me/liked гонял все лайкнутые треки целиком ради списка id.
+    liked_playlist = get_or_create_liked_playlist(db, current_user)
+    rows = db.query(playlist_tracks.c.track_id).filter(
+        playlist_tracks.c.playlist_id == liked_playlist.id
+    ).all()
+    return [row[0] for row in rows]
+
+
 @router.get("/me/history", response_model=List[TrackResponse])
 def get_listening_history(
     limit: int = 50,

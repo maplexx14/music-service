@@ -19,16 +19,22 @@
   background-color: #a259ff;
   color: #ffffff;
   border: none;
-  border-radius: 50px;
+  border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
 }
 
 .create-playlist-btn:hover {
   background-color: #1ed760;
-  transform: scale(1.05);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .create-playlist-btn:hover {
+    transform: scale(1.05);
+  }
 }
 
 .create-playlist-form {
@@ -36,6 +42,16 @@
   border-radius: 8px;
   padding: 24px;
   margin-bottom: 32px;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+}
+
+/* Плавное появление инлайн-форм вместо телепортации. */
+@starting-style {
+  .create-playlist-form,
+  .import-playlist-form {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
 }
 
 .create-playlist-form input {
@@ -43,7 +59,7 @@
   padding: 12px 16px;
   background-color: #1a1a1a;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: 16px;
   margin-bottom: 16px;
@@ -60,7 +76,8 @@
   padding: 48px;
   text-align: center;
   background-color: #181818;
-  transition: all 0.2s;
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
   color: #b3b3b3;
 }
 .create-playlist-form input:focus {
@@ -79,11 +96,11 @@
   background-color: #a259ff;
   color: #ffffff;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out);
 }
 
 .submit-btn:hover {
@@ -95,11 +112,12 @@
   background-color: transparent;
   color: #b3b3b3;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color var(--duration-base) var(--ease-out),
+              border-color var(--duration-base) var(--ease-out);
 }
 
 .cancel-btn:hover {
@@ -134,7 +152,8 @@
   border-radius: 8px;
   padding: 16px;
   text-decoration: none;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
   display: block;
   position: relative;
 }
@@ -155,7 +174,9 @@
   color: #ffffff;
   cursor: pointer;
   opacity: 0.85;
-  transition: all 0.2s;
+  transition: opacity var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
 }
 
 .playlist-card:hover .playlist-delete-btn {
@@ -164,12 +185,22 @@
 
 .playlist-delete-btn:hover {
   background-color: #e53935;
-  transform: scale(1.1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playlist-delete-btn:hover {
+    transform: scale(1.1);
+  }
 }
 
 .playlist-card:hover {
   background-color: #282828;
-  transform: translateY(-4px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playlist-card:hover {
+    transform: translateY(-4px);
+  }
 }
 
 .playlist-card-link {
@@ -228,16 +259,22 @@
   background-color: transparent;
   color: #ffffff;
   border: 1px solid #a259ff;
-  border-radius: 50px;
+  border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
 }
 
 .import-playlist-btn:hover {
   background-color: #a259ff;
-  transform: scale(1.05);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .import-playlist-btn:hover {
+    transform: scale(1.05);
+  }
 }
 
 .import-playlist-form {
@@ -245,6 +282,7 @@
   border-radius: 8px;
   padding: 24px;
   margin-bottom: 32px;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
 }
 
 .import-hint {
@@ -264,7 +302,7 @@
   padding: 12px 16px;
   background-color: #1a1a1a;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: 15px;
 }
@@ -277,7 +315,7 @@
 
 .import-preview {
   background-color: #1a1a1a;
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
 }

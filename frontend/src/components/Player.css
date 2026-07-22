@@ -65,13 +65,18 @@
   height: 12px;
   border-radius: 50%;
   background: #a259ff;
-  transform: translateY(-50%) scale(0);
-  transition: transform 0.15s ease;
+  /* Появление из scale(0.6) + прозрачность: ничто не возникает из ниоткуда. */
+  transform: translateY(-50%) scale(0.6);
+  opacity: 0;
+  transition: transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
   pointer-events: none;
 }
 
-.player-progress-top:hover .player-progress-thumb {
-  transform: translateY(-50%) scale(1);
+@media (hover: hover) and (pointer: fine) {
+  .player-progress-top:hover .player-progress-thumb {
+    transform: translateY(-50%) scale(1);
+    opacity: 1;
+  }
 }
 
 .player-progress-time-bubble {
@@ -83,7 +88,7 @@
   padding: 4px 8px;
   background: #0d0d0d;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: var(--text-xs, 12px);
   font-weight: 600;
@@ -95,7 +100,12 @@
 
 .player-progress-top:hover .player-progress-time-bubble {
   opacity: 1;
-  transform: translateY(0);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-progress-top:hover .player-progress-time-bubble {
+    transform: translateY(0);
+  }
 }
 
 .player-progress-duration {
@@ -105,7 +115,7 @@
   padding: 4px 8px;
   background: #0d0d0d;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: var(--text-xs, 12px);
   font-weight: 600;
@@ -139,14 +149,19 @@
 
 .player-cover-wrap:hover {
   border-color: rgba(255, 255, 255, 0.22);
-  transform: translateY(-1px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-cover-wrap:hover {
+    transform: translateY(-1px);
+  }
 }
 
 .player-cover {
   width: 50px;
   height: 50px;
   object-fit: cover;
-  border-radius: 7px;
+  border-radius: 8px;
   background-color: #181818;
 }
 
@@ -159,7 +174,7 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.45);
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .player-cover-buffering-spinner {
@@ -205,7 +220,7 @@
   height: 36px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
   padding: 0;
@@ -225,6 +240,14 @@
   color: #a259ff;
   background: rgba(162, 89, 255, 0.12);
   border-color: rgba(162, 89, 255, 0.24);
+  /* Поп при лайке: редкий «момент радости», разрешаем чуть заметный отскок. */
+  animation: likePop 0.3s var(--ease-out);
+}
+
+@keyframes likePop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); }
 }
 
 .add-btn {
@@ -232,7 +255,7 @@
   height: 36px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
   padding: 0;
@@ -271,8 +294,18 @@
   padding: 14px;
   min-width: 240px;
   z-index: 1001;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(14px);
+  /* Вырастает от плеера снизу-слева. */
+  transform-origin: bottom left;
+  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+@starting-style {
+  .playlist-add-panel {
+    opacity: 0;
+    transform: scale(0.96);
+  }
 }
 
 .playlist-add-title {
@@ -294,7 +327,7 @@
   padding: 8px;
   background-color: #121212;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
+  border-radius: 8px;
   color: #ffffff;
   font-size: var(--text-sm);
   margin-bottom: 8px;
@@ -315,7 +348,7 @@
 .playlist-add-cancel,
 .playlist-add-confirm {
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: var(--text-sm);
   cursor: pointer;
 }
@@ -354,7 +387,7 @@
   height: 36px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   color: rgba(255, 255, 255, 0.56);
   cursor: pointer;
   padding: 0;
@@ -373,6 +406,17 @@
   color: #a259ff;
   background: rgba(162, 89, 255, 0.1);
   border-color: rgba(162, 89, 255, 0.16);
+}
+
+/* Кнопка «следующий» заблокирована, пока следующий трек не подгрузился. */
+.control-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.control-btn:disabled:hover {
+  color: rgba(255, 255, 255, 0.56);
+  background: transparent;
 }
 
 .play-pause-btn {
@@ -470,7 +514,7 @@
   border-radius: 999px;
   outline: none;
   cursor: pointer;
-  
+
 }
 
 .volume-slider::-webkit-slider-thumb {

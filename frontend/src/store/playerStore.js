@@ -10,10 +10,34 @@ function shuffleArray(arr) {
   return result
 }
 
+// Ключ прогрева резолва трека — зеркалит логику prefetchTracks. Нужен, чтобы
+// понять, завершился ли резолв следующего трека (гейт скипа вперёд).
+// Возвращает null для локальных/несписочных треков: им резолв не нужен, они
+// «готовы» всегда.
+function prefetchKeyFor(track) {
+  if (!track) return null
+  if (track.source === 'ytmusic') {
+    const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+    return externalId ? `yt:${externalId}` : null
+  }
+  if (track.source === 'soundcloud') {
+    const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
+    return token ? `sc:${token}` : null
+  }
+  return null
+}
+
 // Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
 // ре-рендеры компонентов, но не персистится между перезагрузками страницы
 // (это нормально: кэш на бэке в Redis всё равно тёплый).
 const requestedPrefetchIds = new Set()
+
+// Ключи треков, для которых прогрев резолва на бэке УЖЕ ЗАВЕРШИЛСЯ (POST
+// вернулся). Гейтит скип вперёд: пока резолв следующего не готов, кнопка
+// «следующий» заблокирована, чтобы не прыгать на ещё не подгруженный трек.
+// Дублируется в store.resolvedPrefetchVersion (счётчик) для реактивности —
+// сам Set держим на уровне модуля, чтобы переживал ре-рендеры.
+const resolvedPrefetchKeys = new Set()
 
 // Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
 // дедуп летящего запроса + TTL свежести предзагруженного списка.
@@ -139,9 +163,9 @@ const usePlayerStore = create((set, get) => ({
 
     set({ likedTracksLoading: true })
     try {
-      const response = await api.get('/tracks/me/liked')
+      const response = await api.get('/tracks/me/liked/ids')
       set({
-        likedTrackIds: response.data.map((track) => track.id),
+        likedTrackIds: response.data,
         likedTracksLoaded: true,
       })
     } finally {
@@ -215,22 +239,92 @@ const usePlayerStore = create((set, get) => ({
   // прогрев текущего трека не конкурирует с его же реальным стримом за
   // отдельный yt-dlp вызов. requestedPrefetchIds — трек-левел дедуп на
   // фронте, чтобы одно и то же не гонялось повторно при ре-рендерах.
+  //
+  // ВАЖНО: POST /prefetch — fire-and-forget (ставит фоновую задачу и сразу
+  // отвечает "queued", см. schedule_prefetch на бэке). Поэтому «POST вернулся»
+  // НЕ значит «трек готов». Готовность узнаём отдельным поллингом
+  // GET /prefetch/{id}/ready — только он даёт настоящий сигнal для гейта
+  // скипа вперёд (см. _pollPrefetchReady / isNextTrackReady).
   prefetchTracks: (tracks, count = 1) => {
     const list = (tracks || []).filter(Boolean).slice(0, count)
     for (const track of list) {
       if (track.source === 'ytmusic') {
         const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
-        if (!externalId || requestedPrefetchIds.has(`yt:${externalId}`)) continue
-        requestedPrefetchIds.add(`yt:${externalId}`)
-        api.post(`/ytdlp/prefetch/${externalId}`).catch(() => {})
+        if (!externalId) continue
+        const key = `yt:${externalId}`
+        if (requestedPrefetchIds.has(key)) continue
+        requestedPrefetchIds.add(key)
+        api.post(`/ytdlp/prefetch/${externalId}`)
+          .then(() => get()._pollPrefetchReady(key, `/ytdlp/prefetch/${externalId}/ready`))
+          .catch(() => requestedPrefetchIds.delete(key))
       } else if (track.source === 'soundcloud') {
         // Токен резолва зашит в stream_url (.../soundcloud/stream/{token}).
         const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
-        if (!token || requestedPrefetchIds.has(`sc:${token}`)) continue
-        requestedPrefetchIds.add(`sc:${token}`)
-        api.post(`/soundcloud/prefetch/${token}`).catch(() => {})
+        if (!token) continue
+        const key = `sc:${token}`
+        if (requestedPrefetchIds.has(key)) continue
+        requestedPrefetchIds.add(key)
+        api.post(`/soundcloud/prefetch/${token}`)
+          .then(() => get()._pollPrefetchReady(key, `/soundcloud/prefetch/${token}/ready`))
+          .catch(() => requestedPrefetchIds.delete(key))
       }
     }
+  },
+
+  // Поллит GET /prefetch/{id}/ready, пока бэк не подтвердит, что резолв трека
+  // реально готов (URL в Redis или кэш-файл на диске) — тогда помечает ключ
+  // готовым (снимает гейт скипа вперёд). Лёгкий запрос (без запуска работы на
+  // бэке), интервал ~600 мс, кап попыток, чтобы зависший резолв не поллился
+  // вечно. При исчерпании попыток ключ всё равно помечаем готовым — гейт не
+  // должен запирать пользователя навсегда из-за медленного/битого источника.
+  _pollPrefetchReady: (key, readyUrl) => {
+    if (!key || resolvedPrefetchKeys.has(key)) return
+    const POLL_INTERVAL_MS = 600
+    const MAX_ATTEMPTS = 40 // ~24 c потолок
+    let attempts = 0
+    const tick = () => {
+      if (resolvedPrefetchKeys.has(key)) return
+      attempts += 1
+      api
+        .get(readyUrl, { skipErrorToast: true })
+        .then(({ data }) => {
+          if (data?.ready) {
+            get()._markPrefetchResolved(key)
+          } else if (attempts < MAX_ATTEMPTS) {
+            setTimeout(tick, POLL_INTERVAL_MS)
+          } else {
+            get()._markPrefetchResolved(key) // не запираем навсегда
+          }
+        })
+        .catch(() => {
+          if (attempts < MAX_ATTEMPTS) setTimeout(tick, POLL_INTERVAL_MS)
+          else get()._markPrefetchResolved(key)
+        })
+    }
+    tick()
+  },
+
+  // Прогрев резолва трека реально завершён (ready=True с бэка) — помечаем ключ
+  // готовым и бьём счётчик реактивности, чтобы гейт скипа (isNextTrackReady) в
+  // UI пересчитался. Local/несписочные треки резолва не требуют — их
+  // prefetchKeyFor даёт null, и гейт считает их готовыми и без этой записи.
+  resolvedPrefetchVersion: 0,
+  _markPrefetchResolved: (key) => {
+    if (!key || resolvedPrefetchKeys.has(key)) return
+    resolvedPrefetchKeys.add(key)
+    set((state) => ({ resolvedPrefetchVersion: state.resolvedPrefetchVersion + 1 }))
+  },
+
+  // Готов ли к скипу вперёд следующий трек: его резолв на бэке уже завершён,
+  // либо трек резолва не требует (локальный/списочный — prefetchKeyFor=null),
+  // либо очередь кончилась (гейтить нечего). Читается в Player для блокировки
+  // кнопки «следующий»/свайпа/виджета.
+  isNextTrackReady: () => {
+    const next = get().getNextTrack(1)
+    if (!next) return true // конец очереди — гейтить нечего
+    const key = prefetchKeyFor(next)
+    if (!key) return true // резолв не нужен
+    return resolvedPrefetchKeys.has(key)
   },
 
   // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы

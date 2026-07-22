@@ -108,16 +108,23 @@ class PlaylistCreate(PlaylistBase):
     pass
 
 
-class PlaylistResponse(PlaylistBase):
+class PlaylistSummaryResponse(PlaylistBase):
+    """Плейлист без треков — для списков и поиска. Отсутствие поля tracks
+    важно: сериализация не трогает relationship и не тянет содержимое каждого
+    плейлиста. track_count считается в том же SELECT (см. Playlist.track_count)."""
     id: int
     owner_id: int
     is_liked: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
-    tracks: List[TrackResponse] = []
+    track_count: int = 0
 
     class Config:
         from_attributes = True
+
+
+class PlaylistResponse(PlaylistSummaryResponse):
+    tracks: List[TrackResponse] = []
 
 
 class PlaylistUpdate(BaseModel):
@@ -129,7 +136,7 @@ class PlaylistUpdate(BaseModel):
 
 class SearchResponse(BaseModel):
     tracks: List[TrackResponse] = []
-    playlists: List[PlaylistResponse] = []
+    playlists: List[PlaylistSummaryResponse] = []
     users: List[UserResponse] = []
 
 
