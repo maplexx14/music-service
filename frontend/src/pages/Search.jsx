@@ -5,7 +5,7 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import defaultCover from '../assets/default-cover.png'
-import { resolveCoverUrl, handleCoverError, upscaleCover } from '../utils/media'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Search.css'
 
 // Лейбл и класс бейджа по источнику внешнего трека.
@@ -194,9 +194,11 @@ function Search() {
                     {...trackIntentHandlers(track)}
                   >
                     <img
-                      src={upscaleCover(track.cover_url) || defaultCover}
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-item-cover"
+                      loading="lazy"
+                      decoding="async"
                       onError={handleCoverError}
                     />
                     <div className="track-item-info">
@@ -243,6 +245,8 @@ function Search() {
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
                       className="playlist-item-cover"
+                      loading="lazy"
+                      decoding="async"
                       onError={handleCoverError}
                     />
                     <div className="playlist-item-info">

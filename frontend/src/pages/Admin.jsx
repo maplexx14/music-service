@@ -100,6 +100,8 @@ function Admin() {
                   src={resolveCoverUrl(track.cover_url) || defaultCover}
                   alt={track.title}
                   className="admin-track-cover"
+                  loading="lazy"
+                  decoding="async"
                   onError={handleCoverError}
                 />
                 <div className="admin-track-info">

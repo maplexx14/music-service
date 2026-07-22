@@ -368,6 +368,11 @@ function PlayerInner() {
         setCurrentTime(audio.currentTime)
         const { isPlaying: playing } = usePlayerStore.getState()
         if (playing && audio.paused && !audio.ended) {
+          // После длительного отсутствия на вкладке буфер мог быть вытеснен.
+          // play() на пустом буфере молча ничего не делает — нужен load().
+          if (audio.readyState < audio.HAVE_CURRENT_DATA) {
+            audio.load()
+          }
           audio.play().catch(() => {})
         } else if (playing && isStalledStart()) {
           kickStalled()
@@ -493,7 +498,10 @@ function PlayerInner() {
     audio.addEventListener('canplay', updateDuration)
     audio.addEventListener('seeked', syncPositionState)
     audio.addEventListener('ratechange', syncPositionState)
-    audio.addEventListener('playing', handlePlaying)
+    // syncPositionState на playing: iOS требует setPositionState ДО того,
+    // как система «признает» воспроизведение — иначе виджет на экране
+    // блокировки не появляется. timeupdate стреляет слишком поздно.
+    audio.addEventListener('playing', () => { handlePlaying(); syncPositionState() })
     audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('stalled', handleLoadStall)
@@ -676,6 +684,13 @@ function PlayerInner() {
       // до готовности). AbortError гасим: он означает штатное прерывание
       // висящего play() новой сменой src (быстрое перелистывание треков),
       // а handleCanPlay выше остаётся страховкой и повторит попытку.
+      //
+      // После длительной паузы браузер может вытеснить буфер аудио
+      // (readyStateHAVE_ENOUGH_DATA). В этом случае play() молча не
+      // воспроизводит — нужен явный load() для повторной загрузки данных.
+      if (audio.readyState < audio.HAVE_CURRENT_DATA) {
+        audio.load()
+      }
       audio.play().catch(err => {
         // AbortError — штатное прерывание play() новой сменой src (быстрое
         // перелистывание). NotAllowedError — браузер заблокировал play() из-за
@@ -755,6 +770,8 @@ function PlayerInner() {
 
   // Media Session API — инфо о треке в системном виджете проигрывания (экран
   // блокировки, шторка, медиаклавиши). Метаданные обновляем при смене трека.
+  // setPositionState вызываем здесь же — iOS требует его ДО начала воспроизведения,
+  // иначе виджет на экране блокировки не появляется.
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
     if (!currentTrack) {
@@ -780,12 +797,29 @@ function PlayerInner() {
       // с одним и тем же URL, но разными заявленными размерами.
       artwork: [{ src: artworkUrl }],
     })
+
+    // setPositionState при смене трека: длительность берём из БД (точная),
+    // позиция = 0 (трек только что начался). iOS/Android используют это для
+    // шкалы времени на экране блокировки — без него виджет может не появиться.
+    const mediaDuration = Number(currentTrack.duration)
+    if (Number.isFinite(mediaDuration) && mediaDuration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: mediaDuration,
+          position: 0,
+          playbackRate: 1,
+        })
+      } catch {
+        /* noop — не все браузеры поддерживают */
+      }
+    }
   }, [
     currentTrack?.id,
     currentTrack?.title,
     currentTrack?.artist,
     currentTrack?.album,
     currentTrack?.cover_url,
+    currentTrack?.duration,
     isExternalTrack,
   ])
 
@@ -1129,6 +1163,8 @@ function PlayerInner() {
             src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
+            loading="lazy"
+            decoding="async"
             onError={handleCoverError}
           />
           {isExternalTrack && isBuffering && (
@@ -1223,7 +1259,7 @@ function PlayerInner() {
             onClick={toggleShuffle}
             title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
           >
-            <Shuffle size={20} />
+            <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
           </button>
           <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
             <SkipBack size={20} />
@@ -1251,7 +1287,7 @@ function PlayerInner() {
             onClick={toggleRepeatOne}
             title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
           >
-            <Repeat1 size={20} />
+            <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
           </button>
         </div>
       </div>

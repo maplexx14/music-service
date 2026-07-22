@@ -267,6 +267,8 @@ function Playlists() {
                   src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                   alt={playlist.name}
                   className="playlist-cover"
+                  loading="lazy"
+                  decoding="async"
                   onError={handleCoverError}
                 />
                 <div className="playlist-info">

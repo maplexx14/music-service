@@ -150,7 +150,7 @@ function FullScreenPlayer() {
   }
 
   const coverUrl = useMemo(
-    () => resolveCoverUrl(currentTrack?.cover_url) || defaultCover,
+    () => resolveCoverUrl(currentTrack?.cover_url, true) || defaultCover,
     [currentTrack?.cover_url],
   )
 
@@ -258,13 +258,13 @@ function FullScreenPlayer() {
           onClick={toggleShuffle}
           aria-label={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
         >
-          <Shuffle size={20} />
+          <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
         </button>
         <button className="fullscreen-icon" onClick={previousTrack} aria-label="Назад">
           <SkipBack size={20} />
         </button>
         <button className="fullscreen-play" onClick={togglePlayPause} aria-label="Play/Pause">
-          {isPlaying ? <Pause size={24} /> : <Play size={24} />}
+          {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
         </button>
         <button
           className="fullscreen-icon"
@@ -281,7 +281,7 @@ function FullScreenPlayer() {
           onClick={toggleRepeatOne}
           aria-label={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
         >
-          <Repeat1 size={20} />
+          <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
         </button>
       </div>
     </div>

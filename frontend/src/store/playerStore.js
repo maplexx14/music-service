@@ -399,7 +399,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   startFlow: async () => {
-    if (get().flowLoading) return
+    if (get().flowLoading) return false
     set({ flowLoading: true })
     try {
       // Если предзагрузка ещё летит (клик сразу после открытия страницы) —

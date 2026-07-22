@@ -73,7 +73,7 @@ function Sidebar() {
               className={`nav-item ${isActive ? 'active' : ''}`}
               title={isCollapsed ? item.label : ''}
             >
-              <Icon size={24} />
+              <Icon size={24} fill={isActive ? 'currentColor' : 'none'} />
               {!isCollapsed && <span>{item.label}</span>}
             </Link>
           )

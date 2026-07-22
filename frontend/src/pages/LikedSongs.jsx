@@ -218,6 +218,8 @@ function LikedSongs() {
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-table-cover"
+                      loading="lazy"
+                      decoding="async"
                       onError={handleCoverError}
                     />
                     <div>

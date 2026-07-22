@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Play, Pause, Settings, Shield, LogOut, Home as HomeIcon, History } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
@@ -8,9 +8,11 @@ import { useUiSettingsStore } from '../store/uiSettingsStore'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
-import Grainient from '../components/Grainient'
 import Spinner from '../components/Spinner'
 import './Home.css'
+
+// Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
+const Grainient = lazy(() => import('../components/Grainient'))
 
 // Не зависит от состояния компонента — вынесено на уровень модуля, чтобы
 // ссылка была стабильной и не ломала мемоизацию TrackCard.
@@ -33,6 +35,8 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
         src={resolveCoverUrl(track.cover_url) || defaultCover}
         alt={track.title}
         className="track-cover"
+        loading="lazy"
+        decoding="async"
         onError={handleCoverError}
       />
       <div className="track-info">
@@ -141,14 +145,20 @@ function Home() {
       togglePlayPause()
       return
     }
-    // Персональный поток; если бэк не дал треков — фолбэк на рекомендации.
+    // Персональный поток.
     try {
       const started = await st.startFlow()
       if (started) return
     } catch (error) {
       console.error('Flow start error:', error)
     }
-    if (waveReady) handlePlayPlaylist({ tracks: waveTracks })
+    // Фолбэк: если поток не запустился (бэк вернул пустоту) — берём
+    // рекомендации. Но ТОЛЬКО если поток реально не стартовал
+    // (startFlow вернул false, а не undefined из-за ongoing loading).
+    const stAfter = usePlayerStore.getState()
+    if (!stAfter.flowActive && waveReady) {
+      handlePlayPlaylist({ tracks: waveTracks })
+    }
   }
 
   if (loading) {
@@ -216,31 +226,33 @@ function Home() {
           {liteMode ? (
             <div className="hero-grainient-static" />
           ) : (
-            <Grainient
-              color1="#e0c3ff"
-              color2="#a259ff"
-              color3="#6a3093"
-              timeSpeed={5}
-              colorBalance={-0.32}
-              warpStrength={1.4}
-              warpFrequency={5}
-              warpSpeed={2}
-              warpAmplitude={50}
-              blendAngle={-49}
-              blendSoftness={0.05}
-              rotationAmount={500}
-              noiseScale={1.95}
-              grainAmount={0}
-              grainScale={0.2}
-              grainAnimated={false}
-              contrast={1.5}
-              gamma={1}
-              saturation={1}
-              centerX={0}
-              centerY={0}
-              zoom={0.9}
-              active={isWavePlaying}
-            />
+            <Suspense fallback={<div className="hero-grainient-static" />}>
+              <Grainient
+                color1="#e0c3ff"
+                color2="#a259ff"
+                color3="#6a3093"
+                timeSpeed={5}
+                colorBalance={-0.32}
+                warpStrength={1.4}
+                warpFrequency={5}
+                warpSpeed={2}
+                warpAmplitude={50}
+                blendAngle={-49}
+                blendSoftness={0.05}
+                rotationAmount={500}
+                noiseScale={1.95}
+                grainAmount={0}
+                grainScale={0.2}
+                grainAnimated={false}
+                contrast={1.5}
+                gamma={1}
+                saturation={1}
+                centerX={0}
+                centerY={0}
+                zoom={0.9}
+                active={isWavePlaying}
+              />
+            </Suspense>
           )}
         </div>
         <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
@@ -313,15 +325,6 @@ function Home() {
       {activeTab === 'home' ? (
         <>
           <div className="content-section">
-            <h2 className="section-title">Рекомендуем новинки</h2>
-            <div className="tracks-grid">
-              {recommendations.tracks.slice(0, 12).map((track) => (
-                <TrackCard key={track.id} track={track} queue={recommendations.tracks} />
-              ))}
-            </div>
-          </div>
-
-          <div className="content-section">
             <h2 className="section-title">Тренды</h2>
             <div className="tracks-grid">
               {trending.slice(0, 12).map((track) => (
@@ -344,6 +347,8 @@ function Home() {
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
                       className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
                       onError={handleCoverError}
                     />
                     <div className="playlist-info">

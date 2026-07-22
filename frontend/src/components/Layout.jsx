@@ -102,7 +102,7 @@ function Layout({ children }) {
                 aria-label={label}
               >
                 <span className="mobile-nav-global-icon">
-                  <Icon size={22} />
+                  <Icon size={22} fill={isActive ? 'currentColor' : 'none'} />
                 </span>
               </Link>
             )

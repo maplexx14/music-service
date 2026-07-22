@@ -3,8 +3,9 @@ import defaultCover from '../assets/default-cover.svg'
 
 // Просит у CDN Google обложку большего разрешения. Обложки YouTube Music
 // приходят крошечными (120×120), но размер зашит в URL и CDN ресайзит по
-// запросу. Применяется и к уже сохранённым в БД старым URL при отображении.
-export const upscaleCover = (url) => {
+// запросу. Применяется к URL при отображении в полноэкранном плеере и
+// системном виджете (где нужна высокая детализация).
+const upscaleCover = (url) => {
   if (!url) return url
   if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
     return url.replace(/=w\d+-h\d+/, '=w1200-h1200')
@@ -15,9 +16,12 @@ export const upscaleCover = (url) => {
   return url
 }
 
-export const resolveCoverUrl = (coverUrl) => {
+// Резолвит URL обложки. highQuality=true — для полноэкранного плеера и
+// системного виджета (апскейл CDN). highQuality=false (по умолчанию) —
+// список треков, мини-плеер; экономит трафик и ускоряет загрузку.
+export const resolveCoverUrl = (coverUrl, highQuality = false) => {
   if (!coverUrl) return null
-  if (coverUrl.startsWith('http')) return upscaleCover(coverUrl)
+  if (coverUrl.startsWith('http')) return highQuality ? upscaleCover(coverUrl) : coverUrl
   if (coverUrl.startsWith('/')) return `${SERVER_URL}${coverUrl}`
   return `${SERVER_URL}/${coverUrl}`
 }
