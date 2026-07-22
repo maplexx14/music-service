@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from app import storage
 from app.database import SessionLocal
 from app.models import Track
+from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,18 @@ async def archive_track(
             logger.info("archive: трек %s превысил лимит размера, пропуск", track.id)
             return ArchiveResult.TOO_LARGE
 
+        # Transcode to AAC for smaller, faster-loading files
+        aac_path = transcode_to_aac(tmp_path)
+        if aac_path != tmp_path:
+            # Transcoded — use AAC output, clean up original
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            tmp_path = aac_path
+            ext = AAC_EXT
+            key = f"external/{track.source}/{track.external_id}{ext}"
+
         try:
             file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
         finally:
@@ -401,6 +414,17 @@ async def _archive_external_core(
         except _TooLarge:
             logger.info("archive-ext: %s/%s превысил лимит размера, пропуск", source, external_id)
             return ArchiveResult.TOO_LARGE
+
+        # Transcode to AAC for smaller, faster-loading files
+        aac_path = transcode_to_aac(tmp_path)
+        if aac_path != tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            tmp_path = aac_path
+            ext = AAC_EXT
+            key = f"external/{source}/{external_id}{ext}"
 
         try:
             file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))

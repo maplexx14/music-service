@@ -30,6 +30,7 @@ except Exception:  # noqa: BLE001 — библиотека может быть �
 
 MEDIA_TYPES = {
     ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
     ".mp3": "audio/mpeg",
     ".opus": "audio/ogg",
     ".ogg": "audio/ogg",

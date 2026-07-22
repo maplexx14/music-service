@@ -82,6 +82,10 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # AAC transcoding: all audio is compressed to AAC for smaller files.
+      TRANSCODE_ENABLED: ${TRANSCODE_ENABLED:-1}
+      AAC_BITRATE: ${AAC_BITRATE:-128}
+      AAC_SAMPLE_RATE: ${AAC_SAMPLE_RATE:-44100}
       # Конкурентность: пул БД и threadpool согласованы между собой.
       # pool_size + max_overflow не должно превышать Postgres max_connections
       # (по умолчанию 100) в сумме по всем воркерам.

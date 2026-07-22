@@ -20,6 +20,7 @@ from starlette.background import BackgroundTask
 from app import storage
 from app import external_archive
 import mimetypes
+from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,8 @@ def stream_track(
         range_header = request.headers.get("range")
         common_headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "public, max-age=604800, immutable",
+            "Vary": "Accept-Encoding",
         }
         if range_header:
             try:
@@ -250,7 +252,8 @@ def stream_track(
     range_header = request.headers.get("range")
     common_headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "public, max-age=604800, immutable",
+        "Vary": "Accept-Encoding",
     }
 
     if range_header:
@@ -445,6 +448,15 @@ async def upload_track(
         )
     duration = int(audio.info.length)
 
+    # Transcode to AAC for smaller, faster-loading files
+    aac_path = transcode_to_aac(str(file_path))
+    if aac_path != str(file_path):
+        # Transcoded successfully — replace original with AAC version
+        file_path.unlink(missing_ok=True)
+        file_path = Path(aac_path)
+        file_ext = AAC_EXT
+        filename = f"{file_id}{file_ext}"
+
     # Save cover if provided
     cover_url = None
     cover_path = None
@@ -468,8 +480,11 @@ async def upload_track(
     # копии. В БД уйдёт minio://… для аудио и прямой URL для обложки.
     if storage.is_minio_backend():
         audio_mime, _ = mimetypes.guess_type(str(file_path))
+        # Use AAC content type for transcoded files
+        if file_ext == AAC_EXT:
+            audio_mime = AAC_CONTENT_TYPE
         relative_path = storage.upload_music_file(
-            str(file_path), filename, audio_mime or "audio/mpeg"
+            str(file_path), filename, audio_mime or "audio/mp4"
         )
         file_path.unlink(missing_ok=True)
         if cover_path is not None:
