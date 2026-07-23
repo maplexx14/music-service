@@ -524,13 +524,15 @@ const usePlayerStore = create((set, get) => ({
     set((state) => ({ isPlaying: !state.isPlaying }))
   },
 
-  openFullScreen: () => {
-    set({ isFullScreen: true })
+  openFullScreen: (karaoke = false) => {
+    set({ isFullScreen: true, karaokeMode: karaoke })
   },
 
   closeFullScreen: () => {
-    set({ isFullScreen: false })
+    set({ isFullScreen: false, karaokeMode: false })
   },
+
+  karaokeMode: false,
   
   // Скип как негативный сигнал: если переключили, прослушав <25% трека.
   // nextTrack вызывается и при естественном окончании — там прогресс ~100%,

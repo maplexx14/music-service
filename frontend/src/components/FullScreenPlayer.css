@@ -7,8 +7,8 @@
     radial-gradient(circle at top, rgba(162, 89, 255, 0.18), transparent 34%),
     linear-gradient(180deg, #1a1a1a 0%, #050505 62%, #000000 100%);
   color: #ffffff;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  display: flex;
+  flex-direction: column;
   padding: calc(env(safe-area-inset-top, 0px) + 22px) 24px calc(env(safe-area-inset-bottom, 0px) + 24px);
   z-index: 1200;
   overflow: hidden;
@@ -80,8 +80,8 @@
 }
 
 .fullscreen-icon:disabled {
-  cursor: wait;
-  opacity: 0.55;
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 .fullscreen-icon.active {
@@ -91,7 +91,6 @@
 
 .fullscreen-like.active {
   background: rgba(162, 89, 255, 0.14);
-  /* Поп при лайке — как у .like-btn в мини-плеере. */
   animation: fullscreenLikePop 0.3s var(--ease-out);
 }
 
@@ -101,6 +100,21 @@
   100% { transform: scale(1); }
 }
 
+/* --- Body: container for content area --- */
+.fullscreen-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fullscreen-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  overflow: hidden;
+}
+
 .fullscreen-art {
   display: grid;
   place-items: center;
@@ -108,6 +122,7 @@
   margin: 26px 0 34px;
   min-height: 0;
   overflow: hidden;
+  transition: margin 0.35s var(--ease-drawer), flex 0.35s var(--ease-drawer);
 }
 
 .fullscreen-art img {
@@ -117,6 +132,7 @@
   object-fit: cover;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   background: #181818;
+  transition: width 0.35s var(--ease-drawer), height 0.35s var(--ease-drawer);
 }
 
 .fullscreen-info {
@@ -154,6 +170,147 @@
   display: flex;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+/* --- Lyrics: desktop side-by-side --- */
+.fullscreen-lyrics-desktop {
+  display: none;
+}
+
+/* --- Lyrics: mobile fullscreen --- */
+.fullscreen-lyrics-mobile {
+  display: none;
+}
+
+/* ============================
+   LYRICS MODE: desktop (>=768px)
+   Cover shrinks left, lyrics right
+   ============================ */
+@media (min-width: 769px) {
+  .fullscreen-player.has-lyrics .fullscreen-body {
+    display: flex;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-content {
+    flex-direction: row;
+    align-items: center;
+    gap: 32px;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-art {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-art img {
+    width: min(240px, 30vw, 40vh);
+    height: min(240px, 30vw, 40vh);
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-content {
+    position: relative;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-info {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-lyrics-desktop {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 20px 0;
+  }
+}
+
+/* Karaoke mode: cover left, lyrics right, controls always visible */
+@media (min-width: 769px) {
+  .fullscreen-player.karaoke-mode .fullscreen-body {
+    display: flex;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-content {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 48px;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-art {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-art img {
+    width: min(280px, 32vw, 44vh);
+    height: min(280px, 32vw, 44vh);
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-info {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-lyrics-desktop {
+    display: flex;
+    flex: 0 1 auto;
+    max-width: 420px;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 20px 0;
+  }
+}
+
+/* ============================
+   LYRICS MODE: mobile (<769px)
+   Art hidden, only lyrics text
+   ============================ */
+@media (max-width: 768px) {
+  .fullscreen-player.has-lyrics .fullscreen-art {
+    display: none;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-info {
+    margin-bottom: 8px;
+  }
+
+  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Karaoke on mobile: same as lyrics mode — cover hidden, only text */
+  .fullscreen-player.karaoke-mode .fullscreen-art {
+    display: none;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-info {
+    margin-bottom: 8px;
+  }
+
+  .fullscreen-player.karaoke-mode .fullscreen-lyrics-mobile {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 .fullscreen-progress {
@@ -229,13 +386,10 @@
   }
 }
 
+/* --- Mobile: compact padding, controls spread --- */
 @media (max-width: 768px) {
   .fullscreen-player {
     padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px calc(env(safe-area-inset-bottom, 0px) + 18px);
-  }
-
-  .fullscreen-art {
-    margin: 18px 0 22px;
   }
 
   .fullscreen-progress {

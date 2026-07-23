@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1 } from 'lucide-react'
+import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, AlignLeft, X } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
+import { useLyrics } from '../hooks/useLyrics'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import LyricsPanel from './LyricsPanel'
 import './FullScreenPlayer.css'
 
 function formatTime(seconds) {
@@ -51,16 +53,11 @@ function FullScreenProgress() {
 }
 
 function FullScreenPlayer() {
-  // Атомарные селекторы вместо подписки на весь store — без currentTime/
-  // duration, чтобы компонент не перерисовывался на каждом тике
-  // воспроизведения (см. FullScreenProgress выше).
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const previousTrack = usePlayerStore((s) => s.previousTrack)
   const nextTrack = usePlayerStore((s) => s.nextTrack)
-  // Подписка на счётчик резолвов — пересчитывает canSkipNext, когда прогрев
-  // следующего трека завершается (см. playerStore.isNextTrackReady).
   const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
   const closeFullScreen = usePlayerStore((s) => s.closeFullScreen)
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
@@ -73,24 +70,28 @@ function FullScreenPlayer() {
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
+  const karaokeMode = usePlayerStore((s) => s.karaokeMode)
   const [loadingLike, setLoadingLike] = useState(false)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
+  const [lyricsMode, setLyricsMode] = useState(false)
   const gestureRef = useRef(null)
 
-  // Закрытие с анимацией: сначала уводим шторку вниз, затем размонтируем.
+  // Karaoke mode: lyrics are always on, no toggle
+  useEffect(() => {
+    if (karaokeMode) setLyricsMode(true)
+  }, [karaokeMode])
+
+  const { syncedLines, plainText, loading: lyricsLoading } = useLyrics(currentTrack)
+  const hasLyrics = syncedLines.length > 0 || plainText.length > 0
+
   const startClose = () => {
     if (isClosing) return
     setIsClosing(true)
     setTimeout(closeFullScreen, 350)
   }
 
-  // Тач-жесты (только сенсорные экраны — обработчики через onTouch*):
-  //  • свайп вниз «прилипает» к пальцу и закрывает плеер при достаточном сдвиге;
-  //  • горизонтальный свайп по любому месту (включая обложку) меняет трек.
-  // Ось жеста фиксируется по первому заметному сдвигу, чтобы вертикальное
-  // перетаскивание не путалось с горизонтальным переключением.
   const handleTouchStart = (e) => {
     if (e.touches.length !== 1) return
     const t = e.touches[0]
@@ -107,7 +108,6 @@ function FullScreenPlayer() {
       g.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
       if (g.axis === 'y') setIsDragging(true)
     }
-    // Тянем вниз — двигаем плеер за пальцем (вверх не уводим).
     if (g.axis === 'y' && dy > 0) setDragY(dy)
   }
 
@@ -125,10 +125,8 @@ function FullScreenPlayer() {
       if (dx < 0) handleSkipForward()
       else previousTrack()
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
-      // Не сбрасываем dragY — .is-closing подхватит анимацию с текущей позиции.
       startClose()
     } else {
-      // Порог не пройден — плавно возвращаем шторку на место.
       setDragY(0)
     }
   }
@@ -138,11 +136,6 @@ function FullScreenPlayer() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || isExternalTrack
 
-  // Гейт скипа вперёд: следующий трек готов, если его резолв на бэке завершён
-  // (или он локальный / конец очереди). resolvedPrefetchVersion в подписке
-  // выше форсит пересчёт при завершении резолва. handleSkipForward выполняет
-  // скип только когда готово — блокирует кнопку и свайп-влево, но не
-  // естественное окончание трека.
   const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
   const handleSkipForward = () => {
     if (!usePlayerStore.getState().isNextTrackReady()) return
@@ -186,12 +179,11 @@ function FullScreenPlayer() {
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
 
-  // Лёгкое затемнение по мере перетаскивания вниз — визуальный отклик жеста.
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)
 
   return (
     <div
-      className={`fullscreen-player${isClosing ? ' is-closing' : ''}`}
+      className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}${karaokeMode ? ' karaoke-mode' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -209,44 +201,70 @@ function FullScreenPlayer() {
           <div className="fullscreen-subtitle">{queueLabel}</div>
           <div className="fullscreen-track">{currentTrack.title}</div>
         </div>
-        <button className="fullscreen-icon" type="button" aria-label="Очередь">
-          <ListMusic size={20} />
-        </button>
+        {!karaokeMode && (
+          <button
+            className={`fullscreen-icon${hasLyrics ? ' active' : ''}`}
+            onClick={() => setLyricsMode((prev) => !prev)}
+            disabled={!hasLyrics && !lyricsLoading}
+            aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
+            title={hasLyrics ? (lyricsMode ? 'Скрыть текст' : 'Показать текст') : 'Текст не найден'}
+          >
+            {lyricsMode ? <X size={20} /> : <AlignLeft size={20} />}
+          </button>
+        )}
       </div>
 
-      <div className="fullscreen-art">
-        <img src={coverUrl} alt={currentTrack.title} onError={handleCoverError} />
-      </div>
+      <div className="fullscreen-body">
+        <div className="fullscreen-content">
+          <div className={`fullscreen-art${lyricsMode ? ' compact' : ''}`}>
+            <img src={coverUrl} alt={currentTrack.title} onError={handleCoverError} />
+          </div>
 
-      <div className="fullscreen-info">
-        <div>
-          <div className="fullscreen-track-name">{currentTrack.title}</div>
-          <div className="fullscreen-artist">{currentTrack.artist}</div>
-        </div>
-        <div className="fullscreen-actions">
-          {canInteract && (
-            <button
-              type="button"
-              className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
-              onClick={handleLike}
-              disabled={loadingLike}
-              aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-            >
-              <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
-            </button>
+          <div className="fullscreen-info">
+            <div>
+              <div className="fullscreen-track-name">{currentTrack.title}</div>
+              <div className="fullscreen-artist">{currentTrack.artist}</div>
+            </div>
+            <div className="fullscreen-actions">
+              {canInteract && (
+                <button
+                  type="button"
+                  className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
+                  onClick={handleLike}
+                  disabled={loadingLike}
+                  aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+                >
+                  <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
+                </button>
+              )}
+              {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+                <a
+                  className="fullscreen-icon"
+                  href={currentTrack.download_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Скачать"
+                >
+                  <Download size={20} />
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Desktop: lyrics appear to the right of art+info */}
+          {lyricsMode && (
+            <div className="fullscreen-lyrics-desktop">
+              <LyricsPanel />
+            </div>
           )}
-          {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-            <a
-              className="fullscreen-icon"
-              href={currentTrack.download_url}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Скачать"
-            >
-              <Download size={20} />
-            </a>
-          )}
         </div>
+
+        {/* Mobile: lyrics appear below info, above progress */}
+        {lyricsMode && (
+          <div className="fullscreen-lyrics-mobile">
+            <LyricsPanel showOnlyText />
+          </div>
+        )}
       </div>
 
       <FullScreenProgress />

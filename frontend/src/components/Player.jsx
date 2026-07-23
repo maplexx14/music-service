@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -8,6 +8,7 @@ import { useSwipe } from '../hooks/useSwipe'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
+import { useLyrics } from '../hooks/useLyrics'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
@@ -167,6 +168,9 @@ function PlayerInner() {
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const prefetchNext = usePlayerStore((s) => s.prefetchNext)
+
+  const { syncedLines, plainText } = useLyrics(currentTrack)
+  const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const seekRequest = usePlayerStore((s) => s.seekRequest)
   const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
   // Версия-счётчик резолвов растёт, когда прогрев следующего трека завершается —
@@ -1329,6 +1333,17 @@ function PlayerInner() {
       </div>
 
       <div className="player-right">
+        <button
+          className={`lyrics-btn${hasLyrics ? '' : ' disabled'}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            if (hasLyrics) openFullScreen(true)
+          }}
+          disabled={!hasLyrics}
+          title={hasLyrics ? 'Текст песни' : 'Текст не найден'}
+        >
+          <AlignLeft size={18} />
+        </button>
         <div className="volume-control">
           <Volume2 size={20} />
           <input

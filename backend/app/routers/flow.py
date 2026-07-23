@@ -383,6 +383,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "playlist_seeds": playlist_seeds,
         "artists": top_artists,
         "artist_keys": topartist_keys,
+        "artist_weight": {k: v for k, v in artist_weight.items() if v > 0},
         "curated_artist_keys": curated_artist_keys,
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
@@ -402,6 +403,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
+    aw = profile.get("artist_weight") or {}
     filters = []
     if profile["artist_keys"]:
         # Регистронезависимо: SoundCloud и YT Music отдают имя одного и того же
@@ -455,13 +457,20 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             return False
         return genre_is_compatible(t.genre, t.title, t.artist, user_genres)
 
+    def _score(t: Track) -> float:
+        """Персональный скор: artist_weight пользователя * global play_count.
+        Без этого все пользователи с одинаковым жанром видели бы один и тот же
+        глобальный топ по play_count — персонализация отсутствовала."""
+        return aw.get(artist_key(t.artist), 0) * (1 + math.log1p(t.play_count or 0))
+
     candidates: List[Track] = []
     if filters:
         q = db.query(Track).filter(or_(*filters))
         if exclude_ids:
             q = q.filter(~Track.id.in_(exclude_ids))
-        candidates = q.order_by(desc(Track.play_count)).limit(limit * 6).all()
+        candidates = q.order_by(desc(Track.play_count)).limit(limit * 8).all()
         candidates = [t for t in candidates if _keep(t)]
+        candidates.sort(key=_score, reverse=True)
         candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
 
     # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
@@ -476,7 +485,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             t for t in q.order_by(desc(Track.play_count)).limit(limit * 20).all()
             if _keep(t)
         ]
-        random.shuffle(pool)
+        pool.sort(key=_score, reverse=True)
         candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
 
     return candidates
