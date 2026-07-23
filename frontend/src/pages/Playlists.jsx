@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Download, Trash2 } from 'lucide-react'
+import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
@@ -24,8 +24,15 @@ function Playlists() {
   const [previewing, setPreviewing] = useState(false)
   const [importing, setImporting] = useState(false)
 
+  // Cookies для Yandex Music
+  const [showCookiesForm, setShowCookiesForm] = useState(false)
+  const [cookiesFile, setCookiesFile] = useState(null)
+  const [cookiesExists, setCookiesExists] = useState(false)
+  const [uploadingCookies, setUploadingCookies] = useState(false)
+
   useEffect(() => {
     fetchPlaylists()
+    checkCookiesExists()
   }, [])
 
   const fetchPlaylists = async () => {
@@ -125,6 +132,50 @@ function Playlists() {
     setPreview(null)
   }
 
+  // Функции для работы с cookies
+  const checkCookiesExists = async () => {
+    try {
+      const { data } = await api.get('/import/cookies')
+      setCookiesExists(data.exists)
+    } catch (error) {
+      console.error('Error checking cookies:', error)
+    }
+  }
+
+  const handleUploadCookies = async () => {
+    if (!cookiesFile || uploadingCookies) return
+
+    setUploadingCookies(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', cookiesFile)
+
+      await api.post('/import/cookies', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+
+      toast.success('Cookies загружены. Теперь вы можете импортировать из Yandex Music.')
+      setCookiesFile(null)
+      setCookiesExists(true)
+      setShowCookiesForm(false)
+    } catch (error) {
+      const detail = error.response?.data?.detail || 'Не удалось загрузить cookies'
+      toast.error(detail)
+    } finally {
+      setUploadingCookies(false)
+    }
+  }
+
+  const handleDeleteCookies = async () => {
+    try {
+      await api.delete('/import/cookies')
+      setCookiesExists(false)
+      toast.success('Cookies удалены')
+    } catch (error) {
+      console.error('Error deleting cookies:', error)
+    }
+  }
+
   if (loading) {
     return (
       <div className="page-container">
@@ -158,13 +209,88 @@ function Playlists() {
       {showImportForm && (
         <div className="import-playlist-form">
           <p className="import-hint">
-            Вставьте ссылку на плейлист, альбом или профиль SoundCloud либо Yandex Music.
+            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud либо Yandex Music.
             Треки Yandex подбираются из YouTube Music.
           </p>
+          <div className="import-examples">
+            <div className="import-example">
+              <span className="import-example-label">Yandex Music:</span>
+              <span className="import-example-url">music.yandex.ru/album/123456</span>
+              <span className="import-example-url">music.yandex.ru/users/123456/likes/tracks</span>
+              <span className="import-example-url">music.yandex.ru/artist/123456</span>
+            </div>
+            <div className="import-example">
+              <span className="import-example-label">SoundCloud:</span>
+              <span className="import-example-url">soundcloud.com/user/sets/playlist</span>
+              <span className="import-example-url">soundcloud.com/user/track</span>
+            </div>
+          </div>
+
+          {/* Cookies для Yandex Music */}
+          {importUrl.includes('yandex') && (
+            <div className="cookies-section">
+              <div className="cookies-status">
+                {cookiesExists ? (
+                  <span className="cookies-badge cookies-ok">
+                    <Check size={14} />
+                    Cookies загружены
+                  </span>
+                ) : (
+                  <span className="cookies-badge cookies-missing">
+                    <X size={14} />
+                    Cookies не загружены
+                  </span>
+                )}
+              </div>
+
+              {!cookiesExists && (
+                <div className="cookies-upload">
+                  <p className="cookies-hint">
+                    Для обхода CAPTCHA на Yandex Music загрузите cookies из браузера.
+                    <br />
+                    <a href="https://github.com/nicxlau/cookies-txt" target="_blank" rel="noreferrer">
+                      Chrome: Get cookies.txt LOCALLY
+                    </a>
+                    {' · '}
+                    <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" rel="noreferrer">
+                      Firefox: cookies.txt
+                    </a>
+                  </p>
+                  <div className="cookies-upload-row">
+                    <input
+                      type="file"
+                      accept=".txt"
+                      onChange={(e) => setCookiesFile(e.target.files?.[0] || null)}
+                      className="cookies-file-input"
+                    />
+                    <button
+                      type="button"
+                      className="submit-btn small"
+                      onClick={handleUploadCookies}
+                      disabled={!cookiesFile || uploadingCookies}
+                    >
+                      {uploadingCookies ? 'Загрузка...' : 'Загрузить cookies'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {cookiesExists && (
+                <button
+                  type="button"
+                  className="cookies-delete-btn"
+                  onClick={handleDeleteCookies}
+                >
+                  Удалить cookies
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="import-input-row">
             <input
               type="url"
-              placeholder="https://soundcloud.com/... или https://music.yandex.ru/..."
+              placeholder="https://music.yandex.ru/... или https://soundcloud.com/..."
               value={importUrl}
               onChange={(e) => { setImportUrl(e.target.value); setPreview(null) }}
               autoFocus

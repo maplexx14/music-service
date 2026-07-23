@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 from collections import Counter
 
 import httpx
@@ -86,7 +87,12 @@ async def _worker(
                 stats["missing"] += 1
                 return
             title = f"{track.artist} — {track.title}"
-            status = await archive_track(db, track, client=client)
+            status, tmp_path = await archive_track(db, track, client=client)
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
         finally:
             db.close()
 

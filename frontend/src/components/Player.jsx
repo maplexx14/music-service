@@ -139,6 +139,9 @@ function PlayerProgress({ audioRef }) {
 }
 
 function PlayerInner() {
+  // Определяем платформу для iOS-специфичной логики
+  const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+
   // Атомарные селекторы вместо деструктуризации всего store: подписка на
   // весь store означала перерисовку всего Player на КАЖДОМ изменении любого
   // поля — включая currentTime, тикающий 4 раза/сек всё время
@@ -273,8 +276,16 @@ function PlayerInner() {
 
     const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith('/'))
     const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
-    nextAudio.preload = 'auto'
-    if (isOurApi && !swActive) {
+
+    // Detect slow connections and iOS
+    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+    const isSlowConnection = conn && (conn.effectiveType === 'slow-2g' || conn.effectiveType === '2g' || conn.downlink < 0.5)
+    const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+
+    // iOS Safari: skip blob preload entirely — blob URLs cause issues with audio loading
+    // Slow connections: skip blob preload to save bandwidth
+    nextAudio.preload = (isIOSDevice || isSlowConnection) ? 'none' : 'auto'
+    if (isOurApi && !swActive && !isSlowConnection && !isIOSDevice) {
       fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' } })
         .then((r) => r.blob())
         .then((blob) => {
@@ -285,6 +296,7 @@ function PlayerInner() {
         })
         .catch(() => {})
     } else {
+      // On iOS and slow connections: let browser stream directly without blob
       nextAudio.src = rawUrl
       nextAudio.load()
     }
@@ -324,14 +336,30 @@ function PlayerInner() {
       if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
       const effDuration = resolveTrackDuration(audio, currentTrack)
+
+      // Adaptive preload: skip on slow connections, delay on moderate
+      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+      const effectiveType = conn?.effectiveType
+      const downlink = conn?.downlink
+      const isSlow2G = effectiveType === 'slow-2g'
+      const is2G = effectiveType === '2g' || (downlink && downlink < 0.5)
+      const is3G = effectiveType === '3g' || (downlink && downlink < 2)
+
+      // Skip preload entirely on very slow connections
+      if (isSlow2G) return
+
+      // On slow connections, use more conservative thresholds
+      const preloadRemaining = is2G ? 10 : is3G ? 15 : PRELOAD_NEXT_REMAINING_SEC
+      const preloadProgress = is2G ? 0.95 : is3G ? 0.90 : PRELOAD_NEXT_PROGRESS_RATIO
+
       const remainingWindow = Math.min(
-        PRELOAD_NEXT_REMAINING_SEC,
+        preloadRemaining,
         effDuration * PRELOAD_NEXT_REMAINING_RATIO
       )
       if (
         effDuration &&
         (effDuration - audio.currentTime <= remainingWindow ||
-          audio.currentTime / effDuration >= PRELOAD_NEXT_PROGRESS_RATIO)
+          audio.currentTime / effDuration >= preloadProgress)
       ) {
         triggerNextPreload()
       }
@@ -560,7 +588,13 @@ function PlayerInner() {
       return
     }
     const abs = new URL(audioSrc, window.location.href).href
-    if (audio.src !== abs) audio.src = abs
+    const srcChanged = audio.src !== abs
+    if (srcChanged) audio.src = abs
+    // iOS Safari: explicit load() is required to start downloading.
+    // Without it, iOS may not begin fetching the audio data.
+    if (srcChanged && isIOS) {
+      audio.load()
+    }
     if (usePlayerStore.getState().isPlaying && audio.paused) {
       audio.play().catch((err) => {
         if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
@@ -1134,7 +1168,9 @@ function PlayerInner() {
           старта из handleEnded/виджета. */}
       <audio
         ref={audioRef}
-        preload="auto"
+        // iOS Safari: preload="metadata" чтобы не скачивать весь файл целиком.
+        // Desktop Chrome/Firefox: preload="auto" для нормального стриминга.
+        preload={isIOS ? 'metadata' : 'auto'}
         playsInline
         onError={handleAudioError}
         onCanPlay={() => {

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, Music, X } from 'lucide-react'
 import api from '../services/api'
+import { ChunkedUpload, shouldUseChunkedUpload } from '../services/chunkedUpload'
 import { toast } from '../store/toastStore'
 import './UploadTrack.css'
 
@@ -18,6 +19,8 @@ function UploadTrack() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [chunkInfo, setChunkInfo] = useState(null)
+  const uploaderRef = useRef(null)
   const navigate = useNavigate()
 
   const handleFileChange = (e) => {
@@ -95,33 +98,43 @@ function UploadTrack() {
     }
 
     setLoading(true)
+    setChunkInfo(null)
 
     try {
-      const uploadFormData = new FormData()
-      uploadFormData.append('file', file)
-      if (coverFile) {
-        uploadFormData.append('cover', coverFile)
-      }
-      uploadFormData.append('title', formData.title)
-      uploadFormData.append('artist', formData.artist)
-      if (formData.album) {
-        uploadFormData.append('album', formData.album)
-      }
-      if (formData.genre) {
-        uploadFormData.append('genre', formData.genre)
-      }
+      if (shouldUseChunkedUpload(file)) {
+        const uploader = new ChunkedUpload(file, formData, {
+          onProgress: (loaded, total, chunkIdx, totalChunks) => {
+            setUploadProgress(Math.round((loaded / total) * 100))
+            setChunkInfo({ current: chunkIdx + 1, total: totalChunks })
+          },
+        })
+        uploaderRef.current = uploader
+        await uploader.upload()
+      } else {
+        const uploadFormData = new FormData()
+        uploadFormData.append('file', file)
+        if (coverFile) {
+          uploadFormData.append('cover', coverFile)
+        }
+        uploadFormData.append('title', formData.title)
+        uploadFormData.append('artist', formData.artist)
+        if (formData.album) {
+          uploadFormData.append('album', formData.album)
+        }
+        if (formData.genre) {
+          uploadFormData.append('genre', formData.genre)
+        }
 
-      await api.post('/tracks/upload', uploadFormData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        skipErrorToast: true,
-        onUploadProgress: (event) => {
-          if (event.total) {
-            setUploadProgress(Math.round((event.loaded / event.total) * 100))
-          }
-        },
-      })
+        await api.post('/tracks/upload', uploadFormData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          skipErrorToast: true,
+          onUploadProgress: (event) => {
+            if (event.total) {
+              setUploadProgress(Math.round((event.loaded / event.total) * 100))
+            }
+          },
+        })
+      }
 
       setSuccess(true)
       toast.success('Трек успешно загружен')
@@ -129,10 +142,22 @@ function UploadTrack() {
         navigate('/')
       }, 1500)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Ошибка при загрузке файла')
+      if (err.message === 'Upload aborted') {
+        setError('Загрузка отменена')
+      } else {
+        setError(err.response?.data?.detail || 'Ошибка при загрузке файла')
+      }
     } finally {
       setLoading(false)
       setUploadProgress(0)
+      setChunkInfo(null)
+      uploaderRef.current = null
+    }
+  }
+
+  const handleCancelUpload = () => {
+    if (uploaderRef.current) {
+      uploaderRef.current.abort()
     }
   }
 
@@ -310,19 +335,33 @@ function UploadTrack() {
         {loading && (
           <div className="upload-progress">
             <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
-            <span className="upload-progress-label">{uploadProgress}%</span>
+            <span className="upload-progress-label">
+              {chunkInfo
+                ? `Чанк ${chunkInfo.current}/${chunkInfo.total} — ${uploadProgress}%`
+                : `${uploadProgress}%`
+              }
+            </span>
           </div>
         )}
 
         <div className="form-actions">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="cancel-btn"
-            disabled={loading}
-          >
-            Отмена
-          </button>
+          {loading ? (
+            <button
+              type="button"
+              onClick={handleCancelUpload}
+              className="cancel-btn"
+            >
+              Отмена
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="cancel-btn"
+            >
+              Назад
+            </button>
+          )}
           <button
             type="submit"
             className="submit-btn"

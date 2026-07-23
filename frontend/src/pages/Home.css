@@ -601,10 +601,10 @@
     padding: calc(env(safe-area-inset-top, 0px) + 12px) 0 8px;
   }
 
-  .mobile-logo {
-    font-family: 'Syne', sans-serif;
-    font-size: var(--text-xl);
-    font-weight: 700;
+  .mobile-logo-img {
+    height: 48px;
+    width: auto;
+    object-fit: contain;
   }
 
   .hero-section {

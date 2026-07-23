@@ -149,6 +149,7 @@ class ImportRequest(BaseModel):
     """Импорт коллекции/трека по ссылке из внешнего сервиса."""
     url: str
     playlist_name: Optional[str] = None
+    cookies_file: Optional[str] = None  # путь к cookies файлу для обхода CAPTCHA
 
 
 class ImportPreviewTrack(BaseModel):

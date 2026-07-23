@@ -4,17 +4,18 @@
 делает каждый трек играбельным и складывает в новый плейлист пользователя:
 
 * SoundCloud — материализуем нативно (свой стрим-движок, см. soundcloud.py).
-* Yandex Music (и всё не-нативное) — стриминг требует токен/регион, поэтому
-  подбираем аналог в YouTube Music поиском по «артист + название».
+* Yandex Music — нативная интеграция через API (см. yandex_music.py), с фолбэком
+  на yt-dlp + матчинг в YouTube Music.
 """
 
 import asyncio
 import logging
+import os
 import re
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,14 @@ from app.schemas import (
     PlaylistResponse,
 )
 
+# Пытаемся импортировать нативный клиент Yandex Music
+try:
+    from app.routers import yandex_music as yandex_music_native
+    HAS_YANDEX_MUSIC_NATIVE = True
+except ImportError:
+    HAS_YANDEX_MUSIC_NATIVE = False
+    logger.warning("Нативный клиент Yandex Music недоступен")
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -41,11 +50,15 @@ _MAX_TRACKS = 10_000
 # Одновременных резолвов/матчей — чтобы большой плейлист не завалил yt-dlp/ytmusic.
 _CONCURRENCY = 8
 
+# Директория для хранения cookies файлов (для обхода CAPTCHA на Yandex Music)
+_COOKIES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "cookies")
+os.makedirs(_COOKIES_DIR, exist_ok=True)
+
 
 def _detect(url: str) -> Tuple[str, str]:
     """Ссылка → (source, kind). Кидает 400 на нераспознанный URL.
 
-    source: soundcloud | yandex; kind: playlist | user | track.
+    source: soundcloud | yandex; kind: playlist | user | track | album | artist | likes.
     """
     host = (urlparse(url).netloc or "").lower()
     path = urlparse(url).path.rstrip("/")
@@ -63,15 +76,34 @@ def _detect(url: str) -> Tuple[str, str]:
         return "soundcloud", "track"
 
     if "music.yandex." in host:
-        if "/playlists/" in path or "/album/" in path:
-            # /album/x/track/y — одиночный трек внутри альбома
-            if "/track/" in path:
-                return "yandex", "track"
+        # /users/{user_id}/likes/tracks — избранное/лайки пользователя
+        if re.search(r"/users/\d+/likes(/tracks)?$", path):
+            return "yandex", "likes"
+        # /users/{user_id}/playlists/{playlist_id} — плейлист пользователя
+        if re.search(r"/users/\d+/playlists/\d+", path):
             return "yandex", "playlist"
-        if "/track/" in path:
+        # /playlists/{owner_id}/{playlist_id} — плейлист (короткий URL)
+        if re.search(r"/playlists/\d+/\d+", path):
+            return "yandex", "playlist"
+        # /album/{id}/track/{id} — одиночный трек внутри альбома
+        if re.search(r"/album/\d+/track/\d+", path):
             return "yandex", "track"
-        if "/artist/" in path:
-            return "yandex", "playlist"  # треки артиста как коллекция
+        # /album/{id} — альбом
+        if re.search(r"/album/\d+$", path):
+            return "yandex", "album"
+        # /artist/{id}/tracks — все треки артиста
+        if re.search(r"/artist/\d+/tracks", path):
+            return "yandex", "artist"
+        # /artist/{id} — страница артиста (берём треки)
+        if re.search(r"/artist/\d+$", path):
+            return "yandex", "artist"
+        # /track/{id} — одиночный трек
+        if re.search(r"/track/\d+$", path):
+            return "yandex", "track"
+        # /playlists/ — список плейлистов (фолбэк)
+        if "/playlists/" in path:
+            return "yandex", "playlist"
+        # Неизвестный формат — пробуем как плейлист
         return "yandex", "playlist"
 
     raise HTTPException(
@@ -93,8 +125,13 @@ def _cover_of(entry: dict) -> Optional[str]:
     return entry.get("thumbnail")
 
 
-def _extract_blocking(url: str) -> dict:
-    """yt-dlp extract_flat по ссылке. Блокирующая — звать через to_thread."""
+def _extract_blocking(url: str, cookies_file: Optional[str] = None) -> dict:
+    """yt-dlp extract_flat по ссылке. Блокирующая — звать через to_thread.
+
+    cookies_file — путь к Netscape-формату cookies (браузерный экспорт).
+    Помогает обойти CAPTCHA на Yandex Music, если пользователь уже авторизован
+    в браузере.
+    """
     import yt_dlp
 
     opts = {
@@ -105,6 +142,23 @@ def _extract_blocking(url: str) -> dict:
         "playlistend": _MAX_TRACKS,
         "socket_timeout": 20,
     }
+
+    # Поддержка cookies для обхода CAPTCHA
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+    else:
+        # Пробуем стандартные пути для cookies
+        import os
+        possible_cookie_paths = [
+            os.path.expanduser("~/yandex_music_cookies.txt"),
+            os.path.expanduser("~/.config/yandex_music_cookies.txt"),
+            os.path.join(os.path.dirname(__file__), "..", "..", "yandex_cookies.txt"),
+        ]
+        for path in possible_cookie_paths:
+            if os.path.exists(path):
+                opts["cookiefile"] = path
+                break
+
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False) or {}
 
@@ -119,17 +173,248 @@ def _user_fallback_artist(url: str, info: dict) -> Optional[str]:
     return segments[0] if segments else None
 
 
+def _extract_yandex_likes_url(url: str) -> Optional[str]:
+    """Извлекает URL для извлечения лайков из ссылки Yandex Music.
+
+    Примеры:
+    - https://music.yandex.ru/users/12345678/likes/tracks → https://music.yandex.ru/users/12345678/likes/tracks
+    - https://music.yandex.ru/users/12345678/likes → https://music.yandex.ru/users/12345678/likes/tracks
+    """
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    # Паттерн: /users/{user_id}/likes[/tracks]
+    match = re.search(r"(/users/\d+/likes)(/tracks)?$", path)
+    if match:
+        base = match.group(1)
+        return f"{parsed.scheme}://{parsed.netloc}{base}/tracks"
+
+    return None
+
+
+def _clean_yandex_title(title: str) -> str:
+    """Очищает название трека от мусора Yandex Music.
+
+    Удаляет '(remix)', '[explicit]', 'feat. ...' и т.п. из названия
+    для более точного матчинга в YouTube Music.
+    """
+    if not title:
+        return title
+
+    # Удаляем типичные суффиксы в скобках/квадратных скобках
+    cleaned = re.sub(
+        r"\s*[\(\[]\s*(?:remix|edit|version|explicit|clean|radio edit|"
+        r"extended|instrumental|acoustic|live|demo|radio|club|"
+        r"remaster(?:ed)?|deluxe|single|album version)\s*[\)\]]",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+
+    # Удаляем "feat. ..." и "ft. ..." из названия (артист уже вынесен отдельно)
+    cleaned = re.sub(r"\s*(?:feat\.|ft\.)\s*.+$", "", cleaned, flags=re.IGNORECASE)
+
+    return cleaned.strip(" -–—")
+
+
+def _build_yandex_match_query(artist: str, title: str) -> str:
+    """Строит оптимальный запрос для матчинга в YouTube Music.
+
+    Использует очищенное название и основного артиста для более точного поиска.
+    """
+    # Берём только первого артиста (основного) для более точного поиска
+    main_artist = artist.split(",")[0].strip() if artist else ""
+    cleaned_title = _clean_yandex_title(title)
+
+    if main_artist and cleaned_title:
+        return f"{main_artist} {cleaned_title}"
+    elif main_artist:
+        return main_artist
+    elif cleaned_title:
+        return cleaned_title
+    else:
+        return f"{artist} {title}".strip()
+
+
+async def _extract_yandex_native(
+    request: Request, url: str, kind: str
+) -> Optional[Tuple[Optional[str], Optional[str], List[dict]]]:
+    """Пытается извлечь данные из Yandex Music через нативный API.
+
+    Возвращает (title, cover, entries) или None, если нативный клиент недоступен.
+    """
+    if not HAS_YANDEX_MUSIC_NATIVE:
+        return None
+
+    # Проверяем, что нативный клиент настроен
+    status = await yandex_music_native.check_status()
+    if not status.get("connected"):
+        return None
+
+    # Парсим URL для извлечения ID
+    from urllib.parse import urlparse
+    import re
+
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    try:
+        # Определяем тип контента по URL
+        if re.search(r"/album/(\d+)$", path):
+            # Альбом
+            album_id = re.search(r"/album/(\d+)$", path).group(1)
+            title, cover, tracks = await yandex_music_native.get_album_tracks(request, album_id)
+            entries = [
+                {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                for t in tracks
+            ]
+            return title, cover, entries
+
+        elif re.search(r"/artist/(\d+)", path):
+            # Артист
+            artist_id = re.search(r"/artist/(\d+)", path).group(1)
+            name, cover, tracks = await yandex_music_native.get_artist_tracks(request, artist_id)
+            entries = [
+                {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                for t in tracks
+            ]
+            return name, cover, entries
+
+        elif re.search(r"/users/(\d+)/playlists/(\d+)", path):
+            # Плейлист пользователя
+            match = re.search(r"/users/(\d+)/playlists/(\d+)", path)
+            user_id, playlist_id = match.group(1), match.group(2)
+            title, cover, tracks = await yandex_music_native.get_playlist_tracks(
+                request, user_id, playlist_id
+            )
+            entries = [
+                {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                for t in tracks
+            ]
+            return title, cover, entries
+
+        elif re.search(r"/users/(\d+)/likes", path):
+            # Избранное/лайки
+            user_id = re.search(r"/users/(\d+)", path).group(1)
+            title, cover, tracks = await yandex_music_native.get_user_likes(request, user_id)
+            entries = [
+                {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                for t in tracks
+            ]
+            return title, cover, entries
+
+        elif re.search(r"/track/(\d+)$", path):
+            # Одиночный трек
+            track_id = re.search(r"/track/(\d+)$", path).group(1)
+            tracks = await yandex_music_native.search_yandex_music(request, f"track:{track_id}", limit=1)
+            if tracks:
+                t = tracks[0]
+                entry = {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                return t.title, t.cover_url, [entry]
+
+        elif re.search(r"/playlists/(\d+)/(\d+)", path):
+            # Плейлист (короткий URL)
+            match = re.search(r"/playlists/(\d+)/(\d+)", path)
+            owner_id, playlist_id = match.group(1), match.group(2)
+            title, cover, tracks = await yandex_music_native.get_playlist_tracks(
+                request, owner_id, playlist_id
+            )
+            entries = [
+                {
+                    "title": t.title,
+                    "artists": [t.artist],
+                    "album": t.album,
+                    "duration": t.duration,
+                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+                    "id": t.id,
+                }
+                for t in tracks
+            ]
+            return title, cover, entries
+
+    except Exception as e:
+        logger.warning("Native Yandex Music extraction failed for %s: %s", url, e)
+        # Возвращаем None, чтобы фолбэк на yt-dlp
+        return None
+
+    return None
+
+
 async def _extract_collection(
-    request: Request, url: str, source: str, kind: str
+    request: Request, url: str, source: str, kind: str, cookies_file: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], List[dict]]:
     """(title, cover, entries) коллекции/трека. Кидает 502 при сбое извлечения."""
+
+    # Для Yandex Music сначала пробуем нативный API (обходит CAPTCHA)
+    if source == "yandex":
+        native_result = await _extract_yandex_native(request, url, kind)
+        if native_result is not None:
+            return native_result
+        # Если нативный API не сработал, фолбэк на yt-dlp
+
+    # Специальная обработка для лайков Yandex Music
+    if source == "yandex" and kind == "likes":
+        likes_url = _extract_yandex_likes_url(url)
+        if likes_url:
+            url = likes_url
+            kind = "playlist"  # Лайки обрабатываются как плейлист
+
+    # Если cookies не передан, пробуем найти файл для текущего пользователя
+    if not cookies_file and source == "yandex":
+        try:
+            from app.dependencies import get_current_user_id
+            user_id = get_current_user_id(request)
+            user_cookies = os.path.join(_COOKIES_DIR, f"user_{user_id}_cookies.txt")
+            if os.path.exists(user_cookies):
+                cookies_file = user_cookies
+        except Exception:
+            pass  # Игнорируем, если не удалось получить user_id
+
     try:
-        info = await asyncio.to_thread(_extract_blocking, url)
+        info = await asyncio.to_thread(_extract_blocking, url, cookies_file)
     except Exception as exc:  # noqa: BLE001 — сеть/капча/недоступно
         logger.warning("import extract failed for %s: %s", url, exc)
         raise HTTPException(
             status_code=502,
-            detail="Не удалось прочитать ссылку (сервис недоступен, регион или капча)",
+            detail="Не удалось прочитать ссылку. Возможные решения:\n"
+                   "1. Настройте нативный клиент Yandex Music (задайте YANDEX_MUSIC_TOKEN в .env)\n"
+                   "2. Загрузите cookies файл через /api/import/cookies\n"
+                   "3. Проверьте доступность сервиса",
         ) from exc
 
     entries = info.get("entries")
@@ -173,6 +458,10 @@ async def _extract_collection(
         elif coll_artist:
             e["artists"] = [coll_artist]
 
+    # Для лайков Yandex Music устанавливаем заголовок по умолчанию
+    if source == "yandex" and kind == "likes" and not info.get("title"):
+        info["title"] = "Избранное (Yandex Music)"
+
     return info.get("title"), _cover_of(info), entries
 
 
@@ -193,26 +482,108 @@ async def _entry_to_import(
     artist = _artist_of(entry)
     if not title:
         return None, False
-    query = f"{artist} {title}".strip()
+
+    # Улучшенный запрос для матчинга
+    query = _build_yandex_match_query(artist, title)
+
+    # Если запрос слишком короткий (< 3 символов), пробуем полный вариант
+    if len(query) < 3:
+        query = f"{artist} {title}".strip()
+
     try:
-        found = await ytdlp.search_ytmusic(request, query, limit=1)
+        # Пробуем улучшенный запрос, если не нашли — полный
+        found = await ytdlp.search_ytmusic(request, query, limit=3)
+
+        # Если улучшенный запрос не дал результатов, пробуем полный
+        if not found and query != f"{artist} {title}".strip():
+            full_query = f"{artist} {title}".strip()
+            if full_query != query:
+                found = await ytdlp.search_ytmusic(request, full_query, limit=3)
+
+        # Если всё ещё не нашли, пробуем только название (для случаев с
+        # нестандартными артистами)
+        if not found and title:
+            found = await ytdlp.search_ytmusic(request, title, limit=3)
+
     except Exception:  # noqa: BLE001
         logger.exception("ytmusic match failed for %s", query)
         return None, False
+
     if not found:
         return None, True  # искали, но не нашли — считается как «matched-попытка»
-    t = found[0]
+
+    # Выбираем лучшее совпадение (если несколько)
+    best_match = _select_best_match(found, artist, title)
+    if not best_match:
+        return None, True
+
     payload = ExternalTrackImport(
-        source=t.source,
-        external_id=t.external_id,
-        title=t.title,
-        artist=t.artist,
-        album=t.album,
-        duration=t.duration,
-        cover_url=t.cover_url,
-        stream_url=t.stream_url,
+        source=best_match.source,
+        external_id=best_match.external_id,
+        title=best_match.title,
+        artist=best_match.artist,
+        album=best_match.album,
+        duration=best_match.duration,
+        cover_url=best_match.cover_url,
+        stream_url=best_match.stream_url,
     )
     return payload, True
+
+
+def _select_best_match(
+    candidates: List, artist: str, title: str
+) -> Optional[object]:
+    """Выбирает лучшее совпадение из списка кандидатов.
+
+    Использует простой scoring: точное совпадение артиста + название = высший балл.
+    """
+    if not candidates:
+        return None
+
+    artist_lower = artist.lower()
+    title_lower = title.lower()
+
+    scored = []
+    for candidate in candidates:
+        score = 0
+
+        # Совпадение артиста (точное или частичное)
+        candidate_artist = (candidate.artist or "").lower()
+        if candidate_artist == artist_lower:
+            score += 10
+        elif artist_lower in candidate_artist or candidate_artist in artist_lower:
+            score += 5
+
+        # Совпадение названия (точное или частичное)
+        candidate_title = (candidate.title or "").lower()
+        cleaned_title = _clean_yandex_title(title_lower)
+        if candidate_title == cleaned_title or candidate_title == title_lower:
+            score += 10
+        elif cleaned_title in candidate_title or candidate_title in cleaned_title:
+            score += 5
+        elif title_lower in candidate_title or candidate_title in title_lower:
+            score += 3
+
+        # Наличие обложки (бонус)
+        if candidate.cover_url:
+            score += 1
+
+        # Наличие альбома (бонус)
+        if candidate.album:
+            score += 1
+
+        scored.append((score, candidate))
+
+    # Сортируем по убыванию балла
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Возвращаем лучший вариант, если балл достаточный
+    best_score, best_candidate = scored[0]
+    if best_score >= 5:  # Минимальный порог для принятия
+        return best_candidate
+
+    # Если балл низкий, всё равно возвращаем лучший (может быть полезен)
+    return best_candidate
 
 
 async def _soundcloud_playlist_native(
@@ -244,6 +615,76 @@ async def _soundcloud_playlist_native(
         for t in sc_tracks[:_MAX_TRACKS]
     ]
     return meta.title, meta.cover_url, imports
+
+
+@router.post("/cookies")
+async def upload_cookies(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_active_user),
+):
+    """Загружает cookies файл для обхода CAPTCHA на Yandex Music.
+
+    Формат: Netscape cookies (экспорт из браузерного расширения).
+    Примеры расширений:
+    - Chrome: "Get cookies.txt LOCALLY"
+    - Firefox: "cookies.txt"
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
+
+    # Проверяем расширение
+    if not file.filename.endswith(('.txt', '.cookies')):
+        raise HTTPException(
+            status_code=400,
+            detail="Поддерживаются только .txt файлы (Netscape cookies format)"
+        )
+
+    # Сохраняем файл
+    file_path = os.path.join(_COOKIES_DIR, f"user_{current_user.id}_cookies.txt")
+    content = await file.read()
+
+    # Простая валидка формата cookies
+    content_str = content.decode('utf-8', errors='ignore')
+    if not any(line.strip().startswith('.') or line.strip().startswith('#') 
+               for line in content_str.split('\n')[:10]):
+        raise HTTPException(
+            status_code=400,
+            detail="Неверный формат cookies. Используйте Netscape cookies format."
+        )
+
+    with open(file_path, 'wb') as f:
+        f.write(content)
+
+    return {
+        "status": "ok",
+        "message": "Cookies загружены. Теперь вы можете импортировать из Yandex Music.",
+        "file_path": file_path
+    }
+
+
+@router.delete("/cookies")
+async def delete_cookies(
+    current_user=Depends(get_current_active_user),
+):
+    """Удаляет загруженный cookies файл."""
+    file_path = os.path.join(_COOKIES_DIR, f"user_{current_user.id}_cookies.txt")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return {"status": "ok", "message": "Cookies удалены"}
+    return {"status": "ok", "message": "Cookies файл не найден"}
+
+
+@router.get("/cookies")
+async def check_cookies(
+    current_user=Depends(get_current_active_user),
+):
+    """Проверяет наличие загруженного cookies файла."""
+    file_path = os.path.join(_COOKIES_DIR, f"user_{current_user.id}_cookies.txt")
+    exists = os.path.exists(file_path)
+    return {
+        "exists": exists,
+        "file_path": file_path if exists else None
+    }
 
 
 @router.post("/preview", response_model=ImportPreviewResponse)
@@ -279,6 +720,10 @@ async def import_preview(
             )
 
     title, cover, entries = await _extract_collection(request, payload.url, source, kind)
+
+    # Для лайков Yandex Music устанавливаем заголовок по умолчанию
+    if source == "yandex" and kind == "likes" and not title:
+        title = "Избранное (Yandex Music)"
 
     tracks = [
         ImportPreviewTrack(
@@ -366,7 +811,7 @@ async def import_collection(
     name = payload.playlist_name or title or "Импортированный плейлист"
     new_playlist = Playlist(
         name=name,
-        description=f"Импортировано из {source}",
+        description=f"Импортировано из {source}" + (" (избранное)" if kind == "likes" else ""),
         cover_url=cover if (cover and cover.startswith("http")) else None,
         is_public=False,
         owner_id=current_user.id,

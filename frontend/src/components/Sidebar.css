@@ -65,17 +65,13 @@
 .sidebar.collapsed .logo-text {
   display: none;
 }
-.logo-text{
-  text-decoration: none;
-  padding-left: 24px;
-  font-size: 28px;
-  padding: 8px;
-  color: #000000;
-  border-radius: 8px;
-  background: linear-gradient(70deg,#e0c3ff,#a259ff,#6a3093);
+.logo-img {
+  height: 64px;
+  width: auto;
+  object-fit: contain;
 }
-.logo-text:visited{
-  color: #a259ff;
+.sidebar.collapsed .logo-img {
+  display: none;
 }
 
 .collapse-btn {

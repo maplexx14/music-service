@@ -291,6 +291,117 @@
   margin-bottom: 16px;
 }
 
+.import-examples {
+  background-color: #1a1a1a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+
+.import-example {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.import-example:last-child {
+  margin-bottom: 0;
+}
+
+.import-example-label {
+  color: #a259ff;
+  font-weight: 600;
+  min-width: 80px;
+}
+
+.import-example-url {
+  color: #666;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* --- Cookies секция для Yandex Music --- */
+.cookies-section {
+  background-color: #1a1a1a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.cookies-status {
+  margin-bottom: 8px;
+}
+
+.cookies-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.cookies-ok {
+  background-color: rgba(30, 215, 96, 0.1);
+  color: #1ed760;
+}
+
+.cookies-missing {
+  background-color: rgba(255, 100, 100, 0.1);
+  color: #ff6464;
+}
+
+.cookies-hint {
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.cookies-hint a {
+  color: #a259ff;
+  text-decoration: none;
+}
+
+.cookies-hint a:hover {
+  text-decoration: underline;
+}
+
+.cookies-upload-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cookies-file-input {
+  flex: 1;
+  font-size: 12px;
+  color: #b3b3b3;
+}
+
+.submit-btn.small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.cookies-delete-btn {
+  font-size: 11px;
+  color: #888;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.cookies-delete-btn:hover {
+  color: #ff6464;
+  text-decoration: underline;
+}
+
 .import-input-row {
   display: flex;
   gap: 12px;
@@ -393,6 +504,15 @@
   .import-playlist-form,
   .create-playlist-form {
     padding: 16px;
+  }
+
+  /* Cookies секция на мобильном */
+  .cookies-upload-row {
+    flex-direction: column;
+  }
+
+  .cookies-upload-row .submit-btn {
+    width: 100%;
   }
 
   .form-actions {

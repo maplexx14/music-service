@@ -82,6 +82,9 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # ─── Yandex Music (нативная интеграция) ───
+      # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
+      YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
       # AAC transcoding: all audio is compressed to AAC for smaller files.
       TRANSCODE_ENABLED: ${TRANSCODE_ENABLED:-1}
       AAC_BITRATE: ${AAC_BITRATE:-128}
@@ -98,6 +101,7 @@ services:
       - ./backend:/app
       - music_files:/app/music_files
       - ytdlp_cache:/app/ytdlp_cache
+      - cookies_data:/app/cookies
       - slskd_downloads:/app/slskd_downloads:ro
       - slskd_incomplete:/app/slskd_incomplete:ro
     depends_on:
@@ -181,6 +185,7 @@ volumes:
   minio_data:
   music_files:
   ytdlp_cache:
+  cookies_data:
   frontend_node_modules:
   slskd_downloads:
   slskd_incomplete:

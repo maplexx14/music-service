@@ -55,7 +55,7 @@ function Sidebar() {
     <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
         <div className="logo">
-          {!isCollapsed && <span className="logo-text">BoltMusic</span>}
+          {!isCollapsed && <img src="/logoBolt1.PNG" alt="BoltMusic" className="logo-img" />}
         </div>
         <button className="collapse-btn" onClick={toggleCollapse} title={isCollapsed ? 'Развернуть' : 'Свернуть'}>
           {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}

@@ -57,7 +57,7 @@ _AUDIO_CT = {
 MAX_AUDIO_BYTES = int(os.getenv("ARCHIVE_MAX_AUDIO_BYTES", str(60 * 1024 * 1024)))
 
 # Таймаут на скачивание одного трека (соединение, чтение).
-_DL_TIMEOUT = httpx.Timeout(20.0, read=120.0)
+_DL_TIMEOUT = httpx.Timeout(30.0, read=300.0)
 
 # Ограничитель одновременных ленивых архиваций: несколько разных треков подряд
 # в плеере не должны запускать десяток параллельных скачиваний в процессе API.
@@ -70,7 +70,7 @@ _lazy_sem: Optional[asyncio.Semaphore] = None
 _inflight: set[int] = set()
 
 # Повторная попытка при транзиентных ошибках (сеть, таймаут).
-_MAX_RETRIES = 2
+_MAX_RETRIES = 4
 _RETRY_DELAY = 2.0
 
 
@@ -155,30 +155,77 @@ class _Unsupported(Exception):
     """Источник трека не поддерживает детерминированную архивацию."""
 
 
-async def _download_to_temp(url: str, suffix: str, client: httpx.AsyncClient) -> tuple[str, int]:
-    """Скачивает url во временный файл. Возвращает (путь, размер). Чистит за собой при ошибке."""
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+async def _download_to_temp(
+    url: str,
+    suffix: str,
+    client: httpx.AsyncClient,
+    resume_path: Optional[str] = None,
+) -> tuple[str, int]:
+    """Скачивает url во временный файл с поддержкой Resume (Range requests).
+
+    Если resume_path указан и файл существует — продолжает с того места,
+    где остановились, отправляя заголовок Range. Иначе создаёт новый файл.
+    Возвращает (путь, итоговый размер). Чистит за собой при ошибке.
+    """
+    if resume_path and os.path.exists(resume_path):
+        tmp_path = resume_path
+    else:
+        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
+
+    state_path = tmp_path + ".state"
     size = 0
     ok = False
+
     try:
-        with os.fdopen(fd, "wb") as fh:
-            async with client.stream("GET", url) as resp:
+        # Восстанавливаем размер предыдущей попытки
+        if os.path.exists(state_path):
+            try:
+                size = int(open(state_path).read().strip())
+            except (ValueError, OSError):
+                size = 0
+        elif os.path.exists(tmp_path):
+            size = os.path.getsize(tmp_path)
+
+        headers = {}
+        if size > 0:
+            headers["Range"] = f"bytes={size}-"
+            logger.info("resume download from byte %d for %s", size, url)
+
+        with os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if size > 0 else os.O_TRUNC)), "ab" if size > 0 else "wb") as fh:
+            async with client.stream("GET", url, headers=headers) as resp:
+                # Если сервер не поддерживает Range — начинаем сначала
+                if size > 0 and resp.status_code == 200:
+                    size = 0
+                    fh.seek(0)
+                    fh.truncate()
+                    logger.info("server does not support range, restarting download")
+
                 resp.raise_for_status()
                 async for chunk in resp.aiter_bytes(256 * 1024):
                     fh.write(chunk)
                     size += len(chunk)
-                    # Прерываем скачивание, если файл превысил лимит: незачем
-                    # тянуть весь многочасовой микс, чтобы потом его отбросить.
+                    # Сохраняем прогресс каждые 1MB
+                    if size % (1024 * 1024) < len(chunk):
+                        try:
+                            open(state_path, "w").write(str(size))
+                        except OSError:
+                            pass
                     if MAX_AUDIO_BYTES and size > MAX_AUDIO_BYTES:
                         raise _TooLarge()
+
         ok = True
         return tmp_path, size
     finally:
-        if not ok and os.path.exists(tmp_path):
+        # Чистим state-файл при успехе
+        if ok and os.path.exists(state_path):
             try:
-                os.remove(tmp_path)
+                os.remove(state_path)
             except OSError:
                 pass
+        if not ok:
+            # Оставляем temp-файл для resume на следующей попытке
+            pass
 
 
 def _cover_ext(url: str, content_type: Optional[str]) -> str:
@@ -239,50 +286,52 @@ async def archive_track(
     db: Session,
     track: Track,
     client: Optional[httpx.AsyncClient] = None,
-) -> str:
+    resume_path: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
     """Архивирует один внешний трек в MinIO и обновляет запись в БД.
 
-    Возвращает один из статусов ArchiveResult. Идемпотентно: уже
-    заархивированный трек (file_path вида minio://) не трогается.
+    Возвращает (статус, tmp_path). tmp_path сохраняется для retry с resume.
+    Идемпотентно: уже заархивированный трек (file_path вида minio://) не трогается.
     """
     from app.routers.ytdlp import TrackUnavailable, TransientResolveError
 
     if track.source == "local":
-        return ArchiveResult.LOCAL
+        return ArchiveResult.LOCAL, None
     if storage.is_minio_path(track.file_path):
-        return ArchiveResult.ALREADY
+        return ArchiveResult.ALREADY, None
     if track.source not in ARCHIVABLE_SOURCES:
-        return ArchiveResult.UNSUPPORTED
+        return ArchiveResult.UNSUPPORTED, None
     if not track.external_id:
-        return ArchiveResult.NO_ID
+        return ArchiveResult.NO_ID, None
 
     storage.ensure_buckets()
 
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
+    saved_tmp = None
     try:
         try:
             url, ext, _total = await _resolve_for_track(track)
         except TrackUnavailable:
-            return ArchiveResult.UNAVAILABLE
+            return ArchiveResult.UNAVAILABLE, None
         except TransientResolveError:
-            return ArchiveResult.TRANSIENT
+            return ArchiveResult.TRANSIENT, None
         except _NoPermalink:
-            return ArchiveResult.NO_PERMALINK
+            return ArchiveResult.NO_PERMALINK, None
         except _Unsupported:
-            return ArchiveResult.UNSUPPORTED
+            return ArchiveResult.UNSUPPORTED, None
 
         key = f"external/{track.source}/{track.external_id}{ext}"
         try:
-            tmp_path, _size = await _download_to_temp(url, ext, client)
+            tmp_path, _size = await _download_to_temp(url, ext, client, resume_path=resume_path)
+            saved_tmp = tmp_path
         except _TooLarge:
             logger.info("archive: трек %s превысил лимит размера, пропуск", track.id)
-            return ArchiveResult.TOO_LARGE
+            return ArchiveResult.TOO_LARGE, None
 
         # Transcode to AAC for smaller, faster-loading files
         aac_path = transcode_to_aac(tmp_path)
         if aac_path != tmp_path:
-            # Transcoded — use AAC output, clean up original
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -309,11 +358,11 @@ async def archive_track(
         if new_cover:
             track.cover_url = new_cover
         db.commit()
-        return ArchiveResult.ARCHIVED
+        return ArchiveResult.ARCHIVED, None
     except Exception:
         db.rollback()
         logger.exception("archive: не удалось заархивировать трек %s", track.id)
-        return ArchiveResult.FAILED
+        return ArchiveResult.FAILED, saved_tmp
     finally:
         if owns_client:
             await client.aclose()
@@ -347,10 +396,18 @@ async def schedule_archive(track_id: int) -> None:
                     return
                 if track.source not in ARCHIVABLE_SOURCES:
                     return
+                resume_tmp = None
                 for attempt in range(_MAX_RETRIES + 1):
-                    status = await archive_track(db, track)
+                    status, tmp_path = await archive_track(db, track, resume_path=resume_tmp)
                     if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
+                        # Clean up any leftover temp file on success
+                        if tmp_path and os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
                         break
+                    resume_tmp = tmp_path
                     if attempt < _MAX_RETRIES:
                         logger.warning(
                             "lazy-archive: трек %s попытка %d/%d — %s, повтор через %.1fs",
@@ -378,9 +435,11 @@ async def _archive_external_core(
     external_id: str,
     permalink: Optional[str],
     track: Optional[Track],
-) -> str:
+    resume_path: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
     """Резолвит → скачивает → кладёт внешний трек в MinIO по (source, external_id).
 
+    Возвращает (статус, tmp_path). tmp_path сохраняется для retry с resume.
     Не требует DB-записи: ключ объекта детерминирован (external/<source>/<id>).
     Если track передан — обновляет его file_path/cover_url, чтобы повторные
     прослушивания шли через /tracks/{id}/stream уже из MinIO.
@@ -388,6 +447,7 @@ async def _archive_external_core(
     from app.routers.ytdlp import TrackUnavailable, TransientResolveError
 
     client = httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
+    saved_tmp = None
     try:
         try:
             if source == "ytmusic":
@@ -396,24 +456,25 @@ async def _archive_external_core(
                 url, ext, _total = await _resolve_audio(external_id)
             elif source == "soundcloud":
                 if not permalink:
-                    return ArchiveResult.NO_PERMALINK
+                    return ArchiveResult.NO_PERMALINK, None
                 from app.routers.soundcloud import _resolve_cached
 
                 url, ext, _total, _fresh = await _resolve_cached(external_id, permalink)
             else:
-                return ArchiveResult.UNSUPPORTED
+                return ArchiveResult.UNSUPPORTED, None
         except TrackUnavailable:
-            return ArchiveResult.UNAVAILABLE
+            return ArchiveResult.UNAVAILABLE, None
         except TransientResolveError:
-            return ArchiveResult.TRANSIENT
+            return ArchiveResult.TRANSIENT, None
 
         storage.ensure_buckets()
         key = f"external/{source}/{external_id}{ext}"
         try:
-            tmp_path, _size = await _download_to_temp(url, ext, client)
+            tmp_path, _size = await _download_to_temp(url, ext, client, resume_path=resume_path)
+            saved_tmp = tmp_path
         except _TooLarge:
             logger.info("archive-ext: %s/%s превысил лимит размера, пропуск", source, external_id)
-            return ArchiveResult.TOO_LARGE
+            return ArchiveResult.TOO_LARGE, None
 
         # Transcode to AAC for smaller, faster-loading files
         aac_path = transcode_to_aac(tmp_path)
@@ -444,11 +505,11 @@ async def _archive_external_core(
             if new_cover:
                 track.cover_url = new_cover
             db.commit()
-        return ArchiveResult.ARCHIVED
+        return ArchiveResult.ARCHIVED, None
     except Exception:
         db.rollback()
         logger.exception("archive-ext: не удалось заархивировать %s/%s", source, external_id)
-        return ArchiveResult.FAILED
+        return ArchiveResult.FAILED, saved_tmp
     finally:
         await client.aclose()
 
@@ -511,10 +572,19 @@ async def schedule_archive_external(
                             "lazy-archive-ext: %s/%s → linked existing object", source, external_id
                         )
                     return
+                resume_tmp = None
                 for attempt in range(_MAX_RETRIES + 1):
-                    status = await _archive_external_core(db, source, external_id, permalink, track)
+                    status, tmp_path = await _archive_external_core(
+                        db, source, external_id, permalink, track, resume_path=resume_tmp
+                    )
                     if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
+                        if tmp_path and os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
                         break
+                    resume_tmp = tmp_path
                     if attempt < _MAX_RETRIES:
                         logger.warning(
                             "lazy-archive-ext: %s/%s попытка %d/%d — %s, повтор через %.1fs",

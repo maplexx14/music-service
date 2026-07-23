@@ -6,6 +6,8 @@ from typing import List, Optional
 import logging
 import os
 import uuid
+import json
+import shutil
 import aiofiles
 from pathlib import Path
 from mutagen import File as MutagenFile
@@ -62,6 +64,8 @@ MUSIC_DIR = Path(os.getenv("MUSIC_FILES_DIR", os.path.join(os.path.dirname(__fil
 COVER_DIR = Path(os.getenv("COVER_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "cover_files")))
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 COVER_DIR.mkdir(parents=True, exist_ok=True)
+CHUNKED_UPLOAD_DIR = MUSIC_DIR / "_uploads"
+CHUNKED_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.get("/", response_model=List[TrackResponse])
@@ -153,7 +157,7 @@ def stream_track(
         range_header = request.headers.get("range")
         common_headers = {
             "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=604800, immutable",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Vary": "Accept-Encoding",
         }
         if range_header:
@@ -508,6 +512,206 @@ async def upload_track(
     db.commit()
     db.refresh(db_track)
     
+    return db_track
+
+
+# ─────────────── chunked upload ───────────────
+
+DEFAULT_CHUNK_SIZE = 512 * 1024  # 512 KB
+
+
+class ChunkedUploadInit(BaseModel):
+    filename: str
+    file_size: int = Field(gt=0)
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
+
+
+class ChunkedUploadInitResponse(BaseModel):
+    upload_id: str
+    chunk_size: int
+    total_chunks: int
+
+
+class ChunkedUploadComplete(BaseModel):
+    upload_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    genre: Optional[str] = None
+
+
+@router.post("/upload/init", response_model=ChunkedUploadInitResponse)
+async def init_chunked_upload(
+    payload: ChunkedUploadInit,
+    current_user: User = Depends(get_current_active_user),
+):
+    file_ext = Path(payload.filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    if payload.file_size > MAX_AUDIO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large (max {MAX_AUDIO_SIZE // (1024 * 1024)} MB)"
+        )
+
+    upload_id = str(uuid.uuid4())
+    upload_dir = CHUNKED_UPLOAD_DIR / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    total_chunks = (payload.file_size + payload.chunk_size - 1) // payload.chunk_size
+
+    meta = {
+        "upload_id": upload_id,
+        "filename": payload.filename,
+        "file_ext": file_ext,
+        "file_size": payload.file_size,
+        "chunk_size": payload.chunk_size,
+        "total_chunks": total_chunks,
+        "received_chunks": [],
+    }
+    (upload_dir / "meta.json").write_text(json.dumps(meta))
+
+    return ChunkedUploadInitResponse(
+        upload_id=upload_id,
+        chunk_size=payload.chunk_size,
+        total_chunks=total_chunks,
+    )
+
+
+@router.post("/upload/chunk")
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+):
+    upload_dir = CHUNKED_UPLOAD_DIR / upload_id
+    meta_path = upload_dir / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    meta = json.loads(meta_path.read_text())
+
+    if chunk_index < 0 or chunk_index >= meta["total_chunks"]:
+        raise HTTPException(status_code=400, detail="Invalid chunk index")
+
+    chunk_path = upload_dir / f"chunk_{chunk_index:06d}"
+    await save_upload(file, chunk_path, meta["chunk_size"] + 1024, "chunk")
+
+    if chunk_index not in meta["received_chunks"]:
+        meta["received_chunks"].append(chunk_index)
+        meta_path.write_text(json.dumps(meta))
+
+    return {"chunk_index": chunk_index, "received": len(meta["received_chunks"])}
+
+
+@router.get("/upload/status/{upload_id}")
+async def chunked_upload_status(
+    upload_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    upload_dir = CHUNKED_UPLOAD_DIR / upload_id
+    meta_path = upload_dir / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    meta = json.loads(meta_path.read_text())
+    return {
+        "upload_id": upload_id,
+        "filename": meta["filename"],
+        "total_chunks": meta["total_chunks"],
+        "received_chunks": meta["received_chunks"],
+    }
+
+
+@router.post("/upload/complete", response_model=TrackResponse, status_code=status.HTTP_201_CREATED)
+async def complete_chunked_upload(
+    payload: ChunkedUploadComplete,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    upload_dir = CHUNKED_UPLOAD_DIR / payload.upload_id
+    meta_path = upload_dir / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    meta = json.loads(meta_path.read_text())
+    total_chunks = meta["total_chunks"]
+    received = sorted(meta["received_chunks"])
+
+    if len(received) != total_chunks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Incomplete upload: {len(received)}/{total_chunks} chunks received"
+        )
+
+    file_ext = meta["file_ext"]
+    file_id = str(uuid.uuid4())
+    filename = f"{file_id}{file_ext}"
+    assembled_path = MUSIC_DIR / filename
+
+    # Assemble chunks into final file
+    try:
+        with open(assembled_path, "wb") as out:
+            for i in range(total_chunks):
+                chunk_path = upload_dir / f"chunk_{i:06d}"
+                if not chunk_path.exists():
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Missing chunk {i}"
+                    )
+                with open(chunk_path, "rb") as cf:
+                    shutil.copyfileobj(cf, out)
+    finally:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+    # Validate with mutagen
+    try:
+        audio = MutagenFile(str(assembled_path))
+    except Exception:
+        audio = None
+    if audio is None or audio.info is None:
+        assembled_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is not a valid audio file"
+        )
+    duration = int(audio.info.length)
+
+    # Transcode to AAC
+    aac_path = transcode_to_aac(str(assembled_path))
+    if aac_path != str(assembled_path):
+        assembled_path.unlink(missing_ok=True)
+        assembled_path = Path(aac_path)
+        file_ext = AAC_EXT
+        filename = f"{file_id}{file_ext}"
+
+    relative_path = f"/music_files/{filename}"
+
+    if storage.is_minio_backend():
+        audio_mime, _ = mimetypes.guess_type(str(assembled_path))
+        if file_ext == AAC_EXT:
+            audio_mime = AAC_CONTENT_TYPE
+        relative_path = storage.upload_music_file(
+            str(assembled_path), filename, audio_mime or "audio/mp4"
+        )
+        assembled_path.unlink(missing_ok=True)
+
+    db_track = Track(
+        title=payload.title,
+        artist=payload.artist,
+        album=payload.album,
+        genre=payload.genre,
+        duration=duration,
+        file_path=relative_path,
+        cover_url=None,
+    )
+    db.add(db_track)
+    db.commit()
+    db.refresh(db_track)
     return db_track
 
 
