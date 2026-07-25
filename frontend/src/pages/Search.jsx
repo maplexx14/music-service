@@ -8,6 +8,8 @@ import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Search.css'
 
+const SEARCH_DEBOUNCE_MS = 600
+
 // Лейбл и класс бейджа по источнику внешнего трека.
 const SOURCE_META = {
   soulseek: { label: 'FLAC', className: 'source-badge--flac' },
@@ -34,7 +36,7 @@ function Search() {
       const controller = new AbortController()
       const timeoutId = window.setTimeout(() => {
         performSearch(searchQuery, controller.signal)
-      }, 300)
+      }, SEARCH_DEBOUNCE_MS)
       return () => {
         window.clearTimeout(timeoutId)
         controller.abort()
@@ -330,3 +332,4 @@ function Search() {
 }
 
 export default Search
+

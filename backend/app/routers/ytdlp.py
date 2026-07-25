@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app import storage
 from app.cache import get_cache_async, set_cache_async
 from app.schemas import ExternalTrackResponse
 
@@ -773,8 +774,15 @@ _prefetch_pending: set[str] = set()
 _prefetch_tasks: set[asyncio.Task] = set()
 
 
-async def _prefetch_job(cache_id: str, resolver, cache_key: str, ttl: int) -> None:
+async def _prefetch_job(
+    cache_id: str, resolver, cache_key: str, ttl: int, archive_key: Optional[str] = None
+) -> None:
     try:
+        # Архивная копия в MinIO уже даёт мгновенный старт — резолв провайдера
+        # и скачивание первых байт для такого трека были бы чистой тратой
+        # (и лишним походом к YouTube).
+        if await archived_music_path(archive_key):
+            return
         async with _PREFETCH_SEM:
             url, ext, total, _ = await resolver(False)
         async with _WARM_SEM:
@@ -793,7 +801,9 @@ async def _prefetch_job(cache_id: str, resolver, cache_key: str, ttl: int) -> No
         _prefetch_pending.discard(cache_id)
 
 
-def schedule_prefetch(cache_id: str, resolver, cache_key: str, ttl: int) -> str:
+def schedule_prefetch(
+    cache_id: str, resolver, cache_key: str, ttl: int, archive_key: Optional[str] = None
+) -> str:
     """Ставит прогрев трека в фоновую очередь; возвращает статус для ответа.
 
     Не ждёт ни резолва, ни скачивания — вызывающий эндпоинт отвечает мгновенно
@@ -806,26 +816,33 @@ def schedule_prefetch(cache_id: str, resolver, cache_key: str, ttl: int) -> str:
     if len(_prefetch_pending) >= _PREFETCH_QUEUE_LIMIT:
         return "dropped"
     _prefetch_pending.add(cache_id)
-    task = asyncio.create_task(_prefetch_job(cache_id, resolver, cache_key, ttl))
+    task = asyncio.create_task(
+        _prefetch_job(cache_id, resolver, cache_key, ttl, archive_key)
+    )
     _prefetch_tasks.add(task)
     task.add_done_callback(_prefetch_tasks.discard)
     return "queued"
 
 
-async def prefetch_is_ready(cache_id: str, cache_key: str) -> bool:
+async def prefetch_is_ready(
+    cache_id: str, cache_key: str, archive_key: Optional[str] = None
+) -> bool:
     """Готов ли трек к почти мгновенному старту воспроизведения.
 
     В отличие от schedule_prefetch (fire-and-forget: ставит задачу и сразу
     отвечает «queued»), это ПРОВЕРКА фактического результата прогрева, без
     запуска какой-либо работы. Готово, если резолв прямого URL уже лежит в
-    Redis (валидная запись, а не transient-маркер) ИЛИ трек уже полностью
-    скачан в дисковый кэш. Фронт поллит это после /prefetch и снимает гейт
-    скипа вперёд только когда здесь True.
+    Redis (валидная запись, а не transient-маркер), ИЛИ трек уже полностью
+    скачан в дисковый кэш, ИЛИ есть архивная копия в MinIO (стрим отдаёт её
+    напрямую, см. stream_cached_audio). Фронт поллит это после /prefetch и
+    снимает гейт скипа вперёд только когда здесь True.
     """
     if _cached_file(cache_id):
         return True
     cached = await get_cache_async(cache_key)
-    return bool(cached and cached.get("url"))
+    if cached and cached.get("url"):
+        return True
+    return bool(await archived_music_path(archive_key))
 
 
 async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
@@ -988,7 +1005,32 @@ async def _probe(client: httpx.AsyncClient, url: str) -> tuple[int, Optional[int
     return resp.status_code, total
 
 
-async def stream_cached_audio(request: Request, cache_id: str, resolver):
+# Путь архивной копии внешнего трека в MinIO кэшируем в Redis: без этого
+# list_objects уходил бы в сеть на КАЖДЫЙ Range-запрос плеера. Положительный
+# ответ живёт долго (объект не исчезает), отрицательный — коротко, чтобы трек,
+# заархивированный только что, быстро начал отдаваться из хранилища.
+_ARCHIVE_HIT_TTL = 24 * 3600
+_ARCHIVE_MISS_TTL = 300
+
+
+async def archived_music_path(archive_key: Optional[str]) -> Optional[str]:
+    """file_path архивной копии внешнего трека (``external/<source>/<id>``) или None."""
+    if not archive_key or not storage.is_minio_backend():
+        return None
+    cache_key = f"archive:path:{archive_key}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        return cached or None
+    path = await asyncio.to_thread(storage.find_music_object, f"external/{archive_key}")
+    await set_cache_async(
+        cache_key, path or "", expire=_ARCHIVE_HIT_TTL if path else _ARCHIVE_MISS_TTL
+    )
+    return path
+
+
+async def stream_cached_audio(
+    request: Request, cache_id: str, resolver, archive_key: Optional[str] = None
+):
     """Отдаёт аудио по прямому URL с диск-кэшем, probe и ресегментацией.
 
     Общий движок стрима для всех yt-dlp-провайдеров (YouTube Music, SoundCloud).
@@ -1008,6 +1050,18 @@ async def stream_cached_audio(request: Request, cache_id: str, resolver):
     if cached:
         ext = os.path.splitext(cached)[1].lower()
         return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
+
+    # Архивная копия в MinIO (её кладёт ленивая архивация при первом
+    # прослушивании) — второй по скорости путь после локального диск-кэша:
+    # байты рядом, резолв провайдера не нужен вовсе. Диск-кэш ограничен
+    # 4 ГБ и вытесняется по LRU, поэтому без этой проверки давно
+    # заархивированный трек всё равно уходил в резолв (~1.5-5 с TTFB).
+    archived = await archived_music_path(archive_key)
+    if archived:
+        try:
+            return await asyncio.to_thread(storage.minio_range_response, archived, request)
+        except Exception:  # noqa: BLE001 — объект мог быть удалён; играем по обычному пути
+            logger.warning("archived object unusable for %s", cache_id, exc_info=True)
 
     try:
         direct_url, ext, total, fresh = await resolver(False)
@@ -1352,7 +1406,10 @@ async def stream_ytmusic(video_id: str, request: Request):
     except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
         logger.exception("lazy-archive-ext: не удалось запланировать архивацию %s", video_id)
     return await stream_cached_audio(
-        request, video_id, lambda force: _resolve_cached(video_id, force=force)
+        request,
+        video_id,
+        lambda force: _resolve_cached(video_id, force=force),
+        archive_key=f"ytmusic/{video_id}",
     )
 
 
@@ -1370,6 +1427,7 @@ async def prefetch_ytmusic(video_id: str):
         lambda force=False: _resolve_cached(video_id, force=force),
         f"ytdlp:resolve:v2:{video_id}",
         _RESOLVE_TTL,
+        archive_key=f"ytmusic/{video_id}",
     )
     return {"status": status}
 
@@ -1380,5 +1438,7 @@ async def prefetch_ytmusic_ready(video_id: str):
     после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
-    ready = await prefetch_is_ready(video_id, f"ytdlp:resolve:v2:{video_id}")
+    ready = await prefetch_is_ready(
+        video_id, f"ytdlp:resolve:v2:{video_id}", archive_key=f"ytmusic/{video_id}"
+    )
     return {"ready": ready}

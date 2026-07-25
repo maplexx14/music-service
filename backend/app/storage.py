@@ -25,6 +25,9 @@ from datetime import timedelta
 from typing import Iterator, Optional
 from urllib.parse import urlsplit
 
+from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────── конфигурация ───────────────────────────
@@ -276,6 +279,71 @@ def iter_music_object(
     finally:
         resp.close()
         resp.release_conn()
+
+
+def minio_range_response(file_path: str, request: Request) -> Response:
+    """Отдаёт аудио-объект из MinIO с поддержкой Range (перемотка/докачка).
+
+    Проксируем через бэкенд (тот же origin/https, что и приложение), А НЕ
+    редиректом на MINIO_PUBLIC_ENDPOINT: за https-туннелем прямой
+    http://<minio>:9000 блокируется как mixed content, а localhost с другого
+    устройства указывает на сам клиент. Внутренний клиент (minio:9000) доступен
+    из контейнера всегда.
+
+    Общий путь для /tracks/{id}/stream и для провайдерских стрим-эндпоинтов
+    (ytdlp/soundcloud), которые проверяют архивную копию до резолва.
+    """
+    file_size, mime_type = stat_music_object(file_path)
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        # Байты объекта неизменны для данного ключа — разрешаем браузеру
+        # кэшировать: повторный старт и перемотка не тянут их заново через
+        # туннель (раньше здесь стоял no-store и каждый seek качал заново).
+        "Cache-Control": "private, max-age=3600",
+        "Vary": "Accept-Encoding",
+    }
+    range_header = request.headers.get("range")
+    if not range_header:
+        return StreamingResponse(
+            iter_music_object(file_path),
+            media_type=mime_type,
+            headers={**common_headers, "Content-Length": str(file_size)},
+        )
+
+    try:
+        unit, raw_range = range_header.strip().split("=", 1)
+        if unit.lower() != "bytes" or "," in raw_range:
+            raise ValueError
+        raw_start, raw_end = raw_range.split("-", 1)
+        if raw_start:
+            start = int(raw_start)
+            end = int(raw_end) if raw_end else file_size - 1
+        else:
+            suffix_length = int(raw_end)
+            if suffix_length <= 0:
+                raise ValueError
+            start = max(file_size - suffix_length, 0)
+            end = file_size - 1
+        if start < 0 or start >= file_size or end < start:
+            raise ValueError
+        end = min(end, file_size - 1)
+    except (ValueError, TypeError):
+        return Response(
+            status_code=416,
+            headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+        )
+
+    content_length = end - start + 1
+    return StreamingResponse(
+        iter_music_object(file_path, offset=start, length=content_length),
+        status_code=206,
+        media_type=mime_type,
+        headers={
+            **common_headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(content_length),
+        },
+    )
 
 
 def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int]:

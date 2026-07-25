@@ -674,6 +674,7 @@ async def stream_soundcloud(token: str, request: Request):
         request,
         f"sc{track_id}",
         lambda force: _resolve_cached(track_id, permalink, force=force),
+        archive_key=f"soundcloud/{track_id}",
     )
 
 
@@ -687,6 +688,7 @@ async def prefetch_soundcloud(token: str):
         lambda force=False: _resolve_cached(track_id, permalink, force=force),
         f"soundcloud:resolve:{track_id}",
         _RESOLVE_TTL,
+        archive_key=f"soundcloud/{track_id}",
     )
     return {"status": status}
 
@@ -696,5 +698,9 @@ async def prefetch_soundcloud_ready(token: str):
     """Готов ли прогрев трека (резолв в Redis или кэш-файл). Фронт поллит это
     после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
     track_id, _permalink = _decode_token(token)
-    ready = await prefetch_is_ready(f"sc{track_id}", f"soundcloud:resolve:{track_id}")
+    ready = await prefetch_is_ready(
+        f"sc{track_id}",
+        f"soundcloud:resolve:{track_id}",
+        archive_key=f"soundcloud/{track_id}",
+    )
     return {"ready": ready}

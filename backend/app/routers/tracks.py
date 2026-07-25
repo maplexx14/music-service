@@ -153,52 +153,7 @@ def stream_track(
     # localhost с другого устройства указывает на сам клиент. Внутренний клиент
     # (minio:9000) доступен из контейнера всегда. Range поддерживаем вручную.
     if storage.is_minio_path(track.file_path):
-        file_size, mime_type = storage.stat_music_object(track.file_path)
-        range_header = request.headers.get("range")
-        common_headers = {
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Vary": "Accept-Encoding",
-        }
-        if range_header:
-            try:
-                unit, raw_range = range_header.strip().split("=", 1)
-                if unit.lower() != "bytes" or "," in raw_range:
-                    raise ValueError
-                raw_start, raw_end = raw_range.split("-", 1)
-                if raw_start:
-                    start = int(raw_start)
-                    end = int(raw_end) if raw_end else file_size - 1
-                else:
-                    suffix_length = int(raw_end)
-                    if suffix_length <= 0:
-                        raise ValueError
-                    start = max(file_size - suffix_length, 0)
-                    end = file_size - 1
-                if start < 0 or start >= file_size or end < start:
-                    raise ValueError
-                end = min(end, file_size - 1)
-            except (ValueError, TypeError):
-                return Response(
-                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                    headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
-                )
-            content_length = end - start + 1
-            return StreamingResponse(
-                storage.iter_music_object(track.file_path, offset=start, length=content_length),
-                status_code=status.HTTP_206_PARTIAL_CONTENT,
-                media_type=mime_type,
-                headers={
-                    **common_headers,
-                    "Content-Range": f"bytes {start}-{end}/{file_size}",
-                    "Content-Length": str(content_length),
-                },
-            )
-        return StreamingResponse(
-            storage.iter_music_object(track.file_path),
-            media_type=mime_type,
-            headers={**common_headers, "Content-Length": str(file_size)},
-        )
+        return storage.minio_range_response(track.file_path, request)
 
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
     if track.source and track.source != "local":

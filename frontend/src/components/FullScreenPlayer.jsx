@@ -48,6 +48,7 @@ function FullScreenProgress() {
         <span>{formatTime(currentTime)}</span>
         <span>{formatTime(duration)}</span>
       </div>
+
     </div>
   )
 }
@@ -78,9 +79,10 @@ function FullScreenPlayer() {
   const [lyricsMode, setLyricsMode] = useState(false)
   const gestureRef = useRef(null)
 
-  // Karaoke mode: lyrics are always on, no toggle
+  // Keep the initial layout in sync with the way fullscreen was opened.
+  // Karaoke mode always starts with lyrics; a plain cover click always resets them.
   useEffect(() => {
-    if (karaokeMode) setLyricsMode(true)
+    setLyricsMode(Boolean(karaokeMode))
   }, [karaokeMode])
 
   const { syncedLines, plainText, loading: lyricsLoading } = useLyrics(currentTrack)
@@ -134,7 +136,7 @@ function FullScreenPlayer() {
   const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
-  const canInteract = dbTrackId !== null || isExternalTrack
+  const canInteract = dbTrackId !== null || Boolean(currentTrack?.source)
 
   const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
   const handleSkipForward = () => {
@@ -183,7 +185,7 @@ function FullScreenPlayer() {
 
   return (
     <div
-      className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}${karaokeMode ? ' karaoke-mode' : ''}`}
+      className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -201,9 +203,9 @@ function FullScreenPlayer() {
           <div className="fullscreen-subtitle">{queueLabel}</div>
           <div className="fullscreen-track">{currentTrack.title}</div>
         </div>
-        {!karaokeMode && (
+        {(
           <button
-            className={`fullscreen-icon${hasLyrics ? ' active' : ''}`}
+            className={`fullscreen-icon fullscreen-lyrics-toggle${hasLyrics ? ' active' : ''}`}
             onClick={() => setLyricsMode((prev) => !prev)}
             disabled={!hasLyrics && !lyricsLoading}
             aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
@@ -302,8 +304,26 @@ function FullScreenPlayer() {
           <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
         </button>
       </div>
+
+      <div className="fullscreen-mobile-tools">
+        <button
+          type="button"
+          className={`fullscreen-mobile-lyrics${lyricsMode ? ' active' : ''}`}
+          onClick={() => setLyricsMode((prev) => !prev)}
+          disabled={!hasLyrics && !lyricsLoading}
+          aria-label={lyricsMode ? 'Hide lyrics' : 'Show lyrics'}
+          title={hasLyrics ? (lyricsMode ? 'Hide lyrics' : 'Show lyrics') : 'Lyrics not found'}
+        >
+          <AlignLeft size={24} />
+        </button>
+      </div>
     </div>
   )
 }
 
 export default FullScreenPlayer
+
+
+
+
+

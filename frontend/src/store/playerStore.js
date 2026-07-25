@@ -27,6 +27,13 @@ function prefetchKeyFor(track) {
   return null
 }
 
+// Готов ли трек к мгновенному старту: его резолв на бэке уже завершён, либо
+// резолв ему не нужен вовсе (локальный трек — prefetchKeyFor даёт null).
+function isTrackResolved(track) {
+  const key = prefetchKeyFor(track)
+  return !key || resolvedPrefetchKeys.has(key)
+}
+
 // Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
 // ре-рендеры компонентов, но не персистится между перезагрузками страницы
 // (это нормально: кэш на бэке в Redis всё равно тёплый).
@@ -419,7 +426,13 @@ const usePlayerStore = create((set, get) => ({
       const preload = get().flowPreload
       if (preload && Date.now() - preload.ts < FLOW_PRELOAD_TTL_MS && preload.tracks.length > 0) {
         set({ flowPreload: null })
-        get().playPlaylist(preload.tracks, 0, 'flow')
+        // Стартуем с трека, чей резолв УЖЕ завершён (preloadFlow греет первые
+        // два, ready-поллинг помечает готовность). Если первый ещё резолвится,
+        // а второй готов — начать со второго значит играть сразу вместо
+        // ожидания нескольких секунд; порядок потока при этом не важен, он
+        // и так перемешан на бэке. Ничего не готово — стартуем с нулевого.
+        const startIndex = Math.max(preload.tracks.findIndex(isTrackResolved), 0)
+        get().playPlaylist(preload.tracks, startIndex, 'flow')
         get().prefetchTracks(preload.tracks.slice(0, 4), 4)
         set({ flowActive: true })
         return true

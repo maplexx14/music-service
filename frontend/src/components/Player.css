@@ -586,3 +586,19 @@
 .volume-slider:hover::-moz-range-thumb {
   background: #a259ff;
 }
+
+/* The mini player itself fills as the track progresses. */
+.player-progress-surface {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: 0;
+  border-radius: 999px 0 0 999px;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.13);
+  will-change: width;
+  z-index: 0;
+}
+
+

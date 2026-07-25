@@ -78,6 +78,9 @@ function LyricsPanel({ showOnlyText = false }) {
       className="lyrics-panel"
       ref={containerRef}
       onScroll={handleScroll}
+      onTouchStart={showOnlyText ? (event) => event.stopPropagation() : undefined}
+      onTouchMove={showOnlyText ? (event) => event.stopPropagation() : undefined}
+      onTouchEnd={showOnlyText ? (event) => event.stopPropagation() : undefined}
     >
       {isSynced ? (
         <div className="lyrics-synced">
@@ -107,3 +110,4 @@ function LyricsPanel({ showOnlyText = false }) {
 
 export { LyricsPanel }
 export default LyricsPanel
+

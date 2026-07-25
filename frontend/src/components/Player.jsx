@@ -21,14 +21,6 @@ const RETRY_DELAY_MS = 900
 // Проверочный range-запрос при ошибке не должен зависать дольше этого —
 // иначе зависший probe держит трек в состоянии "буферизуется" бесконечно.
 const PROBE_TIMEOUT_MS = 6000
-// Ленивая подгрузка следующего трека: начинаем буферизовать его, когда до
-// конца текущего осталось <=20с ИЛИ проиграно >=85% — что наступит раньше.
-// Окно по остатку масштабируется вниз для коротких треков (40% длительности),
-// чтобы они не начинали буферизацию сразу со старта.
-const PRELOAD_NEXT_REMAINING_SEC = 20
-const PRELOAD_NEXT_REMAINING_RATIO = 0.4
-const PRELOAD_NEXT_PROGRESS_RATIO = 0.85
-
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -44,14 +36,15 @@ const PLAY_RECORD_MIN_SEC = 60
 // Строя этот URL сразу на фронте, экономим полный round-trip редиректа
 // (через tuna-туннель — десятки-сотни мс) плюс SQL-запрос на бэке
 // при КАЖДОМ старте внешнего трека.
-// ytmusic СОЗНАТЕЛЬНО НЕ срезаем напрямую: его нужно вести через
-// /tracks/{id}/stream, чтобы бэкенд (а) при первом прослушивании фоном
-// закэшировал трек в MinIO, (б) на повторных отдавал его прямо из MinIO
-// (быстрее и надёжнее живого резолва yt-dlp). Для незакэшированных
-// бэкенд сам редиректит на /ytdlp/stream/ (один лишний hop до кэширования).
-// soulseek в MinIO не архивируется (P2P), поэтому его шорткат сохраняем.
+// ytmusic тоже срезаем напрямую: /ytdlp/stream сам (а) отдаёт архивную копию
+// из MinIO, если она есть (см. stream_cached_audio → archived_music_path),
+// (б) ставит ленивую архивацию при первом прослушивании. Крюк через
+// /tracks/{id}/stream давал ровно те же байты, но ценой лишнего 307 на
+// каждом старте — полный round-trip через туннель.
+// soulseek в MinIO не архивируется (P2P), но его прокси-эндпоинт прямой.
 const DIRECT_STREAM_PREFIX = {
   soulseek: '/soulseek/stream/',
+  ytmusic: '/ytdlp/stream/',
 }
 
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
@@ -123,19 +116,28 @@ function PlayerProgress({ audioRef }) {
     setCurrentTime(newTime)
   }
 
+  const progressPercent = duration ? Math.min(100, (currentTime / duration) * 100) : 0
+
   return (
-    <div className="player-progress-top" onClick={handleSeek}>
-      <div className="player-progress-top-track">
-        <div
-          className="player-progress-top-fill"
-          style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-        >
-          <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
-          <span className="player-progress-thumb" />
+    <>
+      <div
+        className="player-progress-surface"
+        style={{ width: `${progressPercent}%` }}
+        aria-hidden="true"
+      />
+      <div className="player-progress-top" onClick={handleSeek}>
+        <div className="player-progress-top-track">
+          <div
+            className="player-progress-top-fill"
+            style={{ width: `${progressPercent}%` }}
+          >
+            <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
+            <span className="player-progress-thumb" />
+          </div>
         </div>
+        <span className="player-progress-duration">{formatTime(duration)}</span>
       </div>
-      <span className="player-progress-duration">{formatTime(duration)}</span>
-    </div>
+    </>
   )
 }
 
@@ -178,17 +180,6 @@ function PlayerInner() {
   const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
 
   const audioRef = useRef(null)
-  // Оставлены только как guards для старой логики preload; второго <audio>
-  // больше нет, поэтому iOS сохраняет единственного media-session владельца.
-  const nextAudioRef = useRef(null)
-  const nextBlobUrlRef = useRef(null)
-  const preloadTriggeredForRef = useRef(null)
-  // Скрытый <audio preload="none">, который буферизирует следующий трек
-  // очереди, когда текущий подходит к концу — без него оставался бы только
-  // фоновый прогрев резолва на бэке (prefetchNext), а не реальная буферизация
-  // байтов в браузере.
-  // id трека, для которого уже запущена ленивая подгрузка следующего — чтобы
-  // не запускать её повторно на каждом timeupdate.
   const lastRecordedTrackIdRef = useRef(null)
   // Токен актуальности резолва audioSrc (см. эффект ниже) — защита от того,
   // что устаревший (для уже пропущенного трека) fetch применит свой результат
@@ -254,58 +245,6 @@ function PlayerInner() {
     threshold: 60,
   })
 
-  // Ленивая подгрузка следующего трека: пока не наступил порог — буфер
-  // остаётся пустым (preload="none"), браузер не трогает файл следующего
-  // трека. При приближении к концу текущего переключаем скрытый <audio> на
-  // preload="auto" и задаём ему src следующего трека — начинается фоновая
-  // буферизация без видимого запроса от пользователя.
-  const triggerNextPreload = () => {
-    const trackId = currentTrack?.id
-    if (trackId == null || preloadTriggeredForRef.current === trackId) return
-    const next = usePlayerStore.getState().getNextTrack()
-    if (!next) return
-    preloadTriggeredForRef.current = trackId
-
-    const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(next.source)
-    const rawUrl = resolveRawUrl(next, nextIsExternal)
-    if (!rawUrl) return
-
-    const nextAudio = nextAudioRef.current
-    if (!nextAudio) return
-
-    if (nextBlobUrlRef.current) {
-      URL.revokeObjectURL(nextBlobUrlRef.current)
-      nextBlobUrlRef.current = null
-    }
-
-    const isOurApi = !nextIsExternal && (rawUrl.startsWith(API_URL) || rawUrl.startsWith('/'))
-    const swActive = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller
-
-    // Detect slow connections and iOS
-    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection
-    const isSlowConnection = conn && (conn.effectiveType === 'slow-2g' || conn.effectiveType === '2g' || conn.downlink < 0.5)
-    const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
-
-    // iOS Safari: skip blob preload entirely — blob URLs cause issues with audio loading
-    // Slow connections: skip blob preload to save bandwidth
-    nextAudio.preload = (isIOSDevice || isSlowConnection) ? 'none' : 'auto'
-    if (isOurApi && !swActive && !isSlowConnection && !isIOSDevice) {
-      fetch(rawUrl, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' } })
-        .then((r) => r.blob())
-        .then((blob) => {
-          const url = URL.createObjectURL(blob)
-          nextBlobUrlRef.current = url
-          nextAudio.src = url
-          nextAudio.load()
-        })
-        .catch(() => {})
-    } else {
-      // On iOS and slow connections: let browser stream directly without blob
-      nextAudio.src = rawUrl
-      nextAudio.load()
-    }
-  }
-
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
@@ -339,34 +278,6 @@ function PlayerInner() {
       lastTickSecond = sec
       if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
-      const effDuration = resolveTrackDuration(audio, currentTrack)
-
-      // Adaptive preload: skip on slow connections, delay on moderate
-      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection
-      const effectiveType = conn?.effectiveType
-      const downlink = conn?.downlink
-      const isSlow2G = effectiveType === 'slow-2g'
-      const is2G = effectiveType === '2g' || (downlink && downlink < 0.5)
-      const is3G = effectiveType === '3g' || (downlink && downlink < 2)
-
-      // Skip preload entirely on very slow connections
-      if (isSlow2G) return
-
-      // On slow connections, use more conservative thresholds
-      const preloadRemaining = is2G ? 10 : is3G ? 15 : PRELOAD_NEXT_REMAINING_SEC
-      const preloadProgress = is2G ? 0.95 : is3G ? 0.90 : PRELOAD_NEXT_PROGRESS_RATIO
-
-      const remainingWindow = Math.min(
-        preloadRemaining,
-        effDuration * PRELOAD_NEXT_REMAINING_RATIO
-      )
-      if (
-        effDuration &&
-        (effDuration - audio.currentTime <= remainingWindow ||
-          audio.currentTime / effDuration >= preloadProgress)
-      ) {
-        triggerNextPreload()
-      }
     }
     // Зависший старт: play() уже принят (paused === false), а currentTime
     // замер на нуле. Две разновидности, у каждой своё лекарство:
@@ -379,7 +290,24 @@ function PlayerInner() {
     //      прогресс-бар. load() тут вреден: он сбрасывает уже загруженный
     //      буфер и может застрять снова.
     // «paused-ретраи» обе формы не видят: элемент формально «играет».
-    const isStalledStart = () => !audio.paused && audio.currentTime === 0
+    //
+    // ВАЖНО: «данных ещё нет» — это НЕ зависание. Через узкий туннель
+    // (~140 КБ/с) трек честно грузится несколько секунд, и раньше watchdog
+    // принимал это за stall: kickStalled() звал load(), тот РВАЛ уже летящий
+    // запрос (в логах nginx — серия 499 каждые ~3 с) и начинал качать с нуля.
+    // Старт 3.5-МБ трека растягивался на ~25 с вместо ~2 с. Поэтому «замерло»
+    // определяем по нативному событию progress (браузер шлёт его, пока байты
+    // идут): загрузка считается зависшей, только если байты не приходили
+    // NO_PROGRESS_STALL_MS.
+    const NO_PROGRESS_STALL_MS = 8000
+    let lastProgressAt = Date.now()
+    const noteProgress = () => {
+      lastProgressAt = Date.now()
+    }
+    const isStalledStart = () =>
+      !audio.paused &&
+      audio.currentTime === 0 &&
+      Date.now() - lastProgressAt > NO_PROGRESS_STALL_MS
     const kickStalled = () => {
       if (audio.readyState >= audio.HAVE_CURRENT_DATA) {
         try {
@@ -524,6 +452,12 @@ function PlayerInner() {
     }, 3000)
 
     audio.addEventListener('timeupdate', updateTime)
+    // progress/loadstart питают детектор зависания (см. isStalledStart):
+    // пока браузер докладывает о новых байтах, загрузка живая — рвать её
+    // load()'ом нельзя, даже если трек ещё не начал играть.
+    audio.addEventListener('progress', noteProgress)
+    audio.addEventListener('loadstart', noteProgress)
+    audio.addEventListener('canplay', noteProgress)
     document.addEventListener('visibilitychange', handleVisibility)
     audio.addEventListener('loadedmetadata', updateDuration)
     audio.addEventListener('durationchange', updateDuration)
@@ -542,6 +476,9 @@ function PlayerInner() {
     return () => {
       clearInterval(watchdog)
       audio.removeEventListener('timeupdate', updateTime)
+      audio.removeEventListener('progress', noteProgress)
+      audio.removeEventListener('loadstart', noteProgress)
+      audio.removeEventListener('canplay', noteProgress)
       document.removeEventListener('visibilitychange', handleVisibility)
       audio.removeEventListener('loadedmetadata', updateDuration)
       audio.removeEventListener('durationchange', updateDuration)
@@ -653,30 +590,13 @@ function PlayerInner() {
     setAddError('')
     setSelectedPlaylistId('')
 
-    // Сбрасываем состояние ленивой подгрузки следующего трека — новый трек
-    // ещё не приблизился к концу, буферизировать пока нечего.
-    preloadTriggeredForRef.current = null
-    if (nextBlobUrlRef.current) {
-      URL.revokeObjectURL(nextBlobUrlRef.current)
-      nextBlobUrlRef.current = null
-    }
-    const nextAudio = nextAudioRef.current
-    if (nextAudio) {
-      nextAudio.removeAttribute('src')
-      nextAudio.preload = 'none'
-      nextAudio.load()
-    }
   }, [currentTrack?.id, setCurrentTime, setDuration])
 
-  // Отменяем висящий ретрай и освобождаем буфер предзагрузки при
-  // размонтировании плеера.
+  // Отменяем висящий ретрай при размонтировании плеера.
   useEffect(() => {
     return () => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current)
-      }
-      if (nextBlobUrlRef.current) {
-        URL.revokeObjectURL(nextBlobUrlRef.current)
       }
     }
   }, [])
@@ -1196,7 +1116,7 @@ function PlayerInner() {
         <button
           type="button"
           className="player-cover-wrap"
-          onClick={openFullScreen}
+          onClick={() => openFullScreen(false)}
           aria-label="Открыть плеер на весь экран"
         >
           <img
@@ -1364,3 +1284,5 @@ function PlayerInner() {
 const Player = React.memo(PlayerInner)
 
 export default Player
+
+

@@ -34,6 +34,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app import storage
+from app.cache import set_cache_async
 from app.database import SessionLocal
 from app.models import Track
 from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
@@ -95,6 +96,17 @@ class _TooLarge(Exception):
 
 def _audio_content_type(ext: str) -> str:
     return _AUDIO_CT.get(ext.lower(), "audio/mpeg")
+
+
+async def _note_archived(source: str, external_id: str, file_path: str) -> None:
+    """Публикует путь свежей архивной копии в кэш, который читают стрим-эндпоинты.
+
+    Провайдерские стримы ищут архив через ``archive:path:<source>/<id>``
+    (см. ytdlp.archived_music_path) и кэшируют промах на несколько минут. Без
+    этой записи только что заархивированный трек продолжал бы играться
+    медленным путём резолва до истечения negative-TTL.
+    """
+    await set_cache_async(f"archive:path:{source}/{external_id}", file_path, expire=24 * 3600)
 
 
 def _sc_permalink_from_track(track: Track) -> Optional[str]:
@@ -349,6 +361,8 @@ async def archive_track(
                 except OSError:
                     pass
 
+        await _note_archived(track.source, track.external_id, file_path)
+
         # Обложку архивируем отдельно и best-effort: её отсутствие не должно
         # ронять архивацию аудио.
         new_cover = await _archive_cover(track, f"{track.source}/{track.external_id}", client)
@@ -496,6 +510,8 @@ async def _archive_external_core(
                 except OSError:
                     pass
 
+        await _note_archived(source, external_id, file_path)
+
         # Если трек уже материализован — привязываем объект к записи и архивируем
         # обложку. Если записи нет (трек играется из поиска/потока) — объект
         # просто лежит в MinIO и будет подхвачен при последующем импорте (find_music_object).
@@ -544,15 +560,19 @@ async def schedule_archive_external(
 
     try:
         async with _lazy_sem:
-            prefix = f"external/{source}/{external_id}"
-            # Проверка наличия объекта ПОД семафором: MinIO list_objects —
-            # сетевой вызов, до семафора он замедляет каждый стрим-запрос,
-            # а при высокой нагрузке и вовсе блокирует очередь архиваций.
-            existing = storage.find_music_object(prefix)
+            # Наличие объекта берём через кэш пути (Redis), который читает и сам
+            # стрим — на повторных прослушиваниях это вообще без сети к MinIO.
+            # Проверка ПОД семафором: до него сетевой вызов замедлял бы каждый
+            # стрим-запрос, а под нагрузкой блокировал очередь архиваций.
+            from app.routers.ytdlp import archived_music_path
+
+            existing = await archived_music_path(f"{source}/{external_id}")
             db = SessionLocal()
             try:
-                track = (
-                    db.query(Track)
+                # SQL — блокирующий вызов, а мы висим на том же event loop, что
+                # и живые стримы (архивация запускается из стрим-эндпоинта).
+                track = await asyncio.to_thread(
+                    lambda: db.query(Track)
                     .filter(Track.source == source, Track.external_id == external_id)
                     .first()
                 )
