@@ -31,3 +31,37 @@ def is_foreign_script(text: str) -> bool:
     """True, если в тексте есть символ явно чужой (не рус/англ) письменности
     или вьетнамская диакритика. Английская латиница таковой НЕ считается."""
     return bool(_FOREIGN_RE.search(text or ""))
+
+
+_CYRILLIC_RE = re.compile("[а-яё]", re.IGNORECASE)
+
+# Доля, с которой язык библиотеки считается ВЫРАЖЕННЫМ. Ниже — вкус смешанный,
+# и язык ничего не решает.
+_LANG_DOMINANCE = 0.65
+
+
+def is_cyrillic(text: str) -> bool:
+    return bool(_CYRILLIC_RE.search(text or ""))
+
+
+def dominant_is_cyrillic(texts) -> bool | None:
+    """True/False, если библиотека юзера явно русская/нерусская, иначе None.
+
+    Язык — не жанр, но при пустых genre-метаданных (заполнены у ~1% каталога)
+    это единственный сильный доступный сигнал, и на реальных данных он ровно
+    тот, что разделяет наблюдаемый шум: у слушателей русского рэпа библиотека
+    на 67-76% русская, а прилетали им English-ретро (Ace of Base, Rick Astley,
+    Joan Jett, Scorpions). Считается по названию+артисту.
+
+    ponytail: грубый прокси жанра. Если/когда genre начнёт приходить от
+    провайдеров или появится классификатор — проверку языка можно снять.
+    """
+    texts = [t for t in texts if t]
+    if len(texts) < 10:  # мало данных — не делаем выводов о языке
+        return None
+    share = sum(1 for t in texts if is_cyrillic(t)) / len(texts)
+    if share >= _LANG_DOMINANCE:
+        return True
+    if share <= 1 - _LANG_DOMINANCE:
+        return False
+    return None

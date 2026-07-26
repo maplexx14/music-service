@@ -12,11 +12,18 @@
 матчит нужные ключевые слова, и считаем жанр/тему привязанной к артисту в
 целом — так в кандидаты попадают ВСЕ его треки.
 """
+import re
+from functools import lru_cache
 from itertools import combinations
 from typing import Iterable
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
+
+
+@lru_cache(maxsize=256)
+def _word_re(keyword: str):
+    return re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE)
 
 
 def artists_matching_keywords(db: Session, keywords: Iterable[str], min_matches: int = 1) -> set:
@@ -46,10 +53,22 @@ def artists_matching_keywords(db: Session, keywords: Iterable[str], min_matches:
             and_(*(func.lower(Track.title).like(f"%{kw.lower()}%") for kw in combo))
             for combo in combinations(keywords, min_matches)
         ]
+    # LIKE %kw% — дешёвый предфильтр в SQL, но он матчит слово ВНУТРИ другого:
+    # "rap" в "Violent PornogRAPhy", "pop" в "Big POPpa", "trap" в "YUNG TRAPPA".
+    # Через привязку жанра к артисту это тянуло в выдачу ВЕСЬ чужой каталог
+    # (System Of A Down любителю русского рэпа). Границу слова проверяем в
+    # Python — SQL-regex по-разному пишется в Postgres (\y) и SQLite (нет его).
     rows = (
-        db.query(func.lower(Track.artist))
+        db.query(func.lower(Track.artist), Track.title)
         .filter(or_(*conditions))
-        .distinct()
         .all()
     )
-    return {r[0] for r in rows if r[0]}
+    lowered = [kw.lower() for kw in keywords]
+    matched = set()
+    for artist, title in rows:
+        if not artist:
+            continue
+        hits = sum(1 for kw in lowered if _word_re(kw).search(title or ""))
+        if hits >= max(1, min_matches):
+            matched.add(artist)
+    return matched

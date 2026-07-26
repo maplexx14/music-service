@@ -22,8 +22,9 @@ from app.models import (
 )
 from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse
 from app.dependencies import get_current_active_user
-from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords, genre_is_compatible
-from app.lang import is_foreign_script
+from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords
+from app.lang import dominant_is_cyrillic, is_foreign_script
+from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import similar_track_ids
@@ -77,6 +78,13 @@ _MAX_PER_ARTIST = 2
 # Плейлистные треки (вес +4.0) достигают порога ещё быстрее.
 _ARTIST_TRUST_THRESHOLD = 3.0
 
+# Насколько положительный сигнал должен ПЕРЕВЕШИВАТЬ скипы, чтобы недоверенный
+# артист попал в сид. Строгого `> 0` не хватает: оба сигнала лог-масштабные и
+# сходятся почти вплотную (2 прослушивания = 2.10 против 3 скипов = 2.08), так
+# что заскипанный артист проходил с перевесом 0.02 и тянул за собой весь свой
+# каталог. Требуем внятного перевеса, а не арифметической ничьей.
+_NET_TRUST_MARGIN = 1.0
+
 # --- Дослушивания (completion из user_play_events) ---
 # Средняя доля дослушивания уточняет бинарный play/skip: стабильно
 # дослушиваемый трек — более сильный плюс, стабильно бросаемый на 10-30% —
@@ -92,6 +100,13 @@ _COMPLETION_LO_ARTIST_PENALTY = 0.75
 # (коллаборативный сигнал), в приоритете — артисты, которых юзер ещё не
 # слушал. Остальная выдача — «эксплуатация» известного вкуса.
 _EXPLORE_RATIO = 0.2
+
+# Доля от score самого похожего соседа, ниже которой co-occurrence-сосед
+# считается шумом. Матрица строится с _MIN_COMMON=1 (иначе на малой базе она
+# пустая), поэтому в хвосте лежат пары, склеенные ОДНИМ случайным общим
+# слушателем. У реального юзера-рэпера топ-сосед имел score ~33, а хвост
+# 0.8-1.4 — именно оттуда в выдачу приходили Ace of Base и Men At Work.
+_NEIGHBOR_SCORE_FLOOR = 0.05
 
 # --- Показы (rec_impressions) ---
 # Трек, показанный в рекомендациях столько раз и ни разу не сыгранный,
@@ -126,22 +141,35 @@ _BUCKET_HOURS = {
 }
 
 
-def _varied_popular(db: Session, exclude_ids: set, need: int) -> list:
+def _varied_popular(
+    db: Session,
+    exclude_ids: set,
+    need: int,
+    keep=None,
+) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
     Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
     старта, и для добора тонкой выдачи, чтобы рекомендации были свои у
-    каждого, а не один и тот же глобальный список."""
+    каждого, а не один и тот же глобальный список.
+
+    keep — предикат вкуса; передаётся, когда у юзера УЖЕ есть профиль. Без него
+    этот путь был главной причиной нерелевантной выдачи: у слушателя русского
+    рэпа он занимал большинство слотов глобальными хитами (Rick Astley, AC/DC,
+    Hell March). При холодном старте keep нет — фильтровать нечем и не по чему.
+    """
     if need <= 0:
         return []
     q = db.query(Track)
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
+    # С предикатом вкуса отсев жёстче, поэтому берём пул с большим запасом.
+    window = max(need * (40 if keep else 5), 100)
     pool = [
         t
-        for t in q.order_by(desc(Track.play_count)).limit(max(need * 5, 100)).all()
+        for t in q.order_by(desc(Track.play_count)).limit(window).all()
         # Фильтр иностранного здесь и обещан docstring'ом, и нужен: холодный
         # старт не должен подсовывать стабильно скипаемые CJK/вьетнамские хиты.
-        if not is_foreign_script(t.title)
+        if not is_foreign_script(t.title) and (keep is None or keep(t))
     ]
     random.shuffle(pool)
     return cap_per_artist(pool, _MAX_PER_ARTIST)[:need]
@@ -404,8 +432,34 @@ def get_recommendations(
             for key, pos in artist_positive.items()
             if pos >= _ARTIST_TRUST_THRESHOLD
             or artist_curated_count.get(key, 0) >= _CURATED_TRUST_COUNT
-            or pos - artist_skip_penalty.get(key, 0) > 0
+            or pos - artist_skip_penalty.get(key, 0) >= _NET_TRUST_MARGIN
         ]
+
+        # Единая проверка релевантности для ВСЕХ путей выдачи (основной пул,
+        # co-occurrence-соседи, добор популярным). Раньше каждый путь фильтровал
+        # по-своему, и постороннее протекало через тот, что чинили последним.
+        _prefer_cyrillic = dominant_is_cyrillic(
+            [f"{t.title} {t.artist}" for t, *_ in liked]
+            + [f"{t.title} {t.artist}" for t, *_ in playlisted]
+            + [f"{t.title} {t.artist}" for t, *_ in played]
+        )
+        keep_track = track_check(
+            make_relevance_check(
+                trusted_artist_keys=set(artist_keys),
+                user_genres=set(genres),
+                prefer_cyrillic=_prefer_cyrillic,
+            )
+        )
+        # Для добора глобально популярным — строгий вариант: там кандидат не
+        # связан со вкусом ничем, поэтому нужно положительное подтверждение.
+        keep_unrelated = track_check(
+            make_relevance_check(
+                trusted_artist_keys=set(artist_keys),
+                user_genres=set(genres),
+                prefer_cyrillic=_prefer_cyrillic,
+                require_signal=True,
+            )
+        )
 
         # Кандидаты по вкусу; скипнутые треки исключаем целиком. Условия строим
         # только для непустых списков — у внешних треков жанра нет, и пустой
@@ -448,7 +502,12 @@ def get_recommendations(
 
         # Python-set — для фильтрации в памяти (exploration и т.п.); SQL-
         # исключение коллекции идёт подзапросом (см. _collection_exclude_select).
-        exclude_ids = set(user_track_ids) | skipped_track_ids | fatigued_ids
+        # Усталость показов — сигнал ПОРЯДКА, а не исключения: «показан 4 раза и
+        # не сыгран» ставит трек в конец очереди, но не выбрасывает его. Жёсткое
+        # исключение выжигало пул у активных юзеров (у одного — 191 трек из 300
+        # показанных), после чего выдача добивалась чем попало. Релевантный
+        # повтор лучше нерелевантной новинки.
+        exclude_ids = set(user_track_ids) | skipped_track_ids
         exclude_select = _collection_exclude_select(current_user.id)
         if taste_filters:
             # Берём с запасом — после genre-фильтра и cap_per_artist
@@ -458,9 +517,6 @@ def get_recommendations(
             q = db.query(Track).filter(or_(*taste_filters)).filter(
                 ~Track.id.in_(exclude_select)
             )
-            # «Уставшие» показы — маленький список, ему литеральный NOT IN ок.
-            if fatigued_ids:
-                q = q.filter(~Track.id.in_(fatigued_ids))
             pool = q.order_by(desc(Track.play_count)).limit(limit * 8).all()
             # Гарантируем, что треки доверенных артистов (из плейлистов)
             # попадают в пул, даже если их play_count низкий и они не
@@ -487,24 +543,20 @@ def get_recommendations(
             # Поднимаем их в пуле выше популярных, иначе нишевые артисты
             # из плейлистов (Sileo, KalloedBrood, play_count=1-6) систематически
             # задавливаются глобально популярными (AC/DC, Ace of Base, play_count=16).
-            pool.sort(key=lambda t: (0 if artist_key(t.artist) in playlist_artist_keys else 1, -t.play_count))
+            # «Уставшие» показы уходят в конец (не исключаются — см. exclude_ids).
+            pool.sort(
+                key=lambda t: (
+                    1 if t.id in fatigued_ids else 0,
+                    0 if artist_key(t.artist) in playlist_artist_keys else 1,
+                    -t.play_count,
+                )
+            )
             # Совпадение по слову в названии/теге само по себе не значит
             # "тот же дух" — трек мог попасть в выдачу по случайному слову в
-            # заголовке, будучи из совсем другого жанра. Артистов, которых
-            # пользователь уже реально слушает, из проверки исключаем — это
-            # доверенный сигнал сам по себе.
-            user_genres = set(genres)
-            pool = [
-                t for t in pool
-                if artist_key(t.artist) in artist_keys
-                or genre_is_compatible(t.genre, t.title, t.artist, user_genres)
-            ]
-            # Иностранное (вьетнам/CJK/деванагари и т.п.) юзер стабильно
-            # скипает — режем, кроме треков уже слушаемых им артистов.
-            pool = [
-                t for t in pool
-                if artist_key(t.artist) in artist_keys or not is_foreign_script(t.title)
-            ]
+            # заголовке, будучи из совсем другого жанра (плюс отсев иностранного
+            # и, при одноязычной библиотеке, чужого языка). Артисты, которых
+            # юзер реально слушает, проходят проверку сами по себе.
+            pool = [t for t in pool if keep_track(t)]
             recommended_tracks = cap_per_artist(pool, _MAX_PER_ARTIST)[:limit]
 
         # Exploration-слоты: ~20% выдачи — co-occurrence-соседи любимых треков
@@ -517,40 +569,75 @@ def get_recommendations(
         n_explore = max(1, int(limit * _EXPLORE_RATIO))
         got_ids = {t.id for t in recommended_tracks}
         seeds = (liked_track_ids + played_track_ids + playlisted_track_ids)[:80]
+        scored_neighbors = similar_track_ids(db, seeds, limit=300)
+        # Абсолютный score co-occurrence зависит от того, сколько у юзера
+        # сигналов, поэтому порог берём ОТНОСИТЕЛЬНО самого похожего соседа.
+        # Хвост распределения — это треки, попавшие в матрицу через одного
+        # случайного общего слушателя: у любителя русского рэпа именно оттуда
+        # приходили Ace of Base и Men At Work (score 0.8 против 33 у топа).
+        top_score = scored_neighbors[0][1] if scored_neighbors else 0.0
         neighbor_ids = [
             tid
-            for tid, _score in similar_track_ids(db, seeds, limit=150)
-            if tid not in exclude_ids and tid not in got_ids
+            for tid, score in scored_neighbors
+            if tid not in exclude_ids
+            and tid not in got_ids
+            and score >= top_score * _NEIGHBOR_SCORE_FLOOR
         ]
-        explore_tracks = []
+        neighbors: list = []
         if neighbor_ids:
             by_id = {
                 t.id: t
                 for t in db.query(Track).filter(Track.id.in_(neighbor_ids)).all()
             }
+            # Co-occurrence на малой базе склеивает треки через одного общего
+            # слушателя, поэтому «сосед» может быть из совсем другого жанра —
+            # прогоняем соседей через ту же проверку вкуса, что и основной пул.
             ordered = [
                 by_id[tid]
                 for tid in neighbor_ids
-                if tid in by_id and not is_foreign_script(by_id[tid].title)
+                if tid in by_id and keep_track(by_id[tid])
             ]
+            # «Уставшие» показы не исключаем, но ставим после свежих.
+            ordered.sort(key=lambda t: 1 if t.id in fatigued_ids else 0)
             fresh = [t for t in ordered if artist_key(t.artist) not in artist_keys]
             known = [t for t in ordered if artist_key(t.artist) in artist_keys]
             # 1 трек на артиста: exploration должен максимизировать охват
             # нового, а не заполнять слоты одним новым артистом.
-            explore_tracks = cap_per_artist(fresh + known, 1)[:n_explore]
+            neighbors = cap_per_artist(fresh + known, 1)
+        explore_tracks = neighbors[:n_explore]
         if explore_tracks:
-            keep = limit - len(explore_tracks)
-            recommended_tracks = recommended_tracks[:keep] + explore_tracks
+            n_keep = limit - len(explore_tracks)
+            recommended_tracks = recommended_tracks[:n_keep] + explore_tracks
 
-        # Добор варьируемым популярным, если вкусовых нашлось мало ИЛИ вообще
-        # не набралось фильтров (напр. у юзера один played-трек, чей артист
-        # ушёл в минус из-за скипов → taste_filters пуст). Без этого такие
-        # юзеры видели ПУСТУЮ выдачу. Активных не задевает: у них уже >= limit.
+        # Добор, когда вкусовых кандидатов нашлось мало ИЛИ фильтры вообще не
+        # набрались (напр. единственный played-трек, чей артист ушёл в минус по
+        # скипам) — иначе такие юзеры видели ПУСТУЮ выдачу.
+        #
+        # Сначала — ОСТАЛЬНЫЕ co-occurrence-соседи (сверх explore-квоты): это
+        # всё ещё «слушавшие ваше слушают и это», т.е. персональный сигнал.
+        # Раньше добор шёл сразу глобальным популярным, и на небольшом локальном
+        # каталоге он забирал БОЛЬШИНСТВО слотов: у слушателя русского рэпа
+        # 11 из 18 позиций занимали Hell March, Rick Astley и AC/DC, хотя
+        # непоказанных релевантных соседей оставалось больше сотни.
+        if len(recommended_tracks) < limit:
+            got = {t.id for t in recommended_tracks}
+            recommended_tracks += [
+                t for t in neighbors if t.id not in got
+            ][: limit - len(recommended_tracks)]
+        # Глобально популярное — последний резерв: только если персональных
+        # кандидатов не хватило даже вместе с соседями.
         if len(recommended_tracks) < limit:
             got = {t.id for t in recommended_tracks}
             recommended_tracks += _varied_popular(
-                db, exclude_ids | got, limit - len(recommended_tracks)
+                db,
+                exclude_ids | got,
+                limit - len(recommended_tracks),
+                keep=keep_unrelated,
             )
+            # Пул вкуса исчерпан (у активного юзера почти весь релевантный
+            # каталог уже в коллекции/показах) — отдаём КОРОТКУЮ выдачу вместо
+            # добивки посторонним. Раньше именно здесь слушателю русского рэпа
+            # прилетали поп и ретро.
     else:
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
         # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных

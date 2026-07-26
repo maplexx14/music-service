@@ -25,11 +25,11 @@ from app.dependencies import get_current_active_user
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
-    genre_is_compatible,
     infer_genre_from_text,
     top_genre_keywords,
 )
-from app.lang import is_foreign_script
+from app.lang import dominant_is_cyrillic
+from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.diversity import cap_per_artist, interleave_artists
 from app.artist_utils import artist_key
@@ -190,7 +190,12 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     seen_curated_artist = set()
     playlist_seeds: List[str] = []  # ytmusic video_id из плейлистов, свежие первыми
 
+    # Тексты (название + артист) всех положительных сигналов — по ним определяем
+    # доминирующий язык библиотеки (см. lang.dominant_is_cyrillic).
+    lang_texts: List[str] = []
+
     for track, added_at in liked:
+        lang_texts.append(f"{track.title} {track.artist}")
         key = artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + 3.0 * _decay(added_at)
         artist_display.setdefault(key, track.artist)
@@ -211,6 +216,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # пользователь осознанно подбирал композиции в плейлист, что является
     # более надёжным индикатором предпочтений, чем одиночный лайк.
     for track, added_at in playlisted:
+        lang_texts.append(f"{track.title} {track.artist}")
         key = artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + 4.0 * _decay(added_at)
         artist_display.setdefault(key, track.artist)
@@ -231,6 +237,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             playlist_seeds.append(track.external_id)
 
     for track, play_count, last_played in played:
+        lang_texts.append(f"{track.title} {track.artist}")
         w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
         key = artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + w
@@ -389,6 +396,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "genre_counts": dict(Counter(genres)),
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
         "banned_artists": banned_artists,
+        "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         "recent_ids": recent_ids,
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
@@ -441,21 +449,17 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     if genreartist_keys:
         filters.append(func.lower(Track.artist).in_(genreartist_keys))
 
-    curated_artist_keys = set(profile.get("curated_artist_keys") or [])
-    user_genres = set(profile.get("genres") or [])
-
-    def _keep(t: Track) -> bool:
-        # Для гарантированной квоты доверяем только артистам, которых юзер сам
-        # добавил в лайки/плейлисты, либо явному совместимому genre. Обычная
-        # история могла загрязниться предыдущими ошибочными рекомендациями —
-        # считать любого сыгранного артиста «жанром пользователя» нельзя.
-        key = artist_key(t.artist)
-        if key in curated_artist_keys:
-            return True
-        # Иностранное (вьетнам/CJK/деванагари…) юзер стабильно скипает.
-        if is_foreign_script(t.title):
-            return False
-        return genre_is_compatible(t.genre, t.title, t.artist, user_genres)
+    # Доверяем только артистам, которых юзер сам добавил в лайки/плейлисты, либо
+    # совместимому по жанру/языку треку. Обычная история могла загрязниться
+    # предыдущими ошибочными рекомендациями — считать любого сыгранного артиста
+    # «жанром пользователя» нельзя. Проверка общая с recommendations.py (taste.py).
+    _keep = track_check(
+        make_relevance_check(
+            trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+            user_genres=set(profile.get("genres") or []),
+            prefer_cyrillic=profile.get("prefer_cyrillic"),
+        )
+    )
 
     def _score(t: Track) -> float:
         """Персональный скор: artist_weight пользователя * global play_count.
@@ -747,28 +751,18 @@ async def get_flow(
         )
     ]
 
-    trusted_artist_keys = set(profile.get("curated_artist_keys") or [])
-    user_genres = set(profile.get("genres") or [])
-
-    def _matches_taste(t: ExternalTrackResponse) -> bool:
-        # Иностранное (вьетнам/CJK/…) юзер стабильно скипает — режем из радио.
-        if is_foreign_script(t.title):
-            return False
-        akey = artist_key(t.artist)
-        # Любимый артист — сильный сигнал даже без заполненного genre.
-        if akey in trusted_artist_keys:
-            return True
-        # Для незнакомого артиста требуется жанровая совместимость. Проверка
-        # только по наличию отдельных taste_keywords была слишком слабой и
-        # пропускала омонимы/случайные слова из поп-, техно- и ретро-треков.
-        if user_genres:
-            return genre_is_compatible(None, t.title, t.artist, user_genres)
-        # Если жанр из метаданных определить не удалось, не открываем шлюз всему
-        # радио: допускаем незнакомое только по явным тематическим словам.
-        if taste_keywords:
-            text = f"{t.title} {t.artist}".lower()
-            return any(kw in text for kw in taste_keywords)
-        return not trusted_artist_keys
+    # Та же проверка, что и для локальных кандидатов и для /recommendations
+    # (taste.py). У внешних треков genre всегда пуст, поэтому решает жанр по
+    # названию, а если он неопределим — язык библиотеки, и лишь затем
+    # тематические слова.
+    _matches_taste = track_check(
+        make_relevance_check(
+            trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+            user_genres=set(profile.get("genres") or []),
+            prefer_cyrillic=profile.get("prefer_cyrillic"),
+            keywords=taste_keywords,
+        )
+    )
 
     # Сиды всегда берём из подтверждённого профиля пользователя. Переходы от
     # рекомендованного трека к его radio создавали жанровый дрейф на каждом

@@ -14,7 +14,7 @@ common / sqrt(pop_a * pop_b) — иначе глобальные хиты «по
 """
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -92,17 +92,19 @@ def similar_track_ids(db: Session, seed_ids, limit: int = 100):
     seed_ids = [int(s) for s in seed_ids]
     if not seed_ids:
         return []
+    # IN с expanding bindparam, а не `= ANY(:seeds)`: ANY — Postgres-изм, на
+    # SQLite (тесты) он падал с "no such function: ANY". План в Postgres тот же.
     rows = db.execute(
         text(
             """
             SELECT other_track_id, SUM(score) AS s
             FROM track_cooccurrence
-            WHERE track_id = ANY(:seeds)
+            WHERE track_id IN :seeds
             GROUP BY other_track_id
             ORDER BY s DESC
             LIMIT :lim
             """
-        ),
+        ).bindparams(bindparam("seeds", expanding=True)),
         {"seeds": seed_ids, "lim": limit},
     ).all()
     return [(int(tid), float(score)) for tid, score in rows]
