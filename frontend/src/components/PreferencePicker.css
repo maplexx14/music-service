@@ -70,6 +70,38 @@
   100% { transform: scale(1); }
 }
 
+/* Жанр, который сервис определил по прослушиваниям, но юзер не выбрал сам. */
+.pref-chip.detected:not(.active) {
+  border-color: rgba(162, 89, 255, 0.55);
+  color: #ffffff;
+}
+
+.pref-chip.detected:not(.active) svg {
+  color: #a259ff;
+}
+
+.pref-apply-detected {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px dashed rgba(162, 89, 255, 0.6);
+  background: transparent;
+  color: #cfa6ff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.pref-apply-detected:hover {
+  background: rgba(162, 89, 255, 0.12);
+  color: #ffffff;
+}
+
 /* --- Артисты: теги + ввод + подсказки --- */
 .pref-tags {
   display: flex;
@@ -193,4 +225,36 @@
 
 .pref-suggestion:active {
   transform: scale(0.96);
+}
+
+/* --- Блок «определено по прослушиваниям» (артисты) --- */
+.pref-detected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(162, 89, 255, 0.25);
+  background: rgba(162, 89, 255, 0.06);
+}
+
+.pref-detected-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #cfa6ff;
+}
+
+.pref-detected .pref-suggestions {
+  margin-top: 0;
+}
+
+.pref-suggestion.detected {
+  border-color: rgba(162, 89, 255, 0.45);
+  color: #ffffff;
 }

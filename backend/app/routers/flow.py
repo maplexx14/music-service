@@ -31,7 +31,13 @@ from app.genre_keywords import (
 from app.lang import dominant_is_cyrillic
 from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
-from app.diversity import cap_per_artist, interleave_artists
+from app.diversity import (
+    cap_per_artist,
+    demote_over_cap,
+    interleave_artists,
+    primary_artist_key,
+    weighted_order,
+)
 from app.artist_utils import artist_key
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.routers import soundcloud, ytdlp
@@ -73,6 +79,13 @@ _TAG_EXPLORE_TTL = 1800
 # Максимум треков одного артиста в "эксплуатации" — иначе сортировка по
 # play_count раз за разом выдаёт одних и тех же самых заигранных артистов.
 _MAX_PER_ARTIST = 2
+# Сколько артистов вкуса берём в работу за один запрос. Порядок взвешенно
+# случайный (см. diversity.weighted_order), поэтому это не «топ-N навсегда», а
+# ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
+# библиотеки. Прежний фиксированный топ-12 был причиной «крутит одних и тех же».
+_FLOW_ARTISTS = 30
+# Сколько артистов конца выдачи помним для разноса на стыке подгрузок.
+_ARTIST_TAIL = 3
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого окна «последние N записей» — иначе у активных
 # пользователей (сотни прослушиваний за сессию) более ранний, но всё ещё
@@ -364,12 +377,13 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         pool = [r[0] for r in popular_yt if r[0] not in skipped_video_ids]
         seeds = random.sample(pool, min(5, len(pool)))
 
-    # В топ идут только артисты с положительным итоговым весом.
-    topartist_keys = [
-        a
-        for a, w in sorted(artist_weight.items(), key=lambda kv: kv[1], reverse=True)
-        if w > 0
-    ][:12]
+    # Артисты вкуса — только с положительным итоговым весом. Порядок взвешенно
+    # СЛУЧАЙНЫЙ, а не фиксированный топ по весу: детерминированный топ-N
+    # означал, что каждая подгрузка волны собирает кандидатов вокруг одних и
+    # тех же нескольких имён, а остальная библиотека юзера не доходит до
+    # выдачи вообще. Берём шире (_FLOW_ARTISTS из всех положительных).
+    positive_keys = [a for a, w in artist_weight.items() if w > 0]
+    topartist_keys = weighted_order(positive_keys, artist_weight)[:_FLOW_ARTISTS]
     top_artists = [artist_display.get(a, a) for a in topartist_keys]
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
@@ -461,20 +475,29 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         )
     )
 
-    def _score(t: Track) -> float:
-        """Персональный скор: artist_weight пользователя * global play_count.
-        Без этого все пользователи с одинаковым жанром видели бы один и тот же
-        глобальный топ по play_count — персонализация отсутствовала."""
-        return aw.get(artist_key(t.artist), 0) * (1 + math.log1p(t.play_count or 0))
+    # Ротация артистов этого запроса (взвешенно случайный порядок из профиля) —
+    # ею и упорядочиваем кандидатов. Сортировка по artist_weight * play_count
+    # давала строго один и тот же порядок при каждой подгрузке: несколько самых
+    # тяжёлых артистов забирали все слоты, остальная библиотека не доходила.
+    rotation = {k: i for i, k in enumerate(profile["artist_keys"])}
+
+    def _score(t: Track) -> tuple:
+        key = artist_key(t.artist)
+        # Артист вне ротации (пришёл по жанру/тегу) — после ротационных, внутри
+        # своей группы по популярности.
+        return (rotation.get(key, len(rotation)), -(t.play_count or 0))
 
     candidates: List[Track] = []
     if filters:
         q = db.query(Track).filter(or_(*filters))
         if exclude_ids:
             q = q.filter(~Track.id.in_(exclude_ids))
-        candidates = q.order_by(desc(Track.play_count)).limit(limit * 8).all()
+        # Случайная выборка окна, а не топ по play_count: иначе окно limit*8 —
+        # это всегда самые заигранные треки нескольких артистов, и никакая
+        # сортировка в Python уже не достанет остальных из библиотеки.
+        candidates = q.order_by(func.random()).limit(limit * 8).all()
         candidates = [t for t in candidates if _keep(t)]
-        candidates.sort(key=_score, reverse=True)
+        candidates.sort(key=_score)
         candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
 
     # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
@@ -489,7 +512,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             t for t in q.order_by(desc(Track.play_count)).limit(limit * 20).all()
             if _keep(t)
         ]
-        pool.sort(key=_score, reverse=True)
+        pool.sort(key=_score)
         candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
 
     return candidates
@@ -687,6 +710,14 @@ async def get_flow(
     }
 
     profile = await asyncio.to_thread(_taste_profile, db, current_user.id)
+    # Дальше идут секунды сетевых ожиданий (radio YT Music + поиск SoundCloud),
+    # а сессия всё это время держала бы соединение открытым в состоянии
+    # `idle in transaction` — под нагрузкой пул исчерпывается на ожидании сети,
+    # а не на работе с БД. Закрываем: profile — уже готовый dict из примитивов,
+    # а _local_candidates ниже возьмёт из пула новое соединение (сессия
+    # переоткрывает его лениво). current_user становится detached, но все его
+    # загруженные поля (нужен только .id) остаются доступны.
+    db.close()
     excl_ids |= profile["recent_ids"]
     excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
     for item_id in history_ids:
@@ -837,6 +868,11 @@ async def get_flow(
     )
     # Порядок внутри выдачи случайный, как и раньше (shuffle шёл по merged).
     random.shuffle(explore)
+    # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
+    # исполнителя, а лимита на артиста тут (в отличие от локального пула) не
+    # было — из-за этого разведка и приносила в выдачу одних и тех же артистов.
+    # Лишние не выбрасываем, а уводим в хвост: они ещё нужны для добора.
+    explore = demote_over_cap(explore, _MAX_PER_ARTIST)
 
     # --- эксплуатация: локальная библиотека по вкусу ---
     local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
@@ -861,6 +897,9 @@ async def get_flow(
     genre_quota = min(limit, 14 if limit == 15 else max(0, limit - 1))
 
     random.shuffle(exploit)
+    # _local_candidates капит артиста в каждом из двух проходов отдельно, так
+    # что суммарно один артист мог занять до 2*_MAX_PER_ARTIST мест.
+    exploit = demote_over_cap(exploit, _MAX_PER_ARTIST)
     relevant_local = exploit[:genre_quota]
 
     mix: List[dict] = [
@@ -896,7 +935,13 @@ async def get_flow(
     n_explore = used_external
     n_exploit = len(mix) - n_explore
     random.shuffle(mix)
-    mix = interleave_artists(mix, artist_getter=lambda item: item.get("artist"))
+    # Хвост артистов прошлой порции — иначе разнос работал только внутри одной
+    # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
+    mix = interleave_artists(
+        mix,
+        artist_getter=lambda item: item.get("artist"),
+        previous_artists=history.get("artists") or [],
+    )
 
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
@@ -921,6 +966,10 @@ async def get_flow(
                 tuple(k) for k in old_keys + returned_keys
                 if isinstance(k, (list, tuple)) and len(k) == 2
             )][-_FLOW_HISTORY_LIMIT:],
+            # Хвост артистов для разноса на стыке подгрузок (см. interleave_artists).
+            "artists": [
+                primary_artist_key(item.get("artist", "")) for item in mix
+            ][-_ARTIST_TAIL:],
         },
         expire=_FLOW_HISTORY_TTL,
     )

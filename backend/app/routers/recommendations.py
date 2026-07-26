@@ -27,8 +27,8 @@ from app.lang import dominant_is_cyrillic, is_foreign_script
 from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
-from app.cooccurrence import similar_track_ids
-from app.diversity import cap_per_artist, interleave_artists
+from app.cooccurrence import pair_scores, similar_track_ids
+from app.diversity import cap_per_artist, interleave_artists, mmr, weighted_order
 from app.artist_utils import artist_key
 
 router = APIRouter()
@@ -517,7 +517,12 @@ def get_recommendations(
             q = db.query(Track).filter(or_(*taste_filters)).filter(
                 ~Track.id.in_(exclude_select)
             )
-            pool = q.order_by(desc(Track.play_count)).limit(limit * 8).all()
+            # Окно берём СЛУЧАЙНО, а не топом по play_count: топ окна — это
+            # всегда самые заигранные треки нескольких артистов, поэтому выдача
+            # крутила одних и тех же, хотя вкусовых артистов в библиотеке сотни.
+            # Никакая сортировка в Python остальных уже не достанет — их просто
+            # нет в выборке.
+            pool = q.order_by(func.random()).limit(limit * 8).all()
             # Гарантируем, что треки доверенных артистов (из плейлистов)
             # попадают в пул, даже если их play_count низкий и они не
             # прошли в limit*8 по популярности. Иначе плейлисты с нишевыми
@@ -544,10 +549,19 @@ def get_recommendations(
             # из плейлистов (Sileo, KalloedBrood, play_count=1-6) систематически
             # задавливаются глобально популярными (AC/DC, Ace of Base, play_count=16).
             # «Уставшие» показы уходят в конец (не исключаются — см. exclude_ids).
+            # Ротация артистов вкуса: взвешенно случайный порядок вместо
+            # -play_count. По популярности первые слоты (после cap 2/артист)
+            # доставались одной и той же горстке самых заигранных артистов при
+            # каждом пересчёте — остальные артисты библиотеки не показывались.
+            rotation = {
+                key: i
+                for i, key in enumerate(weighted_order(artist_keys, artist_positive))
+            }
             pool.sort(
                 key=lambda t: (
                     1 if t.id in fatigued_ids else 0,
                     0 if artist_key(t.artist) in playlist_artist_keys else 1,
+                    rotation.get(artist_key(t.artist), len(rotation)),
                     -t.play_count,
                 )
             )
@@ -557,7 +571,15 @@ def get_recommendations(
             # и, при одноязычной библиотеке, чужого языка). Артисты, которых
             # юзер реально слушает, проходят проверку сами по себе.
             pool = [t for t in pool if keep_track(t)]
-            recommended_tracks = cap_per_artist(pool, _MAX_PER_ARTIST)[:limit]
+            capped = cap_per_artist(pool, _MAX_PER_ARTIST)
+            # Разнообразие по АУДИТОРИИ, а не только по имени артиста: cap выше
+            # не видит, когда артисты формально разные, но все из одной тусовки.
+            # Похожесть берём из co-occurrence по кандидатам-финалистам (запас
+            # limit*3, чтобы MMR было из чего выбирать, но запрос остался мелким).
+            shortlist = capped[: limit * 3]
+            recommended_tracks = mmr(
+                shortlist, pair_scores(db, [t.id for t in shortlist])
+            )[:limit]
 
         # Exploration-слоты: ~20% выдачи — co-occurrence-соседи любимых треков
         # («слушавшие X слушают и Y»). Единственный сигнал, открывающий юзеру

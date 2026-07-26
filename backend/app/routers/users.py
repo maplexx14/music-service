@@ -8,6 +8,7 @@ from app.models import User, Track
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
 from app.genre_keywords import GENRE_KEYWORDS, GENRE_LABELS
 from app.dependencies import get_current_active_user, get_current_admin_user
+from app.routers.flow import _taste_profile
 
 router = APIRouter()
 
@@ -48,6 +49,26 @@ def suggest_artists(
         .all()
     )
     return [r[0] for r in rows if r[0]]
+
+
+@router.get("/me/taste")
+def get_detected_taste(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Предпочтения, ВЫВЕДЕННЫЕ из прослушиваний (лайки, плейлисты, история).
+
+    Тот же профиль, по которому строится волна (flow._taste_profile), — чтобы
+    в настройках юзер видел, что сервис о нём понял, и мог перенести это в
+    свой явный выбор. Жанры фильтруем по словарю: в Track.genre встречаются
+    произвольные строки от провайдеров, а в предпочтениях храним только ключи.
+    """
+    profile = _taste_profile(db, current_user.id)
+    counts = profile.get("genre_counts") or {}
+    genres = sorted(
+        (g for g in counts if g in GENRE_KEYWORDS), key=lambda g: -counts[g]
+    )
+    return {"genres": genres[:12], "artists": (profile.get("artists") or [])[:12]}
 
 
 @router.put("/me/preferences", response_model=UserResponse)

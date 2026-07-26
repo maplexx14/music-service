@@ -82,6 +82,45 @@ def rebuild_cooccurrence(db: Session) -> int:
     return int(count or 0)
 
 
+def pair_scores(db: Session, track_ids) -> dict:
+    """Похожесть ВНУТРИ набора кандидатов: {(a, b): score} в обе стороны.
+
+    Нужна для MMR-отбора (diversity.mmr): чтобы наказывать кандидата за
+    похожесть на уже выбранное, нужна метрика «трек ↔ трек». Обучать embeddings
+    ради этого не обязательно — score в track_cooccurrence уже и есть метрика
+    похожести по аудитории.
+
+    Скоры нормируются на максимум в наборе: абсолютное значение зависит от
+    размера базы (на малой матрица строится с _MIN_COMMON=1), а MMR сравнивает
+    штраф с релевантностью в шкале 0..1.
+    """
+    ids = [int(t) for t in track_ids]
+    if len(ids) < 2:
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT track_id, other_track_id, score
+            FROM track_cooccurrence
+            WHERE track_id IN :ids AND other_track_id IN :ids
+            """
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": ids},
+    ).all()
+    if not rows:
+        return {}
+    top = max(float(r[2]) for r in rows) or 1.0
+    pairs: dict = {}
+    for a, b, score in rows:
+        s = float(score) / top
+        # Матрица асимметрична (нормировка по популярности), а MMR нужен
+        # симметричный «насколько это одно и то же» — берём максимум.
+        key, rkey = (int(a), int(b)), (int(b), int(a))
+        pairs[key] = max(pairs.get(key, 0.0), s)
+        pairs[rkey] = max(pairs.get(rkey, 0.0), s)
+    return pairs
+
+
 def similar_track_ids(db: Session, seed_ids, limit: int = 100):
     """Соседи по co-occurrence для набора seed-треков.
 

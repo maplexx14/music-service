@@ -90,10 +90,11 @@ services:
       AAC_BITRATE: ${AAC_BITRATE:-128}
       AAC_SAMPLE_RATE: ${AAC_SAMPLE_RATE:-44100}
       # Конкурентность: пул БД и threadpool согласованы между собой.
-      # pool_size + max_overflow не должно превышать Postgres max_connections
-      # (по умолчанию 100) в сумме по всем воркерам.
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
+      # (pool_size + max_overflow) × число воркеров gunicorn (-w 4 ниже) не
+      # должно превышать Postgres max_connections (по умолчанию 100).
+      # 10+10 × 4 = 80, остаток — под alembic, psql и служебные подключения.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-60}
     ports:
       - "8000:8000"

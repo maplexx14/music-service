@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Plus, X, Search } from 'lucide-react'
+import { Check, Plus, X, Search, Sparkles } from 'lucide-react'
 import api from '../services/api'
 import './PreferencePicker.css'
 
@@ -15,6 +15,8 @@ function PreferencePicker({ value, onChange }) {
   const [genreOptions, setGenreOptions] = useState([])
   const [artistQuery, setArtistQuery] = useState('')
   const [suggestions, setSuggestions] = useState([])
+  // Вкус, выведенный из прослушиваний — тот же профиль, что строит волну.
+  const [detected, setDetected] = useState({ genres: [], artists: [] })
 
   // Список жанров из встроенного словаря бэкенда.
   useEffect(() => {
@@ -23,6 +25,24 @@ function PreferencePicker({ value, onChange }) {
       .get('/users/genres')
       .then((res) => {
         if (active) setGenreOptions(res.data || [])
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    api
+      .get('/users/me/taste')
+      .then((res) => {
+        if (active) {
+          setDetected({
+            genres: res.data?.genres || [],
+            artists: res.data?.artists || [],
+          })
+        }
       })
       .catch(() => {})
     return () => {
@@ -49,6 +69,33 @@ function PreferencePicker({ value, onChange }) {
       clearTimeout(t)
     }
   }, [artistQuery])
+
+  // Определённое по истории, что юзер ещё не выбрал явно.
+  const unusedDetected = useMemo(
+    () => detected.genres.filter((g) => !selectedGenres.includes(g)),
+    [detected.genres, selectedGenres]
+  )
+  const unusedDetectedArtists = useMemo(
+    () =>
+      detected.artists.filter(
+        (d) => !selectedArtists.some((a) => a.toLowerCase() === d.toLowerCase())
+      ),
+    [detected.artists, selectedArtists]
+  )
+
+  const applyDetected = () => {
+    onChange({
+      genres: [...selectedGenres, ...unusedDetected],
+      artists: selectedArtists,
+    })
+  }
+
+  const applyDetectedArtists = () => {
+    onChange({
+      genres: selectedGenres,
+      artists: [...selectedArtists, ...unusedDetectedArtists],
+    })
+  }
 
   const toggleGenre = (key) => {
     const has = selectedGenres.includes(key)
@@ -84,12 +131,16 @@ function PreferencePicker({ value, onChange }) {
     }
   }
 
+  // Определённые артисты показаны отдельным блоком выше, в подсказках
+  // каталога они были бы дублем.
   const visibleSuggestions = useMemo(
     () =>
       suggestions.filter(
-        (s) => !selectedArtists.some((a) => a.toLowerCase() === s.toLowerCase())
+        (s) =>
+          !selectedArtists.some((a) => a.toLowerCase() === s.toLowerCase()) &&
+          !unusedDetectedArtists.some((d) => d.toLowerCase() === s.toLowerCase())
       ),
-    [suggestions, selectedArtists]
+    [suggestions, selectedArtists, unusedDetectedArtists]
   )
 
   return (
@@ -102,20 +153,30 @@ function PreferencePicker({ value, onChange }) {
         <div className="pref-genres">
           {genreOptions.map((g) => {
             const active = selectedGenres.includes(g.key)
+            const fromHistory = detected.genres.includes(g.key)
             return (
               <button
                 type="button"
                 key={g.key}
-                className={`pref-chip ${active ? 'active' : ''}`}
+                className={`pref-chip ${active ? 'active' : ''} ${
+                  fromHistory ? 'detected' : ''
+                }`}
                 onClick={() => toggleGenre(g.key)}
                 aria-pressed={active}
+                title={fromHistory ? 'Определено по вашим прослушиваниям' : undefined}
               >
                 {active && <Check size={16} />}
                 {g.label}
+                {fromHistory && !active && <Sparkles size={14} />}
               </button>
             )
           })}
         </div>
+        {unusedDetected.length > 0 && (
+          <button type="button" className="pref-apply-detected" onClick={applyDetected}>
+            <Sparkles size={14} /> Добавить из прослушанного ({unusedDetected.length})
+          </button>
+        )}
       </section>
 
       <section className="pref-section">
@@ -138,6 +199,33 @@ function PreferencePicker({ value, onChange }) {
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {unusedDetectedArtists.length > 0 && (
+          <div className="pref-detected">
+            <div className="pref-detected-label">
+              <Sparkles size={14} /> Определено по вашим прослушиваниям
+            </div>
+            <div className="pref-suggestions">
+              {unusedDetectedArtists.map((a) => (
+                <button
+                  type="button"
+                  key={a}
+                  className="pref-suggestion detected"
+                  onClick={() => addArtist(a)}
+                >
+                  <Plus size={14} /> {a}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="pref-apply-detected"
+              onClick={applyDetectedArtists}
+            >
+              <Sparkles size={14} /> Добавить всех ({unusedDetectedArtists.length})
+            </button>
           </div>
         )}
 

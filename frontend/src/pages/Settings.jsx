@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -18,6 +18,17 @@ function Settings() {
     artists: user?.preferred_artists || [],
   })
   const [savingPrefs, setSavingPrefs] = useState(false)
+
+  // Профиль приходит асинхронно (checkAuth), и на первом рендере user ещё
+  // null — без этого окно оставалось пустым независимо от предпочтений.
+  useEffect(() => {
+    if (user) {
+      setPrefs({
+        genres: user.preferred_genres || [],
+        artists: user.preferred_artists || [],
+      })
+    }
+  }, [user])
 
   const handleSavePrefs = async () => {
     setSavingPrefs(true)

@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Play, Pause, Settings, Shield, LogOut, Home as HomeIcon, History } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
@@ -9,6 +9,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import Spinner from '../components/Spinner'
+import { toast } from '../store/toastStore'
 import './Home.css'
 
 // Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
@@ -119,13 +120,11 @@ function Home() {
     }
   }
 
-  const isWavePlaying = isPlaying && (source === 'flow' || source === 'wave')
-  const waveTracks = recommendations.tracks.length > 0 ? recommendations.tracks : trending
-  const waveReady = waveTracks.length > 0
-  const upcomingText = useMemo(() => {
-    if (!waveTracks.length) return ''
-    return waveTracks.slice(0, 4).map((track) => track.title).join(', ')
-  }, [waveTracks])
+  // Кнопка потока управляет ТОЛЬКО потоком. Раньше сюда входил и source
+  // 'wave' (клик по карточке трека/плейлиста) — из-за этого после любого
+  // проигрывания карточки кнопка вместо запуска потока просто ставила ту
+  // очередь на паузу, и пользователь бесконечно слушал одну цепочку.
+  const isWavePlaying = isPlaying && source === 'flow'
   // Страховка на случай долгого пребывания на странице (TTL предзагрузки
   // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
   // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
@@ -152,12 +151,16 @@ function Home() {
     } catch (error) {
       console.error('Flow start error:', error)
     }
-    // Фолбэк: если поток не запустился (бэк вернул пустоту) — берём
-    // рекомендации. Но ТОЛЬКО если поток реально не стартовал
-    // (startFlow вернул false, а не undefined из-за ongoing loading).
+    // Раньше здесь был фолбэк на статичную выдачу /recommendations (список
+    // бывшего раздела «Рекомендуем новинки»). Он играл под source 'wave',
+    // поток при этом не активировался — extendFlowIfNeeded молчал, очередь
+    // не росла, и каждое нажатие давало одну и ту же цепочку треков.
+    // Пустой поток — это ошибка бэка, а не повод подменять его чем-то другим.
+    // flowLoading — параллельный запуск/подгрузка потока (двойной клик):
+    // это не ошибка, тост не показываем.
     const stAfter = usePlayerStore.getState()
-    if (!stAfter.flowActive && waveReady) {
-      handlePlayPlaylist({ tracks: waveTracks })
+    if (!stAfter.flowActive && !stAfter.flowLoading) {
+      toast.error('Поток пока недоступен, попробуйте ещё раз')
     }
   }
 
