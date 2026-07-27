@@ -104,6 +104,27 @@ function PlayerProgress({ audioRef }) {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
+  const surfaceRef = useRef(null)
+  const fillRef = useRef(null)
+
+  // Ширину заливки двигаем на каждом кадре прямо в DOM, минуя store и React:
+  // store тикает раз в секунду (сознательный троттлинг timeupdate), от этого
+  // полоса дёргалась секундными шагами. rAF сам замирает в скрытой вкладке,
+  // так что фоновые кадры не жгут CPU.
+  useEffect(() => {
+    let raf
+    const tick = () => {
+      const audio = audioRef.current
+      if (audio && duration > 0) {
+        const pct = `${Math.min(100, (audio.currentTime / duration) * 100)}%`
+        surfaceRef.current?.style.setProperty('--player-progress', pct)
+        fillRef.current?.style.setProperty('--player-progress', pct)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [audioRef, duration])
 
   const handleSeek = (e) => {
     const audio = audioRef.current
@@ -121,15 +142,17 @@ function PlayerProgress({ audioRef }) {
   return (
     <>
       <div
+        ref={surfaceRef}
         className="player-progress-surface"
-        style={{ width: `${progressPercent}%` }}
+        style={{ '--player-progress': `${progressPercent}%` }}
         aria-hidden="true"
       />
       <div className="player-progress-top" onClick={handleSeek}>
         <div className="player-progress-top-track">
           <div
+            ref={fillRef}
             className="player-progress-top-fill"
-            style={{ width: `${progressPercent}%` }}
+            style={{ '--player-progress': `${progressPercent}%` }}
           >
             <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
             <span className="player-progress-thumb" />
