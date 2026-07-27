@@ -32,14 +32,19 @@ user_track_plays = Table(
     Column('last_played', DateTime(timezone=True), server_default=func.now())
 )
 
-# Скипы (прослушано <25% и переключил) — негативный сигнал для рекомендаций
+# Скипы (прослушано <25% и переключил) — негативный сигнал для рекомендаций.
+# disliked — явный дизлайк («не нравится» в плеере): тот же негативный сигнал,
+# но осознанный и постоянный, поэтому штраф артисту сильнее и без затухания
+# (см. flow.py/_taste_profile и recommendations.py). Отдельная таблица не
+# нужна: исключение самого трека из выдачи уже работает по наличию строки.
 user_track_skips = Table(
     'user_track_skips',
     Base.metadata,
     Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
     Column('track_id', Integer, ForeignKey('tracks.id'), primary_key=True),
     Column('skip_count', Integer, default=1),
-    Column('last_skipped', DateTime(timezone=True), server_default=func.now())
+    Column('last_skipped', DateTime(timezone=True), server_default=func.now()),
+    Column('disliked', Boolean, nullable=False, server_default='false', default=False),
 )
 
 

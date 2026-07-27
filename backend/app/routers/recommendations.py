@@ -95,6 +95,12 @@ _COMPLETION_HI_BOOST = 1.3
 _COMPLETION_LO_DAMP = 0.5
 _COMPLETION_LO_ARTIST_PENALTY = 0.75
 
+# Штраф артисту за ЯВНЫЙ дизлайк трека (POST /tracks/{id}/dislike): весомее
+# случайного скипа и не затухает со временем — осознанное «не нравится» не
+# должно растворяться через две недели. Зеркало _DISLIKE_ARTIST_PENALTY в
+# flow.py: движка два, шкала весов у них общая.
+_DISLIKE_ARTIST_PENALTY = 3.5
+
 # --- Exploration / exploitation ---
 # Доля слотов выдачи под «исследование»: co-occurrence-соседи любимых треков
 # (коллаборативный сигнал), в приоритете — артисты, которых юзер ещё не
@@ -281,7 +287,13 @@ def get_recommendations(
     # Скипы — негативный сигнал: сам трек исключаем из выдачи, а артистам считаем
     # чистый вес (лайк/повторы против скипов), чтобы отсеять надоевших.
     skipped = (
-        db.query(Track.id, Track.artist, user_track_skips.c.skip_count, user_track_skips.c.last_skipped)
+        db.query(
+            Track.id,
+            Track.artist,
+            user_track_skips.c.skip_count,
+            user_track_skips.c.last_skipped,
+            user_track_skips.c.disliked,
+        )
         .join(user_track_skips, user_track_skips.c.track_id == Track.id)
         .filter(user_track_skips.c.user_id == current_user.id)
         .order_by(desc(user_track_skips.c.last_skipped))
@@ -395,11 +407,18 @@ def get_recommendations(
             if genre:
                 genres.append(genre)
             weighted_titles.append((t.title, w))
-        for _tid, artist, skip_count, last_skipped in skipped:
+        for _tid, artist, skip_count, last_skipped, disliked in skipped:
             key = artist_key(artist)
-            artist_skip_penalty[key] = (
-                artist_skip_penalty.get(key, 0) + 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
+            # Явный дизлайк — осознанный отказ: штраф тяжелее случайного скипа
+            # и не затухает со временем (см. _DISLIKE_ARTIST_PENALTY во flow.py).
+            # Порог доверия по курированию (2+ лайка/плейлиста) он не отменяет:
+            # один дизлайк у любимого артиста банит трек, а не весь каталог.
+            penalty = (
+                _DISLIKE_ARTIST_PENALTY
+                if disliked
+                else 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
             )
+            artist_skip_penalty[key] = artist_skip_penalty.get(key, 0) + penalty
 
         # Контекст времени суток: артисты, которых юзер слушает в текущем
         # временном интервале (по client_hour из лога событий), получают бонус

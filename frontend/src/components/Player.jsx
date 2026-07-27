@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ListPlus, Download, AlignLeft } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -191,6 +191,9 @@ function PlayerInner() {
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const dislikedTrackIds = usePlayerStore((s) => s.dislikedTrackIds)
+  const fetchDislikedTracks = usePlayerStore((s) => s.fetchDislikedTracks)
+  const toggleTrackDislike = usePlayerStore((s) => s.toggleTrackDislike)
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const prefetchNext = usePlayerStore((s) => s.prefetchNext)
 
@@ -227,6 +230,7 @@ function PlayerInner() {
   // (но живой) резолв YouTube Music выглядит как зависший плеер.
   const [isBuffering, setIsBuffering] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
+  const [loadingDislike, setLoadingDislike] = useState(false)
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
   const [playlists, setPlaylists] = useState([])
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
@@ -521,8 +525,11 @@ function PlayerInner() {
       fetchLikedTracks().catch((error) => {
         console.error('Error checking liked status:', error)
       })
+      fetchDislikedTracks().catch((error) => {
+        console.error('Error checking disliked status:', error)
+      })
     }
-  }, [dbTrackId, fetchLikedTracks])
+  }, [dbTrackId, fetchLikedTracks, fetchDislikedTracks])
 
   // Всегда отдаём URL непосредственно постоянному <audio>. Blob-источник не
   // имеет HTTP Range/Content-Range, поэтому iOS считает его неперематываемым и
@@ -988,6 +995,28 @@ function PlayerInner() {
   }
 
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
+  const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
+
+  // Дизлайк = «не хочу это слышать»: помечаем трек и сразу уходим на
+  // следующий. Повторное нажатие (трек уже дизлайкнут) только снимает метку,
+  // не переключая: пользователь мог вернуться и передумать.
+  const handleDislike = async () => {
+    if (!canInteract || loadingDislike) return
+
+    setLoadingDislike(true)
+    try {
+      const id = dbTrackId ?? (await materializeCurrentTrack())
+      if (!id) return
+      const wasDisliked = usePlayerStore.getState().dislikedTrackIds.includes(id)
+      await toggleTrackDislike(id)
+      if (!wasDisliked) nextTrack()
+    } catch (error) {
+      console.error('Error toggling dislike:', error)
+      toast.error('Не удалось отметить трек')
+    } finally {
+      setLoadingDislike(false)
+    }
+  }
 
   const handleOpenAddToPlaylist = async () => {
     if (!canInteract) return
@@ -1174,6 +1203,18 @@ function PlayerInner() {
               title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
             >
               <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleDislike()
+              }}
+              disabled={loadingDislike}
+              title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
+              aria-pressed={isDisliked}
+            >
+              <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
             </button>
             <button
               className="add-btn"

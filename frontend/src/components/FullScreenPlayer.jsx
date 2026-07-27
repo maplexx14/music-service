@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, AlignLeft, X } from 'lucide-react'
+import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
 import defaultCover from '../assets/default-cover.png'
@@ -70,9 +70,13 @@ function FullScreenPlayer() {
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const dislikedTrackIds = usePlayerStore((s) => s.dislikedTrackIds)
+  const fetchDislikedTracks = usePlayerStore((s) => s.fetchDislikedTracks)
+  const toggleTrackDislike = usePlayerStore((s) => s.toggleTrackDislike)
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const karaokeMode = usePlayerStore((s) => s.karaokeMode)
   const [loadingLike, setLoadingLike] = useState(false)
+  const [loadingDislike, setLoadingDislike] = useState(false)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
@@ -154,13 +158,14 @@ function FullScreenPlayer() {
       if (!dbTrackId) return
       try {
         await fetchLikedTracks()
+        await fetchDislikedTracks()
       } catch (error) {
         console.error('Error checking liked status:', error)
       }
     }
 
     checkLikedStatus()
-  }, [dbTrackId, fetchLikedTracks])
+  }, [dbTrackId, fetchLikedTracks, fetchDislikedTracks])
 
   if (!currentTrack) return null
 
@@ -178,7 +183,27 @@ function FullScreenPlayer() {
     }
   }
 
+  // Дизлайк: помечаем и уходим на следующий трек (как в Player.jsx). Повторное
+  // нажатие только снимает метку — пользователь мог передумать.
+  const handleDislike = async () => {
+    if (!canInteract || loadingDislike) return
+
+    setLoadingDislike(true)
+    try {
+      const id = dbTrackId ?? (await materializeCurrentTrack())
+      if (!id) return
+      const wasDisliked = usePlayerStore.getState().dislikedTrackIds.includes(id)
+      await toggleTrackDislike(id)
+      if (!wasDisliked) nextTrack()
+    } catch (error) {
+      console.error('Error toggling dislike:', error)
+    } finally {
+      setLoadingDislike(false)
+    }
+  }
+
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
+  const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
   const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
 
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)
@@ -237,6 +262,18 @@ function FullScreenPlayer() {
                   aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
                 >
                   <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
+                </button>
+              )}
+              {canInteract && (
+                <button
+                  type="button"
+                  className={`fullscreen-icon fullscreen-dislike ${isDisliked ? 'active' : ''}`}
+                  onClick={handleDislike}
+                  disabled={loadingDislike}
+                  aria-pressed={isDisliked}
+                  aria-label={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
+                >
+                  <ThumbsDown size={20} fill={isDisliked ? 'currentColor' : 'none'} />
                 </button>
               )}
               {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (

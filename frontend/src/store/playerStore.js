@@ -102,6 +102,9 @@ const usePlayerStore = create((set, get) => ({
   likedTrackIds: [],
   likedTracksLoaded: false,
   likedTracksLoading: false,
+  dislikedTrackIds: [],
+  dislikedTracksLoaded: false,
+  dislikedTracksLoading: false,
 
   setCurrentTrack: (track) => {
     set({ currentTrack: track, currentTime: 0 })
@@ -189,7 +192,16 @@ const usePlayerStore = create((set, get) => ({
       ? likedTrackIds.filter((id) => id !== trackId)
       : [...likedTrackIds, trackId]
 
-    set({ likedTrackIds: nextLikedTrackIds, likedTracksLoaded: true })
+    // Лайк снимает дизлайк (это же делает бэк в like_track): иначе строка в
+    // user_track_skips продолжала бы исключать трек из рекомендаций.
+    const { dislikedTrackIds } = get()
+    set({
+      likedTrackIds: nextLikedTrackIds,
+      likedTracksLoaded: true,
+      dislikedTrackIds: wasLiked
+        ? dislikedTrackIds
+        : dislikedTrackIds.filter((id) => id !== trackId),
+    })
 
     try {
       if (wasLiked) {
@@ -198,7 +210,48 @@ const usePlayerStore = create((set, get) => ({
         await api.post(`/tracks/${trackId}/like`)
       }
     } catch (error) {
-      set({ likedTrackIds })
+      set({ likedTrackIds, dislikedTrackIds })
+      throw error
+    }
+  },
+
+  fetchDislikedTracks: async () => {
+    const { dislikedTracksLoaded, dislikedTracksLoading } = get()
+    if (dislikedTracksLoaded || dislikedTracksLoading) return
+
+    set({ dislikedTracksLoading: true })
+    try {
+      const response = await api.get('/tracks/me/disliked/ids')
+      set({ dislikedTrackIds: response.data, dislikedTracksLoaded: true })
+    } finally {
+      set({ dislikedTracksLoading: false })
+    }
+  },
+
+  // Дизлайк («не нравится»): трек уходит из рекомендаций и волны. Лайк при
+  // этом снимается и на бэке (см. dislike_track), поэтому чистим его и в
+  // локальном состоянии — иначе сердечко осталось бы залитым.
+  toggleTrackDislike: async (trackId) => {
+    if (!trackId) return
+    const { dislikedTrackIds, likedTrackIds } = get()
+    const wasDisliked = dislikedTrackIds.includes(trackId)
+
+    set({
+      dislikedTrackIds: wasDisliked
+        ? dislikedTrackIds.filter((id) => id !== trackId)
+        : [...dislikedTrackIds, trackId],
+      dislikedTracksLoaded: true,
+      likedTrackIds: wasDisliked ? likedTrackIds : likedTrackIds.filter((id) => id !== trackId),
+    })
+
+    try {
+      if (wasDisliked) {
+        await api.delete(`/tracks/${trackId}/dislike`)
+      } else {
+        await api.post(`/tracks/${trackId}/dislike`)
+      }
+    } catch (error) {
+      set({ dislikedTrackIds, likedTrackIds })
       throw error
     }
   },

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, Response, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import List, Optional
 import logging
@@ -751,6 +751,12 @@ def like_track(
         track_id=track_id,
         position=max_position + 1,
     ))
+    # Лайк снимает дизлайк/скип: строка в user_track_skips исключает трек из
+    # рекомендаций и волны, а лайкнутый трек в чёрном списке — противоречие.
+    db.execute(user_track_skips.delete().where(
+        (user_track_skips.c.user_id == current_user.id) &
+        (user_track_skips.c.track_id == track_id)
+    ))
     db.commit()
     # Лайк — сильный явный сигнал: сбрасываем кэш рекомендаций сразу, а не
     # ждём истечения TTL (иначе юзер лайкает и 5 минут видит старую выдачу).
@@ -933,6 +939,85 @@ def record_track_skip(
     # Скип — явный негативный сигнал: кэш рекомендаций сбрасываем сразу.
     clear_pattern(f"recs:{current_user.id}:*")
     return {"message": "Skip recorded"}
+
+
+@router.post("/{track_id}/dislike", status_code=status.HTTP_200_OK)
+def dislike_track(
+    track_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Явный дизлайк — «не нравится, больше не показывать».
+
+    Пишется в ту же таблицу, что и скипы (наличие строки уже исключает трек
+    из рекомендаций и волны), но с флагом disliked: артисту начисляется более
+    тяжёлый штраф, не затухающий по времени. Лайк при этом снимается — иначе
+    трек одновременно и в «Понравившихся», и в чёрном списке.
+    """
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    # Без pg-специфичного upsert (как в /skip): дизлайк — редкое ручное
+    # действие, гонки параллельных нажатий тут нет, зато код работает и на
+    # SQLite (тесты).
+    updated = db.execute(
+        user_track_skips.update()
+        .where(
+            (user_track_skips.c.user_id == current_user.id) &
+            (user_track_skips.c.track_id == track_id)
+        )
+        .values(disliked=True, last_skipped=func.now())
+    ).rowcount
+    if not updated:
+        db.execute(user_track_skips.insert().values(
+            user_id=current_user.id,
+            track_id=track_id,
+            skip_count=1,
+            disliked=True,
+        ))
+
+    liked_playlist = get_or_create_liked_playlist(db, current_user)
+    db.execute(playlist_tracks.delete().where(
+        (playlist_tracks.c.playlist_id == liked_playlist.id) &
+        (playlist_tracks.c.track_id == track_id)
+    ))
+    db.commit()
+    clear_pattern(f"recs:{current_user.id}:*")
+    return {"message": "Track disliked"}
+
+
+@router.delete("/{track_id}/dislike", status_code=status.HTTP_200_OK)
+def undislike_track(
+    track_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Снятие дизлайка. Строку удаляем целиком: она же исключает трек из
+    выдачи, а накопленный скип-счётчик после явной отмены не должен держать
+    трек в чёрном списке."""
+    db.execute(user_track_skips.delete().where(
+        (user_track_skips.c.user_id == current_user.id) &
+        (user_track_skips.c.track_id == track_id)
+    ))
+    db.commit()
+    clear_pattern(f"recs:{current_user.id}:*")
+    return {"message": "Dislike removed"}
+
+
+@router.get("/me/disliked/ids", response_model=List[int])
+def get_disliked_track_ids(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """id дизлайкнутых треков — для состояния кнопки в плеере."""
+    rows = db.execute(
+        select(user_track_skips.c.track_id).where(
+            user_track_skips.c.user_id == current_user.id,
+            user_track_skips.c.disliked.is_(True),
+        )
+    ).scalars()
+    return list(rows)
 
 
 class ListenEventPayload(BaseModel):

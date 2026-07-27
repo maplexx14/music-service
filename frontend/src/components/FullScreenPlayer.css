@@ -94,6 +94,14 @@
   animation: fullscreenLikePop 0.3s var(--ease-out);
 }
 
+/* Дизлайк — негативное действие, поэтому красный, а не акцентный фиолетовый
+   (.fullscreen-icon.active), который читается как «включено/нравится». */
+.fullscreen-dislike.active {
+  background: rgba(255, 107, 107, 0.14);
+  border-color: rgba(255, 107, 107, 0.45);
+  color: #ff6b6b;
+}
+
 @keyframes fullscreenLikePop {
   0% { transform: scale(1); }
   40% { transform: scale(1.18); }

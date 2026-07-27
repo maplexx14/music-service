@@ -50,6 +50,38 @@ def test_delete_track_requires_admin(client, db):
     assert resp.status_code == 403
 
 
+def test_dislike_flow(client, db):
+    """Дизлайк: помечает трек, снимает лайк, отменяется, взаимно исключается с лайком."""
+    create_user(db, "dis")
+    track = make_track(db)
+    headers = auth_headers(client, "dis")
+
+    assert client.post(f"/api/tracks/{track.id}/like", headers=headers).status_code == 200
+    assert client.post(f"/api/tracks/{track.id}/dislike", headers=headers).status_code == 200
+    # Дизлайк снял лайк и попал в список дизлайков.
+    assert client.get("/api/tracks/me/liked/ids", headers=headers).json() == []
+    assert client.get("/api/tracks/me/disliked/ids", headers=headers).json() == [track.id]
+
+    # Повторный дизлайк идемпотентен (upsert-ветка обновления).
+    assert client.post(f"/api/tracks/{track.id}/dislike", headers=headers).status_code == 200
+    assert client.get("/api/tracks/me/disliked/ids", headers=headers).json() == [track.id]
+
+    # Лайк снимает дизлайк — трек не должен остаться в чёрном списке.
+    assert client.post(f"/api/tracks/{track.id}/like", headers=headers).status_code == 200
+    assert client.get("/api/tracks/me/disliked/ids", headers=headers).json() == []
+
+    # Явное снятие дизлайка.
+    client.post(f"/api/tracks/{track.id}/dislike", headers=headers)
+    assert client.delete(f"/api/tracks/{track.id}/dislike", headers=headers).status_code == 200
+    assert client.get("/api/tracks/me/disliked/ids", headers=headers).json() == []
+
+
+def test_dislike_unknown_track_404(client, db):
+    create_user(db, "dis2")
+    headers = auth_headers(client, "dis2")
+    assert client.post("/api/tracks/999999/dislike", headers=headers).status_code == 404
+
+
 def test_delete_track_as_admin(client, db):
     create_user(db, "admin1", is_admin=True)
     track = make_track(db)

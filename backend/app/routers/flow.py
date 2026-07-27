@@ -95,6 +95,11 @@ _ARTIST_TAIL = 3
 # смысловая отсечка.
 _TASTE_HALF_LIFE_DAYS = 14.0
 _TASTE_QUERY_LIMIT = 300
+# Штраф артисту за ЯВНЫЙ дизлайк трека: сильнее лайка (+3.0) и плейлиста
+# (+4.0 — курирование всё же перевешивает один дизлайк), без затухания по
+# времени. Осознанное «не нравится» должно убирать артиста из волны сразу,
+# а не растворяться в весах через две недели.
+_DISLIKE_ARTIST_PENALTY = 3.5
 # Краткосрочная серверная история не даёт новому запуску волны сразу вернуть
 # тот же исчерпанный пул в другом порядке. Хвоста достаточно для нескольких
 # длинных сессий, TTL позже разрешает старым трекам естественно вернуться.
@@ -171,8 +176,14 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     )
 
     # Скипы — негативный сигнал (фронт шлёт их только при <25% прослушивания).
+    # disliked — явный дизлайк из плеера: штраф тяжелее и без затухания.
     skipped = (
-        db.query(Track, user_track_skips.c.skip_count, user_track_skips.c.last_skipped)
+        db.query(
+            Track,
+            user_track_skips.c.skip_count,
+            user_track_skips.c.last_skipped,
+            user_track_skips.c.disliked,
+        )
         .join(user_track_skips, user_track_skips.c.track_id == Track.id)
         .filter(user_track_skips.c.user_id == user_id)
         .order_by(desc(user_track_skips.c.last_skipped))
@@ -268,15 +279,21 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     skipped_ids: set = set()
     skipped_keys: set = set()
     skipped_video_ids: set = set()
-    for track, skip_count, last_skipped in skipped:
+    for track, skip_count, last_skipped, disliked in skipped:
         skipped_ids.add(track.id)
         skipped_keys.add(_norm_key(track.artist, track.title))
         if track.external_id:
             skipped_video_ids.add(track.external_id)
         key = artist_key(track.artist)
-        artist_weight[key] = (
-            artist_weight.get(key, 0) - 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
+        # Явный дизлайк весомее случайного скипа и не затухает: пользователь
+        # сказал «не хочу» осознанно. Вес подобран так, чтобы один дизлайк
+        # перебивал один лайк (+3.0) и уводил артиста в banned_artists.
+        penalty = (
+            _DISLIKE_ARTIST_PENALTY
+            if disliked
+            else 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
         )
+        artist_weight[key] = artist_weight.get(key, 0) - penalty
         artist_display.setdefault(key, track.artist)
 
     # --- Явные предпочтения пользователя (онбординг/настройки) ---
