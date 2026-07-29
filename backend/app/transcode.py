@@ -184,6 +184,91 @@ def transcode_to_aac(
         return input_path
 
 
+# ─────────────────────────── HLS remux ───────────────────────────
+
+# Сколько ждём ffmpeg на сборку одного HLS-трека. Сегменты качаются по сети,
+# для четырёхминутного трека это единицы секунд; 180 с — запас на медленный
+# канал, но не «навсегда» (запрос стрима висит на этом вызове).
+HLS_REMUX_TIMEOUT = int(os.getenv("HLS_REMUX_TIMEOUT", "180"))
+
+
+def remux_hls_to_file(
+    m3u8_url: str,
+    output_path: str,
+    container: str = "mp4",
+    max_bytes: int = 0,
+) -> bool:
+    """Собирает HLS-плейлист в цельный файл без перекодирования (``-c copy``).
+
+    Нужен для источников, которые раздают часть каталога только через HLS
+    (SoundCloud так отдаёт лейбловые треки): байт-range-прокси m3u8 играть не
+    умеет, а ffmpeg склеивает сегменты в готовый m4a за секунды и без потери
+    качества.
+
+    ``container`` задаётся явно (``-f``), а не выводится из расширения: пишем
+    в ``*.part``, по которому ffmpeg формат не угадает. Возвращает True, если
+    на выходе получился непустой файл.
+    """
+    if not _ffmpeg_available():
+        logger.warning("hls remux: ffmpeg not found")
+        return False
+
+    cmd = [
+        FFMPEG_BIN,
+        "-y",
+        "-nostdin",
+        "-loglevel", "error",
+        "-i", m3u8_url,
+        "-vn",                       # обложка-видеопоток в аудиофайле не нужна
+        "-c:a", "copy",              # без перекодирования: быстро и без потерь
+    ]
+    if container == "mp4":
+        # moov в начале файла — иначе браузер не может играть/сикать до
+        # полной загрузки, а отдаём мы как раз Range-запросами.
+        cmd += ["-movflags", "+faststart"]
+    if max_bytes:
+        cmd += ["-fs", str(max_bytes)]
+    cmd += ["-f", container, output_path]
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=HLS_REMUX_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("hls remux timed out after %ss", HLS_REMUX_TIMEOUT)
+        _unlink_quiet(output_path)
+        return False
+    except Exception:
+        logger.exception("hls remux error")
+        _unlink_quiet(output_path)
+        return False
+
+    if result.returncode != 0:
+        logger.warning("hls remux failed: %s", (result.stderr or "")[:500])
+        _unlink_quiet(output_path)
+        return False
+
+    try:
+        size = os.path.getsize(output_path)
+    except OSError:
+        size = 0
+    if size < 1024:
+        logger.warning("hls remux output too small (%d bytes)", size)
+        _unlink_quiet(output_path)
+        return False
+
+    logger.info("hls remux ok: %s (%.1f MiB)", Path(output_path).name, size / 1048576)
+    return True
+
+
+def _unlink_quiet(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def transcode_bytes_to_aac(
     input_bytes: bytes,
     input_ext: str = ".mp3",

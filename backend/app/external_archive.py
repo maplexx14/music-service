@@ -109,6 +109,59 @@ async def _note_archived(source: str, external_id: str, file_path: str) -> None:
     await set_cache_async(f"archive:path:{source}/{external_id}", file_path, expire=24 * 3600)
 
 
+async def adopt_local_file(source: str, external_id: str, local_path: str) -> Optional[str]:
+    """Кладёт уже готовый локальный файл в MinIO как архивную копию трека.
+
+    Обычный путь архивации сам резолвит и качает аудио. Но есть источники, где
+    файл уже собран на нашей стороне и повторно скачать его нечем: SoundCloud
+    HLS-only треки ремуксятся ffmpeg'ом в дисковый кэш прямо на стриме
+    (см. soundcloud._stream_via_hls), и этот же файл имеет смысл сохранить —
+    дисковый кэш вытесняется по LRU, а MinIO нет.
+
+    Возвращает file_path в MinIO или None, если архивация невозможна/не нужна.
+    """
+    if not storage.is_minio_backend():
+        return None
+    if source not in ARCHIVABLE_SOURCES or not external_id:
+        return None
+    if not local_path or not os.path.exists(local_path):
+        return None
+
+    ext = os.path.splitext(local_path)[1].lower() or ".m4a"
+    key = f"external/{source}/{external_id}{ext}"
+    try:
+        storage.ensure_buckets()
+        file_path = await asyncio.to_thread(
+            storage.upload_music_file, local_path, key, _audio_content_type(ext)
+        )
+    except Exception:  # noqa: BLE001 — трек уже играет с диска, архив не критичен
+        logger.exception("adopt: не удалось загрузить %s/%s в MinIO", source, external_id)
+        return None
+
+    await _note_archived(source, external_id, file_path)
+
+    # Привязываем объект к записи в БД, чтобы /tracks/{id}/stream отдавал трек
+    # прямо из MinIO, а ленивая архивация больше не бралась за него.
+    db = SessionLocal()
+    try:
+        track = (
+            db.query(Track)
+            .filter(Track.source == source, Track.external_id == str(external_id))
+            .first()
+        )
+        if track is not None and not storage.is_minio_path(track.file_path):
+            track.file_path = file_path
+            db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("adopt: не удалось привязать %s/%s к записи", source, external_id)
+    finally:
+        db.close()
+
+    logger.info("adopt: %s/%s → %s", source, external_id, file_path)
+    return file_path
+
+
 def _sc_permalink_from_track(track: Track) -> Optional[str]:
     """Достаёт SoundCloud-permalink из stream_url трека.
 

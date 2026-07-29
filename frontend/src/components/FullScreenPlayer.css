@@ -160,6 +160,9 @@
   font-weight: 700;
   line-height: 1.08;
   overflow: hidden;
+  /* Название без пробелов (одно длинное слово) иначе обрезалось бы посередине
+     без многоточия — переносим в любом месте. */
+  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -226,13 +229,6 @@
 
   .fullscreen-player.has-lyrics .fullscreen-content {
     position: relative;
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-info {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
   }
 
   .fullscreen-player.has-lyrics .fullscreen-lyrics-desktop {
@@ -533,6 +529,10 @@
 
   .fullscreen-player.has-lyrics .fullscreen-info,
   .fullscreen-player.karaoke-mode .fullscreen-info {
+    /* Обязательно in-flow: как абсолютный элемент грида с `auto` конечной
+       линией он растягивался до правого края контейнера и заезжал под текст
+       песни — длинное название переставало переноситься по границе колонки. */
+    position: static;
     grid-column: 1;
     grid-row: 2;
     width: 100%;

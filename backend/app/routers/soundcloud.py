@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 import logging
+import os
 import re
 from typing import List, Optional
 
@@ -9,8 +10,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.cache import get_cache_async, set_cache_async
 from app.routers.ytdlp import (
+    CACHE_DIR,
+    MEDIA_TYPES,
     TrackUnavailable,
     TransientResolveError,
+    _cached_file,
+    _enforce_cache_limit,
+    _serve_file,
     cached_ydl,
     clean_title,
     schedule_prefetch,
@@ -41,6 +47,11 @@ router = APIRouter()
 _RESOLVE_TTL = 120
 _UNAVAILABLE_TTL = 600
 _TRANSIENT_TTL = 25
+
+# Предохранитель на HLS-ремукс: ffmpeg обрежет вывод на этом размере. Тот же
+# смысл, что у ARCHIVE_MAX_AUDIO_BYTES в external_archive — многочасовой микс
+# не должен занять весь дисковый кэш.
+_HLS_MAX_BYTES = int(os.getenv("ARCHIVE_MAX_AUDIO_BYTES", str(60 * 1024 * 1024)))
 
 
 def _artist(entry: dict) -> str:
@@ -413,15 +424,58 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     return None
 
 
+class _TranscodingGone(RuntimeError):
+    """Эндпоинт транскодирования ответил 404 — этого пресета у трека больше нет."""
+
+
+async def _transcoding_direct_url(transcoding_url: str) -> str:
+    """Второй шаг SoundCloud: URL транскодирования → прямая ссылка на аудио.
+
+    Транскодер отвечает либо JSON с ``url``, либо сразу 302 на CDN. Редирект
+    здесь нельзя проходить автоматически: CDN-URL одноразовый/короткоживущий,
+    и его 404 не является ответом эндпоинта транскодирования.
+    """
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+        client_id = await get_cache_async(_CLIENT_ID_KEY)
+        for attempt in range(2):
+            if not client_id:
+                client_id = await _scrape_client_id(client)
+                if not client_id:
+                    raise RuntimeError("could not obtain SoundCloud client_id")
+                await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
+            try:
+                response = await client.get(transcoding_url, params={"client_id": client_id})
+            except httpx.HTTPError as exc:
+                raise RuntimeError("SoundCloud transcoding request failed") from exc
+            if response.status_code in (401, 403) and attempt == 0:
+                client_id = None
+                continue
+            if response.status_code == 404:
+                raise _TranscodingGone("SoundCloud transcoding returned HTTP 404")
+            if response.is_error:
+                raise RuntimeError(f"SoundCloud transcoding returned HTTP {response.status_code}")
+            direct_url = response.headers.get("location") if response.is_redirect else None
+            if not direct_url:
+                try:
+                    direct_url = response.json().get("url")
+                except ValueError as exc:
+                    raise RuntimeError("SoundCloud transcoding returned invalid response") from exc
+            if not direct_url:
+                raise RuntimeError("SoundCloud transcoding response has no audio URL")
+            return direct_url
+
+    raise RuntimeError("SoundCloud client_id was rejected")
+
+
 async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
     """Получает HTTP-поток трека через api-v2, минуя web-метаданные yt-dlp.
 
     HLS здесь намеренно не выбираем: общий stream-прокси работает с byte-range
-    HTTP-аудио, а не с m3u8-плейлистами. Если SoundCloud оставил только HLS,
-    это временная ошибка интеграции, а не доказательство удаления трека.
+    HTTP-аудио, а не с m3u8-плейлистами. Трек, у которого остался только HLS,
+    играется отдельным путём — см. ``resolve_hls_via_api`` и ``_stream_via_hls``.
     """
-    import httpx
-
     track = await _api_get(f"/tracks/{track_id}", {})
     if not isinstance(track, dict):
         raise RuntimeError("SoundCloud API did not return track metadata")
@@ -432,11 +486,11 @@ async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
     # Монетизированные (policy=MONETIZE) треки SoundCloud раздаёт только как
     # посегментно зашифрованный HLS (протоколы ctr-/cbc-encrypted-hls) — это
     # DRM: yt-dlp его намеренно не расшифровывает ("This video is DRM
-    # protected"), а наш byte-range-прокси m3u8 играть не умеет. Прогрессивный
-    # mp3-пресет у таких треков ещё числится в метаданных, но его эндпоинт
-    # мёртв (404). Флаг отличает «DRM, играть реально нечем» (→ TrackUnavailable
-    # → 404 → чистый скип на фронте) от случайного 404 у обычного трека
-    # (→ transient → 503 с ретраем).
+    # protected"), а ffmpeg не соберёт из него файл. Прогрессивный mp3-пресет у
+    # таких треков ещё числится в метаданных, но его эндпоинт мёртв (404). Флаг
+    # отличает «DRM, играть реально нечем» (→ TrackUnavailable → 404 → чистый
+    # скип на фронте) от случайного 404 у обычного трека (→ transient → 503
+    # с ретраем).
     has_drm = any(
         str(item.get("format", {}).get("protocol", "")).startswith(("ctr-", "cbc-"))
         for item in transcodings
@@ -457,48 +511,140 @@ async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
         reverse=True,
     )
 
-    # Транскодер может ответить JSON с ``url`` либо 302 сразу на CDN. Редирект
-    # здесь нельзя проходить автоматически: CDN-URL одноразовый/короткоживущий,
-    # и его 404 не является ответом эндпоинта транскодирования.
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-        client_id = await get_cache_async(_CLIENT_ID_KEY)
-        for attempt in range(2):
-            if not client_id:
-                client_id = await _scrape_client_id(client)
-                if not client_id:
-                    raise RuntimeError("could not obtain SoundCloud client_id")
-                await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
-            try:
-                response = await client.get(progressive[0]["url"], params={"client_id": client_id})
-            except httpx.HTTPError as exc:
-                raise RuntimeError("SoundCloud transcoding request failed") from exc
-            if response.status_code in (401, 403) and attempt == 0:
-                client_id = None
-                continue
-            if response.status_code == 404:
-                if has_drm:
-                    # У DRM-трека прогрессивный mp3-пресет числится в
-                    # метаданных, но эндпоинт отдаёт 404 (реально остался только
-                    # зашифрованный HLS). Играть нечем — трек недоступен.
-                    raise TrackUnavailable(track_id)
-                # У обычного трека URL транскодирования может устареть/меняться
-                # независимо от самого трека — это не повод помечать удалённым.
-                raise RuntimeError("SoundCloud transcoding returned HTTP 404")
-            if response.is_error:
-                raise RuntimeError(f"SoundCloud transcoding returned HTTP {response.status_code}")
-            direct_url = response.headers.get("location") if response.is_redirect else None
-            if not direct_url:
-                try:
-                    direct_url = response.json().get("url")
-                except ValueError as exc:
-                    raise RuntimeError("SoundCloud transcoding returned invalid response") from exc
-            if not direct_url:
-                raise RuntimeError("SoundCloud transcoding response has no audio URL")
-            mime = str(progressive[0].get("format", {}).get("mime_type", "")).lower()
-            ext = ".mp3" if "mpeg" in mime else ".m4a"
-            return direct_url, ext, None
+    try:
+        direct_url = await _transcoding_direct_url(progressive[0]["url"])
+    except _TranscodingGone as exc:
+        if has_drm:
+            # У DRM-трека прогрессивный mp3-пресет числится в метаданных, но
+            # эндпоинт отдаёт 404 (реально остался только зашифрованный HLS).
+            # Играть нечем — трек недоступен.
+            raise TrackUnavailable(track_id) from exc
+        # У обычного трека URL транскодирования может устареть/меняться
+        # независимо от самого трека — это не повод помечать удалённым.
+        raise RuntimeError("SoundCloud transcoding returned HTTP 404") from exc
 
-    raise RuntimeError("SoundCloud client_id was rejected")
+    mime = str(progressive[0].get("format", {}).get("mime_type", "")).lower()
+    ext = ".mp3" if "mpeg" in mime else ".m4a"
+    return direct_url, ext, None
+
+
+async def resolve_hls_via_api(track_id: str) -> Optional[tuple[str, str]]:
+    """(URL m3u8, расширение файла) для трека, у которого остался только HLS.
+
+    Возвращает None, если пригодного HLS нет: либо транскодов нет вовсе, либо
+    все они зашифрованные (DRM) — такое ffmpeg не соберёт. Тогда вызывающий код
+    оставляет свою исходную ошибку резолва.
+    """
+    track = await _api_get(f"/tracks/{track_id}", {})
+    if not isinstance(track, dict):
+        return None
+    if track.get("access") == "blocked":
+        return None
+
+    transcodings = ((track.get("media") or {}).get("transcodings") or [])
+    # Только чистый "hls": ctr-/cbc-encrypted-hls — DRM, его не расшифровать.
+    hls = [
+        item for item in transcodings
+        if item.get("url") and item.get("format", {}).get("protocol") == "hls"
+    ]
+    if not hls:
+        return None
+    # AAC-пресеты у SoundCloud качественнее mp3 при том же битрейте, а m4a
+    # ремуксится из HLS без перекодирования. Внутри AAC берём старший битрейт
+    # (aac_160k > aac_96k) — он зашит в имя пресета.
+    def _preset_kbps(item: dict) -> int:
+        match = re.search(r"(\d+)k", str(item.get("preset", "")))
+        return int(match.group(1)) if match else 0
+
+    hls.sort(
+        key=lambda item: (
+            "mp4" in str(item.get("format", {}).get("mime_type", "")),
+            _preset_kbps(item),
+        ),
+        reverse=True,
+    )
+    try:
+        m3u8_url = await _transcoding_direct_url(hls[0]["url"])
+    except Exception:  # noqa: BLE001 — нет HLS-ссылки: пусть останется исходная ошибка
+        logger.warning("SoundCloud HLS transcoding unavailable for %s", track_id, exc_info=True)
+        return None
+
+    mime = str(hls[0].get("format", {}).get("mime_type", "")).lower()
+    ext = ".mp3" if "mpeg" in mime else ".m4a"
+    return m3u8_url, ext
+
+
+
+# ---------------------------------------------------------------------------
+# HLS-only треки. Часть каталога (как правило, загрузки лейблов) SoundCloud
+# раздаёт вообще без прогрессивного транскода. Байт-range-прокси m3u8 играть не
+# умеет, поэтому такой трек один раз собирается ffmpeg'ом в цельный файл: он
+# ложится в тот же дисковый кэш, из которого stream_cached_audio отдаёт уже
+# проигранные треки, и параллельно уходит в MinIO — дальше трек живёт как
+# обычный заархивированный файл (и prefetch_is_ready видит его готовым).
+# ---------------------------------------------------------------------------
+
+# Один ремукс на трек: браузер шлёт на один и тот же трек несколько
+# Range-запросов, и без блокировки каждый запускал бы свой ffmpeg.
+_hls_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _remux_hls_to_cache(cache_id: str, m3u8_url: str, ext: str) -> Optional[str]:
+    """Собирает HLS в файл дискового кэша. Возвращает путь или None."""
+    from app.transcode import remux_hls_to_file
+
+    final_path = os.path.join(CACHE_DIR, f"{cache_id}{ext}")
+    part_path = final_path + ".part"
+    container = "mp3" if ext == ".mp3" else "mp4"
+    ok = await asyncio.to_thread(
+        remux_hls_to_file, m3u8_url, part_path, container, _HLS_MAX_BYTES
+    )
+    if not ok:
+        return None
+    try:
+        # Атомарно: _cached_file игнорирует *.part, поэтому недособранный файл
+        # никогда не попадёт в отдачу.
+        os.replace(part_path, final_path)
+    except OSError:
+        logger.exception("hls: не удалось сохранить %s", final_path)
+        return None
+    _enforce_cache_limit()
+    return final_path
+
+
+async def _stream_via_hls(request: Request, track_id: str):
+    """Отдаёт трек, у которого у SoundCloud остался только HLS.
+
+    Возвращает None, если пригодного HLS нет — тогда вызывающий код оставляет
+    исходную ошибку (503/404), как будто этого пути не существует.
+    """
+    cache_id = f"sc{track_id}"
+    lock = _hls_locks.setdefault(track_id, asyncio.Lock())
+    async with lock:
+        cached = _cached_file(cache_id)
+        if not cached:
+            hls = await resolve_hls_via_api(track_id)
+            if not hls:
+                return None
+            m3u8_url, ext = hls
+            logger.info("SoundCloud %s: прогрессивного потока нет, собираем HLS", track_id)
+            cached = await _remux_hls_to_cache(cache_id, m3u8_url, ext)
+            if not cached:
+                return None
+            # Дисковый кэш вытесняется по LRU — кладём копию в MinIO, чтобы
+            # второй раз не ремуксить (и чтобы ленивая архивация, которая умеет
+            # только прогрессивный резолв, больше не билась об этот трек).
+            try:
+                from app import external_archive
+
+                asyncio.create_task(
+                    external_archive.adopt_local_file("soundcloud", track_id, cached)
+                )
+            except Exception:  # noqa: BLE001 — архивация не важнее воспроизведения
+                logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
+
+    ext = os.path.splitext(cached)[1].lower()
+    return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
 
 def _upscale_artwork(url: Optional[str]) -> Optional[str]:
@@ -670,12 +816,23 @@ async def stream_soundcloud(token: str, request: Request):
         )
     except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
         logger.exception("lazy-archive-ext: не удалось запланировать архивацию sc/%s", track_id)
-    return await stream_cached_audio(
-        request,
-        f"sc{track_id}",
-        lambda force: _resolve_cached(track_id, permalink, force=force),
-        archive_key=f"soundcloud/{track_id}",
-    )
+    try:
+        return await stream_cached_audio(
+            request,
+            f"sc{track_id}",
+            lambda force: _resolve_cached(track_id, permalink, force=force),
+            archive_key=f"soundcloud/{track_id}",
+        )
+    except HTTPException as exc:
+        # 503 значит «прогрессивного потока нет/резолв сорвался». У части
+        # каталога (обычно лейбловые загрузки) прогрессивного транскода у
+        # SoundCloud нет вовсе — такой трек играем через HLS, см. _stream_via_hls.
+        if exc.status_code != 503:
+            raise
+        response = await _stream_via_hls(request, track_id)
+        if response is None:
+            raise
+        return response
 
 
 @router.post("/prefetch/{token}")
