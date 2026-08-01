@@ -26,89 +26,95 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ondelete=CASCADE: эти таблицы не замаплены как ORM-relationships, при
-    # удалении трека/юзера ORM их не подчистит — пусть чистит сама БД.
-    op.create_table(
-        "user_play_events",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column(
-            "user_id",
-            sa.Integer(),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "track_id",
-            sa.Integer(),
-            sa.ForeignKey("tracks.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "played_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        # Финальная доля прослушивания 0..1 (NULL — ещё не сообщена фронтом).
-        sa.Column("completion", sa.Float(), nullable=True),
-        # Локальный час клиента 0-23 (таймзона юзера != таймзоне сервера).
-        sa.Column("client_hour", sa.Integer(), nullable=True),
-    )
-    op.create_index(
-        "ix_user_play_events_user_played",
-        "user_play_events",
-        ["user_id", "played_at"],
-    )
-    op.create_index("ix_user_play_events_track", "user_play_events", ["track_id"])
+    # Idempotent: skip if tables already exist (partial migration state)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = inspector.get_table_names()
 
-    op.create_table(
-        "rec_impressions",
-        sa.Column(
-            "user_id",
-            sa.Integer(),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "track_id",
-            sa.Integer(),
-            sa.ForeignKey("tracks.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column("shown_count", sa.Integer(), nullable=False, server_default="1"),
-        sa.Column(
-            "last_shown",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-    )
+    if "user_play_events" not in existing_tables:
+        op.create_table(
+            "user_play_events",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column(
+                "user_id",
+                sa.Integer(),
+                sa.ForeignKey("users.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column(
+                "track_id",
+                sa.Integer(),
+                sa.ForeignKey("tracks.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column(
+                "played_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            # Финальная доля прослушивания 0..1 (NULL — ещё не сообщена фронтом).
+            sa.Column("completion", sa.Float(), nullable=True),
+            # Локальный час клиента 0-23 (таймзона юзера != таймзоне сервера).
+            sa.Column("client_hour", sa.Integer(), nullable=True),
+        )
+        op.create_index(
+            "ix_user_play_events_user_played",
+            "user_play_events",
+            ["user_id", "played_at"],
+        )
+        op.create_index("ix_user_play_events_track", "user_play_events", ["track_id"])
 
-    op.create_table(
-        "track_cooccurrence",
-        sa.Column(
-            "track_id",
-            sa.Integer(),
-            sa.ForeignKey("tracks.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "other_track_id",
-            sa.Integer(),
-            sa.ForeignKey("tracks.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column("score", sa.Float(), nullable=False),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-    )
-    op.create_index(
-        "ix_track_cooccurrence_track", "track_cooccurrence", ["track_id"]
-    )
+    if "rec_impressions" not in existing_tables:
+        op.create_table(
+            "rec_impressions",
+            sa.Column(
+                "user_id",
+                sa.Integer(),
+                sa.ForeignKey("users.id", ondelete="CASCADE"),
+                primary_key=True,
+            ),
+            sa.Column(
+                "track_id",
+                sa.Integer(),
+                sa.ForeignKey("tracks.id", ondelete="CASCADE"),
+                primary_key=True,
+            ),
+            sa.Column("shown_count", sa.Integer(), nullable=False, server_default="1"),
+            sa.Column(
+                "last_shown",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+        )
+
+    if "track_cooccurrence" not in existing_tables:
+        op.create_table(
+            "track_cooccurrence",
+            sa.Column(
+                "track_id",
+                sa.Integer(),
+                sa.ForeignKey("tracks.id", ondelete="CASCADE"),
+                primary_key=True,
+            ),
+            sa.Column(
+                "other_track_id",
+                sa.Integer(),
+                sa.ForeignKey("tracks.id", ondelete="CASCADE"),
+                primary_key=True,
+            ),
+            sa.Column("score", sa.Float(), nullable=False),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+        )
+        op.create_index(
+            "ix_track_cooccurrence_track", "track_cooccurrence", ["track_id"]
+        )
 
 
 def downgrade() -> None:

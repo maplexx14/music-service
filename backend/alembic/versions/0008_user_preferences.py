@@ -23,24 +23,30 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "users",
-        sa.Column(
-            "preferred_genres",
-            sa.JSON(),
-            nullable=False,
-            server_default="[]",
-        ),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "preferred_artists",
-            sa.JSON(),
-            nullable=False,
-            server_default="[]",
-        ),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = [col['name'] for col in inspector.get_columns('users')]
+
+    if 'preferred_genres' not in columns:
+        op.add_column(
+            "users",
+            sa.Column(
+                "preferred_genres",
+                sa.JSON(),
+                nullable=False,
+                server_default="[]",
+            ),
+        )
+    if 'preferred_artists' not in columns:
+        op.add_column(
+            "users",
+            sa.Column(
+                "preferred_artists",
+                sa.JSON(),
+                nullable=False,
+                server_default="[]",
+            ),
+        )
 
 
 def downgrade() -> None:

@@ -19,15 +19,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "user_track_skips",
-        sa.Column(
-            "disliked",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = [col['name'] for col in inspector.get_columns('user_track_skips')]
+
+    if 'disliked' not in columns:
+        op.add_column(
+            "user_track_skips",
+            sa.Column(
+                "disliked",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
+        )
 
 
 def downgrade() -> None:
