@@ -19,11 +19,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "playlists",
-        sa.Column("is_liked", sa.Boolean(), nullable=False, server_default="false"),
-    )
-    op.create_index("ix_playlists_is_liked", "playlists", ["is_liked"])
+    # Check if column already exists (idempotent)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = [col['name'] for col in inspector.get_columns('playlists')]
+
+    if 'is_liked' not in columns:
+        op.add_column(
+            "playlists",
+            sa.Column("is_liked", sa.Boolean(), nullable=False, server_default="false"),
+        )
+        op.create_index("ix_playlists_is_liked", "playlists", ["is_liked"])
 
     bind = op.get_bind()
     metadata = sa.MetaData()
