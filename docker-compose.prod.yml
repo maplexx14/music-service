@@ -1,0 +1,272 @@
+# Продакшен-конфигурация для VDS. САМОДОСТАТОЧНА — не оверлей.
+#
+# Почему не `-f docker-compose.yml -f docker-compose.prod.yml`: в Compose
+# списки `ports` и `volumes` при мердже СКЛАДЫВАЮТСЯ, а не заменяются.
+# Оверлеем невозможно убрать `5432:5432` или bind-mount `./backend:/app`
+# из базового файла — Postgres так и остался бы открыт наружу, а код бы
+# подхватывался с диска мимо образа. Поэтому прод описан отдельным файлом.
+#
+# Запуск: ./deploy.sh  (обёртка над `docker compose -f docker-compose.prod.yml`)
+#
+# Отличия от dev-конфигурации:
+#   * наружу слушает только nginx (80/443); Postgres и консоль MinIO — на
+#     127.0.0.1, доступ через SSH-туннель; Redis и S3-API MinIO не публикуются;
+#   * нет bind-mount исходников: образы самодостаточны;
+#   * нет slskd и tuna;
+#   * restart: unless-stopped и ротация логов у всех сервисов;
+#   * ресурсы рассчитаны на VDS с 8 ГБ RAM (см. комментарии у postgres/backend).
+
+name: music-prod
+
+# Ротация логов: без неё json-file драйвер пишет безлимитно и рано или поздно
+# забивает диск VDS. Якорь переиспользуется всеми сервисами.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: music_postgres
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env.prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env.prod}
+    # Параметры под VDS с 8 ГБ RAM, где кроме Postgres живут ещё backend
+    # (4 воркера), MinIO, Redis, nginx и сборка образов.
+    #
+    #   shared_buffers=1GB        — 12.5% RAM. Каноничные 25% (2GB) здесь
+    #                               перебор: остальным сервисам нужно больше.
+    #   effective_cache_size=4GB  — подсказка планировщику, память не резервирует.
+    #   max_connections=200       — потолок кластера. Инвариант:
+    #                               (DB_POOL_SIZE+DB_MAX_OVERFLOW)×GUNICORN_WORKERS
+    #                               = (15+15)×4 = 120 < 200, остаток на alembic/psql.
+    #   work_mem=8MB              — на операцию сортировки, не на соединение.
+    #                               Под пиком 120 соединений даёт разумный потолок.
+    command: >
+      postgres
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-1GB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
+      -c work_mem=8MB
+      -c maintenance_work_mem=256MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+    # Порт наружу НЕ публикуется: бэкенд ходит по docker-сети. Для psql с
+    # локальной машины поднимите SSH-туннель (см. DEPLOY.md).
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Проверяем реального пользователя и базу. В dev-конфиге тут был
+      # `-U music_db` (имя БД вместо пользователя) — pg_isready при этом
+      # всё равно отвечал, так что healthcheck проходил вхолостую.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: music_redis
+    restart: unless-stopped
+    logging: *default-logging
+    # В Redis лежат кэш, серверная история потока (flow:history, с TTL) и
+    # счётчики rate-limit. Всё восстановимо, поэтому персистентность не нужна,
+    # но нужен потолок памяти — иначе кэш растёт, пока OOM-killer не убьёт
+    # процесс. volatile-lru вытесняет только ключи с выставленным TTL.
+    command: >
+      redis-server
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
+      --maxmemory-policy volatile-lru
+      --save ""
+      --appendonly no
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: music_minio
+    restart: unless-stopped
+    logging: *default-logging
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env.prod}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env.prod}
+    # S3-API наружу не нужен: аудио и обложки бэкенд проксирует сам под своим
+    # origin (см. storage.py — minio_range_response и COVER_PROXY_PREFIX),
+    # presigned-ссылки клиенту не отдаются.
+    # Консоль — только на localhost, для админки через SSH-туннель.
+    ports:
+      - "127.0.0.1:9001:9001"
+    expose:
+      - "9000"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: music-service/backend:prod
+    container_name: music_backend
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      MINIO_ENDPOINT: minio:9000
+      # Браузер за этим адресом НЕ ходит (всё проксируется через бэкенд), но
+      # значение участвует в нормализации legacy cover_url (storage.py:299),
+      # поэтому держим его согласованным с публичным доменом.
+      MINIO_PUBLIC_ENDPOINT: https://${DOMAIN:?Set DOMAIN in .env.prod}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_SECURE: "false"
+      MINIO_BUCKET_MUSIC: ${MINIO_BUCKET_MUSIC:-music}
+      MINIO_BUCKET_COVERS: ${MINIO_BUCKET_COVERS:-covers}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.prod (openssl rand -hex 32)}
+      # Конкретный origin вместо "*": включает allow_credentials=True
+      # (main.py:31) и ограничивает, кто может обращаться к API из браузера.
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://${DOMAIN}}
+      JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
+      # Soulseek/slskd в прод-конфигурации отключён: сервиса нет, а пустой
+      # SOULSEEK_USERNAME заставляет роутер отдавать пустую выдачу вместо
+      # попыток соединения (soulseek.py:129).
+      SOULSEEK_USERNAME: ""
+      YTDLP_CACHE_DIR: /app/ytdlp_cache
+      YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
+      INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
+      INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
+      INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      SPOTIFY_MARKET: ${SPOTIFY_MARKET:-US}
+      TRANSCODE_ENABLED: ${TRANSCODE_ENABLED:-1}
+      AAC_BITRATE: ${AAC_BITRATE:-128}
+      AAC_SAMPLE_RATE: ${AAC_SAMPLE_RATE:-44100}
+      # 4 воркера под 8 ГБ / типовые 4 vCPU. Инвариант с max_connections:
+      # (15+15)×4 = 120 < 200.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-15}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
+      THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-70}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+    # Только данные — код приезжает в образе.
+    volumes:
+      - music_files:/app/music_files
+      - cover_files:/app/cover_files
+      - ytdlp_cache:/app/ytdlp_cache
+      - cookies_data:/app/cookies
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Миграции Alembic выполняются до старта воркеров; на холодной БД это
+      # заметно дольше обычного запуска.
+      start_period: 90s
+    command: >
+      sh -c "alembic upgrade head &&
+      gunicorn app.main:app
+      -k uvicorn.workers.UvicornWorker
+      -w ${GUNICORN_WORKERS:-4}
+      -b 0.0.0.0:8000
+      --proxy-headers --forwarded-allow-ips='*'
+      --access-logfile - --error-logfile -"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Пусто: src/config.js возьмёт window.location.origin + '/api'.
+        VITE_API_URL: ${VITE_API_URL:-}
+    image: music-service/frontend:prod
+    container_name: music_frontend
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-}
+    expose:
+      - "3000"
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+      target: prod
+    image: music-service/nginx:prod
+    container_name: music_nginx
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - backend
+      - frontend
+
+  # Продление сертификатов. Первичный выпуск делает ./init-letsencrypt.sh —
+  # здесь только renew: certbot сам проверяет срок и обновляет, если до
+  # истечения меньше 30 дней. nginx перечитывает конфиг по своему таймеру
+  # (см. nginx/docker-entrypoint.sh).
+  certbot:
+    image: certbot/certbot:latest
+    container_name: music_certbot
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet;
+        sleep 12h & wait $${!};
+      done"
+
+volumes:
+  postgres_data:
+  minio_data:
+  music_files:
+  cover_files:
+  ytdlp_cache:
+  cookies_data:
+  certbot_conf:
+  certbot_www:

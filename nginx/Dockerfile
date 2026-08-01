@@ -40,8 +40,9 @@ RUN NGINX_VERSION=$(nginx -v 2>&1 | sed 's/.*\///') \
     && cp objs/ngx_http_brotli_filter_module.so /tmp/ \
     && cp objs/ngx_http_brotli_static_module.so /tmp/
 
-# Runtime image — тот же базовый образ
-FROM nginx:1.27-alpine
+# Runtime-база: nginx с brotli-модулями и тюнингом, но БЕЗ конфига виртхоста.
+# От неё наследуются dev- и prod-стадии, поэтому brotli собирается один раз.
+FROM nginx:1.27-alpine AS base
 
 RUN apk add --no-cache pcre zlib openssl
 
@@ -67,5 +68,40 @@ RUN sed -i '1i load_module /usr/lib64/nginx/modules/ngx_http_brotli_filter_modul
 RUN sed -i 's/^worker_processes .*/worker_processes auto;/' /etc/nginx/nginx.conf \
     && sed -i 's/worker_connections .*/worker_connections 8192;/' /etc/nginx/nginx.conf \
     && sed -i '/^events {/i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
+
+
+# ─────────────────────────── prod ───────────────────────────
+# Собирается только явным `target: prod` (см. docker-compose.prod.yml).
+# Конфиг — шаблон: entrypoint подставляет ${DOMAIN} и выбирает http-only
+# или TLS-вариант в зависимости от наличия сертификата.
+FROM base AS prod
+
+# envsubst для подстановки ${DOMAIN} в шаблоны. В nginx:alpine он есть как
+# зависимость штатного docker-entrypoint.d, но полагаться на транзитивную
+# зависимость чужого образа не стоит — ставим явно.
+RUN apk add --no-cache gettext
+
+# http-уровневая часть (maps + upstreams) — попадает в http-блок автоматически
+# через `include /etc/nginx/conf.d/*.conf` базового nginx.conf.
+COPY conf.d/00-upstreams.conf /etc/nginx/conf.d/00-upstreams.conf
+# Сниппет с location'ами лежит ВНЕ conf.d: голые location в http-блоке
+# невалидны, он подключается из server-блока директивой include.
+COPY snippets/app-locations.conf /etc/nginx/snippets/app-locations.conf
+# Шаблоны виртхоста — оба, entrypoint выберет нужный.
+COPY conf.d/app.conf.template /etc/nginx/templates/app.conf.template
+COPY conf.d/app-http-only.conf.template /etc/nginx/templates/app-http-only.conf.template
+
+COPY docker-entrypoint.sh /docker-entrypoint-prod.sh
+RUN chmod +x /docker-entrypoint-prod.sh
+
+ENTRYPOINT ["/docker-entrypoint-prod.sh"]
+CMD ["nginx", "-g", "daemon off;"]
+
+
+# ─────────────────────────── dev ───────────────────────────
+# ПОСЛЕДНЯЯ стадия намеренно: docker-compose.yml собирает ./nginx без
+# `target`, т.е. получает именно её. Порядок менять нельзя, иначе дев-сборка
+# молча начнёт собирать prod.
+FROM base AS dev
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf

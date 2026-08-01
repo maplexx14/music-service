@@ -1,0 +1,32 @@
+# Что НЕ попадает в build-контекст фронтенда.
+# node_modules критичны: их копирование в контекст занимает сотни МБ и
+# ломает `npm ci` (он ставит свои по lock-файлу).
+
+node_modules
+dist
+.git
+.gitignore
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+.DS_Store
+Thumbs.db
+
+.vscode
+.idea
+*.swp
+*.swo
+
+# Локальные переменные — в образ не пойдут, VITE_API_URL приходит через ARG.
+.env
+.env.local
+.env.*.local
+
+# Дев-обвязка: в прод-образе не используется.
+Dockerfile
+Dockerfile.prod
+docker-entrypoint.sh
+.dockerignore

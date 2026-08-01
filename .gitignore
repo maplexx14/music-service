@@ -30,6 +30,9 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+# Прод-секреты: генерируются на сервере (см. DEPLOY.md), в репозиторий не
+# попадают. .env.prod.example — шаблон, он отслеживается.
+.env.prod
 
 # OS
 .DS_Store
@@ -43,8 +46,8 @@ logs/
 *.db
 *.sqlite
 
-# Docker
-.dockerignore
+# Дампы БД, создаваемые backup.sh
+backups/
 
 # Cached external audio (YouTube Music etc.)
 backend/ytdlp_cache/

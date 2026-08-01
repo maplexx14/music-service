@@ -1,0 +1,44 @@
+# Что НЕ попадает в build-контекст бэкенда.
+
+__pycache__
+*.py[cod]
+*$py.class
+.Python
+env
+venv
+ENV
+.venv
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+.git
+.gitignore
+
+# Пользовательские данные: в проде живут в docker-томах и MinIO, а не в
+# образе. Запекать дев-файлы в образ нельзя — они бы «воскресали» при
+# каждом деплое и раздували слои.
+music_files/*
+cover_files/*
+ytdlp_cache/*
+slskd_downloads/*
+slskd_incomplete/*
+cookies/*
+
+# Тесты и локальная обвязка в рантайме не нужны.
+tests
+.dockerignore
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+.env
+.env.local
+.env.*.local
+
+*.db
+*.sqlite
+*.log

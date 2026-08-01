@@ -1,0 +1,103 @@
+# Шаблон виртхоста для прода. ${DOMAIN} подставляется entrypoint'ом через
+# envsubst при старте контейнера, результат кладётся в conf.d/app.conf.
+#
+# Entrypoint выбирает между этим файлом и http-only заглушкой в зависимости
+# от того, выпущен ли уже сертификат: nginx падает при старте, если
+# ssl_certificate указывает на несуществующий файл, а получить сертификат
+# без работающего nginx нельзя (ACME http-01 ходит на порт 80). См.
+# docker-entrypoint.sh.
+
+# HTTP: только ACME-челлендж и редирект на HTTPS.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    # Certbot webroot. Тот же том смонтирован в контейнер certbot.
+    # Должен идти ДО редиректа, иначе челлендж уедет на https и проверка
+    # не пройдёт.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    # Параметры TLS в духе рекомендаций Mozilla (intermediate): только TLS 1.2+,
+    # шифры на стороне клиента (для TLS 1.3 порядок всё равно задаёт клиент).
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    # OCSP stapling: браузеру не нужно самому ходить к CA за статусом
+    # сертификата — экономит один round-trip на первом соединении.
+    # Работает только с полной цепочкой (fullchain.pem), она у нас есть.
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /etc/letsencrypt/live/${DOMAIN}/chain.pem;
+    resolver 127.0.0.11 valid=30s;
+    resolver_timeout 5s;
+
+    # HSTS. Полгода, без preload/includeSubDomains: preload практически
+    # необратим, а поддомены могут жить на другом железе без TLS.
+    add_header Strict-Transport-Security "max-age=15768000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Загрузка треков и обложек: тот же лимит, что в деве.
+    client_max_body_size 1024m;
+    # Долгий keepalive: аудио-стримы длятся минутами.
+    keepalive_timeout 3600s;
+
+    # Кэш файловых дескрипторов: ускоряет TTFB для статических файлов,
+    # которые уже открывались (JS/CSS-чанки, обложки).
+    open_file_cache max=1000 inactive=60s;
+    open_file_cache_valid 30s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
+
+    gzip on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_vary on;
+    gzip_types application/json application/javascript text/javascript application/xml text/xml text/css text/plain image/svg+xml application/manifest+json;
+
+    # Brotli: ~20-30% лучше сжатие чем gzip для текстовых ресурсов.
+    # brotli_static раздаёт предкомпрессированные .br файлы если есть.
+    brotli on;
+    brotli_comp_level 6;
+    brotli_min_length 1024;
+    brotli_types application/json application/javascript text/javascript application/xml text/xml text/css text/plain image/svg+xml application/manifest+json;
+    brotli_static on;
+
+    # Общие заголовки проксирования (в location'ах, ставящих свои заголовки,
+    # продублированы — proxy_set_header не наследуется частично).
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    # TCP keepalive: предотвращает обрыв idle-соединений промежуточными
+    # слоями (NAT, файрволы) во время пауз буферизации.
+    proxy_socket_keepalive on;
+
+    include /etc/nginx/snippets/app-locations.conf;
+}
