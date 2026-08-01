@@ -469,6 +469,14 @@ def _local_candidates(
     exclude_ids = set(base) | (extra_exclude_ids or set())
     aw = profile.get("artist_weight") or {}
     filters = []
+    # Базовый фильтр: включаем все источники — локальные (local/minio), ytmusic, soundcloud.
+    # Без этого при пустом minio в базе оставались только внешние треки, но
+    # фильтры жанров/артистов всё равно исключали их, и поток возвращал [].
+    filters.append(
+        or_(
+            Track.source.in_(["local", "ytmusic", "soundcloud"]),
+        )
+    )
     if profile["artist_keys"]:
         # Регистронезависимо: SoundCloud и YT Music отдают имя одного и того же
         # артиста в разном написании (регистр/пробелы), точное сравнение их
