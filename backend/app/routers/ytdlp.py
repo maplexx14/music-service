@@ -159,6 +159,30 @@ async def search_ytmusic(
     return results
 
 
+async def search_ytmusic_artists(q: str, limit: int = 20) -> List[str]:
+    if _ytmusic is None:
+        return []
+
+    try:
+        raw = await asyncio.to_thread(
+            _ytmusic.search, q, filter="artists", limit=limit
+        )
+    except Exception:
+        logger.exception("YouTube Music artist search failed")
+        return []
+
+    results: List[str] = []
+    seen = set()
+    for item in raw or []:
+        name = (item.get("artist") or item.get("name") or "").strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            results.append(name)
+        if len(results) >= limit:
+            break
+    return results
+
+
 @router.get("/search", response_model=List[ExternalTrackResponse])
 async def search_endpoint(
     request: Request,

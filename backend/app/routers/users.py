@@ -9,6 +9,8 @@ from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
 from app.genre_keywords import GENRE_KEYWORDS, GENRE_LABELS
 from app.dependencies import get_current_active_user, get_current_admin_user
 from app.routers.flow import _taste_profile
+from app.routers.ytdlp import search_ytmusic_artists
+from app.artist_utils import artist_key
 
 router = APIRouter()
 
@@ -31,15 +33,18 @@ def list_genres():
 
 
 @router.get("/artists/suggest", response_model=List[str])
-def suggest_artists(
+async def suggest_artists(
     q: str = "",
     limit: int = 20,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Подсказки артистов из каталога, отсортированные по популярности."""
-    query = db.query(Track.artist).filter(Track.artist.isnot(None))
+    """Подсказки артистов: локальный каталог + YouTube Music."""
     term = (q or "").strip()
+    local_names: List[str] = []
+    yt_names: List[str] = []
+
+    query = db.query(Track.artist).filter(Track.artist.isnot(None))
     if term:
         query = query.filter(Track.artist.ilike(f"%{term}%"))
     rows = (
@@ -48,7 +53,19 @@ def suggest_artists(
         .limit(min(max(limit, 1), 50))
         .all()
     )
-    return [r[0] for r in rows if r[0]]
+    local_names = [r[0] for r in rows if r[0]]
+
+    if term:
+        yt_names = await search_ytmusic_artists(term, limit=limit)
+
+    merged: List[str] = list(local_names)
+    existing_keys = {artist_key(n) for n in merged}
+    for name in yt_names:
+        if artist_key(name) not in existing_keys:
+            existing_keys.add(artist_key(name))
+            merged.append(name)
+
+    return merged[:limit]
 
 
 @router.get("/me/taste")
