@@ -68,8 +68,12 @@ def make_relevance_check(
         if kws:
             text = f"{title} {artist}".lower()
             return any(kw in text for kw in kws)
-        # Ни одного сигнала — не режем вслепую (иначе холодный старт пуст).
-        return True
+        # Ни одного сигнала. Если у пользователя есть хоть какой-то выраженный
+        # вкус (артисты, жанры, язык, тематические слова) — трек без жанра от
+        # незнакомого артиста не может быть релевантным. Холодный старт (полное
+        # отсутствие сигналов) — пропускаем, иначе поток будет пустым.
+        has_taste = bool(trusted or genres or prefer_cyrillic is not None or kws)
+        return not has_taste
 
     return keep
 

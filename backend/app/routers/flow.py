@@ -9,16 +9,19 @@
 import asyncio
 import logging
 import math
+import os
 import random
 import re
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
+from app import storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -434,6 +437,25 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     }
 
 
+MUSIC_DIR = Path(os.getenv("MUSIC_FILES_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "music_files")))
+
+
+def _media_available(track: Track) -> bool:
+    if track.source == "local" or not track.source:
+        if not track.file_path:
+            return False
+        if storage.is_minio_path(track.file_path):
+            return True
+        path = MUSIC_DIR / Path(track.file_path).name
+        alt = MUSIC_DIR / track.file_path.replace("/music_files/", "")
+        return path.is_file() or alt.is_file()
+    if track.source == "ytmusic":
+        return bool(track.external_id)
+    if track.source == "soundcloud":
+        return bool(track.stream_url)
+    return bool(track.external_id or track.stream_url)
+
+
 def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids: Optional[set] = None) -> List[Track]:
     """Локальные кандидаты: треки любимых артистов/жанров + популярное (блокирующая)."""
     # Исключаем не только недавнее/скипнутое (recent_ids), но и то, что УЖЕ в
@@ -513,21 +535,32 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # это всегда самые заигранные треки нескольких артистов, и никакая
         # сортировка в Python уже не достанет остальных из библиотеки.
         candidates = q.order_by(func.random()).limit(limit * 8).all()
-        candidates = [t for t in candidates if _keep(t)]
+        candidates = [t for t in candidates if _keep(t) and _media_available(t)]
         candidates.sort(key=_score)
         candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
 
     # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
     # жанровой проверки попадал случайный глобальный top по play_count — именно
     # этот путь подмешивал любителю русского рэпа поп, техно и музыку 90-х.
+    # require_signal: трек обязан иметь положительное подтверждение вкуса (жанр,
+    # язык или ключевые слова), а не просто «не противоречит». Иначе любой хит
+    # без жанра от незнакомого артиста проходил бы проверку и попадал в выдачу.
     if len(candidates) < limit:
+        _keep_strict = track_check(
+            make_relevance_check(
+                trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+                user_genres=set(profile.get("genres") or []),
+                prefer_cyrillic=profile.get("prefer_cyrillic"),
+                require_signal=True,
+            )
+        )
         skip = {t.id for t in candidates} | exclude_ids
         q = db.query(Track)
         if skip:
             q = q.filter(~Track.id.in_(skip))
         pool = [
             t for t in q.order_by(desc(Track.play_count)).limit(limit * 20).all()
-            if _keep(t)
+            if _keep_strict(t) and _media_available(t)
         ]
         pool.sort(key=_score)
         candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
@@ -774,6 +807,12 @@ async def get_flow(
                 continue
             # Артист, заскипанный в минус, не попадает в волну и из радио.
             if banned and any(a.strip().lower() in banned for a in t.artist.split(",")):
+                continue
+            # Треки без рабочего источника не добавляем: ytmusic без external_id
+            # или soundcloud без stream_url не смогут играться.
+            if t.source == "ytmusic" and not t.external_id:
+                continue
+            if t.source == "soundcloud" and not t.stream_url:
                 continue
             seen_keys.add(key)
             excl_videos.add(t.external_id)
