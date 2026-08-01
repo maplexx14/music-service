@@ -74,6 +74,17 @@ _inflight: set[int] = set()
 _MAX_RETRIES = 4
 _RETRY_DELAY = 2.0
 
+# Размер сегмента при скачивании аудио с googlevideo. Длинный одиночный GET
+# CDN троттлит и обрывает на середине (RemoteProtocolError: «peer closed
+# connection without sending complete message body»), из-за чего архивация
+# крупных треков не доходила до конца ни за одну из _MAX_RETRIES попыток.
+# Короткие range-запросы успевают завершиться целиком, а обрыв стоит один
+# сегмент вместо всего файла. Тот же приём уже применяется при проксировании
+# стрима (ytdlp._SEGMENT).
+_SEGMENT = 1 << 20  # 1 MiB
+# Подряд идущие безрезультатные попытки одного сегмента, после которых сдаёмся.
+_SEGMENT_RETRIES = 3
+
 
 class ArchiveResult:
     """Строковые статусы результата (для агрегированной статистики в скрипте)."""
@@ -220,6 +231,14 @@ class _Unsupported(Exception):
     """Источник трека не поддерживает детерминированную архивацию."""
 
 
+def _content_range_total(header: Optional[str]) -> Optional[int]:
+    """Полный размер файла из заголовка ``Content-Range: bytes a-b/total``."""
+    if not header or "/" not in header:
+        return None
+    tail = header.rsplit("/", 1)[-1].strip()
+    return int(tail) if tail.isdigit() else None
+
+
 async def _download_to_temp(
     url: str,
     suffix: str,
@@ -252,32 +271,122 @@ async def _download_to_temp(
         elif os.path.exists(tmp_path):
             size = os.path.getsize(tmp_path)
 
-        headers = {}
         if size > 0:
-            headers["Range"] = f"bytes={size}-"
             logger.info("resume download from byte %d for %s", size, url)
 
-        with os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if size > 0 else os.O_TRUNC)), "ab" if size > 0 else "wb") as fh:
-            async with client.stream("GET", url, headers=headers) as resp:
-                # Если сервер не поддерживает Range — начинаем сначала
-                if size > 0 and resp.status_code == 200:
-                    size = 0
-                    fh.seek(0)
-                    fh.truncate()
-                    logger.info("server does not support range, restarting download")
+        # Тянем файл короткими range-сегментами: см. _SEGMENT. Обрыв внутри
+        # сегмента стоит только этот сегмент — прогресс на диске сохраняется,
+        # и повтор продолжает с той же позиции, а не с нуля.
+        total: Optional[int] = None
+        stalled = 0
+        # Сервер игнорирует Range и всегда отдаёт файл целиком: тогда первый же
+        # 200-ответ и есть весь файл, а следующий range-запрос вернул бы его
+        # заново — без этого флага цикл перекачивал бы файл вечно.
+        ignores_range = False
+        with os.fdopen(
+            os.open(
+                tmp_path,
+                os.O_WRONLY | os.O_CREAT | (os.O_APPEND if size > 0 else os.O_TRUNC),
+            ),
+            "ab" if size > 0 else "wb",
+        ) as fh:
+            while total is None or size < total:
+                end = size + _SEGMENT - 1
+                if total is not None:
+                    end = min(end, total - 1)
+                got = 0
+                try:
+                    async with client.stream(
+                        "GET", url, headers={"Range": f"bytes={size}-{end}"}
+                    ) as resp:
+                        # Сервер проигнорировал Range и отдаёт файл с начала:
+                        # продолжать с середины нельзя — начинаем заново.
+                        if resp.status_code == 200 and size > 0:
+                            logger.info(
+                                "server does not support range, restarting download"
+                            )
+                            fh.seek(0)
+                            fh.truncate()
+                            size = 0
+                            total = None
+                            stalled = 0
+                            ignores_range = True
+                            continue
+                        if resp.status_code == 200:
+                            ignores_range = True
+                        # 416 на возобновлении: запрошенный диапазон за концом
+                        # файла — состояние с прошлой попытки не соответствует
+                        # этой ссылке (другой itag/битрейт). Целостность важнее
+                        # экономии трафика: качаем с нуля.
+                        if resp.status_code == 416 and size > 0:
+                            logger.info(
+                                "stale resume state for %s (416 @%d), restarting",
+                                url, size,
+                            )
+                            fh.seek(0)
+                            fh.truncate()
+                            size = 0
+                            total = None
+                            stalled = 0
+                            continue
+                        resp.raise_for_status()
+                        if total is None:
+                            total = _content_range_total(
+                                resp.headers.get("content-range")
+                            )
+                        async for chunk in resp.aiter_bytes(256 * 1024):
+                            fh.write(chunk)
+                            size += len(chunk)
+                            got += len(chunk)
+                            if MAX_AUDIO_BYTES and size > MAX_AUDIO_BYTES:
+                                raise _TooLarge()
+                except httpx.HTTPError as exc:
+                    # Обрыв/таймаут внутри сегмента: то, что успели записать,
+                    # уже на диске. Повторяем сегмент с новой позиции.
+                    if got == 0:
+                        stalled += 1
+                        if stalled > _SEGMENT_RETRIES:
+                            raise
+                        logger.info(
+                            "archive segment @%d failed for %s (%s), retry %d/%d",
+                            size, url, exc, stalled, _SEGMENT_RETRIES,
+                        )
+                        continue
+                    logger.info(
+                        "archive segment @%d truncated for %s (%s), continuing",
+                        size, url, exc,
+                    )
+                else:
+                    # Пустой ответ без ошибки — тоже отсутствие прогресса,
+                    # иначе цикл мог бы вращаться вечно на мёртвой ссылке.
+                    if got == 0:
+                        stalled += 1
+                        if stalled > _SEGMENT_RETRIES:
+                            break
+                        continue
+                fh.flush()
+                stalled = 0
+                try:
+                    open(state_path, "w").write(str(size))
+                except OSError:
+                    pass
+                # Ответ 200 — тело было целым файлом, докачивать нечего.
+                if ignores_range:
+                    break
+                # Размер неизвестен (CDN не отдал content-range), а последний
+                # сегмент оказался короче запрошенного — значит это конец файла.
+                if total is None and got < _SEGMENT:
+                    break
 
-                resp.raise_for_status()
-                async for chunk in resp.aiter_bytes(256 * 1024):
-                    fh.write(chunk)
-                    size += len(chunk)
-                    # Сохраняем прогресс каждые 1MB
-                    if size % (1024 * 1024) < len(chunk):
-                        try:
-                            open(state_path, "w").write(str(size))
-                        except OSError:
-                            pass
-                    if MAX_AUDIO_BYTES and size > MAX_AUDIO_BYTES:
-                        raise _TooLarge()
+        # Недокачанный файл наверх не отдаём. Транскод усечённого аудио может
+        # завершиться «успешно» (а при недоступном ffmpeg вообще идёт
+        # passthrough), и в MinIO уехал бы обрезанный трек — навсегда, т.к.
+        # архивный объект считается готовым и больше не перекачивается.
+        # Прогресс на диске остаётся: следующая попытка продолжит с resume.
+        if total is not None and size < total:
+            raise httpx.RemoteProtocolError(
+                f"incomplete download: {size} of {total} bytes"
+            )
 
         ok = True
         return tmp_path, size

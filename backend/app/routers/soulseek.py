@@ -5,6 +5,7 @@ import os
 import re
 from typing import List, Optional, Tuple
 
+import aiofiles
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -274,9 +275,9 @@ async def stream_soulseek(token: str):
                 if path and os.path.exists(path):
                     current = os.path.getsize(path)
                     if current > sent:
-                        with open(path, "rb") as fh:
-                            fh.seek(sent)
-                            chunk = fh.read(current - sent)
+                        async with aiofiles.open(path, "rb") as fh:
+                            await fh.seek(sent)
+                            chunk = await fh.read(current - sent)
                         if chunk:
                             sent += len(chunk)
                             idle = 0.0
@@ -294,9 +295,9 @@ async def stream_soulseek(token: str):
                     if path and os.path.exists(path):
                         current = os.path.getsize(path)
                         if current > sent:
-                            with open(path, "rb") as fh:
-                                fh.seek(sent)
-                                chunk = fh.read(current - sent)
+                            async with aiofiles.open(path, "rb") as fh:
+                                await fh.seek(sent)
+                                chunk = await fh.read(current - sent)
                             if chunk:
                                 sent += len(chunk)
                                 yield chunk

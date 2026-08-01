@@ -118,13 +118,17 @@ EXTERNAL_STREAM_PREFIX = {
 }
 
 
-def iter_file_range(file_path: Path, start: int, end: int, chunk_size: int = 256 * 1024):
-    """Yield exactly the requested inclusive byte range without loading the file."""
+async def iter_file_range(file_path: Path, start: int, end: int, chunk_size: int = 256 * 1024):
+    """Yield exactly the requested inclusive byte range without loading the file.
+
+    Async (aiofiles), не держит OS-тред на всю длительность стрима — см. план
+    async-переделки для 10k конкурентных слушателей.
+    """
     remaining = end - start + 1
-    with file_path.open("rb") as audio_file:
-        audio_file.seek(start)
+    async with aiofiles.open(file_path, "rb") as audio_file:
+        await audio_file.seek(start)
         while remaining > 0:
-            chunk = audio_file.read(min(chunk_size, remaining))
+            chunk = await audio_file.read(min(chunk_size, remaining))
             if not chunk:
                 break
             remaining -= len(chunk)
@@ -132,7 +136,7 @@ def iter_file_range(file_path: Path, start: int, end: int, chunk_size: int = 256
 
 
 @router.get("/{track_id}/stream")
-def stream_track(
+async def stream_track(
     track_id: int,
     request: Request,
     db: Session = Depends(get_db)
@@ -153,7 +157,7 @@ def stream_track(
     # localhost с другого устройства указывает на сам клиент. Внутренний клиент
     # (minio:9000) доступен из контейнера всегда. Range поддерживаем вручную.
     if storage.is_minio_path(track.file_path):
-        return storage.minio_range_response(track.file_path, request)
+        return await storage.minio_range_response_async(track.file_path, request)
 
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
     if track.source and track.source != "local":
@@ -261,7 +265,7 @@ def stream_track(
 
 
 @router.get("/cover/{key:path}")
-def stream_cover(key: str):
+async def stream_cover(key: str):
     """Отдаёт обложку из MinIO через бэкенд-прокси (тот же origin, что и app).
 
     Нужно, чтобы за https-туннелем обложки не ломались как mixed content
@@ -270,7 +274,7 @@ def stream_cover(key: str):
     if not storage.is_minio_backend():
         raise HTTPException(status_code=404, detail="Cover not found")
     try:
-        stream, content_type, size = storage.open_cover_object(key)
+        stream, content_type, size = await storage.open_cover_object_async(key)
     except Exception:
         raise HTTPException(status_code=404, detail="Cover not found")
     return StreamingResponse(

@@ -15,15 +15,21 @@ if not DATABASE_URL:
 # должен покрывать размер threadpool (см. THREADPOOL_TOKENS в main.py).
 #
 # pool_size + max_overflow = потолок соединений НА ОДИН воркер, а воркеров
-# gunicorn запускает несколько (-w 4). Итог умножается: старые 20+40 давали
-# 240 соединений против Postgres max_connections=100 — четвёртый воркер под
-# нагрузкой получал бы FATAL: too many connections вместо ожидания в пуле.
-# 10+10 на воркер = 80 при -w 4, с запасом под alembic и служебные подключения.
-# THREADPOOL_TOKENS остаётся больше: часть тредов занята стримами файлов и
-# MinIO, они соединение БД не держат (проверено — стрим не даёт idle in
-# transaction). Треды, которым БД всё же нужна, ждут в очереди пула.
-DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
-DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+# gunicorn запускает несколько (GUNICORN_WORKERS, см. docker-compose.yml).
+# Итог умножается: 20+20 на воркер × 8 воркеров = 320 против Postgres
+# max_connections=400 (см. POSTGRES_MAX_CONNECTIONS в docker-compose.yml) —
+# остаток под alembic, psql и служебные подключения. При изменении
+# GUNICORN_WORKERS пересчитать оба лимита, иначе лишние воркеры под нагрузкой
+# получат FATAL: too many connections вместо ожидания в пуле.
+#
+# Под таргет 10k активных юзеров (~1k одновременных стримов): увеличен с 10+10
+# до 20+20 на воркер. THREADPOOL_TOKENS (70) остаётся больше: async-стримы
+# (tracks.py:160, storage.py:462) не держат соединение БД во время передачи
+# байтов (проверено — idle in transaction не появляется), держат только на
+# начальную SELECT tracks. Треды, которым БД всё же нужна для работы, ждут в
+# очереди пула (pool_timeout=30s).
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
 
 engine = create_engine(
     DATABASE_URL,

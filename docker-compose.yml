@@ -8,6 +8,26 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-music_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-music_password}
       POSTGRES_DB: ${POSTGRES_DB:-music_db}
+    # max_connections: должен покрывать (DB_POOL_SIZE + DB_MAX_OVERFLOW) × GUNICORN_WORKERS
+    # backend'а (см. database.py) плюс запас под alembic/psql. Дефолт Postgres — 100,
+    # мало при GUNICORN_WORKERS=8. Под 10k активных юзеров: (20+20)×8=320 + запас = 400.
+    #
+    # Память: shared_buffers и effective_cache_size масштабируются с RAM хоста.
+    # На контейнере с 8GB выделенной памяти: shared_buffers=2GB (25%),
+    # effective_cache_size=6GB (75%). На production с 16GB настроить 4GB/12GB.
+    # work_mem=16MB на запрос × 400 соединений = до 6.4GB под тяжёлые сортировки
+    # (в реальности пик гораздо ниже — большинство запросов простые).
+    command: >
+      postgres
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-400}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-2GB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-6GB}
+      -c work_mem=16MB
+      -c maintenance_work_mem=512MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
     ports:
       - "5432:5432"
     volumes:
@@ -85,17 +105,26 @@ services:
       # ─── Yandex Music (нативная интеграция) ───
       # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
+      # ─── Spotify (метаданные для импорта; аудио матчится в YouTube Music) ───
+      # Client ID/Secret приложения: https://developer.spotify.com/dashboard
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      SPOTIFY_MARKET: ${SPOTIFY_MARKET:-US}
       # AAC transcoding: all audio is compressed to AAC for smaller files.
       TRANSCODE_ENABLED: ${TRANSCODE_ENABLED:-1}
       AAC_BITRATE: ${AAC_BITRATE:-128}
       AAC_SAMPLE_RATE: ${AAC_SAMPLE_RATE:-44100}
       # Конкурентность: пул БД и threadpool согласованы между собой.
-      # (pool_size + max_overflow) × число воркеров gunicorn (-w 4 ниже) не
-      # должно превышать Postgres max_connections (по умолчанию 100).
-      # 10+10 × 4 = 80, остаток — под alembic, psql и служебные подключения.
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
-      THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-60}
+      # (pool_size + max_overflow) × число воркеров gunicorn не должно превышать
+      # Postgres max_connections. Под таргет 10k активных юзеров (~1k одновременных
+      # стримов): (20+20)×8=320 vs max_connections=400 — запас под alembic/psql.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+      # Стримы (файл/MinIO) не держат соединение БД, поэтому тредов под них можно
+      # больше, чем DB-пула: GUNICORN_WORKERS(8) × 70 = 560 конкурентных стримов —
+      # запас над таргетом 500 одновременных слушателей.
+      THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-70}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-8}
     ports:
       - "8000:8000"
     volumes:
@@ -115,7 +144,7 @@ services:
     # --proxy-headers + --forwarded-allow-ips='*': доверяем X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
     # (mixed active content).
-    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips='*'"
+    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips='*'"
 
   slskd:
     image: slskd/slskd:latest

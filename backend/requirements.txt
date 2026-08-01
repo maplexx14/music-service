@@ -12,6 +12,9 @@ python-multipart==0.0.6
 redis==5.0.1
 aiofiles==23.2.1
 minio==7.2.7
+# Async S3 client (MinIO — S3-compatible) для hot-path стрима аудио/обложек,
+# см. storage.py init_async_client(). Uploads/migrations остаются на sync minio.
+aiobotocore==3.8.0
 Pillow==10.2.0
 email-validator==2.1.0
 mutagen==1.47.0

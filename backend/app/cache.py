@@ -4,11 +4,28 @@ import json
 from typing import Optional, Any
 import os
 
+# Таймауты обязательны: без socket_timeout зависший/перегруженный Redis
+# блокирует вызывающий тред НАВСЕГДА. Все sync-эндпоинты живут в anyio
+# threadpool (THREADPOOL_TOKENS штук на воркер), поэтому один недоступный
+# Redis выжирает весь threadpool и роняет ВЕСЬ воркер, включая эндпоинты,
+# которым кэш не нужен. С таймаутом вызов падает, get_cache/set_cache глотают
+# исключение (см. ниже) и запрос идёт в обход кэша — деградация, не отказ.
+#
+# max_connections ограничивает пул на процесс-воркер: без лимита пул растёт
+# по числу конкурентных тредов и упирается в maxclients Redis'а.
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "redis"),
     port=int(os.getenv("REDIS_PORT", 6379)),
     db=0,
-    decode_responses=True
+    decode_responses=True,
+    socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2.0")),
+    socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
+    socket_keepalive=True,
+    # Пингует соединение, простоявшее дольше интервала, до отдачи запроса —
+    # иначе первый запрос после простоя падает на разорванном сокете.
+    health_check_interval=30,
+    retry_on_timeout=True,
+    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", "100")),
 )
 
 

@@ -690,16 +690,31 @@ def get_recommendations(
     # Фиксируем показы (для сигнала «показан N раз — не сыгран»). Пока ответ
     # живёт в кэше, повторные отдачи того же списка показом не считаются —
     # это осознанно: юзер видел ОДНУ выдачу, а не пять.
+    #
+    # ОДИН multi-row upsert, а не по statement на трек: при limit=20 это было
+    # 20 round-trip'ов к Postgres внутри GET-запроса, и каждый держал write-lock
+    # по своей строке. На 10k активных юзеров разница — 200k statement'ов против
+    # 10k. Дедуп по track_id обязателен: ON CONFLICT DO UPDATE не может дважды
+    # обновить одну строку в одном statement ("cannot affect row a second time"),
+    # а порядок выдачи (interleave_artists/добор соседями) дублей не исключает.
+    seen_impression_ids = set()
+    impression_rows = []
     for t in recommended_tracks:
+        if t.id in seen_impression_ids:
+            continue
+        seen_impression_ids.add(t.id)
+        impression_rows.append(
+            {
+                "user_id": current_user.id,
+                "track_id": t.id,
+                "shown_count": 1,
+                "last_shown": func.now(),
+            }
+        )
+    if impression_rows:
+        stmt = pg_insert(rec_impressions).values(impression_rows)
         db.execute(
-            pg_insert(rec_impressions)
-            .values(
-                user_id=current_user.id,
-                track_id=t.id,
-                shown_count=1,
-                last_shown=func.now(),
-            )
-            .on_conflict_do_update(
+            stmt.on_conflict_do_update(
                 index_elements=[rec_impressions.c.user_id, rec_impressions.c.track_id],
                 set_={
                     "shown_count": rec_impressions.c.shown_count + 1,
@@ -707,7 +722,7 @@ def get_recommendations(
                 },
             )
         )
-    db.commit()
+        db.commit()
 
     # Get popular playlists — без selectinload(tracks): ответ встраивает только
     # метаданные плейлистов (название, обложка), а не все их треки. Полный

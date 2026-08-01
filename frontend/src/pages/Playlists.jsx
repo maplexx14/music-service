@@ -17,7 +17,7 @@ function Playlists() {
   const [coverFile, setCoverFile] = useState(null)
   const [creating, setCreating] = useState(false)
 
-  // Импорт из внешних сервисов (SoundCloud / Yandex Music).
+  // Импорт из внешних сервисов (SoundCloud / Yandex Music / Spotify).
   const [showImportForm, setShowImportForm] = useState(false)
   const [importUrl, setImportUrl] = useState('')
   const [preview, setPreview] = useState(null)
@@ -209,10 +209,16 @@ function Playlists() {
       {showImportForm && (
         <div className="import-playlist-form">
           <p className="import-hint">
-            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud либо Yandex Music.
-            Треки Yandex подбираются из YouTube Music.
+            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music
+            либо Spotify. Треки Yandex и Spotify подбираются из YouTube Music.
           </p>
           <div className="import-examples">
+            <div className="import-example">
+              <span className="import-example-label">Spotify:</span>
+              <span className="import-example-url">open.spotify.com/playlist/37i9dQ...</span>
+              <span className="import-example-url">open.spotify.com/album/1DFixL...</span>
+              <span className="import-example-url">open.spotify.com/track/4cOdK2...</span>
+            </div>
             <div className="import-example">
               <span className="import-example-label">Yandex Music:</span>
               <span className="import-example-url">music.yandex.ru/album/123456</span>
@@ -290,7 +296,7 @@ function Playlists() {
           <div className="import-input-row">
             <input
               type="url"
-              placeholder="https://music.yandex.ru/... или https://soundcloud.com/..."
+              placeholder="https://open.spotify.com/... , https://music.yandex.ru/... или https://soundcloud.com/..."
               value={importUrl}
               onChange={(e) => { setImportUrl(e.target.value); setPreview(null) }}
               autoFocus

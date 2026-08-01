@@ -1,4 +1,4 @@
-"""Импорт треков и плейлистов из внешних сервисов (SoundCloud, Yandex Music).
+"""Импорт треков и плейлистов из внешних сервисов (SoundCloud, Yandex Music, Spotify).
 
 Разбирает ссылку через yt-dlp (extract_flat — только метаданные, быстро), затем
 делает каждый трек играбельным и складывает в новый плейлист пользователя:
@@ -6,6 +6,8 @@
 * SoundCloud — материализуем нативно (свой стрим-движок, см. soundcloud.py).
 * Yandex Music — нативная интеграция через API (см. yandex_music.py), с фолбэком
   на yt-dlp + матчинг в YouTube Music.
+* Spotify — только метаданные через Web API (см. spotify.py): аудио закрыто DRM,
+  поэтому каждый трек подбирается матчингом в YouTube Music.
 """
 
 import asyncio
@@ -22,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
-from app.routers import soundcloud, ytdlp
+from app.routers import soundcloud, spotify, ytdlp
 from app.routers.tracks import get_or_create_external_track
 from app.schemas import (
     ExternalTrackImport,
@@ -54,12 +56,26 @@ _CONCURRENCY = 8
 _COOKIES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "cookies")
 os.makedirs(_COOKIES_DIR, exist_ok=True)
 
+# Человекочитаемые имена источников для описания созданного плейлиста.
+_SOURCE_LABELS = {
+    "soundcloud": "SoundCloud",
+    "yandex": "Yandex Music",
+    "spotify": "Spotify",
+}
+
 
 def _detect(url: str) -> Tuple[str, str]:
     """Ссылка → (source, kind). Кидает 400 на нераспознанный URL.
 
-    source: soundcloud | yandex; kind: playlist | user | track | album | artist | likes.
+    source: soundcloud | yandex | spotify;
+    kind: playlist | user | track | album | artist | likes.
     """
+    # Spotify: и веб-ссылки (open.spotify.com/...), и URI (spotify:playlist:...).
+    # Проверяем первым: у URI нет netloc, разбор ниже его не увидит.
+    spotify_parsed = spotify.parse_url(url)
+    if spotify_parsed:
+        return "spotify", spotify_parsed[0]
+
     host = (urlparse(url).netloc or "").lower()
     path = urlparse(url).path.rstrip("/")
 
@@ -108,8 +124,20 @@ def _detect(url: str) -> Tuple[str, str]:
 
     raise HTTPException(
         status_code=400,
-        detail="Поддерживаются только ссылки SoundCloud и Yandex Music",
+        detail="Поддерживаются только ссылки SoundCloud, Yandex Music и Spotify",
     )
+
+
+async def _normalize_url(url: str) -> str:
+    """Приводит ссылку к разбираемому виду до _detect.
+
+    Мобильное «Поделиться» в Spotify даёт короткую spotify.link/... — из неё
+    нельзя вытащить тип и id, пока не пройден редирект.
+    """
+    url = (url or "").strip()
+    if spotify.is_short_link(url):
+        return await spotify.resolve_short_link(url)
+    return url
 
 
 def _artist_of(entry: dict) -> str:
@@ -192,11 +220,12 @@ def _extract_yandex_likes_url(url: str) -> Optional[str]:
     return None
 
 
-def _clean_yandex_title(title: str) -> str:
-    """Очищает название трека от мусора Yandex Music.
+def _clean_match_title(title: str) -> str:
+    """Очищает название трека от мусора перед матчингом.
 
     Удаляет '(remix)', '[explicit]', 'feat. ...' и т.п. из названия
-    для более точного матчинга в YouTube Music.
+    для более точного матчинга в YouTube Music. Используется для всех
+    источников без нативного стрима (Yandex Music, Spotify).
     """
     if not title:
         return title
@@ -217,14 +246,14 @@ def _clean_yandex_title(title: str) -> str:
     return cleaned.strip(" -–—")
 
 
-def _build_yandex_match_query(artist: str, title: str) -> str:
+def _build_match_query(artist: str, title: str) -> str:
     """Строит оптимальный запрос для матчинга в YouTube Music.
 
     Использует очищенное название и основного артиста для более точного поиска.
     """
     # Берём только первого артиста (основного) для более точного поиска
     main_artist = artist.split(",")[0].strip() if artist else ""
-    cleaned_title = _clean_yandex_title(title)
+    cleaned_title = _clean_match_title(title)
 
     if main_artist and cleaned_title:
         return f"{main_artist} {cleaned_title}"
@@ -375,10 +404,34 @@ async def _extract_yandex_native(
     return None
 
 
+async def _extract_spotify(url: str) -> Tuple[Optional[str], Optional[str], List[dict]]:
+    """Метаданные коллекции/трека Spotify через Web API → entries.
+
+    Фолбэка на yt-dlp нет: yt-dlp не умеет Spotify (аудио под DRM). Ошибки
+    (не настроен, приватный плейлист, 404) уходят наружу как есть.
+    """
+    title, cover, tracks = await spotify.fetch_by_url(url)
+    entries = [
+        {
+            "title": t.title,
+            "artists": [t.artist],
+            "album": t.album,
+            "duration": t.duration,
+            "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
+            "id": t.id,
+        }
+        for t in tracks
+    ]
+    return title, cover, entries
+
+
 async def _extract_collection(
     request: Request, url: str, source: str, kind: str, cookies_file: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], List[dict]]:
     """(title, cover, entries) коллекции/трека. Кидает 502 при сбое извлечения."""
+
+    if source == "spotify":
+        return await _extract_spotify(url)
 
     # Для Yandex Music сначала пробуем нативный API (обходит CAPTCHA)
     if source == "yandex":
@@ -477,14 +530,14 @@ async def _entry_to_import(
         payload = soundcloud.entry_to_import(request, entry)
         return payload, False
 
-    # Yandex и прочее: матчим по «артист + название» в YouTube Music.
+    # Yandex, Spotify и прочее: матчим по «артист + название» в YouTube Music.
     title = entry.get("title") or entry.get("track") or ""
     artist = _artist_of(entry)
     if not title:
         return None, False
 
     # Улучшенный запрос для матчинга
-    query = _build_yandex_match_query(artist, title)
+    query = _build_match_query(artist, title)
 
     # Если запрос слишком короткий (< 3 символов), пробуем полный вариант
     if len(query) < 3:
@@ -556,7 +609,7 @@ def _select_best_match(
 
         # Совпадение названия (точное или частичное)
         candidate_title = (candidate.title or "").lower()
-        cleaned_title = _clean_yandex_title(title_lower)
+        cleaned_title = _clean_match_title(title_lower)
         if candidate_title == cleaned_title or candidate_title == title_lower:
             score += 10
         elif cleaned_title in candidate_title or candidate_title in cleaned_title:
@@ -694,10 +747,11 @@ async def import_preview(
     current_user=Depends(get_current_active_user),
 ):
     """Разбирает ссылку и возвращает метаданные без материализации (для UI)."""
-    source, kind = _detect(payload.url)
+    url = await _normalize_url(payload.url)
+    source, kind = _detect(url)
 
     if source == "soundcloud" and kind == "playlist":
-        native = await _soundcloud_playlist_native(request, payload.url)
+        native = await _soundcloud_playlist_native(request, url)
         if native:
             title, cover, imports = native
             tracks = [
@@ -719,7 +773,7 @@ async def import_preview(
                 tracks=tracks,
             )
 
-    title, cover, entries = await _extract_collection(request, payload.url, source, kind)
+    title, cover, entries = await _extract_collection(request, url, source, kind)
 
     # Для лайков Yandex Music устанавливаем заголовок по умолчанию
     if source == "yandex" and kind == "likes" and not title:
@@ -754,7 +808,8 @@ async def import_collection(
     db: Session = Depends(get_db),
 ):
     """Импортирует коллекцию/трек в новый плейлист пользователя."""
-    source, kind = _detect(payload.url)
+    url = await _normalize_url(payload.url)
+    source, kind = _detect(url)
 
     imports: List[ExternalTrackImport] = []
     matched = 0
@@ -763,12 +818,12 @@ async def import_collection(
 
     native = None
     if source == "soundcloud" and kind == "playlist":
-        native = await _soundcloud_playlist_native(request, payload.url)
+        native = await _soundcloud_playlist_native(request, url)
 
     if native:
         title, cover, imports = native
     else:
-        title, cover, entries = await _extract_collection(request, payload.url, source, kind)
+        title, cover, entries = await _extract_collection(request, url, source, kind)
         if not entries:
             raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
 
@@ -811,7 +866,8 @@ async def import_collection(
     name = payload.playlist_name or title or "Импортированный плейлист"
     new_playlist = Playlist(
         name=name,
-        description=f"Импортировано из {source}" + (" (избранное)" if kind == "likes" else ""),
+        description=f"Импортировано из {_SOURCE_LABELS.get(source, source)}"
+                    + (" (избранное)" if kind == "likes" else ""),
         cover_url=cover if (cover and cover.startswith("http")) else None,
         is_public=False,
         owner_id=current_user.id,

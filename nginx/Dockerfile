@@ -52,4 +52,20 @@ COPY --from=builder /tmp/ngx_http_brotli_static_module.so /usr/lib64/nginx/modul
 # Добавляем load_module в main nginx.conf
 RUN sed -i '1i load_module /usr/lib64/nginx/modules/ngx_http_brotli_filter_module.so;\nload_module /usr/lib64/nginx/modules/ngx_http_brotli_static_module.so;' /etc/nginx/nginx.conf
 
+# Конкурентность под 10k активных юзеров (~1k одновременных стримов).
+# Директивы уровня main/events живут ТОЛЬКО в /etc/nginx/nginx.conf —
+# conf.d/default.conf включается внутрь http-блока, там они невалидны.
+#
+#   worker_connections   — потолок соединений НА ВОРКЕР. Каждый проксируемый
+#                          клиент занимает два (client + upstream), поэтому
+#                          8192 на воркер × auto(=nproc) воркеров с запасом
+#                          покрывает 10k. Базовый образ даёт 1024 — это и был
+#                          жёсткий потолок, ниже цели.
+#   worker_rlimit_nofile — лимит открытых fd на воркер. Без него ulimit (часто
+#                          1024) ограничивает реальную конкурентность
+#                          независимо от worker_connections. Ставим 2× запас.
+RUN sed -i 's/^worker_processes .*/worker_processes auto;/' /etc/nginx/nginx.conf \
+    && sed -i 's/worker_connections .*/worker_connections 8192;/' /etc/nginx/nginx.conf \
+    && sed -i '/^events {/i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf

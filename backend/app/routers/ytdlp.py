@@ -7,6 +7,7 @@ import tempfile
 import threading
 from typing import List, Optional
 
+import aiofiles
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -199,20 +200,34 @@ def _pick_audio_format(info: dict) -> Optional[dict]:
 
 
 # Наборы player-клиентов, которыми по очереди прикидываемся при резолве.
-# "Video unavailable" часто зависит от клиента: то, что недоступно для web,
-# нередко отдаётся tv/android_music/ios и наоборот. Перебираем, пока не выйдет.
+# "Video unavailable" часто зависит от клиента: то, что недоступно для одного,
+# нередко отдаётся другим. Перебираем, пока не выйдет.
 #
-# Primary — единственный лёгкий клиент (android_music): он не требует
-# JS-расшифровки n-sig/cipher параметра googlevideo-ссылок (в отличие от web),
-# поэтому обычно отвечает заметно быстрее. Остальные наборы (в т.ч. web)
-# остаются fallback'ом и подключаются через хедж, если primary не ответил
-# вовремя или отдал "unavailable".
+# ВАЖНО (проверено на yt-dlp 2026.7.4): единственный клиент, отдающий прямые
+# audio-URL без PO-token, — android_vr. Остальные (ios/android/mweb/tv*/web*)
+# на тех же роликах возвращают только mhtml-storyboard'ы: аудио у них
+# SABR-only, ссылок нет. Поэтому android_vr — primary, а не «ещё один в
+# списке». Раньше здесь первым стоял android_music, которого в yt-dlp УЖЕ НЕТ
+# ("Skipping unsupported client android_music"): primary-слот молча пустовал,
+# резолв всегда съедал _HEDGE_DELAY и веером поднимал все остальные наборы.
+# Работало это лишь потому, что yt-dlp падал на свой дефолт (тот же android_vr).
+#
+# Наборов теперь два, а не четыре: каждый лишний набор — отдельный запрос к
+# YouTube на КАЖДЫЙ промах, а именно объём запросов с одного IP и вызывает
+# "Sign in to confirm you're not a bot" (см. _BOT_CHECK_MARKERS). web_safari
+# оставлен фолбэком: он требует JS-рантайм (в образе есть nodejs) и начнёт
+# отдавать форматы, как только появятся cookies/PO-token.
 _CLIENT_CANDIDATES = (
-    ["android_music"],
-    ["ios", "android", "web"],
-    ["tv", "web_safari"],
-    ["mweb", "android"],
+    ["android_vr"],
+    ["web_safari", "tv_simply"],
 )
+
+# JS-рантайм для расшифровки n-sig/cipher googlevideo-ссылок. По умолчанию
+# yt-dlp включает только deno; в образе стоит nodejs (см. backend/Dockerfile),
+# поэтому указываем его явно — иначе рантайм не находится и все JS-клиенты
+# отдают 0 пригодных форматов ("No supported JavaScript runtime could be
+# found ... some formats may be missing").
+_JS_RUNTIMES = {"node": {}}
 
 
 # Каждую попытку резолва ограничиваем по времени: без таймаута зависшее
@@ -238,6 +253,17 @@ class TrackUnavailable(Exception):
 
 class TransientResolveError(Exception):
     """Временный сбой резолва (таймаут/429/сеть) — стоит повторить позже."""
+
+
+class BotCheckError(TransientResolveError):
+    """YouTube ответил "Sign in to confirm you're not a bot" — rate-limit по IP.
+
+    Подтип временного сбоя: ролик цел, через некоторое время резолвится (это
+    проверено — те же id, что отдавали bot-check, минутой позже вернули по 26-27
+    форматов). Отдельный класс нужен ради ДЛИНЫ бэкоффа: обычный
+    _TRANSIENT_TTL (25с) провоцирует быстрый повтор, а каждый лишний запрос с
+    того же IP только продлевает блокировку.
+    """
 
 
 # Invidious-инстанс (self-hosted, с companion-сервисом для PO-token) отдаёт
@@ -326,18 +352,51 @@ async def _resolve_via_invidious(video_id: str) -> tuple[str, str, Optional[int]
 
 # Маркеры в тексте ошибки yt-dlp, означающие ИМЕННО недоступность ролика, а не
 # временный сбой. Всё остальное (таймауты, 429, обрывы сети) считаем временным.
+#
+# "video unavailable" / "this video is not available" — сюда же: для нашего
+# egress-IP такой ролик не отдаётся ни одним клиентом (проверено: oembed
+# подтверждает, что видео существует, но playabilityStatus=UNPLAYABLE на
+# android_vr/ios/web*/tv*). Ретрай это не лечит, а без маркера такой трек
+# считался временным сбоем: фронт жёг MAX_TRACK_RETRIES по 503 и только потом
+# показывал ошибку — вместо чистого скипа по 404.
 _UNAVAILABLE_MARKERS = (
     "private video",
     "removed",
     "no longer available",
     "account associated with this video has been terminated",
+    "video unavailable",
+    "this video is not available",
+)
+
+# Bot-check: YouTube требует логин, потому что с этого IP пришло слишком много
+# запросов. Это ВРЕМЕННОЕ состояние (проверено: те же ролики резолвятся через
+# минуту), поэтому оно НЕ должно попасть в _UNAVAILABLE_MARKERS и стать 404.
+# Но и коротким _TRANSIENT_TTL его лечить нельзя: быстрый ретрай только
+# добавляет запросов и продлевает блокировку — нужен свой, длинный бэкофф
+# (_BOT_CHECK_TTL). Осторожно с апострофом: YouTube пишет "you’re" через U+2019
+# (typographic), поэтому матчим по подстроке без него.
+_BOT_CHECK_MARKERS = (
+    "sign in to confirm",
+    "not a bot",
+    "confirm your age",
 )
 
 
 def is_track_unavailable_error(exc: Exception) -> bool:
     """True only when yt-dlp explicitly reports that the source is unavailable."""
     msg = str(exc).lower()
+    if is_bot_check_error(msg):
+        # Bot-check важнее: его текст содержит "sign in", но недоступностью
+        # ролика он не является.
+        return False
     return any(m in msg for m in _UNAVAILABLE_MARKERS)
+
+
+def is_bot_check_error(text) -> bool:
+    """True, если YouTube ответил bot-check'ом (rate-limit по IP), а не отказом
+    в доступе к конкретному ролику."""
+    msg = (text if isinstance(text, str) else str(text)).lower()
+    return any(m in msg for m in _BOT_CHECK_MARKERS)
 
 
 def _needs_auth(info: dict) -> bool:
@@ -407,6 +466,7 @@ def _warmup_ydl_blocking() -> None:
                 "socket_timeout": _SOCKET_TIMEOUT,
                 "format": "bestaudio/best",
                 "ignore_no_formats_error": True,
+                "js_runtimes": _JS_RUNTIMES,
                 "extractor_args": {"youtube": {"player_client": primary}},
             },
         )
@@ -415,13 +475,52 @@ def _warmup_ydl_blocking() -> None:
         logger.warning("yt-dlp warmup failed", exc_info=True)
 
 
-def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[dict], bool]:
+class _CapturingLogger:
+    """Собирает warning/error yt-dlp, не печатая их в stdout.
+
+    Причина отказа (``Video unavailable``, ``Sign in to confirm you're not a
+    bot``) в info-словаре НЕ лежит: при ``ignore_no_formats_error`` yt-dlp
+    возвращает info с ``availability='public'``, ``age_limit=0`` и пустым
+    ``formats``, а текст уходит только в логгер. Без него bot-check (временный,
+    лечится бэкоффом) и гео-блок (перманентный, надо скипнуть) выглядят
+    одинаково и оба уезжают в transient.
+    """
+
+    def __init__(self) -> None:
+        self.messages: List[str] = []
+
+    def reset(self) -> None:
+        self.messages.clear()
+
+    @property
+    def text(self) -> str:
+        return " | ".join(self.messages)
+
+    def debug(self, msg):  # noqa: D102 — интерфейс yt-dlp
+        pass
+
+    def info(self, msg):  # noqa: D102
+        pass
+
+    def warning(self, msg):  # noqa: D102
+        self.messages.append(str(msg))
+
+    def error(self, msg):  # noqa: D102
+        self.messages.append(str(msg))
+
+
+def _extract_with_clients(
+    video_id: str, clients: List[str]
+) -> tuple[Optional[dict], bool, bool]:
     """Одна попытка резолва набором клиентов.
 
-    Возвращает ``(info, transient)``: ``info`` — результат или None; ``transient``
-    True, если неудача выглядит временной (таймаут/сеть/429), а не «видео
-    недоступно». Классификация нужна, чтобы не помечать валидный трек надолго
-    недоступным из-за случайного сбоя.
+    Возвращает ``(info, transient, bot_check)``: ``info`` — результат или None;
+    ``transient`` True, если неудача выглядит временной (таймаут/сеть/429), а не
+    «видео недоступно»; ``bot_check`` True, если YouTube ответил
+    "Sign in to confirm you're not a bot" (rate-limit по IP — временно, но
+    требует ДЛИННОГО бэкоффа, а не быстрого ретрая). Классификация нужна, чтобы
+    не помечать валидный трек надолго недоступным из-за случайного сбоя и,
+    наоборот, не жечь ретраи на перманентно заблокированном.
     """
     import yt_dlp
 
@@ -430,7 +529,11 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
         tuple(clients),
         {
             "quiet": True,
-            "no_warnings": True,
+            # Нужны тексты предупреждений: причина отказа приходит именно
+            # warning'ом (см. _CapturingLogger). В stdout они не попадают —
+            # их забирает наш логгер.
+            "no_warnings": False,
+            "logger": _CapturingLogger(),
             "noplaylist": True,
             "skip_download": True,
             "socket_timeout": _SOCKET_TIMEOUT,
@@ -449,18 +552,52 @@ def _extract_with_clients(video_id: str, clients: List[str]) -> tuple[Optional[d
             # возвращает info как есть, а непригодность форматов решает
             # _pick_audio_format (нет — просто пробуем следующий клиент).
             "ignore_no_formats_error": True,
+            "js_runtimes": _JS_RUNTIMES,
             "extractor_args": {"youtube": {"player_client": clients}},
         },
     )
+    # Инстанс переиспользуется в рамках потока (cached_ydl), поэтому чистим
+    # накопленное от прошлого резолва. Внутри одного потока вызовы строго
+    # последовательные, так что перемешаться сообщения не могут.
+    cap = ydl.params.get("logger")
+    if isinstance(cap, _CapturingLogger):
+        cap.reset()
     try:
-        return ydl.extract_info(url, download=False), False
+        info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as exc:
-        transient = not is_track_unavailable_error(exc)
+        bot = is_bot_check_error(exc)
+        transient = bot or not is_track_unavailable_error(exc)
         logger.info(
             "resolve via %s failed for %s (%s): %s",
-            clients, video_id, "transient" if transient else "unavailable", exc,
+            clients, video_id, _reason_label(transient, bot), exc,
         )
-        return None, transient
+        return None, transient, bot
+
+    if _pick_audio_format(info or {}):
+        return info, False, False
+
+    # Форматов нет, но исключения не было (ignore_no_formats_error). Причину
+    # знает только логгер — по ней и решаем: bot-check лечится бэкоффом,
+    # "video unavailable" — перманентен и должен дать чистый 404.
+    reason = cap.text if isinstance(cap, _CapturingLogger) else ""
+    bot = is_bot_check_error(reason)
+    if bot:
+        transient = True
+    elif reason and is_track_unavailable_error(Exception(reason)):
+        transient = False
+    else:
+        transient = True
+    logger.info(
+        "resolve via %s got no audio format for %s (%s): %s",
+        clients, video_id, _reason_label(transient, bot), reason or "no reason logged",
+    )
+    return info, transient, bot
+
+
+def _reason_label(transient: bool, bot: bool) -> str:
+    if bot:
+        return "bot-check"
+    return "transient" if transient else "unavailable"
 
 
 async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
@@ -500,6 +637,11 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
         # что его сбой сюда не попадёт как TrackUnavailable.
         if any(isinstance(f, TrackUnavailable) for f in failures):
             raise TrackUnavailable(video_id) from failures[-1]
+        # Bot-check сохраняем как есть: иначе он превратился бы в обычный
+        # transient с 25-секундным TTL, и быстрые повторы продлевали бы
+        # блокировку вместо длинного бэкоффа (_BOT_CHECK_TTL).
+        if any(isinstance(f, BotCheckError) for f in failures):
+            raise BotCheckError(video_id) from failures[-1]
         raise TransientResolveError(video_id) from (failures[-1] if failures else None)
     finally:
         if not invidious_task.done():
@@ -526,6 +668,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
     info = None
     saw_transient = False
     saw_needs_auth = False
+    saw_bot_check = False
     try:
         while pending:
             done, pending = await asyncio.wait(
@@ -543,7 +686,9 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                 continue
             success = False
             for t in done:
-                result_info, transient = t.result()
+                result_info, transient, bot_check = t.result()
+                if bot_check:
+                    saw_bot_check = True
                 if result_info and _pick_audio_format(result_info):
                     info = result_info
                     success = True
@@ -553,13 +698,12 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                     # клиента (проверено). Это перманентно, ретрай бесполезен.
                     if _needs_auth(result_info):
                         saw_needs_auth = True
-                    else:
-                        # Клиент ответил, но пригодного формата нет (обычно
-                        # PO-token: URL-ы форматов отсутствуют) — это проблема
-                        # конкретного клиента, а не ролика. Считаем временной,
-                        # иначе трек попал бы в негативный кэш «недоступен» на
-                        # 10 минут и «не грузился вообще».
-                        transient = True
+                    # Иначе доверяем классификации _extract_with_clients: она
+                    # читает причину из логгера yt-dlp и уже отличила bot-check
+                    # (временный) от "video unavailable" (перманентный). Раньше
+                    # здесь стоял безусловный transient=True, из-за которого
+                    # гео-блок навсегда выглядел временным сбоем и фронт жёг на
+                    # нём ретраи вместо чистого скипа.
                 saw_transient = saw_transient or transient
             if success:
                 break
@@ -579,7 +723,13 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
             if not t.done():
                 t.cancel()
 
-    if info is None:
+    if info is None or not _pick_audio_format(info):
+        # Bot-check важнее всего: это rate-limit по IP, а не свойство ролика.
+        # Отдаём transient (→503), но вызывающий код закэширует его на
+        # _BOT_CHECK_TTL, а не на _TRANSIENT_TTL: быстрый ретрай только
+        # добавляет запросов и продлевает блокировку.
+        if saw_bot_check:
+            raise BotCheckError(video_id)
         # Age-gate важнее «временного»: если хоть один клиент показал needs_auth,
         # это перманентная недоступность (→404, чистый скип), а не 503 с ретраем.
         if saw_needs_auth:
@@ -589,8 +739,6 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
         raise TrackUnavailable(video_id)
 
     fmt = _pick_audio_format(info)
-    if not fmt:
-        raise RuntimeError("нет доступного аудио-формата")
     ext = "." + (fmt.get("ext") or "m4a").lower()
     # Только ТОЧНЫЙ filesize годится для Content-Length; filesize_approx может
     # расходиться с реальным размером и ломает ответ ("content shorter than
@@ -612,6 +760,11 @@ _UNAVAILABLE_TTL = 600
 # стороны, не долбить YouTube на каждый ретрай, а с другой — быстро дать
 # валидному треку восстановиться (иначе он «не играет» до 10 минут).
 _TRANSIENT_TTL = 25
+# Негативный кэш bot-check'а: сильно длиннее обычного transient. Блокировка
+# снимается временем И тишиной, поэтому быстрый ретрай тут вреден — он
+# продлевает бан. 3 минуты: достаточно, чтобы поток запросов утих, и не так
+# долго, чтобы трек «умер» на весь сеанс.
+_BOT_CHECK_TTL = 180
 
 
 # Однополётность резолва: с прогревом (prefetch текущего/следующих треков во
@@ -664,6 +817,9 @@ async def _resolve_cached(
     key = f"ytdlp:resolve:v2:{video_id}"
     cached = None if force else await get_cache_async(key)
     if cached:
+        if cached.get("bot_check"):
+            # Держим бэкофф: пока запись жива, к YouTube не ходим вовсе.
+            raise BotCheckError(video_id)
         if cached.get("transient"):
             raise TransientResolveError(video_id)
         if cached.get("unavailable"):
@@ -686,6 +842,16 @@ async def _resolve_and_cache(
 ) -> tuple[str, str, Optional[int], bool]:
     try:
         url, ext, total = await _resolve_audio(video_id)
+    except BotCheckError:
+        # Bot-check — длинный бэкофф (см. _BOT_CHECK_TTL). Проверяется РАНЬШЕ
+        # TransientResolveError, т.к. является его подклассом.
+        logger.warning(
+            "youtube bot-check for %s — backing off %ds", video_id, _BOT_CHECK_TTL
+        )
+        await set_cache_async(
+            key, {"transient": True, "bot_check": True}, expire=_BOT_CHECK_TTL
+        )
+        raise
     except TransientResolveError:
         # Временный сбой — короткий негативный кэш отдельным маркером, чтобы
         # скорый повтор от того же клиента не долбил yt-dlp, но чтобы вызывающий
@@ -926,7 +1092,7 @@ def _enforce_cache_limit() -> None:
             break
 
 
-def _serve_file(path: str, media_type: str, request: Request) -> StreamingResponse:
+async def _serve_file(path: str, media_type: str, request: Request) -> StreamingResponse:
     """Отдаёт локальный файл с поддержкой Range (перемотка/докачка)."""
     size = os.path.getsize(path)
     has_range = bool(request.headers.get("range"))
@@ -935,12 +1101,12 @@ def _serve_file(path: str, media_type: str, request: Request) -> StreamingRespon
         end = size - 1
     end = min(end, size - 1)
 
-    def gen():
-        with open(path, "rb") as fh:
-            fh.seek(start)
+    async def gen():
+        async with aiofiles.open(path, "rb") as fh:
+            await fh.seek(start)
             remaining = end - start + 1
             while remaining > 0:
-                chunk = fh.read(min(_FILE_CHUNK, remaining))
+                chunk = await fh.read(min(_FILE_CHUNK, remaining))
                 if not chunk:
                     break
                 remaining -= len(chunk)
@@ -1049,7 +1215,7 @@ async def stream_cached_audio(
     cached = _cached_file(cache_id)
     if cached:
         ext = os.path.splitext(cached)[1].lower()
-        return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
+        return await _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
     # Архивная копия в MinIO (её кладёт ленивая архивация при первом
     # прослушивании) — второй по скорости путь после локального диск-кэша:
@@ -1059,7 +1225,7 @@ async def stream_cached_audio(
     archived = await archived_music_path(archive_key)
     if archived:
         try:
-            return await asyncio.to_thread(storage.minio_range_response, archived, request)
+            return await storage.minio_range_response_async(archived, request)
         except Exception:  # noqa: BLE001 — объект мог быть удалён; играем по обычному пути
             logger.warning("archived object unusable for %s", cache_id, exc_info=True)
 
@@ -1069,6 +1235,15 @@ async def stream_cached_audio(
         # Трек недоступен (удалён/приватен/регион) — это не сбой сервера.
         logger.info("track unavailable: %s", cache_id)
         raise HTTPException(status_code=404, detail="Трек недоступен")
+    except BotCheckError:
+        # Rate-limit по IP. Тоже 503, но с длинным Retry-After: фронт не должен
+        # частить — каждый лишний запрос продлевает блокировку.
+        logger.info("bot-check backoff: %s", cache_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Источник временно ограничил доступ, повторите позже",
+            headers={"Retry-After": str(_BOT_CHECK_TTL)},
+        )
     except TransientResolveError:
         # Временный сбой (таймаут/сеть/429) — сервер жив, стоит повторить
         # скоро. 503, а не 404: фронт не должен считать трек мёртвым.
@@ -1142,6 +1317,14 @@ async def stream_cached_audio(
         except TrackUnavailable:
             await client.aclose()
             raise HTTPException(status_code=404, detail="Трек недоступен")
+        except BotCheckError:
+            await client.aclose()
+            logger.info("bot-check backoff on re-resolve: %s", cache_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Источник временно ограничил доступ, повторите позже",
+                headers={"Retry-After": str(_BOT_CHECK_TTL)},
+            )
         except TransientResolveError:
             await client.aclose()
             logger.info("transient re-resolve failure: %s", cache_id)

@@ -8,7 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.database import engine, Base
 from app.rate_limit import limiter
-from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow, yandex_music
+from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow, yandex_music, spotify
 
 # Schema is managed by Alembic migrations (alembic upgrade head).
 # For quick local dev without migrations set DEBUG=true.
@@ -52,6 +52,7 @@ app.include_router(ytdlp.router, prefix="/api/ytdlp", tags=["ytdlp"])
 app.include_router(soundcloud.router, prefix="/api/soundcloud", tags=["soundcloud"])
 app.include_router(importer.router, prefix="/api/import", tags=["import"])
 app.include_router(yandex_music.router, prefix="/api/yandex", tags=["yandex"])
+app.include_router(spotify.router, prefix="/api/spotify", tags=["spotify"])
 app.include_router(aggregate.router, prefix="/api/search", tags=["search"])
 app.include_router(flow.router, prefix="/api/recommendations", tags=["recommendations"])
 
@@ -70,17 +71,39 @@ if os.path.exists(cover_dir):
 
 @app.on_event("startup")
 async def _configure_threadpool() -> None:
-    # Синхронные (def) эндпоинты и sync-генераторы стримов выполняются в
-    # anyio threadpool. Дефолт — 40 тредов, что мало под 100+ конкурентных
-    # запросов; поднимаем лимит. Должен согласовываться с размером пула БД.
+    # Синхронные (def) эндпоинты БД/API (auth, search, playlists, ...) выполняются
+    # в anyio threadpool — короткие запросы, тредов под них нужно немного.
+    # Аудио/обложки стрим больше НЕ идёт через этот threadpool (см.
+    # _init_async_storage_client ниже и storage.py init_async_client) —
+    # THREADPOOL_TOKENS не нужно поднимать под конкурентность слушателей.
     import anyio
     from anyio import to_thread
 
-    tokens = int(os.getenv("THREADPOOL_TOKENS", "60"))
+    tokens = int(os.getenv("THREADPOOL_TOKENS", "70"))
     try:
         to_thread.current_default_thread_limiter().total_tokens = tokens
     except Exception:  # noqa: BLE001 — не критично, если API изменится
         pass
+
+
+@app.on_event("startup")
+async def _init_async_storage_client() -> None:
+    # aiohttp-сессия внутри async S3-клиента привязана к event loop конкретного
+    # воркера — создаём здесь (после того как loop уже запущен), а не на импорте
+    # модуля. Полагается на то, что gunicorn запускается БЕЗ --preload (см.
+    # docker-compose.yml/Dockerfile): каждый воркер форкается до импорта
+    # app.main, поэтому у каждого гарантированно свой клиент/сессия.
+    from app import storage
+
+    if storage.is_minio_backend():
+        await storage.init_async_client()
+
+
+@app.on_event("shutdown")
+async def _close_async_storage_client() -> None:
+    from app import storage
+
+    await storage.close_async_client()
 
 
 @app.on_event("startup")
@@ -90,13 +113,24 @@ async def _cooccurrence_rebuild_loop() -> None:
     # (self-join по всем сигналам всех юзеров), меняется матрица медленно —
     # раз в час в фоне достаточно. Первый пересчёт — сразу на старте (матрица
     # могла устареть, пока сервис лежал), в треде — не блокируем event loop.
+    #
+    # LEADER ELECTION: эта задача запускается в каждом воркере gunicorn
+    # (on_event("startup") = per-worker), но пересчёт должен идти только в ОДНОМ.
+    # Иначе 8 воркеров параллельно гоняют тот же тяжёлый self-join. Лидер
+    # определяется try-acquire на Redis-ключ с TTL = 2 × interval: только тот
+    # воркер, который захватил ключ, выполняет rebuild_cooccurrence; остальные
+    # проверяют на каждой итерации и тихо пропускают. Если лидер упал, ключ
+    # протухает и другой воркер подхватывает роль.
     import logging
 
+    from app.cache import redis_client
     from app.cooccurrence import rebuild_cooccurrence
     from app.database import SessionLocal
 
     logger = logging.getLogger("cooccurrence")
     interval = int(os.getenv("COOCCURRENCE_REBUILD_INTERVAL_SEC", "3600"))
+    lock_key = "background:cooccurrence:leader"
+    lock_ttl = interval * 2
 
     def _rebuild_once() -> None:
         db = SessionLocal()
@@ -109,7 +143,11 @@ async def _cooccurrence_rebuild_loop() -> None:
     async def _loop() -> None:
         while True:
             try:
-                await asyncio.to_thread(_rebuild_once)
+                # Атомарный try-acquire: SET NX EX. Если вернул 1 — этот воркер лидер.
+                is_leader = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl)
+                if is_leader:
+                    await asyncio.to_thread(_rebuild_once)
+                # else: другой воркер уже лидер — ничего не делаем
             except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
                 logger.exception("cooccurrence rebuild failed")
             await asyncio.sleep(interval)
@@ -125,37 +163,60 @@ async def _play_events_cleanup_loop() -> None:
     трека пишет строку. Без очистки таблица раздувается и замедляет
     рекомендации (GROUP BY completion в recommendations.py). Агрегированные
     данные живут в user_track_plays — лог можно чистить без потери.
+
+    LEADER ELECTION + CHUNKED DELETE: только один воркер выполняет cleanup,
+    и удаляет батчами по 5000 строк с коммитом после каждого батча (защита
+    от длинных блокирующих транзакций на таблице с миллионами строк).
     """
     import logging
 
+    from app.cache import redis_client
     from app.database import SessionLocal
     from sqlalchemy import text
 
     logger = logging.getLogger("cleanup")
     interval = int(os.getenv("PLAY_EVENTS_CLEANUP_INTERVAL_SEC", "3600"))
     retention_days = int(os.getenv("PLAY_EVENTS_RETENTION_DAYS", "90"))
+    lock_key = "background:cleanup:leader"
+    lock_ttl = interval * 2
+    chunk_size = 5000
 
     def _cleanup_once() -> None:
         db = SessionLocal()
         try:
-            result = db.execute(
-                text(
-                    "DELETE FROM user_play_events "
-                    "WHERE played_at < NOW() - INTERVAL '1 day' * :days"
-                ),
-                {"days": retention_days},
-            )
-            deleted = result.rowcount
-            if deleted:
-                db.commit()
-                logger.info("play_events cleanup: deleted %d rows older than %d days", deleted, retention_days)
+            total_deleted = 0
+            while True:
+                result = db.execute(
+                    text(
+                        "DELETE FROM user_play_events WHERE id IN ("
+                        "  SELECT id FROM user_play_events "
+                        "  WHERE played_at < NOW() - INTERVAL '1 day' * :days "
+                        "  LIMIT :chunk_size"
+                        ")"
+                    ),
+                    {"days": retention_days, "chunk_size": chunk_size},
+                )
+                deleted = result.rowcount
+                if deleted > 0:
+                    db.commit()
+                    total_deleted += deleted
+                if deleted < chunk_size:
+                    break
+            if total_deleted > 0:
+                logger.info(
+                    "play_events cleanup: deleted %d rows older than %d days",
+                    total_deleted,
+                    retention_days,
+                )
         finally:
             db.close()
 
     async def _loop() -> None:
         while True:
             try:
-                await asyncio.to_thread(_cleanup_once)
+                is_leader = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl)
+                if is_leader:
+                    await asyncio.to_thread(_cleanup_once)
             except Exception:  # noqa: BLE001
                 logger.exception("play_events cleanup failed")
             await asyncio.sleep(interval)

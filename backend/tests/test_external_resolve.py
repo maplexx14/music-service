@@ -281,3 +281,90 @@ def test_soundcloud_uses_api_fallback_when_ytdlp_metadata_returns_404(monkeypatc
             soundcloud._RESOLVE_TTL,
         )
     ]
+
+
+def test_bot_check_is_not_treated_as_unavailable():
+    """«Sign in to confirm you're not a bot» — rate-limit по IP, а не мёртвый
+    ролик. Если счесть его недоступностью, фронт скипнет живой трек по 404."""
+    # YouTube пишет "you’re" через типографский апостроф (U+2019) — матч не
+    # должен на него опираться.
+    msg = "Sign in to confirm you’re not a bot"
+    assert ytdlp.is_bot_check_error(msg)
+    assert not ytdlp.is_track_unavailable_error(Exception(msg))
+
+
+def test_geo_blocked_video_is_classified_unavailable():
+    """"Video unavailable" на всех клиентах — перманентно для нашего IP.
+    Должно дать 404 (чистый скип), а не 503 с выжиганием ретраев."""
+    assert ytdlp.is_track_unavailable_error(
+        Exception("[youtube] Video unavailable. This video is not available")
+    )
+    assert not ytdlp.is_bot_check_error("Video unavailable")
+
+
+def test_bot_check_gets_long_backoff_cache(monkeypatch):
+    """Bot-check кэшируется отдельным маркером и НАДОЛГО: быстрый ретрай
+    только продлевает блокировку."""
+    cached = []
+
+    async def bot_check(_video_id):
+        raise ytdlp.BotCheckError("v")
+
+    async def remember_cache(key, value, expire):
+        cached.append((key, value, expire))
+
+    monkeypatch.setattr(ytdlp, "_resolve_audio", bot_check)
+    monkeypatch.setattr(ytdlp, "set_cache_async", remember_cache)
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_and_cache("v", "resolve:key"))
+
+    assert cached == [
+        ("resolve:key", {"transient": True, "bot_check": True}, ytdlp._BOT_CHECK_TTL)
+    ]
+    assert ytdlp._BOT_CHECK_TTL > ytdlp._TRANSIENT_TTL
+
+
+def test_cached_bot_check_marker_short_circuits_resolve(monkeypatch):
+    """Пока жив бэкофф-маркер, к YouTube не ходим вовсе."""
+
+    async def cached_bot_check(_key):
+        return {"transient": True, "bot_check": True}
+
+    def must_not_run(*_a, **_kw):
+        raise AssertionError("resolve must not be attempted during backoff")
+
+    monkeypatch.setattr(ytdlp, "get_cache_async", cached_bot_check)
+    monkeypatch.setattr(ytdlp, "single_flight_resolve", must_not_run)
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_cached("v"))
+
+
+def test_bot_check_survives_hedge_without_downgrade(monkeypatch):
+    """Invidious упал transient, yt-dlp вернул bot-check. Итог обязан остаться
+    BotCheckError — иначе бэкофф схлопнется в 25с и повторы продлят блокировку."""
+
+    async def invidious_transient(_video_id):
+        raise ytdlp.TransientResolveError("v")
+
+    async def ytdlp_bot_check(_video_id):
+        raise ytdlp.BotCheckError("v")
+
+    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
+    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_transient)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", ytdlp_bot_check)
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_audio("v"))
+
+
+def test_client_candidates_are_valid_ytdlp_clients():
+    """Регрессия на первопричину: primary-набор был "android_music", которого
+    в yt-dlp уже нет — слот молча пустовал ("Skipping unsupported client"),
+    резолв каждый раз съедал хедж-задержку и веером поднимал все фолбэки."""
+    from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+
+    for client_set in ytdlp._CLIENT_CANDIDATES:
+        for client in client_set:
+            assert client in INNERTUBE_CLIENTS, f"unknown yt-dlp client: {client}"

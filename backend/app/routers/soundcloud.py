@@ -644,7 +644,7 @@ async def _stream_via_hls(request: Request, track_id: str):
                 logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
 
     ext = os.path.splitext(cached)[1].lower()
-    return _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
+    return await _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
 
 def _upscale_artwork(url: Optional[str]) -> Optional[str]:

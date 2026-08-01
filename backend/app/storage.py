@@ -22,7 +22,7 @@ import json
 import logging
 import os
 from datetime import timedelta
-from typing import Iterator, Optional
+from typing import AsyncIterator, Iterator, Optional
 from urllib.parse import urlsplit
 
 from fastapi import Request, Response
@@ -133,6 +133,84 @@ def _get_public_client():
             secure=secure,
         )
     return _public_client
+
+
+# ─────────────────────── async-клиент (hot-path стрима) ───────────────────────
+#
+# Sync `minio` SDK не умеет asyncio: sync-эндпоинт стрима держит OS-тред на
+# всю длительность прослушивания (минуты), что упирается в потолок
+# THREADPOOL_TOKENS × GUNICORN_WORKERS задолго до 10k конкурентных слушателей
+# (тред — это память + переключение контекста, не только I/O-wait). Для
+# hot-path чтения (stat/get_object на стриме) используем aiobotocore — тот же
+# S3 API, что и MinIO, но нативный asyncio без треда на соединение.
+#
+# Cold-path операции (upload/ensure_buckets/list_objects/remove) остаются на
+# sync-клиенте выше: они не держатся на время стрима, переписывать их нет
+# смысла.
+
+_async_client_cm = None  # неисполненный async context manager от create_client
+_async_client = None  # результат __aenter__ — переиспользуется на все запросы
+
+
+async def init_async_client() -> None:
+    """Создаёт async S3-клиент на весь процесс воркера.
+
+    Вызывать ТОЛЬКО из async startup-хука (см. main.py), никогда на импорте
+    модуля: aiohttp-сессия внутри клиента привязана к event loop, а gunicorn
+    без --preload форкает воркеров ДО импорта app.main — событийный цикл
+    появляется только после старта конкретного воркера. Создание на импорте
+    привязало бы клиент к чужому/несуществующему loop.
+    """
+    global _async_client_cm, _async_client
+    if _async_client is not None:
+        return
+
+    import aiobotocore.session
+    from botocore.config import Config
+
+    host, secure = _split_endpoint(MINIO_ENDPOINT)
+    endpoint_url = f"{'https' if secure else 'http'}://{host}"
+
+    session = aiobotocore.session.get_session()
+    _async_client_cm = session.create_client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=MINIO_ACCESS_KEY,
+        aws_secret_access_key=MINIO_SECRET_KEY,
+        region_name=MINIO_REGION,
+        config=Config(
+            signature_version="s3v4",
+            # MinIO не умеет virtual-hosted-style адресацию с произвольными
+            # именами бакетов/кастомным эндпоинтом — только path-style.
+            s3={"addressing_style": "path"},
+            # Дефолт botocore — 10 соединений: молча воссоздаёт тот же потолок
+            # конкурентности, который эта переделка убирает, только под другим
+            # именем настройки. Держим с запасом под THREADPOOL_TOKENS-заменяющую
+            # нагрузку на один воркер.
+            max_pool_connections=int(os.getenv("MINIO_ASYNC_MAX_POOL_CONNECTIONS", "1500")),
+            connect_timeout=10,
+            read_timeout=60,
+        ),
+    )
+    _async_client = await _async_client_cm.__aenter__()
+
+
+async def close_async_client() -> None:
+    """Закрывает async-клиент текущего воркера (вызывать на shutdown)."""
+    global _async_client_cm, _async_client
+    if _async_client_cm is not None:
+        await _async_client_cm.__aexit__(None, None, None)
+    _async_client_cm = None
+    _async_client = None
+
+
+def _get_async_client():
+    if _async_client is None:
+        raise RuntimeError(
+            "Async MinIO-клиент не инициализирован — init_async_client() должен "
+            "быть вызван на startup"
+        )
+    return _async_client
 
 
 def _public_read_policy(bucket: str) -> str:
@@ -263,6 +341,13 @@ def stat_music_object(file_path: str) -> tuple[int, str]:
     return st.size, (st.content_type or "audio/mpeg")
 
 
+async def stat_music_object_async(file_path: str) -> tuple[int, str]:
+    """Async-двойник stat_music_object (hot-path, см. init_async_client)."""
+    bucket, key = parse_object_path(file_path)
+    resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
+    return resp["ContentLength"], (resp.get("ContentType") or "audio/mpeg")
+
+
 def iter_music_object(
     file_path: str, offset: int = 0, length: int = 0, chunk_size: int = 256 * 1024
 ) -> Iterator[bytes]:
@@ -279,6 +364,34 @@ def iter_music_object(
     finally:
         resp.close()
         resp.release_conn()
+
+
+async def iter_music_object_async(
+    file_path: str,
+    offset: Optional[int] = None,
+    length: Optional[int] = None,
+    chunk_size: int = 256 * 1024,
+) -> AsyncIterator[bytes]:
+    """Async-двойник iter_music_object.
+
+    offset=None — сентинел «без диапазона»: offset=0 сам по себе валидное
+    начало Range (bytes=0-499), в отличие от sync-версии его нельзя путать
+    с «диапазон не задан», иначе при перемотке на самое начало трека
+    молча уйдёт полный GET вместо Range-запроса.
+    """
+    bucket, key = parse_object_path(file_path)
+    client = _get_async_client()
+    kwargs = {"Bucket": bucket, "Key": key}
+    if offset is not None:
+        end = offset + length - 1
+        kwargs["Range"] = f"bytes={offset}-{end}"
+    resp = await client.get_object(**kwargs)
+    stream = resp["Body"]
+    try:
+        async for chunk in stream.iter_chunks(chunk_size):
+            yield chunk
+    finally:
+        stream.close()
 
 
 def minio_range_response(file_path: str, request: Request) -> Response:
@@ -346,6 +459,62 @@ def minio_range_response(file_path: str, request: Request) -> Response:
     )
 
 
+async def minio_range_response_async(file_path: str, request: Request) -> Response:
+    """Async-двойник minio_range_response — hot-path, не держит OS-тред на стрим.
+
+    Range-парсинг/валидация/416 идентичны sync-версии (чистый Python, S3-объект
+    не трогаем до проверки границ — InvalidRange от get_object невозможен).
+    """
+    file_size, mime_type = await stat_music_object_async(file_path)
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=3600",
+        "Vary": "Accept-Encoding",
+    }
+    range_header = request.headers.get("range")
+    if not range_header:
+        return StreamingResponse(
+            iter_music_object_async(file_path),
+            media_type=mime_type,
+            headers={**common_headers, "Content-Length": str(file_size)},
+        )
+
+    try:
+        unit, raw_range = range_header.strip().split("=", 1)
+        if unit.lower() != "bytes" or "," in raw_range:
+            raise ValueError
+        raw_start, raw_end = raw_range.split("-", 1)
+        if raw_start:
+            start = int(raw_start)
+            end = int(raw_end) if raw_end else file_size - 1
+        else:
+            suffix_length = int(raw_end)
+            if suffix_length <= 0:
+                raise ValueError
+            start = max(file_size - suffix_length, 0)
+            end = file_size - 1
+        if start < 0 or start >= file_size or end < start:
+            raise ValueError
+        end = min(end, file_size - 1)
+    except (ValueError, TypeError):
+        return Response(
+            status_code=416,
+            headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
+        )
+
+    content_length = end - start + 1
+    return StreamingResponse(
+        iter_music_object_async(file_path, offset=start, length=content_length),
+        status_code=206,
+        media_type=mime_type,
+        headers={
+            **common_headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(content_length),
+        },
+    )
+
+
 def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int]:
     """(генератор байтов, content_type, size) обложки из covers-бакета."""
     client = _get_internal_client()
@@ -361,6 +530,23 @@ def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int]:
             resp.release_conn()
 
     return _gen(), (st.content_type or "image/jpeg"), st.size
+
+
+async def open_cover_object_async(key: str) -> tuple[AsyncIterator[bytes], str, int]:
+    """Async-двойник open_cover_object (hot-path)."""
+    client = _get_async_client()
+    st = await client.head_object(Bucket=COVERS_BUCKET, Key=key)
+
+    async def _gen() -> AsyncIterator[bytes]:
+        resp = await client.get_object(Bucket=COVERS_BUCKET, Key=key)
+        stream = resp["Body"]
+        try:
+            async for chunk in stream.iter_chunks(128 * 1024):
+                yield chunk
+        finally:
+            stream.close()
+
+    return _gen(), (st.get("ContentType") or "image/jpeg"), st["ContentLength"]
 
 
 def remove_object_path(file_path: str) -> None:
