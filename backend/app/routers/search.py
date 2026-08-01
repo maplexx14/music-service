@@ -29,14 +29,13 @@ def search(
 
     search_term = f"%{normalized_q}%"
     
-    # Search tracks
     tracks = db.query(Track).filter(
         or_(
             Track.title.ilike(search_term),
             Track.artist.ilike(search_term),
             Track.album.ilike(search_term)
         )
-    ).limit(limit).all()
+    ).order_by(Track.play_count.desc(), Track.created_at.desc()).limit(limit).all()
     
     # Search playlists (summary-схема без треков — выдача их не рендерит).
     # Публичные — всем; приватные — только их владельцу.
