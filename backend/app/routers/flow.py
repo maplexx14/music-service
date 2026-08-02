@@ -1,9 +1,21 @@
 """Персональный поток («Моя волна»).
 
-Генерирует бесконечную персональную очередь: смесь «разведки» (похожие треки
-через радио YouTube Music от сидов пользователя) и «эксплуатации» (локальная
-библиотека по любимым артистам/жанрам). Фронт подгружает следующую порцию,
-когда очередь подходит к концу, передавая exclude-список уже сыгранного.
+Генерирует бесконечную персональную очередь: смесь «разведки» и «эксплуатации»
+(локальная библиотека по любимым артистам/жанрам). Фронт подгружает следующую
+порцию, когда очередь подходит к концу, передавая exclude-список уже сыгранного.
+
+Разведка идёт по трём источникам, и это разделение существенно:
+
+* граф артистов YouTube Music (_similar_pool) — соседи курированного артиста.
+  Работает от ИМЕНИ, поэтому доступен всегда;
+* радио YouTube Music (_radio_pool) — похожесть на уровне трека. Требует
+  ytmusic-видео в профиле, которого у SoundCloud-библиотеки может не быть;
+* поиск SoundCloud по имени артиста (_soundcloud_pool) — по сути дискография
+  самого артиста, НОВЫХ имён не даёт.
+
+Когда единственным источником было радио, любой его отказ (сломанный провайдер,
+нет ytmusic-сидов) обнулял всю разведку, и поток вырождался в дискографию тех
+артистов, которых пользователь уже выбрал сам.
 """
 
 import asyncio
@@ -56,14 +68,25 @@ router = APIRouter()
 # 100 треков хватает на ~5-6 часов активного прослушивания — поток не
 # повторяется даже при длительных сессиях.
 _RECENT_PLAYS_EXCLUDE = 100
-# Доля «разведки» (радио-кандидаты) в миксе. Внешнее радио полезно для
-# открытия нового, но не должно составлять большинство выдачи: на дальних
-# переходах оно жанрово дрейфует (русский рэп → поп/техно/ретро).
-_EXPLORE_RATIO = 0.03
 # Кэш радио-пула на сид: радио YT Music стабильно на коротком горизонте,
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
 _RADIO_LIMIT = 50
+# Разведка по ГРАФУ АРТИСТОВ YT Music. Радио строится от videoId, поэтому у
+# пользователя, чья библиотека целиком в SoundCloud, оно недоступно в принципе,
+# и «похожие артисты» из волны исчезали совсем — оставались ровно те, кого юзер
+# выбрал сам. Граф работает от имени артиста и этой дырки не имеет.
+# Сколько соседей берём у одного артиста и сколько артистов вкуса зондируем за
+# подгрузку (порядок в profile["artists"] уже взвешенно случайный, так что это
+# ротация, а не фиксированный топ).
+_SIMILAR_ARTISTS = 6
+_SIMILAR_SEED_ARTISTS = 2
+# Список соседей практически не меняется — держим сутки. Треки конкретного
+# артиста живут меньше и переиспользуются всеми юзерами сразу.
+_SIMILAR_NAMES_TTL = 24 * 60 * 60
+_SIMILAR_TTL = 6 * 60 * 60
+# Сколько ytmusic-видео артиста берём как сиды радио, когда своих сидов нет.
+_ARTIST_SEED_LIMIT = 3
 # У SoundCloud нет радио-эндпоинта в yt-dlp, поэтому «разведку» по нему делаем
 # поиском по любимым артистам. Сколько артистов зондируем и глубина кэша.
 _SC_EXPLORE_ARTISTS = 6
@@ -390,12 +413,18 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         | {t.external_id for t in pl_tracks if t.external_id}
     )
 
-    # Холодный старт: нет своих сидов — берём популярные ytmusic-треки сервиса.
-    # НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых юзеров волна одинаковая —
-    # одни и те же сиды → один и тот же radio-пул), а случайная выборка из
-    # широкого пула популярного: у каждого юзера (и на каждую подгрузку) свой
-    # набор сидов → свой поток.
-    if not seeds:
+    # Холодный старт: нет НИ сидов, НИ курированных артистов — берём популярные
+    # ytmusic-треки сервиса. НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых
+    # юзеров волна одинаковая — одни и те же сиды → один и тот же radio-пул), а
+    # случайная выборка из широкого пула популярного: у каждого юзера (и на
+    # каждую подгрузку) свой набор сидов → свой поток.
+    #
+    # Если курированные артисты ЕСТЬ, глобальный топ брать нельзя: это чужая
+    # библиотека. Своих ytmusic-треков может не быть вовсе (вся коллекция в
+    # SoundCloud), и тогда любителю русского рэпа сюда попадал ню-метал другого
+    # пользователя сервиса, а радио строилось вокруг него. Сиды для такого
+    # случая резолвит эндпоинт по именам артистов (_artist_seed_videos).
+    if not seeds and not curated_artist_keys:
         popular_yt = (
             db.query(Track.external_id)
             .filter(Track.source == "ytmusic", Track.external_id.isnot(None))
@@ -648,6 +677,82 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
     return pool
 
 
+async def _similar_artist_names(artist: str) -> List[dict]:
+    """Соседи артиста по графу YT Music: [{"name", "browse_id"}, ...]."""
+    key = f"flow:similar_names:{artist_key(artist)}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return cached
+
+    related = await ytdlp.related_ytmusic_artists(artist, limit=_SIMILAR_ARTISTS)
+    # Негативный кэш короткий: у нишевого артиста соседей может не быть сейчас,
+    # но появиться позже — навсегда его вычёркивать не за что.
+    await set_cache_async(
+        key, related, expire=_SIMILAR_NAMES_TTL if related else 600
+    )
+    return related
+
+
+async def _artist_songs_pool(browse_id: str) -> List[ExternalTrackResponse]:
+    """Топ-треки артиста по browseId. Кэш на browseId, а не на пользователя —
+    у популярных соседей он общий для всех, кто до них дотянулся."""
+    key = f"flow:artist_songs:{browse_id}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+
+    songs = await ytdlp.ytmusic_artist_songs(browse_id)
+    await set_cache_async(
+        key,
+        [t.model_dump() for t in songs],
+        expire=_SIMILAR_TTL if songs else 600,
+    )
+    return songs
+
+
+async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
+    """Треки артистов, ПОХОЖИХ на переданного (его собственные не отдаём).
+
+    Это единственный источник похожести, не завязанный на конкретный videoId:
+    radio требует ytmusic-трека в профиле, а SoundCloud-разведка — это по сути
+    дискография самого артиста (см. _soundcloud_pool), новых имён она не даёт.
+    """
+    related = await _similar_artist_names(artist)
+    browse_ids = [r["browse_id"] for r in related if r.get("browse_id")]
+    if not browse_ids:
+        return []
+
+    pools = await asyncio.gather(*(_artist_songs_pool(b) for b in browse_ids))
+    own = artist_key(artist)
+    return [t for pool in pools for t in pool if artist_key(t.artist) != own]
+
+
+async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
+    """videoId треков артиста в YT Music — сиды радио для юзера, у которого
+    своих ytmusic-треков нет. Поиск полнотекстовый, поэтому оставляем только то,
+    где артист реально фигурирует в поле artist (как в _soundcloud_pool)."""
+    key = f"flow:artist_seed:{artist_key(artist)}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return cached
+
+    try:
+        found = await ytdlp.search_ytmusic(request, artist, limit=_ARTIST_SEED_LIMIT * 3)
+    except Exception:  # noqa: BLE001
+        logger.warning("flow artist seed search failed for %s", artist)
+        await set_cache_async(key, [], expire=600)
+        return []
+
+    own = artist_key(artist)
+    videos = [
+        t.external_id
+        for t in found
+        if t.external_id and own in artist_key(t.artist)
+    ][:_ARTIST_SEED_LIMIT]
+    await set_cache_async(key, videos, expire=_SIMILAR_TTL if videos else 600)
+    return videos
+
+
 async def _soundcloud_pool(
     request: Request, artist: str
 ) -> List[ExternalTrackResponse]:
@@ -859,6 +964,21 @@ async def get_flow(
             keywords=taste_keywords,
         )
     )
+    # Кандидаты, добытые расширением курированного артиста (радио от его трека,
+    # сосед по графу артистов, его же дискография в SoundCloud). Их родословная
+    # — уже сигнал вкуса, поэтому неопределимый жанр им не в укор: у похожего
+    # артиста нет ни genre в метаданных, ни слова «рэп» в названии, и обычная
+    # проверка отбраковывала ПОХОЖИХ подчистую, оставляя в волне ровно тех
+    # артистов, которых пользователь и так уже выбрал сам.
+    _matches_related = track_check(
+        make_relevance_check(
+            trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+            user_genres=set(profile.get("genres") or []),
+            prefer_cyrillic=profile.get("prefer_cyrillic"),
+            keywords=taste_keywords,
+            provenance_trusted=True,
+        )
+    )
 
     # Сиды всегда берём из подтверждённого профиля пользователя. Переходы от
     # рекомендованного трека к его radio создавали жанровый дрейф на каждом
@@ -871,20 +991,40 @@ async def get_flow(
         profile_seeds = list(dict.fromkeys(profile["seeds"]))
     random.shuffle(profile_seeds)
     seeds = profile_seeds[:_PROFILE_SEEDS]
+
+    # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
+    # profile["artists"] взвешенно случайный (weighted_order), поэтому это
+    # ротация, а не фиксированный топ.
+    similar_artists = list(profile["artists"])[:_SIMILAR_SEED_ARTISTS]
+
+    # Своих ytmusic-сидов может не быть вовсе — вся коллекция в SoundCloud.
+    # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
+    # брать нельзя, это чужая библиотека (см. _taste_profile).
+    if not seeds and similar_artists:
+        resolved = await asyncio.gather(
+            *(_artist_seed_videos(request, a) for a in similar_artists)
+        )
+        seeds = [v for videos in resolved for v in videos][:_PROFILE_SEEDS]
+
     logger.debug(
-        "flow seeds user=%s continuation=%d profile=%d history=%d",
+        "flow seeds user=%s continuation=%d profile=%d similar=%d history=%d",
         current_user.id,
         len(continuation_seeds),
-        min(len(profile_seeds), _PROFILE_SEEDS),
+        len(seeds),
+        len(similar_artists),
         len(history_ids),
     )
-    if seeds:
-        order = seeds
-        # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
-        # волнами по два: при большом exclude каждая пустая волна добавляла полный
-        # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
-        pools = await asyncio.gather(*(_radio_pool(seed) for seed in order))
-        _add_explore(t for pool in pools for t in pool if _matches_taste(t))
+    # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
+    # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
+    # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
+    discovery = [_similar_pool(a) for a in similar_artists]
+    # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
+    # волнами по два: при большом exclude каждая пустая волна добавляла полный
+    # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
+    discovery += [_radio_pool(seed) for seed in seeds]
+    if discovery:
+        pools = await asyncio.gather(*discovery)
+        _add_explore(t for pool in pools for t in pool if _matches_related(t))
 
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
     # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.
@@ -906,7 +1046,7 @@ async def get_flow(
             *(_soundcloud_pool(request, a) for a in sc_artists)
         )
         _add_explore(
-            t for pool in sc_pools for t in pool if _matches_taste(t)
+            t for pool in sc_pools for t in pool if _matches_related(t)
         )
 
     # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых

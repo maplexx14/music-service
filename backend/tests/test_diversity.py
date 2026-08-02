@@ -115,6 +115,29 @@ def test_take_overflow_prefers_least_used():
     assert budget["b"] == 1, "бюджет не обновлён — следующий добор снова возьмёт B"
 
 
+def test_take_overflow_does_not_return_one_artist_in_a_block():
+    """Регрессия «kizaru, kizaru, kizaru» из боевой выдачи.
+
+    take_overflow сортировал по занятости ОДИН раз и резал срезом, поэтому все
+    треки наименее занятого артиста попадали в порцию сплошным блоком. На бедном
+    каталоге через этот добор проходит почти вся выдача, так что кап и разнос до
+    неё уже не доходили.
+    """
+    items = _items(*(["A"] * 6 + ["B"] * 2))
+    out = _artists(take_overflow(items, 4, lambda i: i["artist"]))
+    assert out.count("B") == 2, f"добор проигнорировал второго артиста: {out}"
+    assert out[:3] != ["A", "A", "A"], f"артист выдан блоком: {out}"
+
+
+def test_take_overflow_respects_existing_budget():
+    # Уже «наевшийся» артист уходит в конец добора, а не забирает его целиком.
+    budget = {"a": 3, "b": 0}
+    out = _artists(
+        take_overflow(_items("A", "A", "B", "B"), 3, lambda i: i["artist"], budget)
+    )
+    assert out[:2] == ["B", "B"], f"добор начался не с наименее занятого: {out}"
+
+
 def test_take_overflow_fills_rather_than_returning_short():
     # Короткая порция хуже повтора: на бедном каталоге волна иначе «замирает».
     items = _items("A", "A", "A")

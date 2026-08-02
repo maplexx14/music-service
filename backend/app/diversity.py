@@ -194,17 +194,30 @@ def take_overflow(
     Нужен там, где короткая порция хуже повтора (волна на бедном каталоге). В
     отличие от простого среза остатка, выбирает наименее представленных в уже
     набранном — повтор достаётся тому, кто мозолил глаза меньше всех.
+
+    Выбираем ПОШАГОВО, обновляя занятость после каждого элемента. Прежняя
+    версия сортировала список один раз и резала срезом — а это значит, что все
+    треки наименее занятого артиста попадали в выдачу СПЛОШНЫМ блоком (шесть
+    подряд, если их шесть). На бедном каталоге через этот добор проходит почти
+    вся порция, поэтому именно он и читался как «один и тот же артист снова и
+    снова», несмотря на кап и на разнос в interleave_artists.
     """
     if n <= 0:
         return []
     used = used if used is not None else {}
-    # sorted стабилен: внутри одинаковой занятости сохраняется исходный
-    # порядок по релевантности.
-    ordered = sorted(items, key=lambda t: used.get(primary_artist_key(artist_of(t)), 0))
-    picked = ordered[:n]
-    for item in picked:
+    pool = list(items)
+    picked: List[T] = []
+    while pool and len(picked) < n:
+        # min по ключу стабилен: внутри равной занятости сохраняется исходный
+        # порядок по релевантности.
+        index = min(
+            range(len(pool)),
+            key=lambda i: used.get(primary_artist_key(artist_of(pool[i])), 0),
+        )
+        item = pool.pop(index)
         key = primary_artist_key(artist_of(item))
         used[key] = used.get(key, 0) + 1
+        picked.append(item)
     return picked
 
 

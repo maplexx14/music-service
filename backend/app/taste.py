@@ -19,12 +19,36 @@ _keep и _matches_taste в flow.py), и каждое чинилось отдел
 одноязычная. Как общий фильтр он не годится: у слушателя русского рэпа треть
 библиотеки — латиницей в названии ("FORTUNA 812 — true adam"), и жёсткое
 требование кириллицы вырезало бы релевантное вместе с посторонним.
+
+Отдельно стоит ПРОВЕНАНС (provenance_trusted): кандидат может быть добыт
+расширением курированного артиста — радио от его трека, соседний артист из
+графа YT Music, его же дискография в SoundCloud. Тогда сигнал вкуса — сама
+родословная кандидата, и требовать от него вторично подтвердить себя жанром,
+языком или тематическим словом нельзя: у похожего артиста нет ни жанра в
+метаданных, ни слова "рэп" в названии, поэтому пункт 4 отбраковывал ВСЕХ
+похожих и в волне оставались ровно те артисты, которых юзер уже выбрал сам.
 """
+import re
 from typing import Optional
 
 from app.artist_utils import artist_key
 from app.genre_keywords import genre_is_compatible, infer_genre_from_text
 from app.lang import is_cyrillic, is_foreign_script
+
+
+def _keyword_pattern(keywords: list):
+    """Одно скомпилированное правило «любое из слов как ОТДЕЛЬНОЕ слово».
+
+    Границы слова обязательны — ровно как в genre_keywords._KEYWORD_PATTERNS.
+    Подстрочный матчинг здесь пропускал в выдачу постороннее по случайному
+    совпадению внутри другого слова: слушателю рэпа ("trap") прилетала
+    ню-метал-группа "Trapt", и она была ЕДИНСТВЕННЫМ, что проходило фильтр.
+    """
+    if not keywords:
+        return None
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(k) for k in keywords) + r")\b", re.IGNORECASE
+    )
 
 
 def make_relevance_check(
@@ -33,6 +57,7 @@ def make_relevance_check(
     prefer_cyrillic: Optional[bool] = None,
     keywords: Optional[list] = None,
     require_signal: bool = False,
+    provenance_trusted: bool = False,
 ):
     """Возвращает предикат (artist, title, genre) -> bool. См. модульный docstring.
 
@@ -47,10 +72,16 @@ def make_relevance_check(
     любой хит. Для основного пула наоборот нужна мягкая проверка: там кандидат
     уже пришёл по артисту/тегу/жанру, и требование второго сигнала вырезало бы
     релевантное.
+    provenance_trusted: кандидат добыт расширением курированного артиста (см.
+    модульный docstring) — неопределимый жанр для него не повод отбраковки.
+    Гейты «чужая письменность» и «жанр определился и не совпал» действуют
+    по-прежнему, а require_signal остаётся сильнее провенанса: добор глобально
+    популярным никакой родословной не имеет.
     """
     trusted = trusted_artist_keys or set()
     genres = user_genres or set()
     kws = [k.lower() for k in (keywords or [])]
+    kw_re = _keyword_pattern(kws)
 
     def keep(artist: str, title: str, genre=None) -> bool:
         if artist_key(artist) in trusted:
@@ -63,11 +94,15 @@ def make_relevance_check(
         # Жанр неопределим — остаются только грубые сигналы.
         if require_signal:
             return False
+        # Провенанс проверяем ДО языка: он сильнее грубого языкового прокси.
+        # Иначе у юзера с одноязычной библиотекой похожий артист на другом
+        # языке снова вырезается — а именно он и есть искомое «новое».
+        if provenance_trusted:
+            return True
         if prefer_cyrillic is not None:
             return is_cyrillic(f"{title} {artist}") == prefer_cyrillic
-        if kws:
-            text = f"{title} {artist}".lower()
-            return any(kw in text for kw in kws)
+        if kw_re is not None:
+            return bool(kw_re.search(f"{title} {artist}"))
         # Ни одного сигнала. Если у пользователя есть хоть какой-то выраженный
         # вкус (артисты, жанры, язык, тематические слова) — трек без жанра от
         # незнакомого артиста не может быть релевантным. Холодный старт (полное

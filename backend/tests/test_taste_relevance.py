@@ -48,20 +48,77 @@ def test_language_decides_when_genre_unknown():
     assert en("Rick Astley", "Never Gonna Give You Up")
     assert not en("нексюша", "Айтишник")
 
-    # Смешанный вкус — язык не сигнал, не режем.
+    # Смешанный вкус — язык не сигнал. Но у юзера с выраженным вкусом
+    # (артисты/жанры) незнакомый артист с неопределимым жанром всё равно не
+    # проходит: сигналов не осталось ни одного, а «не противоречит» — не
+    # подтверждение (см. has_taste в taste.py).
     mixed = _rap_check(prefer_cyrillic=None)
-    assert mixed("Rick Astley", "Never Gonna Give You Up")
+    assert not mixed("Rick Astley", "Never Gonna Give You Up")
+    # Настоящий холодный старт (вкуса нет вообще) — пропускаем, иначе новому
+    # юзеру показывать было бы нечего.
+    cold = make_relevance_check(trusted_artist_keys=set(), user_genres=set())
+    assert cold("Rick Astley", "Never Gonna Give You Up")
+
+
+def test_keywords_match_whole_word_only():
+    """Регрессия: `kw in text` матчил слово ВНУТРИ другого слова.
+
+    У любителя рэпа ключевое слово "trap" совпадало с ню-метал-группой Trapt,
+    и она оказывалась ЕДИНСТВЕННЫМ, что проходило вкусовой фильтр из радио.
+    """
+    keep = _rap_check(prefer_cyrillic=None, keywords=["rap", "trap"])
+    assert not keep("Trapt", "Headstrong")
+    assert not keep("Some Band", "Grape Juice")
+    # Слово целиком — по-прежнему сигнал.
+    assert keep("Actual Rapper", "Real Rap Anthem")
+
+
+def test_provenance_passes_similar_artist():
+    """Кандидат добыт расширением курированного артиста (радио/граф артистов).
+
+    Родословная и есть сигнал: у похожего артиста нет ни genre в метаданных, ни
+    жанрового слова в названии, поэтому без provenance_trusted фильтр вырезал
+    ПОХОЖИХ подчистую и в волне оставались только уже выбранные юзером артисты.
+    """
+    related = _rap_check(prefer_cyrillic=None, keywords=["rap", "trap"], provenance_trusted=True)
+    plain = _rap_check(prefer_cyrillic=None, keywords=["rap", "trap"])
+    assert related("OG BUDA", "Париж")
+    assert not plain("OG BUDA", "Париж"), "тест бессмысленен: трек проходит и без провенанса"
+
+    # Провенанс сильнее языкового прокси: похожий артист на «неродном» для
+    # библиотеки языке — это и есть искомое новое, резать его нельзя.
+    ru_only = _rap_check(prefer_cyrillic=True, provenance_trusted=True)
+    assert ru_only("Yeat", "Rich Minion")
+
+    # Но не отменяет жёсткие гейты.
+    assert not related("K8V", "Ai Đưa Em Về")  # чужая письменность
+    assert not related("Some Star", "Dirty Teen Pop Superstars")  # жанр не совпал
+
+
+def test_require_signal_beats_provenance():
+    """Добор глобально популярным родословной не имеет — там строгость выше."""
+    strict = _rap_check(
+        prefer_cyrillic=None, require_signal=True, provenance_trusted=True
+    )
+    assert not strict("Whoever", "Some Untagged Track")
+    assert strict("madk1d", "Some Untagged Track")
 
 
 def test_require_signal_rejects_unconfirmed():
     """Для добора «ничем не связанным» нужен ПОЛОЖИТЕЛЬНЫЙ сигнал.
-    Без require_signal неопределимый жанр проходит (~99% каталога)."""
-    soft = _rap_check(prefer_cyrillic=None)
-    strict = _rap_check(prefer_cyrillic=None, require_signal=True)
-    assert soft("Whoever", "Some Untagged Track")
-    assert not strict("Whoever", "Some Untagged Track")
+
+    Мягкая проверка пропускает трек по грубому сигналу (совпал доминирующий
+    язык библиотеки), строгая — нет: у добора глобально популярным связи со
+    вкусом не бывает вовсе, и там нужно именно подтверждение.
+    """
+    soft = _rap_check(prefer_cyrillic=True)
+    strict = _rap_check(prefer_cyrillic=True, require_signal=True)
+    assert soft("нексюша", "Айтишник")
+    assert not strict("нексюша", "Айтишник")
     # Доверенный артист проходит даже в строгом режиме.
     assert strict("madk1d", "Some Untagged Track")
+    # Трек совсем без сигналов не проходит ни в одном режиме.
+    assert not soft("Whoever", "Some Untagged Track")
 
 
 def test_dominant_language():

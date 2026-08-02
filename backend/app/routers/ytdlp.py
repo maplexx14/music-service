@@ -20,11 +20,54 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _patch_watch_tab_parser() -> None:
+    """Шим под ytmusicapi==1.8.2: get_watch_playlist(radio=True) падал ВСЕГДА.
+
+    `parsers/watch.get_tab_browse_id` считает, что раз у вкладки нет флага
+    "unselectable", значит у неё точно есть "endpoint". YouTube это правило
+    больше не соблюдает и отдаёт вкладку без endpoint — функция валится
+    `KeyError: 'endpoint'` на ЛЮБОМ videoId (проверено на проде: 7 сидов из 7).
+    Наверх это выглядело как "радио просто не работает": _radio_pool глотает
+    исключение и пишет негативный кэш, поэтому единственный в сервисе источник
+    ПОХОЖИХ треков молча исчезал из волны, и в потоке оставались только уже
+    знакомые артисты.
+
+    browse_id нужен лишь для необязательного поля "related" в ответе, поэтому
+    None вместо исключения — безопасная деградация.
+
+    Апстрим это уже починил (функция переписана в get_tab_browse_ids с
+    безопасным nav), поэтому патч ищет цель мягко и молча ничего не делает,
+    когда её нет: обновление ytmusicapi до 1.12.1 идёт отдельной задачей и не
+    должно ронять импорт этого модуля.
+    """
+    try:
+        from ytmusicapi.mixins import watch as watch_mixin
+        from ytmusicapi.parsers import watch as watch_parsers
+
+        original = watch_parsers.get_tab_browse_id
+    except (ImportError, AttributeError):
+        return
+
+    def safe_get_tab_browse_id(watchNextRenderer, tab_id):
+        try:
+            return original(watchNextRenderer, tab_id)
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    watch_parsers.get_tab_browse_id = safe_get_tab_browse_id
+    # Миксин импортировал функцию ПО ИМЕНИ (`from ..parsers.watch import
+    # get_tab_browse_id`), поэтому патч одного только парсера ни на что не
+    # влияет — подменяем обе ссылки.
+    if hasattr(watch_mixin, "get_tab_browse_id"):
+        watch_mixin.get_tab_browse_id = safe_get_tab_browse_id
+
+
 # ytmusicapi/yt-dlp — опциональные зависимости. Если их нет, провайдер тихо
 # отключается (search вернёт []), чтобы не ронять весь агрегатор.
 try:
     from ytmusicapi import YTMusic
 
+    _patch_watch_tab_parser()
     _ytmusic: Optional["YTMusic"] = YTMusic()
 except Exception:  # noqa: BLE001 — библиотека может быть не установлена / без сети
     _ytmusic = None
@@ -181,6 +224,60 @@ async def search_ytmusic_artists(q: str, limit: int = 20) -> List[str]:
         if len(results) >= limit:
             break
     return results
+
+
+async def related_ytmusic_artists(artist: str, limit: int = 6) -> List[dict]:
+    """Артисты, похожие на переданного, по графу YouTube Music.
+
+    Возвращает [{"name": ..., "browse_id": ...}]. Это единственный источник
+    «похожести», не завязанный на конкретный трек: радио (get_watch_playlist)
+    строится от videoId, а у пользователя, чья библиотека целиком в SoundCloud,
+    ни одного ytmusic-видео может не быть вовсе.
+    """
+    if _ytmusic is None or not (artist or "").strip():
+        return []
+
+    try:
+        found = await asyncio.to_thread(
+            _ytmusic.search, artist, filter="artists", limit=1
+        )
+        browse_id = (found or [{}])[0].get("browseId")
+        if not browse_id:
+            return []
+        info = await asyncio.to_thread(_ytmusic.get_artist, browse_id)
+    except Exception:  # noqa: BLE001 — провайдер/разметка, волна не должна падать
+        logger.warning("YouTube Music related artists failed for %s", artist)
+        return []
+
+    related = ((info or {}).get("related") or {}).get("results") or []
+    out: List[dict] = []
+    for item in related:
+        name = (item.get("title") or "").strip()
+        rel_browse_id = item.get("browseId")
+        if name and rel_browse_id:
+            out.append({"name": name, "browse_id": rel_browse_id})
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def ytmusic_artist_songs(browse_id: str) -> List[ExternalTrackResponse]:
+    """Топ-треки артиста по его browseId (stream_url проставляет вызывающий).
+
+    Формат items совпадает с выдачей search(filter="songs"), поэтому нормализуем
+    тем же _normalize.
+    """
+    if _ytmusic is None or not browse_id:
+        return []
+
+    try:
+        info = await asyncio.to_thread(_ytmusic.get_artist, browse_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("YouTube Music artist songs failed for %s", browse_id)
+        return []
+
+    songs = ((info or {}).get("songs") or {}).get("results") or []
+    return [t for t in (_normalize(item) for item in songs) if t]
 
 
 @router.get("/search", response_model=List[ExternalTrackResponse])
