@@ -530,6 +530,7 @@ async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
 
 
 async def resolve_hls_via_api(track_id: str) -> Optional[tuple[str, str]]:
+    """(URL m3u8, расширение файла) для трека, у которого остался только HLS.
 
     Возвращает None, если пригодного HLS нет: либо транскодов нет вовсе, либо
     все они зашифрованные (DRM) — такое ffmpeg не соберёт. Тогда вызывающий код
@@ -573,6 +574,204 @@ async def resolve_hls_via_api(track_id: str) -> Optional[tuple[str, str]]:
     ext = ".mp3" if "mpeg" in mime else ".m4a"
     return m3u8_url, ext
 
+
+# ---------------------------------------------------------------------------
+# DRM-треки → тот же трек в YouTube Music.
+#
+# Монетизированные загрузки (policy=MONETIZE) SoundCloud отдаёт только как
+# FairPlay-HLS (METHOD=SAMPLE-AES, skd://…): прогрессивный mp3-пресет ещё
+# числится в transcodings, но его эндпоинт мёртв (404), а yt-dlp говорит прямо
+# — "This video is DRM protected". Играть с SoundCloud тут нечем, и раньше
+# такой трек просто скипался. Но сама запись обычно есть в YouTube
+# Music, где стрим не зашифрован, поэтому вместо скипа отдаём 307 на
+# /api/ytdlp/stream/{videoId} — браузер идёт по редиректу сам, а весь путь
+# кэша/прогрева/архивации дальше работает как у обычного ytmusic-трека.
+#
+# Подменяем ТОЛЬКО точное совпадение: артист и название совпали, длительность
+# в пределах _MATCH_DURATION_TOLERANCE. Иначе на «Andante Risoluto» Бритела
+# прилетел бы кавер London Music Works (1:27 против 2:29) или пиано-кавер —
+# то есть пользователь молча слушал бы не ту запись. Не прошло порог — прежний
+# честный 404 и чистый скип на фронте.
+# ---------------------------------------------------------------------------
+
+# Матч устойчив (мы его не переопределяем при каждом Range-запросе), поэтому
+# кэшируем надолго. Отрицательный результат — короче: каталог YouTube Music
+# пополняется, и «сегодня не нашли» не значит «не найдём никогда».
+_MATCH_TTL = 7 * 24 * 3600
+_MATCH_MISS_TTL = 6 * 3600
+# ±5 с: у той же записи длительность на двух сервисах расходится на секунду-две
+# (разный трим тишины в начале/конце), а кавер/радио-версия отличается сильнее.
+_MATCH_DURATION_TOLERANCE = 5
+
+
+def _match_key(text: str) -> str:
+    """Название/имя артиста → форма для сравнения между сервисами.
+
+    Регистр, пунктуация и служебные скобочные суффиксы у одной и той же записи
+    на SoundCloud и в YouTube Music расходятся ("Succession - Andante Risoluto"
+    против "Andante Risoluto (From \\"Succession\\")"), поэтому сравниваем
+    только буквы и цифры.
+    """
+    return re.sub(r"[^a-z0-9а-яё]+", "", (text or "").lower())
+
+
+def _is_exact_match(candidate, title: str, artist: str, duration: int) -> bool:
+    """Точно ли ytmusic-кандидат — та же запись, что и DRM-трек SoundCloud.
+
+    Требуем совпадения артиста, названия и длительности одновременно: любого
+    из признаков по отдельности мало (у кавера то же название и тот же артист
+    в метаданных, но другая длительность; у ремастера — та же длительность и
+    другое название).
+    """
+    if duration <= 0 or not candidate.duration:
+        return False
+    if abs(candidate.duration - duration) > _MATCH_DURATION_TOLERANCE:
+        return False
+
+    cand_artist = _match_key(candidate.artist)
+    want_artist = _match_key(artist)
+    if not cand_artist or not want_artist:
+        return False
+    if (
+        cand_artist != want_artist
+        and want_artist not in cand_artist
+        and cand_artist not in want_artist
+    ):
+        return False
+
+    cand_title = _match_key(candidate.title)
+    want_title = _match_key(title)
+    if not cand_title or not want_title:
+        return False
+    # Вхождение, а не строгое равенство: у SoundCloud в названии часто есть
+    # префикс сериала/релиза ("Succession - Andante Risoluto"), которого в
+    # YouTube Music нет. Длительность уже отсекла чужие записи.
+    return cand_title == want_title or want_title in cand_title or cand_title in want_title
+
+
+def _search_youtube_blocking(query: str, limit: int = 8) -> list[dict]:
+    """Плоский поиск по обычному YouTube: [{id, title, uploader, duration}].
+
+    Каталог YouTube Music — лишь подмножество YouTube: у нишевых исполнителей
+    записи часто есть только на обычном YouTube (проверено: «Врата Овертона —
+    Небратья» в ytmusic отсутствует, на YouTube лежит ровно та же 240-секундная
+    запись). extract_flat: нужны только метаданные для скоринга, прямой URL
+    добудет обычный резолв по videoId.
+    """
+    import yt_dlp
+
+    ydl = cached_ydl(
+        "yt-flat-search",
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": True,
+        },
+    )
+    try:
+        info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+    except yt_dlp.utils.DownloadError:
+        logger.warning("plain-YouTube search failed for %r", query, exc_info=True)
+        return []
+    return [e for e in (info or {}).get("entries") or [] if e.get("id")]
+
+
+def _youtube_entry_matches(entry: dict, title: str, artist: str, duration: int) -> bool:
+    """Точно ли ролик с обычного YouTube — та же запись.
+
+    Порог строже, чем у ytmusic: у YouTube нет отдельного поля артиста, поэтому
+    имя исполнителя ищем в названии ролика (у реаплоада канал произвольный —
+    «CuberGuesser» и т.п.), а название и длительность проверяем как обычно.
+    Реаплоад той же записи — это ровно то, что нам нужно; slowed/reverb и
+    «Анонс» отсекаются по длительности.
+    """
+    dur = entry.get("duration")
+    if duration <= 0 or not isinstance(dur, (int, float)) or dur <= 0:
+        return False
+    if abs(int(dur) - duration) > _MATCH_DURATION_TOLERANCE:
+        return False
+
+    haystack = _match_key(f"{entry.get('title') or ''} {entry.get('uploader') or ''}")
+    want_title = _match_key(title)
+    want_artist = _match_key(artist)
+    if not haystack or not want_title or not want_artist:
+        return False
+    # И название, и артист должны присутствовать: только вместе они отличают
+    # ту же запись от одноимённого трека другого исполнителя.
+    return want_title in haystack and want_artist in haystack
+
+
+async def find_ytmusic_equivalent(track_id: str) -> Optional[str]:
+    """videoId той же записи в YouTube Music для DRM-трека SoundCloud.
+
+    None — точного совпадения нет (или поиск недоступен): вызывающий код
+    оставляет свой 404, и фронт скипает трек, как раньше.
+    """
+    from app.routers import ytdlp
+
+    key = f"soundcloud:ytmatch:{track_id}"
+    cached = await get_cache_async(key)
+    if cached:
+        # Промах тоже кэшируем — иначе каждый Range-запрос браузера гонял бы
+        # поиск в YouTube Music заново.
+        return cached.get("video_id") or None
+
+    track = await _api_get(f"/tracks/{track_id}", {})
+    if not isinstance(track, dict):
+        return None
+    title = clean_title(track.get("title") or "")
+    artist = (track.get("user") or {}).get("username") or ""
+    duration = round((track.get("duration") or 0) / 1000)
+    if not title or not artist:
+        return None
+
+    video_id = None
+    try:
+        # Ищем через нижний слой ytmusicapi, а не search_ytmusic: тому нужен
+        # Request только чтобы собрать stream_url, а здесь достаточно
+        # videoId — так матч доступен и из prefetch-эндпоинтов, где Request
+        # для базового URL не нужен.
+        if ytdlp._ytmusic is None:
+            return None
+        raw = await asyncio.to_thread(
+            ytdlp._ytmusic.search, f"{artist} {title}", "songs", None, 5
+        )
+        for item in raw or []:
+            candidate = ytdlp._normalize(item)
+            if candidate and _is_exact_match(candidate, title, artist, duration):
+                video_id = candidate.external_id
+                break
+
+        if not video_id:
+            # В YouTube Music записи нет — пробуем обычный YouTube. У нишевых
+            # исполнителей это единственное место, где она лежит, а играется
+            # она тем же /api/ytdlp/stream/{videoId}: эндпоинт резолвит любой
+            # videoId, а не только из каталога Music.
+            entries = await asyncio.to_thread(
+                _search_youtube_blocking, f"{artist} {title}"
+            )
+            for entry in entries:
+                if _youtube_entry_matches(entry, title, artist, duration):
+                    video_id = entry["id"]
+                    break
+    except Exception:  # noqa: BLE001 — поиск не должен ломать отдачу 404
+        logger.exception("ytmusic fallback search failed for SoundCloud track %s", track_id)
+        return None
+
+    await set_cache_async(
+        key,
+        {"video_id": video_id},
+        expire=_MATCH_TTL if video_id else _MATCH_MISS_TTL,
+    )
+    if video_id:
+        logger.info(
+            "SoundCloud DRM track %s (%s — %s) matched to ytmusic %s",
+            track_id, artist, title, video_id,
+        )
+    else:
+        logger.info("no ytmusic equivalent for DRM SoundCloud track %s", track_id)
+    return video_id
 
 
 # ---------------------------------------------------------------------------
@@ -827,12 +1026,20 @@ async def stream_soundcloud(token: str, request: Request):
         # 503 значит «прогрессивного потока нет/резолв сорвался». У части
         # каталога (обычно лейбловые загрузки) прогрессивного транскода у
         # SoundCloud нет вовсе — такой трек играем через HLS, см. _stream_via_hls.
-        if exc.status_code != 503:
-            raise
-        response = await _stream_via_hls(request, track_id)
-        if response is None:
-            raise
-        return response
+        if exc.status_code == 503:
+            response = await _stream_via_hls(request, track_id)
+            if response is not None:
+                return response
+        # 404 = подтверждённый TrackUnavailable, для монетизированных треков это
+        # DRM: с SoundCloud играть нечем. Та же запись обычно есть в YouTube
+        # Music — если нашли её точно, отдаём 307 туда вместо скипа. На 503
+        # подмену НЕ делаем: это временный сбой (таймаут/сеть), трек жив, и
+        # ретрай сыграет оригинал — молча заменять его чужой записью нельзя.
+        if exc.status_code == 404:
+            video_id = await find_ytmusic_equivalent(track_id)
+            if video_id:
+                return RedirectResponse(f"/api/ytdlp/stream/{video_id}", status_code=307)
+        raise
 
 
 @router.post("/prefetch/{token}")
@@ -847,7 +1054,32 @@ async def prefetch_soundcloud(token: str):
         _RESOLVE_TTL,
         archive_key=f"soundcloud/{track_id}",
     )
+    # Если у трека уже известна ytmusic-подмена (DRM), греем именно её: реально
+    # играть будет она, и прогрев самого SoundCloud-резолва ничего не даст.
+    # Матч кладётся в кэш первым /stream-запросом; сам поиск здесь не запускаем,
+    # чтобы прогрев остался дешёвым и не ходил в YouTube за каждым треком.
+    asyncio.create_task(_prefetch_ytmusic_match(track_id))
     return {"status": status}
+
+
+async def _prefetch_ytmusic_match(track_id: str) -> None:
+    """Ставит прогрев ytmusic-подмены, если она уже найдена для этого трека."""
+    from app.routers import ytdlp
+
+    try:
+        cached = await get_cache_async(f"soundcloud:ytmatch:{track_id}")
+        video_id = (cached or {}).get("video_id")
+        if not video_id:
+            return
+        schedule_prefetch(
+            video_id,
+            lambda force=False: ytdlp._resolve_cached(video_id, force=force),
+            f"ytdlp:resolve:v2:{video_id}",
+            ytdlp._RESOLVE_TTL,
+            archive_key=f"ytmusic/{video_id}",
+        )
+    except Exception:  # noqa: BLE001 — прогрев подмены best-effort
+        logger.warning("ytmusic match prefetch failed for sc/%s", track_id, exc_info=True)
 
 
 @router.get("/prefetch/{token}/ready")
@@ -860,4 +1092,25 @@ async def prefetch_soundcloud_ready(token: str):
         f"soundcloud:resolve:{track_id}",
         archive_key=f"soundcloud/{track_id}",
     )
+    if not ready:
+        # У DRM-трека резолв SoundCloud не даст готовности никогда, и фронт
+        # поллил бы этот эндпоинт до упора попыток (~24 с), держа гейт скипа.
+        # Если подмена уже найдена и прогрета — трек реально готов играть.
+        ready = await _ytmusic_match_ready(track_id)
     return {"ready": ready}
+
+
+async def _ytmusic_match_ready(track_id: str) -> bool:
+    """Готова ли ytmusic-подмена для DRM-трека SoundCloud.
+
+    Только проверка, без запуска поиска: сам матч ставится в POST /prefetch.
+    """
+    from app.routers import ytdlp
+
+    cached = await get_cache_async(f"soundcloud:ytmatch:{track_id}")
+    video_id = (cached or {}).get("video_id")
+    if not video_id:
+        return False
+    return await prefetch_is_ready(
+        video_id, f"ytdlp:resolve:v2:{video_id}", archive_key=f"ytmusic/{video_id}"
+    )

@@ -693,6 +693,11 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
     saw_transient = False
     saw_needs_auth = False
     saw_bot_check = False
+    # Хоть один клиент НАЗВАЛ причину недоступности («Video unavailable» и
+    # прочие _UNAVAILABLE_MARKERS). Отдельно от saw_transient: у сбойного
+    # клиента transient=True, и без этого флага его сбой затирал бы
+    # подтверждённый ответ YouTube, превращая мёртвый ролик в вечный 503.
+    saw_unavailable = False
     try:
         while pending:
             done, pending = await asyncio.wait(
@@ -728,6 +733,11 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                     # здесь стоял безусловный transient=True, из-за которого
                     # гео-блок навсегда выглядел временным сбоем и фронт жёг на
                     # нём ретраи вместо чистого скипа.
+                if not transient and not bot_check:
+                    # transient=False означает, что классификатор увидел в
+                    # причине явный маркер недоступности — это ответ YouTube о
+                    # самом ролике, а не наш сбой.
+                    saw_unavailable = True
                 saw_transient = saw_transient or transient
             if success:
                 break
@@ -758,9 +768,27 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
         # это перманентная недоступность (→404, чистый скип), а не 503 с ретраем.
         if saw_needs_auth:
             raise TrackUnavailable(video_id)
+        # Подтверждённый маркер важнее чужого сбоя: если один клиент назвал
+        # ролик недоступным, а другой просто не смог ответить (transient),
+        # это всё равно 404 — иначе мёртвый ролик висел бы в вечном 503.
+        if saw_unavailable:
+            raise TrackUnavailable(video_id)
         if saw_transient:
             raise TransientResolveError(video_id)
-        raise TrackUnavailable(video_id)
+        # Ни один клиент не дал форматов, но и НИ ОДИН не назвал причину
+        # («Video unavailable» и прочие _UNAVAILABLE_MARKERS в логгере).
+        # Раньше здесь стоял TrackUnavailable — и это давало ложные 404:
+        # проверено, что генуинно мёртвый ролик (удалённый, несуществующий,
+        # приватный) ВСЕГДА приходит с маркером, т.е. уходит ветками выше.
+        # Пустая же причина — признак сбоя на нашей стороне (PO-token, смена
+        # плеера, JS-рантайм, обрыв), и помечать по ней трек мёртвым нельзя:
+        # те же ролики резолвятся через минуту. Отдаём transient → 503 с
+        # ретраем вместо 404 с необратимым скипом.
+        logger.warning(
+            "no audio format and no reason reported for %s — treating as transient",
+            video_id,
+        )
+        raise TransientResolveError(video_id)
 
     fmt = _pick_audio_format(info)
     ext = "." + (fmt.get("ext") or "m4a").lower()
