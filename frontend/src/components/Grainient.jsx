@@ -137,15 +137,25 @@ const Grainient = ({
     // кадр градиента и останавливаемся (доступность + экономия GPU).
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
 
-    const renderer = new Renderer({
-      webgl: 2,
-      alpha: true,
-      antialias: false,
-      // DPR cap 1.5 вместо 2: фон — мягкий размытый градиент без мелких
-      // деталей, визуальной разницы нет, а пикселей для шейдера на
-      // retina-экранах почти вдвое меньше (1.5² vs 2²).
-      dpr: Math.min(window.devicePixelRatio || 1, 1.5)
-    });
+    // Контекста может не быть: браузер держит лимит живых WebGL-контекстов на
+    // страницу (~8-16), их выбивает софтверный блеклист/экономия батареи, а ogl
+    // на отказ getContext только пишет в консоль и падает дальше на gl.renderer.
+    // Фон — украшение: молча остаёмся на CSS-заглушке вместо краша страницы.
+    let renderer;
+    try {
+      renderer = new Renderer({
+        webgl: 2,
+        alpha: true,
+        antialias: false,
+        // DPR cap 1.5 вместо 2: фон — мягкий размытый градиент без мелких
+        // деталей, визуальной разницы нет, а пикселей для шейдера на
+        // retina-экранах почти вдвое меньше (1.5² vs 2²).
+        dpr: Math.min(window.devicePixelRatio || 1, 1.5)
+      });
+    } catch {
+      return;
+    }
+    if (!renderer.gl) return;
 
     const gl = renderer.gl;
     const canvas = gl.canvas;
@@ -283,6 +293,14 @@ const Grainient = ({
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // Контекст могут отобрать (смена GPU, лимит контекстов, спящий ноутбук):
+    // без обработчика rAF продолжает дёргать мёртвый gl и засоряет консоль.
+    const onContextLost = (e) => {
+      e.preventDefault();
+      stopLoop();
+    };
+    canvas.addEventListener('webglcontextlost', onContextLost);
+
     const io = new IntersectionObserver((entries) => {
       inViewport = entries[0]?.isIntersecting ?? true;
       if (inViewport) startLoop();
@@ -302,11 +320,17 @@ const Grainient = ({
       document.removeEventListener('visibilitychange', onVisibilityChange);
       io.disconnect();
       ro.disconnect();
+      canvas.removeEventListener('webglcontextlost', onContextLost);
       try {
         container.removeChild(canvas);
       } catch {
         // Ignore
       }
+      // Явно освобождаем WebGL-контекст. Удаления canvas из DOM для этого мало:
+      // контекст живёт до GC, а браузер держит жёсткий лимит на страницу — за
+      // несколько переходов на главную (в dev StrictMode — вдвое быстрее) лимит
+      // исчерпывался, и следующий Renderer получал null вместо контекста.
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
     };
   }, [
     timeSpeed,
