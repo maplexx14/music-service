@@ -28,7 +28,7 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
-from app.diversity import cap_per_artist, interleave_artists, mmr, weighted_order
+from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, weighted_order
 from app.artist_utils import artist_key
 
 router = APIRouter()
@@ -152,6 +152,7 @@ def _varied_popular(
     exclude_ids: set,
     need: int,
     keep=None,
+    used: Optional[dict] = None,
 ) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
     Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
@@ -162,6 +163,10 @@ def _varied_popular(
     этот путь был главной причиной нерелевантной выдачи: у слушателя русского
     рэпа он занимал большинство слотов глобальными хитами (Rick Astley, AC/DC,
     Hell March). При холодном старте keep нет — фильтровать нечем и не по чему.
+
+    used — сколько мест артисты уже заняли в собираемой выдаче. Без него лимит
+    считался с нуля на каждом пути отбора и они складывались: 2 трека из
+    основного пула + 1 сосед + 2 отсюда = до 5 треков одного артиста.
     """
     if need <= 0:
         return []
@@ -178,7 +183,7 @@ def _varied_popular(
         if not is_foreign_script(t.title) and (keep is None or keep(t))
     ]
     random.shuffle(pool)
-    return cap_per_artist(pool, _MAX_PER_ARTIST)[:need]
+    return cap_per_artist(pool, _MAX_PER_ARTIST, used=used)[:need]
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -643,8 +648,16 @@ def get_recommendations(
             fresh = [t for t in ordered if artist_key(t.artist) not in artist_keys]
             known = [t for t in ordered if artist_key(t.artist) in artist_keys]
             # 1 трек на артиста: exploration должен максимизировать охват
-            # нового, а не заполнять слоты одним новым артистом.
-            neighbors = cap_per_artist(fresh + known, 1)
+            # нового, а не заполнять слоты одним новым артистом. Лимит считаем
+            # с учётом уже отобранного основного пула — иначе артист, у
+            # которого там уже 2 трека, получал сверху ещё и explore-слот.
+            neighbors = cap_per_artist(
+                fresh + known,
+                1,
+                used=Counter(
+                    primary_artist_key(t.artist) for t in recommended_tracks
+                ),
+            )
         explore_tracks = neighbors[:n_explore]
         if explore_tracks:
             n_keep = limit - len(explore_tracks)
@@ -662,9 +675,15 @@ def get_recommendations(
         # непоказанных релевантных соседей оставалось больше сотни.
         if len(recommended_tracks) < limit:
             got = {t.id for t in recommended_tracks}
-            recommended_tracks += [
-                t for t in neighbors if t.id not in got
-            ][: limit - len(recommended_tracks)]
+            # Через тот же лимит на артиста, что и основной пул: добор шёл
+            # сырым срезом соседей, и один артист добирал здесь сверх своих
+            # двух мест.
+            used = Counter(primary_artist_key(t.artist) for t in recommended_tracks)
+            recommended_tracks += cap_per_artist(
+                [t for t in neighbors if t.id not in got],
+                _MAX_PER_ARTIST,
+                used=used,
+            )[: limit - len(recommended_tracks)]
         # Глобально популярное — последний резерв: только если персональных
         # кандидатов не хватило даже вместе с соседями.
         if len(recommended_tracks) < limit:
@@ -674,6 +693,9 @@ def get_recommendations(
                 exclude_ids | got,
                 limit - len(recommended_tracks),
                 keep=keep_unrelated,
+                used=Counter(
+                    primary_artist_key(t.artist) for t in recommended_tracks
+                ),
             )
             # Пул вкуса исчерпан (у активного юзера почти весь релевантный
             # каталог уже в коллекции/показах) — отдаём КОРОТКУЮ выдачу вместо
@@ -685,7 +707,9 @@ def get_recommendations(
         # юзеров место релевантного занимали глобальные хиты — это и убрано.)
         recommended_tracks = _varied_popular(db, skipped_track_ids | fatigued_ids, limit)
 
-    recommended_tracks = interleave_artists(recommended_tracks)[:limit]
+    # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
+    # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
+    recommended_tracks = interleave_artists(recommended_tracks, min_gap=4)[:limit]
 
     # Фиксируем показы (для сигнала «показан N раз — не сыгран»). Пока ответ
     # живёт в кэше, повторные отдачи того же списка показом не считаются —

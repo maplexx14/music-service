@@ -36,9 +36,10 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.diversity import (
     cap_per_artist,
-    demote_over_cap,
     interleave_artists,
     primary_artist_key,
+    take_capped,
+    take_overflow,
     weighted_order,
 )
 from app.artist_utils import artist_key
@@ -87,8 +88,16 @@ _MAX_PER_ARTIST = 2
 # ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
 # библиотеки. Прежний фиксированный топ-12 был причиной «крутит одних и тех же».
 _FLOW_ARTISTS = 30
-# Сколько артистов конца выдачи помним для разноса на стыке подгрузок.
-_ARTIST_TAIL = 3
+# Сколько последних ОТДАННЫХ треков помним для разноса артистов между
+# подгрузками. Раньше помнили ровно min_gap (3 артиста) — только чтобы артист
+# с конца прошлой порции не пошёл первым в следующей. Этого мало: лимит
+# _MAX_PER_ARTIST считался заново на каждые 15 треков, поэтому один артист
+# спокойно брал свои 2 трека в КАЖДОЙ подгрузке. За сессию это и читается как
+# «один и тот же артист попадается снова и снова».
+_ARTIST_HISTORY = 45
+# Минимальный разнос между треками одного артиста внутри выдачи. Прежние 3
+# допускали A _ _ A _ _ A — формально «не подряд», на слух «опять он».
+_MIN_ARTIST_GAP = 4
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого окна «последние N записей» — иначе у активных
 # пользователей (сотни прослушиваний за сессию) более ранний, но всё ещё
@@ -924,11 +933,6 @@ async def get_flow(
     )
     # Порядок внутри выдачи случайный, как и раньше (shuffle шёл по merged).
     random.shuffle(explore)
-    # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
-    # исполнителя, а лимита на артиста тут (в отличие от локального пула) не
-    # было — из-за этого разведка и приносила в выдачу одних и тех же артистов.
-    # Лишние не выбрасываем, а уводим в хвост: они ещё нужны для добора.
-    explore = demote_over_cap(explore, _MAX_PER_ARTIST)
 
     # --- эксплуатация: локальная библиотека по вкусу ---
     local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
@@ -953,10 +957,20 @@ async def get_flow(
     genre_quota = min(limit, 14 if limit == 15 else max(0, limit - 1))
 
     random.shuffle(exploit)
-    # _local_candidates капит артиста в каждом из двух проходов отдельно, так
-    # что суммарно один артист мог занять до 2*_MAX_PER_ARTIST мест.
-    exploit = demote_over_cap(exploit, _MAX_PER_ARTIST)
-    relevant_local = exploit[:genre_quota]
+
+    # ОДИН бюджет мест на артиста — на локальных и внешних кандидатов сразу и с
+    # переносом на несколько подгрузок вперёд (history["artists"]). Раньше кап
+    # применялся к каждому пулу отдельно (_local_candidates капил ещё и в каждом
+    # из двух своих проходов) и обнулялся на каждой порции из 15 — поэтому один
+    # артист исправно набирал по 2-4 трека в каждой подгрузке.
+    artist_budget: dict = dict(Counter(history.get("artists") or []))
+
+    def _artist_of(t) -> str:
+        return t.artist
+
+    relevant_local, exploit_rest = take_capped(
+        exploit, genre_quota, _MAX_PER_ARTIST, _artist_of, artist_budget
+    )
 
     mix: List[dict] = [
         TrackResponse.model_validate(t).model_dump(mode="json")
@@ -968,8 +982,12 @@ async def get_flow(
     # внешний добор был полностью запрещён, а локальный каталог часто содержал
     # лишь один подходящий трек — поэтому поток заканчивался сразу и Home
     # переходил к секции «Рекомендуем новинки».
-    missing_genre = genre_quota - len(mix)
-    relevant_external = explore[:missing_genre]
+    #
+    # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
+    # исполнителя, поэтому внешние кандидаты идут через тот же бюджет.
+    relevant_external, explore_rest = take_capped(
+        explore, genre_quota - len(mix), _MAX_PER_ARTIST, _artist_of, artist_budget
+    )
     mix.extend(t.model_dump() for t in relevant_external)
     used_external = len(relevant_external)
 
@@ -977,25 +995,47 @@ async def get_flow(
     # не участвует в гарантированных 14 жанровых позициях.
     remaining = limit - len(mix)
     if remaining:
-        discovery = explore[used_external:used_external + remaining]
+        discovery, explore_rest = take_capped(
+            explore_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
+        )
         mix.extend(t.model_dump() for t in discovery)
         used_external += len(discovery)
         remaining = limit - len(mix)
     if remaining:
-        extra_local = exploit[len(relevant_local):len(relevant_local) + remaining]
+        extra_local, exploit_rest = take_capped(
+            exploit_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
+        )
         mix.extend(
             TrackResponse.model_validate(t).model_dump(mode="json")
             for t in extra_local
+        )
+        remaining = limit - len(mix)
+
+    # Последний резерв — добор СВЕРХ лимита на артиста, начиная с наименее
+    # представленных. Короткая порция хуже повтора: на бедном каталоге волна
+    # иначе «замирает» на первых треках (см. историю фиксов выше).
+    if remaining:
+        overflow_external = take_overflow(
+            explore_rest, remaining, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in overflow_external)
+        used_external += len(overflow_external)
+        remaining = limit - len(mix)
+    if remaining:
+        mix.extend(
+            TrackResponse.model_validate(t).model_dump(mode="json")
+            for t in take_overflow(exploit_rest, remaining, _artist_of, artist_budget)
         )
 
     n_explore = used_external
     n_exploit = len(mix) - n_explore
     random.shuffle(mix)
-    # Хвост артистов прошлой порции — иначе разнос работал только внутри одной
+    # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
     # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
     mix = interleave_artists(
         mix,
         artist_getter=lambda item: item.get("artist"),
+        min_gap=_MIN_ARTIST_GAP,
         previous_artists=history.get("artists") or [],
     )
 
@@ -1022,10 +1062,14 @@ async def get_flow(
                 tuple(k) for k in old_keys + returned_keys
                 if isinstance(k, (list, tuple)) and len(k) == 2
             )][-_FLOW_HISTORY_LIMIT:],
-            # Хвост артистов для разноса на стыке подгрузок (см. interleave_artists).
-            "artists": [
-                primary_artist_key(item.get("artist", "")) for item in mix
-            ][-_ARTIST_TAIL:],
+            # Артисты последних отданных треков — и для разноса на стыке
+            # подгрузок (interleave_artists), и как бюджет мест на артиста
+            # (take_capped). Копим окно, а не хвост последней порции: лимит,
+            # обнуляемый каждые 15 треков, и был причиной «снова он».
+            "artists": (
+                [a for a in (history.get("artists") or []) if isinstance(a, str)]
+                + [primary_artist_key(item.get("artist", "")) for item in mix]
+            )[-_ARTIST_HISTORY:],
         },
         expire=_FLOW_HISTORY_TTL,
     )

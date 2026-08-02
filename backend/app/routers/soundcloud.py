@@ -7,6 +7,7 @@ import re
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 
 from app.cache import get_cache_async, set_cache_async
 from app.routers.ytdlp import (
@@ -529,7 +530,6 @@ async def _resolve_via_api(track_id: str) -> tuple[str, str, Optional[int]]:
 
 
 async def resolve_hls_via_api(track_id: str) -> Optional[tuple[str, str]]:
-    """(URL m3u8, расширение файла) для трека, у которого остался только HLS.
 
     Возвращает None, если пригодного HLS нет: либо транскодов нет вовсе, либо
     все они зашифрованные (DRM) — такое ffmpeg не соберёт. Тогда вызывающий код

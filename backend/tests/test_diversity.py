@@ -8,9 +8,10 @@
 
 from app.diversity import (
     cap_per_artist,
-    demote_over_cap,
     interleave_artists,
     mmr,
+    take_capped,
+    take_overflow,
     weighted_order,
 )
 
@@ -50,6 +51,13 @@ def test_collab_counts_as_primary_artist():
     assert len(cap_per_artist(items, 2, lambda i: i["artist"])) == 2
 
 
+def test_collab_separators_beyond_comma():
+    # "ONOKAMI" и "ONOKAMI & Гущина Анастасия" считались разными артистами, и
+    # один и тот же исполнитель шёл в выдаче двумя треками ПОДРЯД.
+    items = _items("ONOKAMI", "ONOKAMI & Гущина Анастасия", "Artist feat. Other", "Artist")
+    assert len(cap_per_artist(items, 1, lambda i: i["artist"])) == 2
+
+
 def test_weighted_order_rotates_but_favours_weight():
     keys = [f"a{i}" for i in range(20)]
     weights = {k: 1.0 for k in keys}
@@ -80,7 +88,36 @@ def test_mmr_noop_without_similarity():
     assert [i["id"] for i in mmr(items, {}, id_of=lambda t: t["id"])] == list(range(20))
 
 
-def test_demote_keeps_everything():
-    items = _items("A", "A", "A", "B")
-    out = _artists(demote_over_cap(items, 2, lambda i: i["artist"]))
-    assert out == ["A", "A", "B", "A"], out
+def test_take_capped_keeps_limit_under_slicing():
+    # Регрессия: demote_over_cap уводил сверх-капные в хвост, но следующий же
+    # срез [:quota] затягивал их обратно — при бедном пуле артист занимал
+    # столько мест, сколько у него было треков.
+    items = _items(*(["A"] * 6 + ["B"] * 5 + ["C"] * 4))
+    picked, rest = take_capped(items, 14, 2, lambda i: i["artist"])
+    assert _artists(picked) == ["A", "A", "B", "B", "C", "C"]
+    assert len(rest) == len(items) - len(picked), "остаток потерян — добирать нечем"
+
+
+def test_take_capped_budget_carries_across_pools():
+    # Один бюджет на локальных и внешних кандидатов: раньше кап применялся к
+    # каждому пулу отдельно и они складывались.
+    budget = {}
+    local, _ = take_capped(_items("A", "A", "B"), 3, 2, lambda i: i["artist"], budget)
+    external, _ = take_capped(_items("A", "C"), 2, 2, lambda i: i["artist"], budget)
+    assert _artists(local) == ["A", "A", "B"]
+    assert _artists(external) == ["C"], "A получил третье место через второй пул"
+
+
+def test_take_overflow_prefers_least_used():
+    budget = {"a": 2, "b": 0}
+    out = _artists(take_overflow(_items("A", "B"), 1, lambda i: i["artist"], budget))
+    assert out == ["B"]
+    assert budget["b"] == 1, "бюджет не обновлён — следующий добор снова возьмёт B"
+
+
+def test_take_overflow_fills_rather_than_returning_short():
+    # Короткая порция хуже повтора: на бедном каталоге волна иначе «замирает».
+    items = _items("A", "A", "A")
+    picked, rest = take_capped(items, 3, 2, lambda i: i["artist"])
+    assert len(picked) == 2
+    assert len(picked) + len(take_overflow(rest, 1, lambda i: i["artist"])) == 3

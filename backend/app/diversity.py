@@ -7,7 +7,8 @@
 артисту занять больше max_per_artist мест.
 """
 import random
-from typing import Callable, Iterable, List, TypeVar
+import re
+from typing import Callable, Iterable, List, Optional, Tuple, TypeVar
 
 from app.artist_utils import artist_key
 
@@ -33,6 +34,19 @@ def weighted_order(
     )
 
 
+# Разделители коллабораций. Запятая — формат радио YT Music ("A, B"),
+# остальное приходит из SoundCloud и локальных тегов ("A & B", "A feat. B").
+# Без них "ONOKAMI" и "ONOKAMI & Гущина Анастасия" — два разных артиста, и
+# один и тот же исполнитель шёл в выдаче двумя треками ПОДРЯД.
+# Компромисс с "&": имя вроде "Simon & Garfunkel" схлопнется до "simon" и
+# может слиться с посторонним артистом Simon. Ключ используется ТОЛЬКО для
+# разнообразия (кап и разнос), не для весов вкуса, поэтому цена ошибки —
+# лишний разнос двух треков, а не искажение профиля.
+_COLLAB_SPLIT = re.compile(
+    r"\s*,\s*|\s+(?:&|x|vs\.?|feat\.?|ft\.?)\s+", re.IGNORECASE
+)
+
+
 def primary_artist_key(name: str) -> str:
     """Ключ по ПЕРВОМУ артисту строки.
 
@@ -40,7 +54,7 @@ def primary_artist_key(name: str) -> str:
     другим артистом, и один и тот же исполнитель проскакивает все ограничения
     на повторы.
     """
-    return artist_key((name or "").split(",")[0])
+    return artist_key(_COLLAB_SPLIT.split((name or "").strip(), 1)[0])
 
 
 def interleave_artists(
@@ -128,31 +142,86 @@ def mmr(
     return ordered
 
 
-def demote_over_cap(
+def take_capped(
     items: List[T],
+    n: int,
     max_per_artist: int = 2,
     artist_of: Callable[[T], str] = lambda t: t.artist,
-) -> List[T]:
-    """cap_per_artist, но «лишние» треки не выбрасываются, а уезжают в хвост.
+    used: Optional[dict] = None,
+) -> Tuple[List[T], List[T]]:
+    """Берёт до n элементов, соблюдая лимит на артиста; возвращает (взятые, остаток).
 
-    Нужно там, где список одновременно и пул для отбора, и резерв для добора:
-    жёсткое отсечение при бедном локальном каталоге вернуло бы порцию из
-    двух треков.
+    Заменяет связку demote_over_cap + срез, которая лимит фактически не держала:
+    demote уводил сверх-капные треки в хвост, но следующий же `items[:quota]`
+    затягивал их обратно, стоило капнутой части оказаться короче квоты (а она
+    короче тем чаще, чем дальше сессия — exclude растёт, локальный пул беднеет).
+
+    `used` — счётчик занятых артистом мест. Он ПЕРЕЖИВАЕТ вызовы и обновляется
+    на месте: один бюджет на локальных и внешних кандидатов сразу и на
+    несколько последних подгрузок подряд. Отдельный кап на каждый пул и на
+    каждую порцию по 15 треков позволял артисту брать по 2 трека бесконечно —
+    это и читалось как «один и тот же артист снова и снова».
+
+    Сверх-капные элементы не выбрасываются, а уходят в остаток: на бедном
+    каталоге вызывающий доберёт их через take_overflow, иначе порция схлопнется
+    до пары треков.
     """
-    keep = cap_per_artist(items, max_per_artist, artist_of)
-    kept = {id(x) for x in keep}
-    return keep + [x for x in items if id(x) not in kept]
+    if used is None:
+        used = {}
+    picked: List[T] = []
+    rest: List[T] = []
+    for item in items:
+        if len(picked) >= n:
+            rest.append(item)
+            continue
+        key = primary_artist_key(artist_of(item))
+        if used.get(key, 0) >= max_per_artist:
+            rest.append(item)
+            continue
+        used[key] = used.get(key, 0) + 1
+        picked.append(item)
+    return picked, rest
+
+
+def take_overflow(
+    items: List[T],
+    n: int,
+    artist_of: Callable[[T], str] = lambda t: t.artist,
+    used: Optional[dict] = None,
+) -> List[T]:
+    """Последний резерв: добор СВЕРХ лимита, начиная с наименее занятых артистов.
+
+    Нужен там, где короткая порция хуже повтора (волна на бедном каталоге). В
+    отличие от простого среза остатка, выбирает наименее представленных в уже
+    набранном — повтор достаётся тому, кто мозолил глаза меньше всех.
+    """
+    if n <= 0:
+        return []
+    used = used if used is not None else {}
+    # sorted стабилен: внутри одинаковой занятости сохраняется исходный
+    # порядок по релевантности.
+    ordered = sorted(items, key=lambda t: used.get(primary_artist_key(artist_of(t)), 0))
+    picked = ordered[:n]
+    for item in picked:
+        key = primary_artist_key(artist_of(item))
+        used[key] = used.get(key, 0) + 1
+    return picked
 
 
 def cap_per_artist(
     items: List[T],
     max_per_artist: int = 2,
     artist_of: Callable[[T], str] = lambda t: t.artist,
+    used: Optional[dict] = None,
 ) -> List[T]:
     """Возвращает items в исходном порядке, отбросив те, что превышают лимит
     max_per_artist на артиста (первые max_per_artist по каждому — в приоритете,
-    т.к. порядок обычно уже отсортирован по релевантности/популярности)."""
-    counts: dict = {}
+    т.к. порядок обычно уже отсортирован по релевантности/популярности).
+
+    used — общий счётчик занятых мест (см. take_capped): позволяет держать один
+    лимит на несколько последовательных вызовов вместо отдельного на каждый.
+    Обновляется на месте, если передан."""
+    counts: dict = used if used is not None else {}
     result: List[T] = []
     for item in items:
         key = primary_artist_key(artist_of(item))
