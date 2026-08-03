@@ -176,3 +176,175 @@ def test_flow_spreads_dominant_artist(client, db, monkeypatch):
     assert best < 3, f"артист идёт блоком: {order}"
     # Миноритарные артисты не должны быть вытеснены доминирующим целиком.
     assert len(set(order)) >= 3, f"выдача выродилась в одного-двух артистов: {order}"
+
+
+def test_flow_ignores_other_users_library(client, db):
+    """Треки, приведённые в базу ДРУГИМ юзером, не попадают в чужую волну.
+
+    Боевой симптом: завёлся второй юзер, импортировал плейлист на 185 треков —
+    и они поехали в волну первому. Таблица tracks общая, владельца у трека нет,
+    а Track.play_count — счётчик на всех юзеров сразу, поэтому страховочный
+    добор (`order_by(desc(play_count))` по всей базе) возглавлял тот, кто
+    последним много слушал, и его библиотека уезжала остальным.
+
+    Приманка проходит вкусовой фильтр добора (require_signal): жанр по названию
+    определяется, а жанров вкуса у Алисы нет, поэтому genre_is_compatible
+    пропускает. Единственное, что её теперь останавливает, — скоуп артистов.
+
+    Профиль Алисы намеренно БЕЗ жанрового сигнала: непустой profile["genres"]
+    поднимает build_keyword_filters, а он строит Postgres-regex (`~*` с `\\y`),
+    который SQLite в тестах не выполняет.
+    """
+    alice = create_user(db, username="alice")
+    bob = create_user(db, username="bob")
+
+    # Профиль Алисы: один курированный артист, названия нейтральные (жанр по
+    # ним не угадывается).
+    alice_pl = Playlist(name="Понравившиеся", is_public=False, is_liked=True, owner_id=alice.id)
+    db.add(alice_pl)
+    db.commit()
+    db.refresh(alice_pl)
+    own = Track(
+        title="Мой любимый",
+        artist="AliceArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/own.mp3",
+    )
+    own_more = Track(
+        title="Второй",
+        artist="AliceArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/own2.mp3",
+    )
+    db.add_all([own, own_more])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(playlist_id=alice_pl.id, track_id=own.id, position=0)
+    )
+    db.commit()
+
+    # Библиотека Боба: play_count намного выше, чем у Алисы, — именно она и
+    # возглавляла глобальный добор.
+    bob_pl = Playlist(name="Импорт", is_public=False, is_liked=False, owner_id=bob.id)
+    db.add(bob_pl)
+    db.commit()
+    db.refresh(bob_pl)
+    bob_tracks = [
+        Track(
+            title=f"Bob phonk {i}",
+            artist=f"BobArtist{i}",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/bob{i}.mp3",
+            play_count=500 + i,
+        )
+        for i in range(12)
+    ]
+    db.add_all(bob_tracks)
+    db.commit()
+    for pos, t in enumerate(bob_tracks):
+        db.execute(
+            playlist_tracks.insert().values(
+                playlist_id=bob_pl.id, track_id=t.id, position=pos
+            )
+        )
+    db.commit()
+
+    resp = client.get("/api/recommendations/flow?limit=10", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+
+    mix = resp.json()
+    artists = {t["artist"] for t in mix}
+    leaked = {a for a in artists if a.startswith("BobArtist")}
+    assert not leaked, f"в волну Алисы протекла библиотека Боба: {leaked}"
+    # Иначе тест прошёл бы и на пустой выдаче, ничего не проверив.
+    assert "AliceArtist" in artists, f"своя библиотека тоже пропала: {artists}"
+
+
+def test_flow_response_is_not_cacheable(client, db):
+    """Ответ волны уникален на каждый запрос — кэшировать его нельзя.
+
+    Браузер, закэшировав выдачу, играл после перезагрузки ту же цепочку: запрос
+    не доходил до бэкенда, серверная история flow:history не двигалась и ротация
+    артистов не работала. Прокси это запрещает (см. nginx), но dev-путь через
+    vite-прокси идёт мимо nginx — заголовок обязан ставить сам эндпоинт.
+    """
+    user = create_user(db)
+    _liked(db, user)
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+    assert resp.headers.get("cache-control") == "no-store"
+
+
+def test_flow_keeps_exploration_when_local_pool_is_rich(client, db, monkeypatch):
+    """Разведка (новые артисты) обязана попадать в волну, даже когда локальных
+    кандидатов вдоволь.
+
+    Боевая регрессия после ограничения локального пула артистами юзера. Раньше
+    страховочный добор брал глобальный топ по play_count и почти весь отсеивался
+    по require_signal, поэтому локальных кандидатов не хватало и разведка
+    занимала оставшиеся места сама. Стоило ограничить добор артистами самого
+    юзера — и почти каждый кандидат стал «доверенным» (make_relevance_check
+    возвращает True для курированного артиста ДО проверки require_signal),
+    локальных кандидатов стало вдоволь, и они забирали все жанровые места.
+    Волна вырождалась в каталог тех артистов, которых юзер и так слушает, —
+    то есть в список бывшего раздела «Рекомендуем для вас».
+
+    Богатый пул — это МНОГО артистов, а не много треков: _MAX_PER_ARTIST режет
+    одного артиста до двух треков. Поэтому здесь 10 курированных артистов, как
+    в боевом импортированном плейлисте.
+    """
+    user = create_user(db)
+    _liked(db, user)
+    liked_pl = db.query(Playlist).filter_by(owner_id=user.id, is_liked=True).first()
+
+    pos = 10
+    for a in range(10):
+        for i in range(2):
+            t = Track(
+                title=f"свой трек {a}-{i}",
+                artist=f"OwnArtist{a}",
+                duration=100,
+                source="local",
+                file_path=f"minio://music/own{a}_{i}.mp3",
+            )
+            db.add(t)
+            db.commit()
+            db.execute(playlist_tracks.insert().values(
+                playlist_id=liked_pl.id, track_id=t.id, position=pos))
+            pos += 1
+    db.commit()
+
+    # Разведка живая: граф артистов даёт треки НОВЫХ артистов. Берём
+    # _similar_pool, а не радио: радио строится от videoId, а ytmusic-треков у
+    # юзера нет — сида не будет и радио не вызовется вовсе.
+    async def _similar(artist):
+        return [
+            _external(f"NeighbourArtist{i}", f"новый трек {i}", f"ext{i}")
+            for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    resp = client.get("/api/recommendations/flow?limit=15", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+
+    mix = resp.json()
+    artists = [t["artist"] for t in mix]
+    external = [a for a in artists if a.startswith("NeighbourArtist")]
+    # Проверяем ДОЛЮ, а не факт попадания: одно-единственное разведочное место
+    # (15-е) существовало и до фикса, но 14 из 15 своих треков — это и есть
+    # «вместо волны играет мой же каталог». Порог заведомо ниже _EXPLORE_SHARE,
+    # чтобы тест не ломался от точной настройки доли.
+    assert len(external) >= 3, (
+        f"разведку вытеснил локальный пул, в волне лишь {len(external)} новых из "
+        f"{len(artists)}: {artists}"
+    )
+    # Локальная часть при этом никуда не делась: доля разведки — это доля,
+    # а не подмена волны разведкой целиком.
+    assert any(a.startswith("OwnArtist") for a in artists), (
+        f"своя библиотека пропала из волны: {artists}"
+    )

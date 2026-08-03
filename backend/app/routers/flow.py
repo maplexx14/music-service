@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -105,7 +105,15 @@ _TAG_EXPLORE_LIMIT = 15
 _TAG_EXPLORE_TTL = 1800
 # Максимум треков одного артиста в "эксплуатации" — иначе сортировка по
 # play_count раз за разом выдаёт одних и тех же самых заигранных артистов.
-_MAX_PER_ARTIST = 2
+_MAX_PER_ARTIST = 6
+# Доля порции, ГАРАНТИРОВАННО отдаваемая разведке. Именно доля, а не остаток
+# после локальных кандидатов: локальный пул почти всегда богаче (один запрос в
+# БД против сети и кэшей у разведки), поэтому на добор разведке не оставалось
+# ничего, и волна вырождалась в каталог тех артистов, которых юзер и так
+# слушает, — то есть в список бывшего раздела «Рекомендуем для вас».
+# Жанровая гарантия от этого не страдает: внешние кандидаты тоже проходят
+# _matches_related/_matches_taste, меняется только очерёдность на слоты.
+_EXPLORE_SHARE = 0.0
 # Сколько артистов вкуса берём в работу за один запрос. Порядок взвешенно
 # случайный (см. diversity.weighted_order), поэтому это не «топ-N навсегда», а
 # ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
@@ -503,6 +511,14 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
     aw = profile.get("artist_weight") or {}
+    # Артисты, по которым у ЭТОГО юзера есть собственный сигнал (плей, лайк,
+    # плейлист, preferred_artists). Таблица tracks общая и владельца у трека
+    # нет, поэтому жанровые/теговые фильтры ниже без такого ограничения
+    # выбирают из чужих библиотек: юзер, импортировавший плейлист на 185
+    # треков, начинал подмешиваться в волну всем остальным. Открытие НОВЫХ
+    # имён — работа разведки (граф артистов / радио / SoundCloud), а не
+    # локального пула; см. модульный docstring.
+    scope = set(aw) | set(profile.get("curated_artist_keys") or [])
     filters = []
     if profile["artist_keys"]:
         # Регистронезависимо: SoundCloud и YT Music отдают имя одного и того же
@@ -535,8 +551,17 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # (title_tags) могут быть неоднозначным словом на тему ("гей") — там
     # требуем пару тегов разом, иначе один случайный серьёзный трек с тем же
     # словом у постороннего артиста тянет весь его чужой каталог.
-    genreartist_keys = artists_matching_keywords(db, top_genre_keywords(profile.get("genre_counts", {})))
-    genreartist_keys |= artists_matching_keywords(db, profile.get("title_tags") or [], min_matches=2)
+    genreartist_keys = artists_matching_keywords(
+        db,
+        top_genre_keywords(profile.get("genre_counts", {})),
+        restrict_artists=scope or None,
+    )
+    genreartist_keys |= artists_matching_keywords(
+        db,
+        profile.get("title_tags") or [],
+        min_matches=2,
+        restrict_artists=scope or None,
+    )
     if genreartist_keys:
         filters.append(func.lower(Track.artist).in_(genreartist_keys))
 
@@ -567,6 +592,14 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     candidates: List[Track] = []
     if filters:
         q = db.query(Track).filter(or_(*filters))
+        # Кандидат обязан быть от артиста, по которому у юзера есть свой сигнал.
+        # Жанр/ключевое слово/тег сами по себе матчат и чужие треки: слово
+        # "phonk" в названии есть и у артиста, которого в базу привёл совсем
+        # другой пользователь. Скоуп пуст только при холодном старте — сужать
+        # там не до чего, и глобальная выборка остаётся осознанным поведением
+        # (см. _taste_profile).
+        if scope:
+            q = q.filter(func.lower(Track.artist).in_(scope))
         if exclude_ids:
             q = q.filter(~Track.id.in_(exclude_ids))
         # Случайная выборка окна, а не топ по play_count: иначе окно limit*8 —
@@ -594,10 +627,19 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         )
         skip = {t.id for t in candidates} | exclude_ids
         q = db.query(Track)
+        # Тот же скоуп, что и у основного пула: Track.play_count — счётчик
+        # ОБЩИЙ на всех юзеров (инкрементится в tracks.py на любом прослушивании
+        # любым юзером), поэтому глобальный топ по нему возглавляет тот, кто
+        # последним импортировал большой плейлист, — и его треки ехали в волну
+        # всем. Порядок тоже меняем: desc(play_count) детерминирован, а значит
+        # добор раз за разом отдавал ОДНУ И ТУ ЖЕ пачку треков — второй, помимо
+        # кэша браузера, источник «одной и той же цепочки».
+        if scope:
+            q = q.filter(func.lower(Track.artist).in_(scope))
         if skip:
             q = q.filter(~Track.id.in_(skip))
         pool = [
-            t for t in q.order_by(desc(Track.play_count)).limit(limit * 20).all()
+            t for t in q.order_by(func.random()).limit(limit * 20).all()
             if _keep_strict(t) and _media_available(t)
         ]
         pool.sort(key=_score)
@@ -850,12 +892,21 @@ def _parse_exclude(exclude: str) -> tuple:
 @router.get("/flow")
 async def get_flow(
     request: Request,
+    response: Response,
     limit: int = Query(8, ge=5, le=50),
     exclude: str = Query("", max_length=4000),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """Порция персонального потока. exclude — id уже находящихся в очереди."""
+    # Ответ уникален для каждого запроса (ротация артистов + серверная история),
+    # кэшировать его нельзя ни на секунду. Прокси это и так запрещает (см.
+    # `location = /api/recommendations/flow` в nginx.conf и в
+    # snippets/app-locations.conf), но dev-путь через vite-прокси на :3000 идёт
+    # мимо nginx вообще — там защититься можно только отсюда. Кэш браузера уже
+    # приводил к тому, что после перезагрузки волна играла ту же цепочку: запрос
+    # не доходил до бэкенда, flow:history не двигалась, ротация не работала.
+    response.headers["Cache-Control"] = "no-store"
     base_url = str(request.base_url).rstrip("/")
     excl_ids, client_yt_videos, external_exclude = _parse_exclude(exclude)
 
@@ -1108,14 +1159,29 @@ async def get_flow(
     def _artist_of(t) -> str:
         return t.artist
 
+    # Разведка забирает свою долю ПЕРВОЙ. Раньше первыми шли локальные
+    # кандидаты на все genre_quota мест, а разведке доставался остаток —
+    # и когда локальный пул богат, остатка не было вовсе. Пока пул был тощим
+    # (страховочный добор брал глобальный топ и почти весь отсеивался по
+    # require_signal), это не проявлялось; после ограничения добора артистами
+    # самого юзера трекам стало легко проходить проверку — у курированного
+    # артиста make_relevance_check возвращает True сразу, — локальных
+    # кандидатов стало вдоволь, и они вытеснили разведку целиком.
+    explore_quota = min(len(explore), round(limit * _EXPLORE_SHARE))
+    relevant_external, explore_rest = take_capped(
+        explore, explore_quota, _MAX_PER_ARTIST, _artist_of, artist_budget
+    )
+    used_external = len(relevant_external)
+
     relevant_local, exploit_rest = take_capped(
-        exploit, genre_quota, _MAX_PER_ARTIST, _artist_of, artist_budget
+        exploit, genre_quota - used_external, _MAX_PER_ARTIST, _artist_of, artist_budget
     )
 
     mix: List[dict] = [
         TrackResponse.model_validate(t).model_dump(mode="json")
         for t in relevant_local
     ]
+    mix.extend(t.model_dump() for t in relevant_external)
 
     # Добираем обязательные 14 мест внешними кандидатами, которые уже прошли
     # _matches_taste и пришли из radio подтверждённых плейлистных сидов. Раньше
@@ -1125,11 +1191,12 @@ async def get_flow(
     #
     # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
     # исполнителя, поэтому внешние кандидаты идут через тот же бюджет.
-    relevant_external, explore_rest = take_capped(
-        explore, genre_quota - len(mix), _MAX_PER_ARTIST, _artist_of, artist_budget
-    )
-    mix.extend(t.model_dump() for t in relevant_external)
-    used_external = len(relevant_external)
+    if len(mix) < genre_quota:
+        extra_external, explore_rest = take_capped(
+            explore_rest, genre_quota - len(mix), _MAX_PER_ARTIST, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in extra_external)
+        used_external += len(extra_external)
 
     # Пятнадцатое место — разведка. Оно также проходит базовый taste-фильтр, но
     # не участвует в гарантированных 14 жанровых позициях.

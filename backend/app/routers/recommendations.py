@@ -153,6 +153,7 @@ def _varied_popular(
     need: int,
     keep=None,
     used: Optional[dict] = None,
+    restrict_artists: Optional[set] = None,
 ) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
     Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
@@ -167,10 +168,19 @@ def _varied_popular(
     used — сколько мест артисты уже заняли в собираемой выдаче. Без него лимит
     считался с нуля на каждом пути отбора и они складывались: 2 трека из
     основного пула + 1 сосед + 2 отсюда = до 5 треков одного артиста.
+
+    restrict_artists — артисты, по которым у юзера есть свой сигнал. Track.play_count
+    ОБЩИЙ на всех юзеров (инкрементится на любом прослушивании любым юзером), а
+    владельца у трека нет, поэтому «популярное сервиса» возглавляет тот, кто
+    последним импортировал большой плейлист, и его библиотека ехала в выдачу
+    остальным. Передаётся вместе с keep (т.е. когда профиль есть); на холодном
+    старте скоупа нет и глобальное популярное остаётся единственным вариантом.
     """
     if need <= 0:
         return []
     q = db.query(Track)
+    if restrict_artists:
+        q = q.filter(func.lower(Track.artist).in_(restrict_artists))
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
     # С предикатом вкуса отсев жёстче, поэтому берём пул с большим запасом.
@@ -459,6 +469,16 @@ def get_recommendations(
             or pos - artist_skip_penalty.get(key, 0) >= _NET_TRUST_MARGIN
         ]
 
+        # Артисты, по которым у юзера есть ЛЮБОЙ положительный сигнал. Шире
+        # artist_keys выше: тот уже сужен порогом доверия и как скоуп вырезал бы
+        # легитимные треки. Таблица tracks общая и владельца у трека нет, поэтому
+        # без этого ограничения жанровые/теговые фильтры ниже выбирают из чужих
+        # библиотек — юзер, импортировавший плейлист, начинал подмешиваться в
+        # рекомендации всем остальным. Открытие НОВЫХ имён остаётся за
+        # co-occurrence: это единственный путь, которому межюзерность нужна
+        # по смыслу (см. app/cooccurrence.py).
+        scope_artist_keys = set(artist_positive)
+
         # Единая проверка релевантности для ВСЕХ путей выдачи (основной пул,
         # co-occurrence-соседи, добор популярным). Раньше каждый путь фильтровал
         # по-своему, и постороннее протекало через тот, что чинили последним.
@@ -519,8 +539,17 @@ def get_recommendations(
         # неоднозначным словом на тему ("гей") — там требуем пару тегов
         # разом, иначе один случайный серьёзный трек с тем же словом у
         # постороннего артиста тянет весь его чужой каталог.
-        genreartist_keys = artists_matching_keywords(db, top_genre_keywords(Counter(genres)))
-        genreartist_keys |= artists_matching_keywords(db, title_tags, min_matches=2)
+        genreartist_keys = artists_matching_keywords(
+            db,
+            top_genre_keywords(Counter(genres)),
+            restrict_artists=scope_artist_keys or None,
+        )
+        genreartist_keys |= artists_matching_keywords(
+            db,
+            title_tags,
+            min_matches=2,
+            restrict_artists=scope_artist_keys or None,
+        )
         if genreartist_keys:
             taste_filters.append(func.lower(Track.artist).in_(genreartist_keys))
 
@@ -541,6 +570,11 @@ def get_recommendations(
             q = db.query(Track).filter(or_(*taste_filters)).filter(
                 ~Track.id.in_(exclude_select)
             )
+            # Кандидат обязан быть от артиста с сигналом юзера (см.
+            # scope_artist_keys). Скоуп пуст только при холодном старте — сужать
+            # там не до чего.
+            if scope_artist_keys:
+                q = q.filter(func.lower(Track.artist).in_(scope_artist_keys))
             # Окно берём СЛУЧАЙНО, а не топом по play_count: топ окна — это
             # всегда самые заигранные треки нескольких артистов, поэтому выдача
             # крутила одних и тех же, хотя вкусовых артистов в библиотеке сотни.
@@ -696,6 +730,7 @@ def get_recommendations(
                 used=Counter(
                     primary_artist_key(t.artist) for t in recommended_tracks
                 ),
+                restrict_artists=scope_artist_keys or None,
             )
             # Пул вкуса исчерпан (у активного юзера почти весь релевантный
             # каталог уже в коллекции/показах) — отдаём КОРОТКУЮ выдачу вместо
