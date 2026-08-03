@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
@@ -104,27 +104,46 @@ function PlayerProgress({ audioRef }) {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
+  // isPlaying меняется только по play/pause, не на каждом тике времени, так что
+  // подписка не возвращает перерисовки, от которых компонент был отделён.
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
   const surfaceRef = useRef(null)
   const fillRef = useRef(null)
+
+  const writeProgress = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio || !(duration > 0)) return
+    const pct = `${Math.min(100, (audio.currentTime / duration) * 100)}%`
+    surfaceRef.current?.style.setProperty('--player-progress', pct)
+    fillRef.current?.style.setProperty('--player-progress', pct)
+  }, [audioRef, duration])
 
   // Ширину заливки двигаем на каждом кадре прямо в DOM, минуя store и React:
   // store тикает раз в секунду (сознательный троттлинг timeupdate), от этого
   // полоса дёргалась секундными шагами. rAF сам замирает в скрытой вкладке,
   // так что фоновые кадры не жгут CPU.
+  //
+  // На паузе позиция не меняется — вместо вечного цикла пишем один кадр и
+  // останавливаемся. Прежде rAF крутился всё время, пока плеер смонтирован,
+  // и каждый кадр дёргал пересчёт стилей полосы даже на стоящем треке.
+  //
+  // Дальнейшие изменения позиции на паузе (seek, смена трека) доезжают сами:
+  // инлайновый style ниже пишет ту же переменную из store на каждом рендере.
+  // Этот единственный кадр нужен ровно затем, чтобы полоса встала на точную
+  // позицию из audio, а не на округлённую store-версию (троттлинг ~1 с).
   useEffect(() => {
+    if (!isPlaying) {
+      writeProgress()
+      return
+    }
     let raf
     const tick = () => {
-      const audio = audioRef.current
-      if (audio && duration > 0) {
-        const pct = `${Math.min(100, (audio.currentTime / duration) * 100)}%`
-        surfaceRef.current?.style.setProperty('--player-progress', pct)
-        fillRef.current?.style.setProperty('--player-progress', pct)
-      }
+      writeProgress()
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [audioRef, duration])
+  }, [isPlaying, writeProgress])
 
   const handleSeek = (e) => {
     const audio = audioRef.current

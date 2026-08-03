@@ -361,7 +361,8 @@
   min-width: 240px;
   z-index: 1001;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(14px);
+  /* Без backdrop-filter: фон панели на 96% непрозрачный, размытие за ним не
+     видно, а лишний проход композитора стоит столько же. */
   /* Вырастает от плеера снизу-слева. */
   transform-origin: bottom left;
   transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
@@ -529,8 +530,12 @@
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;
     background: rgba(10, 10, 14, 0.65);
-    backdrop-filter: blur(20px) saturate(160%);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    /* Радиус 12 вместо 20: плеер лежит поверх анимированного hero, и блюр
+       пересчитывается на каждом его кадре. Стоимость растёт с радиусом, а на
+       65%-затемнённом фоне разница между 12 и 20 не читается. saturate
+       оставлен — это дешёвая цветовая матрица, и без неё панель тускнеет. */
+    backdrop-filter: blur(12px) saturate(160%);
+    -webkit-backdrop-filter: blur(12px) saturate(160%);
   }
 
   .player-left {

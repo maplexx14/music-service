@@ -100,6 +100,22 @@ void main(){
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// Кап FPS. Фон — медленно плывущий градиент: на 30 кадрах он выглядит так же,
+// как на 144, но проходов тяжёлого фрагментного шейдера в 4-5 раз меньше.
+// rAF по умолчанию идёт с частотой монитора, поэтому на 144/165 Гц без капа
+// градиент один съедал больше GPU, чем вся остальная страница.
+const TARGET_FPS = 30;
+const FRAME_INTERVAL = 1 / TARGET_FPS;
+// Допуск ~4 мс: на 60 Гц rAF тикает каждые 16.7 мс, и без допуска кадр на
+// отметке 33.3 мс проваливает сравнение из-за плавающей точки — каждый второй
+// тик отбрасывался бы и вместо 30 fps получалось 20.
+const FRAME_TOLERANCE = 0.004;
+
+// Скорость сходимости mixFactor idle→playing, в единицах в секунду. Раньше
+// лерп шёл с шагом 0.025 за кадр, то есть зависел от частоты монитора и от
+// капа FPS: 1.5 = 0.025 × 60 сохраняет прежнюю длительность перехода.
+const MIX_RATE = 1.5;
+
 const Grainient = ({
   timeSpeed = 0.25,
   colorBalance = 0.0,
@@ -124,6 +140,12 @@ const Grainient = ({
   color2 = '#5227FF',
   color3 = '#B19EEF',
   active = false,
+  // Разрешение рендера в долях CSS-пикселя. Стоимость шейдера линейна по
+  // площади, а градиент мягкий и без мелких деталей — CSS растягивает canvas
+  // билинейно, и разницы не видно. Поднять, если на конкретном пресете
+  // проступают ступеньки на границах цветов или включён заметный grainAmount
+  // (зерно при апскейле становится крупным).
+  renderScale = 0.75,
   className = ''
 }) => {
   const containerRef = useRef(null);
@@ -147,10 +169,13 @@ const Grainient = ({
         webgl: 2,
         alpha: true,
         antialias: false,
-        // DPR cap 1.5 вместо 2: фон — мягкий размытый градиент без мелких
-        // деталей, визуальной разницы нет, а пикселей для шейдера на
-        // retina-экранах почти вдвое меньше (1.5² vs 2²).
-        dpr: Math.min(window.devicePixelRatio || 1, 1.5)
+        // Рендерим ниже разрешения экрана и растягиваем средствами CSS. Фон —
+        // мягкий размытый градиент без мелких деталей, визуальной разницы нет,
+        // а фрагментов на retina вчетверо меньше, чем при прежнем cap 1.5.
+        // Абсолютное значение, а не доля devicePixelRatio: важна физическая
+        // плотность пикселей у градиента, и она одинаково достаточна на любом
+        // экране.
+        dpr: renderScale
       });
     } catch {
       return;
@@ -229,9 +254,11 @@ const Grainient = ({
     };
 
     let mixFactor = activeRef.current ? 1 : 0;
-    const speed = 0.025;
     let animationTime = 0;
     let warpTime = 0;
+    // Время последнего отрисованного кадра, а не последнего тика rAF: дельта
+    // должна покрывать весь промежуток, включая пропущенные по капу тики,
+    // иначе анимация замедлится пропорционально капу.
     let lastT = null;
 
     let raf = 0;
@@ -258,13 +285,22 @@ const Grainient = ({
 
     const loop = (t) => {
       if (!running) return;
+      // Следующий тик просим сразу: кадр может быть отброшен по капу, и выход
+      // до планирования остановил бы цикл насовсем.
+      raf = requestAnimationFrame(loop);
+
       const now = t * 0.001;
+      if (lastT !== null && now - lastT < FRAME_INTERVAL - FRAME_TOLERANCE) return;
+
       const deltaTime = lastT !== null ? Math.min(now - lastT, 0.1) : 0;
       lastT = now;
 
       const isActive = activeRef.current;
       const targetMix = isActive ? 1 : 0;
-      mixFactor = lerp(mixFactor, targetMix, speed);
+      // Экспоненциальное сглаживание вместо лерпа с фиксированным шагом:
+      // длительность перехода теперь не зависит ни от частоты монитора, ни от
+      // капа FPS, ни от просадок.
+      mixFactor = lerp(mixFactor, targetMix, 1 - Math.exp(-deltaTime * MIX_RATE));
 
       const currentTimeSpeed = idle.timeSpeed + (playing.timeSpeed - idle.timeSpeed) * mixFactor;
       const warpStrength = idle.warpStrength + (playing.warpStrength - idle.warpStrength) * mixFactor;
@@ -283,7 +319,6 @@ const Grainient = ({
       program.uniforms.uRotationAmount.value = rotationAmount;
       program.uniforms.iTime.value = now;
       renderer.render({ scene: mesh });
-      raf = requestAnimationFrame(loop);
     };
 
     const onVisibilityChange = () => {
@@ -354,7 +389,8 @@ const Grainient = ({
     zoom,
     color1,
     color2,
-    color3
+    color3,
+    renderScale
   ]);
 
   return <div ref={containerRef} className={`grainient-container ${className}`.trim()} />;
