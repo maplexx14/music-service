@@ -5,6 +5,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
+import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
@@ -1207,7 +1208,11 @@ function PlayerInner() {
         <div className="player-info">
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">
-            {isExternalTrack && isBuffering ? 'Загрузка…' : currentTrack.artist}
+            {isExternalTrack && isBuffering ? (
+              'Загрузка…'
+            ) : (
+              <ArtistLink artist={currentTrack.artist} />
+            )}
           </div>
         </div>
         {canInteract && (

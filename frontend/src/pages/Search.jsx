@@ -4,6 +4,7 @@ import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
+import ArtistLink from '../components/ArtistLink'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Search.css'
@@ -25,7 +26,9 @@ function Search() {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
-  const [externalTracks, setExternalTracks] = useState([])
+  // Внешние источники держим раздельно: выдача показывает их отдельными
+  // секциями в фиксированном порядке (см. рендер ниже).
+  const [externalTracks, setExternalTracks] = useState({ ytmusic: [], soundcloud: [] })
   const [externalPlaylists, setExternalPlaylists] = useState([])
   const [loading, setLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
@@ -44,7 +47,7 @@ function Search() {
     }
 
     setResults({ tracks: [], playlists: [], users: [] })
-    setExternalTracks([])
+    setExternalTracks({ ytmusic: [], soundcloud: [] })
     setExternalPlaylists([])
     setLoading(false)
   }, [query])
@@ -54,13 +57,13 @@ function Search() {
     setSearchError('')
     // Старые внешние результаты чистим сразу: они дорисуются позже и не
     // должны миксоваться с новым запросом.
-    setExternalTracks([])
+    setExternalTracks({ ytmusic: [], soundcloud: [] })
     setExternalPlaylists([])
 
     // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
     // его секции дорисовываются по мере прихода ответов.
     api
-      .get('/search/external', {
+      .get('/search/external/grouped', {
         // Слоты делятся между источниками (каталог артиста / YouTube Music /
         // SoundCloud), поэтому на каждый приходится примерно треть лимита.
         params: { q: searchQuery, limit: 45 },
@@ -69,12 +72,17 @@ function Search() {
       })
       .then((response) => {
         if (signal.aborted) return
-        setExternalTracks(response.data)
+        const grouped = {
+          ytmusic: response.data?.ytmusic || [],
+          soundcloud: response.data?.soundcloud || [],
+        }
+        setExternalTracks(grouped)
         // Прогреваем резолв топ-нескольких результатов заранее — большинство
         // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
         // Ограничиваем прогрев видимой верхушкой, чтобы поиск не создавал
         // всплеск фоновых запросов на слабом клиенте или под нагрузкой.
-        usePlayerStore.getState().prefetchTracks(response.data, 4)
+        usePlayerStore.getState().prefetchTracks(grouped.ytmusic, 4)
+        usePlayerStore.getState().prefetchTracks(grouped.soundcloud, 2)
       })
       .catch((error) => {
         if (!signal.aborted) console.error('External search error:', error)
@@ -116,9 +124,11 @@ function Search() {
     playTrack(track, results.tracks)
   }
 
-  const handlePlayExternalTrack = (track) => {
+  // Очередь — список своей секции: клик по треку из YouTube Music продолжает
+  // выдачу YouTube Music, а не прыгает в SoundCloud.
+  const handlePlayExternalTrack = (track, queue) => {
     const { playTrack } = usePlayerStore.getState()
-    playTrack(track, externalTracks, 'external')
+    playTrack(track, queue, 'external')
   }
 
   const handleImportExternalPlaylist = (playlist) => {
@@ -128,10 +138,68 @@ function Search() {
 
   const hasResults =
     results.tracks.length > 0 ||
-    externalTracks.length > 0 ||
+    externalTracks.ytmusic.length > 0 ||
+    externalTracks.soundcloud.length > 0 ||
     results.playlists.length > 0 ||
     externalPlaylists.length > 0 ||
     results.users.length > 0
+
+  // Секция внешних треков: разметка одна на оба источника, отличаются только
+  // заголовком и списком.
+  const renderExternalSection = (title, tracks) => {
+    if (tracks.length === 0) return null
+    return (
+      <div className="results-section">
+        <h2 className="results-title">{title}</h2>
+        <div className="tracks-list">
+          {tracks.map((track) => (
+            // intent-префетч: наведение/касание строки прогревает резолв на
+            // бэке до клика — важно для результатов ниже топ-4 (их автопрогрев
+            // не покрывает, см. performSearch).
+            <div
+              key={track.id}
+              className="track-item"
+              onClick={() => handlePlayExternalTrack(track, tracks)}
+              {...trackIntentHandlers(track)}
+            >
+              <img
+                src={resolveCoverUrl(track.cover_url) || defaultCover}
+                alt={track.title}
+                className="track-item-cover"
+                loading="lazy"
+                decoding="async"
+                onError={handleCoverError}
+              />
+              <div className="track-item-info">
+                <div className="track-item-title">{track.title}</div>
+                <ArtistLink artist={track.artist} className="track-item-artist" />
+              </div>
+              <div className="track-item-meta">
+                <span
+                  className={`source-badge ${sourceMeta(track.source).className}`}
+                  data-label={sourceMeta(track.source).label}
+                >
+                  {sourceMeta(track.source).label}
+                </span>
+                {track.download_allowed && track.download_url && (
+                  <a
+                    className="track-download"
+                    href={track.download_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => event.stopPropagation()}
+                    aria-label={`Скачать ${track.title}`}
+                  >
+                    <Download size={18} />
+                  </a>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page-container">
@@ -154,89 +222,12 @@ function Search() {
         <div className="search-error">{searchError}</div>
       )}
 
+      {/* Порядок секций фиксирован: плейлисты → треки из медиатеки →
+          YouTube Music → SoundCloud → пользователи. Плейлисты сверху потому,
+          что это готовая подборка (одно попадание вместо десятка треков), а
+          дальше — от «уже своё» к внешнему. */}
       {!loading && query && (
         <div className="search-results">
-          {results.tracks.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Треки</h2>
-              <div className="tracks-list">
-                {results.tracks.map((track) => (
-                  <div
-                    key={track.id}
-                    className="track-item"
-                    onClick={() => handlePlayTrack(track)}
-                    {...trackIntentHandlers(track)}
-                  >
-                    <img
-                      src={resolveCoverUrl(track.cover_url) || defaultCover}
-                      alt={track.title}
-                      className="track-item-cover"
-                      onError={handleCoverError}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <div className="track-item-info">
-                      <div className="track-item-title">{track.title}</div>
-                      <div className="track-item-artist">{track.artist}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {externalTracks.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Внешний каталог</h2>
-              <div className="tracks-list">
-                {externalTracks.map((track) => (
-                  // intent-префетч: наведение/касание строки прогревает резолв на
-                  // бэке до клика — важно для результатов ниже топ-4 (их автопрогрев
-                  // не покрывает, см. performSearch).
-                  <div
-                    key={track.id}
-                    className="track-item"
-                    onClick={() => handlePlayExternalTrack(track)}
-                    {...trackIntentHandlers(track)}
-                  >
-                    <img
-                      src={resolveCoverUrl(track.cover_url) || defaultCover}
-                      alt={track.title}
-                      className="track-item-cover"
-                      loading="lazy"
-                      decoding="async"
-                      onError={handleCoverError}
-                    />
-                    <div className="track-item-info">
-                      <div className="track-item-title">{track.title}</div>
-                      <div className="track-item-artist">{track.artist}</div>
-                    </div>
-                    <div className="track-item-meta">
-                      <span
-                        className={`source-badge ${sourceMeta(track.source).className}`}
-                        data-label={sourceMeta(track.source).label}
-                      >
-                        {sourceMeta(track.source).label}
-                      </span>
-                      {track.download_allowed && track.download_url && (
-                        <a
-                          className="track-download"
-                          href={track.download_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(event) => event.stopPropagation()}
-                          aria-label={`Скачать ${track.title}`}
-                        >
-                          <Download size={18} />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {results.playlists.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Плейлисты</h2>
@@ -295,6 +286,38 @@ function Search() {
               </div>
             </div>
           )}
+
+          {results.tracks.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Треки</h2>
+              <div className="tracks-list">
+                {results.tracks.map((track) => (
+                  <div
+                    key={track.id}
+                    className="track-item"
+                    onClick={() => handlePlayTrack(track)}
+                    {...trackIntentHandlers(track)}
+                  >
+                    <img
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+                      alt={track.title}
+                      className="track-item-cover"
+                      onError={handleCoverError}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <div className="track-item-info">
+                      <div className="track-item-title">{track.title}</div>
+                      <ArtistLink artist={track.artist} className="track-item-artist" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {renderExternalSection('YouTube Music', externalTracks.ytmusic)}
+          {renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
           {results.users.length > 0 && (
             <div className="results-section">

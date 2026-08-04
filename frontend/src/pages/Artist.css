@@ -1,0 +1,26 @@
+/* Страница исполнителя переиспользует разметку PlaylistDetail (шапка + таблица
+   треков) — здесь только то, чем она от плейлиста отличается. */
+
+/* Аватар артиста — круглый, в отличие от квадратной обложки плейлиста. */
+.artist-header-cover {
+  border-radius: 50%;
+}
+
+/* Бейдж источника в строке трека: MP3/SC как в поиске, но приглушённее —
+   в таблице он справочный, а не главный элемент. */
+.artist-track-source {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #b3b3b3;
+  white-space: nowrap;
+}
+
+.artist-section-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 24px 0 8px;
+}

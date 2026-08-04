@@ -205,3 +205,27 @@ class ExternalPlaylistResponse(BaseModel):
 class ExternalPlaylistDetail(BaseModel):
     playlist: ExternalPlaylistResponse
     tracks: List[ExternalTrackResponse] = []
+
+
+class ExternalSearchGrouped(BaseModel):
+    """Внешняя выдача, разложенная по источникам.
+
+    Поиск рисует источники отдельными секциями в фиксированном порядке, так что
+    склеивать их на бэке незачем — фронту пришлось бы разбирать список обратно.
+    """
+    ytmusic: List[ExternalTrackResponse] = []
+    soundcloud: List[ExternalTrackResponse] = []
+
+
+class ArtistPageResponse(BaseModel):
+    """Страница исполнителя: его треки одним плейлистом.
+
+    Два списка вместо одного — потому что типы разные: у треков из библиотеки
+    числовой id (лайк и добавление в плейлист работают сразу), у внешних —
+    строковый ("ytmusic:...", материализуются по действию пользователя).
+    Порядок склейки на фронте: tracks, затем external.
+    """
+    name: str
+    cover_url: Optional[str] = None
+    tracks: List[TrackResponse] = []
+    external: List[ExternalTrackResponse] = []

@@ -9,6 +9,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import Spinner from '../components/Spinner'
+import ArtistLink from '../components/ArtistLink'
 import { toast } from '../store/toastStore'
 import './Home.css'
 
@@ -42,7 +43,7 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
       />
       <div className="track-info">
         <div className="track-title">{track.title}</div>
-        <div className="track-artist">{track.artist}</div>
+        <ArtistLink artist={track.artist} className="track-artist" />
       </div>
     </div>
   )

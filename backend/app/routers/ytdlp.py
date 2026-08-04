@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app import storage
+from app.artist_utils import norm_artist_name, query_names_artist
 from app.cache import get_cache_async, set_cache_async
 from app.schemas import ExternalTrackResponse
 
@@ -301,22 +302,13 @@ async def ytmusic_artist_songs(
 
 
 def _norm_artist_name(name: str) -> str:
-    """Имя артиста в сравнимый вид: регистр, пунктуация, лишние пробелы."""
-    s = re.sub(r"[^\w\s]", " ", (name or "").lower())
-    return re.sub(r"\s+", " ", s).strip()
+    """См. artist_utils.norm_artist_name (алиас ради обратной совместимости)."""
+    return norm_artist_name(name)
 
 
 def _query_names_artist(q: str, artist: str) -> bool:
-    """Запрос — это имя артиста, а не что-то другое?
-
-    Сравниваем по словам, а не строкой целиком: «weeknd» — это The Weeknd, а
-    точное равенство такой запрос отбросило бы. Требуем, чтобы КАЖДОЕ слово
-    запроса было словом имени — так название трека («numb») каталог артиста не
-    подтянет, даже если поиск по артистам что-то на него вернул.
-    """
-    query_words = set(_norm_artist_name(q).split())
-    artist_words = set(_norm_artist_name(artist).split())
-    return bool(query_words) and query_words <= artist_words
+    """См. artist_utils.query_names_artist (алиас ради обратной совместимости)."""
+    return query_names_artist(q, artist)
 
 
 _ARTIST_CATALOG_TTL = 6 * 3600
@@ -374,6 +366,70 @@ async def _fetch_artist_catalog(q: str, limit: int) -> List[ExternalTrackRespons
         return []
 
     return await ytmusic_artist_songs(browse_id, limit=limit)
+
+
+async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -> dict:
+    """Профиль артиста для его страницы: имя, обложка и треки.
+
+    Отличие от ytmusic_artist_catalog: кроме треков отдаёт метаданные самого
+    артиста (канoническое написание имени и аватар) — странице артиста нужна
+    шапка, а не только список.
+
+    Возвращает {"name": str, "cover_url": str|None, "tracks": [...]}; при любом
+    сбое провайдера — тот же словарь с пустым списком, страница артиста должна
+    открываться и на одной локальной библиотеке.
+    """
+    display = (name or "").strip()
+    if _ytmusic is None or not display:
+        return {"name": display, "cover_url": None, "tracks": []}
+
+    # Кэш тот же по смыслу, что у каталога: search → get_artist → get_playlist
+    # это три round-trip'а к YouTube на каждое открытие страницы.
+    cache_key = f"ytmusic:artist_profile:{_norm_artist_name(display)}:{limit}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        profile = {
+            "name": cached.get("name") or display,
+            "cover_url": cached.get("cover_url"),
+            "tracks": [ExternalTrackResponse(**t) for t in cached.get("tracks") or []],
+        }
+    else:
+        profile = await _fetch_artist_profile(display, limit)
+        await set_cache_async(
+            cache_key,
+            {**profile, "tracks": [t.model_dump() for t in profile["tracks"]]},
+            # Негативный кэш короткий: артиста могли не найти из-за разовой
+            # ошибки провайдера, держать его пустым полдня незачем.
+            expire=_ARTIST_CATALOG_TTL if profile["tracks"] else 600,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    for t in profile["tracks"]:
+        t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+    return profile
+
+
+async def _fetch_artist_profile(name: str, limit: int) -> dict:
+    empty = {"name": name, "cover_url": None, "tracks": []}
+    try:
+        found = await asyncio.to_thread(_ytmusic.search, name, filter="artists", limit=1)
+    except Exception:  # noqa: BLE001 — провайдер, страница падать не должна
+        logger.warning("YouTube Music artist lookup failed for %s", name)
+        return empty
+
+    top = (found or [{}])[0] or {}
+    canonical = (top.get("artist") or top.get("title") or "").strip()
+    browse_id = top.get("browseId")
+    # Имя пришло из строки исполнителя трека — если YouTube нашёл кого-то
+    # другого, подмешивать его дискографию нельзя: это чужие треки.
+    if not browse_id or not _query_names_artist(name, canonical):
+        return empty
+
+    return {
+        "name": canonical or name,
+        "cover_url": _thumb(top.get("thumbnails")),
+        "tracks": await ytmusic_artist_songs(browse_id, limit=limit),
+    }
 
 
 @router.get("/search", response_model=List[ExternalTrackResponse])

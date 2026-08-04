@@ -4,6 +4,7 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { Play, Plus, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
+import ArtistLink from '../components/ArtistLink'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { handleCoverError } from '../utils/media'
@@ -234,7 +235,7 @@ function ExternalPlaylist() {
                     />
                     <div>
                       <div className="track-name">{track.title}</div>
-                      <div className="track-artist">{track.artist}</div>
+                      <ArtistLink artist={track.artist} className="track-artist" />
                     </div>
                   </td>
                   <td className="track-album">{track.album || '-'}</td>

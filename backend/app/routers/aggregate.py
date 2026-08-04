@@ -7,7 +7,11 @@ from fastapi import APIRouter, Query, Request
 
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
-from app.schemas import ExternalPlaylistResponse, ExternalTrackResponse
+from app.schemas import (
+    ExternalPlaylistResponse,
+    ExternalSearchGrouped,
+    ExternalTrackResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +25,15 @@ router = APIRouter()
 _SOURCE_RANK = {"soulseek": 3, "ytmusic": 2, "soundcloud": 1}
 
 
-def _dedup_key(track: ExternalTrackResponse) -> tuple:
+def dedup_key(track) -> tuple:
+    """Ключ «тот же трек» — по нормализованным исполнителю и названию.
+
+    Принимает любой объект с .artist/.title: и ExternalTrackResponse из
+    провайдеров, и ORM-модель Track (страница артиста склеивает выдачу
+    источников с уже сохранённой библиотекой).
+    """
     def norm(s: str) -> str:
-        s = clean_title(s).lower()
+        s = clean_title(s or "").lower()
         s = re.sub(r"\bfeat\.?\b.*$", "", s)  # убрать "feat. ..."
         s = re.sub(r"[^\w\s]", "", s)          # пунктуация
         s = re.sub(r"\s+", " ", s).strip()
@@ -51,13 +61,13 @@ def _merge_sources(
     best: dict = {}
     for tracks in sources:
         for t in tracks:
-            key = _dedup_key(t)
+            key = dedup_key(t)
             prev = best.get(key)
             if prev is None or _SOURCE_RANK.get(t.source, 0) > _SOURCE_RANK.get(prev.source, 0):
                 best[key] = t
 
     # Уцелевшие после дедупа, по своим спискам и в исходном порядке.
-    queues = [[t for t in tracks if best.get(_dedup_key(t)) is t] for tracks in sources]
+    queues = [[t for t in tracks if best.get(dedup_key(t)) is t] for tracks in sources]
 
     merged: List[ExternalTrackResponse] = []
     depth = 0
@@ -69,6 +79,31 @@ def _merge_sources(
                     break
         depth += 1
     return merged
+
+
+def dedup_sequential(
+    tracks: List[ExternalTrackResponse],
+    limit: int = 0,
+    seen: set | None = None,
+) -> List[ExternalTrackResponse]:
+    """Дедуп с сохранением исходного порядка (без round-robin).
+
+    Нужен там, где источники показываются отдельными блоками и перемешивать их
+    нельзя: выдача поиска (сначала YouTube Music, потом SoundCloud) и страница
+    артиста. `seen` позволяет вычесть уже показанное — например, треки, которые
+    у пользователя и так есть в библиотеке.
+    """
+    seen = seen if seen is not None else set()
+    out: List[ExternalTrackResponse] = []
+    for track in tracks:
+        key = dedup_key(track)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(track)
+        if limit and len(out) >= limit:
+            break
+    return out
 
 
 @router.get("/external", response_model=List[ExternalTrackResponse])
@@ -103,6 +138,47 @@ async def search_external(
         sources.append(res)
 
     return _merge_sources(sources, limit)
+
+
+@router.get("/external/grouped", response_model=ExternalSearchGrouped)
+async def search_external_grouped(
+    request: Request,
+    q: str = Query(..., min_length=1),
+    limit: int = Query(30, ge=1, le=60),
+):
+    """То же, что /external, но выдача каждого источника — отдельным списком.
+
+    Поиск показывает источники разными секциями в фиксированном порядке
+    (библиотека → YouTube Music → SoundCloud), поэтому round-robin-склейка
+    /external ему только мешает: она перемешивает то, что потом всё равно
+    придётся разбирать обратно по source. Дедуп между источниками сохранён —
+    при совпадении трека остаётся версия из YouTube Music (см. _SOURCE_RANK).
+    """
+    per_source = max(10, limit)
+
+    catalog, songs, sc = await asyncio.gather(
+        ytdlp.ytmusic_artist_catalog(request, q, limit=per_source),
+        ytdlp.search_ytmusic(request, q, limit=per_source),
+        soundcloud.search_soundcloud(request, q, limit=per_source),
+        return_exceptions=True,
+    )
+
+    def ok(res) -> List[ExternalTrackResponse]:
+        if isinstance(res, Exception):
+            logger.warning("external provider failed: %s", res)
+            return []
+        return res
+
+    # Каталог артиста идёт перед обычным поиском: на запрос-имя это его
+    # собственная дискография, а search подмешивает чужие треки с этим именем
+    # в названии (см. ytmusic_artist_catalog).
+    seen: set = set()
+    ytmusic = dedup_sequential(ok(catalog) + ok(songs), limit, seen)
+    # seen прокинут дальше: дубль, уже показанный в YouTube Music, в секции
+    # SoundCloud второй раз не появится.
+    soundcloud_tracks = dedup_sequential(ok(sc), limit, seen)
+
+    return ExternalSearchGrouped(ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 
 
 @router.get("/external/playlists", response_model=List[ExternalPlaylistResponse])

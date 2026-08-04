@@ -5,6 +5,7 @@ import { useLyrics } from '../hooks/useLyrics'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import LyricsPanel from './LyricsPanel'
+import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
 
 function formatTime(seconds) {
@@ -250,7 +251,11 @@ function FullScreenPlayer() {
           <div className="fullscreen-info">
             <div>
               <div className="fullscreen-track-name">{currentTrack.title}</div>
-              <div className="fullscreen-artist">{currentTrack.artist}</div>
+              <ArtistLink
+                artist={currentTrack.artist}
+                className="fullscreen-artist"
+                onNavigate={startClose}
+              />
             </div>
             <div className="fullscreen-actions">
               {canInteract && (
