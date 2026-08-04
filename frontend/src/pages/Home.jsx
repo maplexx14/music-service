@@ -175,7 +175,10 @@ function Home() {
   return (
     <div className="page-container">
       <div className="mobile-header">
-        <img src="/logoBolt1.PNG" alt="BoltMusic" className="mobile-logo-img" />
+        
+        <span href = "">
+          <img src="/logoBolt1.PNG" alt="BoltMusic" className="mobile-logo-img" />
+        </span>
         <div className="mobile-profile">
           <button
             className="mobile-avatar"

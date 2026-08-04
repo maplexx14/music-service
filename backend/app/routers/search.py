@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import and_, case, or_
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User
@@ -10,6 +10,30 @@ from app.dependencies import get_current_user_optional
 router = APIRouter()
 
 _SEARCH_TTL = 180
+# Плейлистов и пользователей в выдаче нужно немного: лимит поднимают ради
+# треков артиста, а не ради полусотни плейлистов и тёзок в юзернеймах.
+_SECONDARY_LIMIT = 20
+
+
+def _like_pattern(token: str) -> str:
+    """Экранирует спецсимволы LIKE: '%' и '_' из запроса — это литералы."""
+    escaped = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _all_tokens_match(tokens: list[str], columns: tuple):
+    """Каждое слово запроса должно найтись хотя бы в одной из колонок.
+
+    Раньше вся строка искалась одним LIKE по каждой колонке по отдельности,
+    поэтому 'linkin park numb' не находил ничего: целиком эта строка не
+    встречается ни в title, ни в artist, ни в album.
+    """
+    return and_(
+        *[
+            or_(*[col.ilike(_like_pattern(token), escape="\\") for col in columns])
+            for token in tokens
+        ]
+    )
 
 
 @router.get("/", response_model=SearchResponse)
@@ -27,36 +51,51 @@ def search(
     if cached is not None:
         return SearchResponse(**cached)
 
-    search_term = f"%{normalized_q}%"
-    
-    tracks = db.query(Track).filter(
-        or_(
-            Track.title.ilike(search_term),
-            Track.artist.ilike(search_term),
-            Track.album.ilike(search_term)
+    tokens = normalized_q.split()
+    if not tokens:
+        # q из одних пробелов: min_length=1 такое пропускает, а пустой and_()
+        # выродился бы в TRUE и отдал всю библиотеку.
+        return SearchResponse(tracks=[], playlists=[], users=[])
+
+    secondary_limit = min(limit, _SECONDARY_LIMIT)
+
+    tracks = (
+        db.query(Track)
+        .filter(_all_tokens_match(tokens, (Track.title, Track.artist, Track.album)))
+        # Треки самого артиста — выше тех, где запрос лишь мелькнул в названии
+        # или альбоме. Иначе при поиске по имени артиста лимит выдачи съедали
+        # чужие треки с большим play_count, и до его собственных дело не доходило.
+        .order_by(
+            case((_all_tokens_match(tokens, (Track.artist,)), 0), else_=1),
+            Track.play_count.desc(),
+            Track.created_at.desc(),
         )
-    ).order_by(Track.play_count.desc(), Track.created_at.desc()).limit(limit).all()
-    
+        .limit(limit)
+        .all()
+    )
+
     # Search playlists (summary-схема без треков — выдача их не рендерит).
     # Публичные — всем; приватные — только их владельцу.
     visibility = Playlist.is_public == True
     if current_user is not None:
         visibility = or_(visibility, Playlist.owner_id == current_user.id)
-    playlists = db.query(Playlist).filter(
-        or_(
-            Playlist.name.ilike(search_term),
-            Playlist.description.ilike(search_term)
-        )
-    ).filter(visibility).limit(limit).all()
-    
+    playlists = (
+        db.query(Playlist)
+        .filter(_all_tokens_match(tokens, (Playlist.name, Playlist.description)))
+        .filter(visibility)
+        .limit(secondary_limit)
+        .all()
+    )
+
     # Search users
-    users = db.query(User).filter(
-        or_(
-            User.username.ilike(search_term),
-            User.full_name.ilike(search_term)
-        )
-    ).filter(User.is_active == True).limit(limit).all()
-    
+    users = (
+        db.query(User)
+        .filter(_all_tokens_match(tokens, (User.username, User.full_name)))
+        .filter(User.is_active == True)
+        .limit(secondary_limit)
+        .all()
+    )
+
     response = SearchResponse(
         tracks=[TrackResponse.model_validate(t) for t in tracks],
         playlists=[PlaylistSummaryResponse.model_validate(p) for p in playlists],

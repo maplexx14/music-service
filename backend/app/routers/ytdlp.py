@@ -261,8 +261,14 @@ async def related_ytmusic_artists(artist: str, limit: int = 6) -> List[dict]:
     return out
 
 
-async def ytmusic_artist_songs(browse_id: str) -> List[ExternalTrackResponse]:
-    """Топ-треки артиста по его browseId (stream_url проставляет вызывающий).
+async def ytmusic_artist_songs(
+    browse_id: str, limit: int = 0
+) -> List[ExternalTrackResponse]:
+    """Треки артиста по его browseId (stream_url проставляет вызывающий).
+
+    По умолчанию — превью со страницы артиста (5-10 треков, этого хватает волне).
+    При limit > 0 идём в полный плейлист «Songs», на который ссылается секция:
+    для поиска по имени артиста превью слишком короткое, а ждут там всю выдачу.
 
     Формат items совпадает с выдачей search(filter="songs"), поэтому нормализуем
     тем же _normalize.
@@ -276,8 +282,98 @@ async def ytmusic_artist_songs(browse_id: str) -> List[ExternalTrackResponse]:
         logger.warning("YouTube Music artist songs failed for %s", browse_id)
         return []
 
-    songs = ((info or {}).get("songs") or {}).get("results") or []
-    return [t for t in (_normalize(item) for item in songs) if t]
+    section = ((info or {}).get("songs") or {})
+    items = section.get("results") or []
+
+    playlist_id = section.get("browseId")
+    if limit and playlist_id and len(items) < limit:
+        # Секция ссылается на плейлист как 'VL<playlistId>', get_playlist ждёт
+        # сам playlistId. Ошибку глотаем — остаётся превью, а не пустая выдача.
+        pid = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
+        try:
+            full = await asyncio.to_thread(_ytmusic.get_playlist, pid, limit)
+            items = (full or {}).get("tracks") or items
+        except Exception:  # noqa: BLE001
+            logger.warning("YouTube Music artist playlist failed for %s", playlist_id)
+
+    tracks = [t for t in (_normalize(item) for item in items) if t]
+    return tracks[:limit] if limit else tracks
+
+
+def _norm_artist_name(name: str) -> str:
+    """Имя артиста в сравнимый вид: регистр, пунктуация, лишние пробелы."""
+    s = re.sub(r"[^\w\s]", " ", (name or "").lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _query_names_artist(q: str, artist: str) -> bool:
+    """Запрос — это имя артиста, а не что-то другое?
+
+    Сравниваем по словам, а не строкой целиком: «weeknd» — это The Weeknd, а
+    точное равенство такой запрос отбросило бы. Требуем, чтобы КАЖДОЕ слово
+    запроса было словом имени — так название трека («numb») каталог артиста не
+    подтянет, даже если поиск по артистам что-то на него вернул.
+    """
+    query_words = set(_norm_artist_name(q).split())
+    artist_words = set(_norm_artist_name(artist).split())
+    return bool(query_words) and query_words <= artist_words
+
+
+_ARTIST_CATALOG_TTL = 6 * 3600
+
+
+async def ytmusic_artist_catalog(
+    request: Request, q: str, limit: int = 20
+) -> List[ExternalTrackResponse]:
+    """Треки со страницы артиста — если запрос и есть имя артиста.
+
+    search(filter="songs") ранжирует по строке запроса: на имя артиста он отдаёт
+    верхушку его популярного вперемешку с чужими треками, где это имя мелькает в
+    названии. Страница артиста — его собственная выдача, и именно она отвечает
+    на «покажи треки такого-то», из-за чего этот источник идёт в выдаче первым.
+
+    Если найденный артист с запросом не совпал (искали название трека, а не имя),
+    возвращаем [] — иначе в выдачу протёк бы каталог случайного артиста.
+    """
+    if _ytmusic is None or not (q or "").strip():
+        return []
+
+    # Кэш по имени: три round-trip'а к YouTube (search → get_artist →
+    # get_playlist) на каждое нажатие клавиши в поиске — заметная задержка.
+    cache_key = f"ytmusic:artist_catalog:{_norm_artist_name(q)}:{limit}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        tracks = [ExternalTrackResponse(**t) for t in cached]
+    else:
+        tracks = await _fetch_artist_catalog(q, limit)
+        # Негативный кэш короткий: запрос-не-имя дешевле перепроверить позже,
+        # чем держать артиста вычеркнутым полдня.
+        await set_cache_async(
+            cache_key,
+            [t.model_dump() for t in tracks],
+            expire=_ARTIST_CATALOG_TTL if tracks else 600,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    for t in tracks:
+        t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+    return tracks
+
+
+async def _fetch_artist_catalog(q: str, limit: int) -> List[ExternalTrackResponse]:
+    try:
+        found = await asyncio.to_thread(_ytmusic.search, q, filter="artists", limit=1)
+    except Exception:  # noqa: BLE001 — провайдер, агрегатор падать не должен
+        logger.warning("YouTube Music artist lookup failed for %s", q)
+        return []
+
+    top = (found or [{}])[0] or {}
+    name = (top.get("artist") or top.get("title") or "").strip()
+    browse_id = top.get("browseId")
+    if not browse_id or not _query_names_artist(q, name):
+        return []
+
+    return await ytmusic_artist_songs(browse_id, limit=limit)
 
 
 @router.get("/search", response_model=List[ExternalTrackResponse])

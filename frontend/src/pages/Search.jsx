@@ -61,7 +61,9 @@ function Search() {
     // его секции дорисовываются по мере прихода ответов.
     api
       .get('/search/external', {
-        params: { q: searchQuery, limit: 30 },
+        // Слоты делятся между источниками (каталог артиста / YouTube Music /
+        // SoundCloud), поэтому на каждый приходится примерно треть лимита.
+        params: { q: searchQuery, limit: 45 },
         skipErrorToast: true,
         signal,
       })
@@ -92,7 +94,9 @@ function Search() {
 
     try {
       const response = await api.get('/search', {
-        params: { q: searchQuery, limit: 20 },
+        // 50, а не 20: при поиске по имени артиста выдача — это его треки,
+        // и на двадцати позициях дискография обрывается на середине.
+        params: { q: searchQuery, limit: 50 },
         signal,
       })
       if (signal.aborted) return
