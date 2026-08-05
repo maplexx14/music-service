@@ -39,3 +39,61 @@
   color: #ffffff;
   margin: 24px 0 8px;
 }
+
+/* Источник и длительность строкой под названием трека. На широких экранах
+   это колонки таблицы, дублировать их незачем. */
+.track-inline-meta {
+  display: none;
+}
+
+/* --- Мобильная адаптация --- */
+@media (max-width: 768px) {
+  /* В шапке исполнителя кнопок три, а не две, как у плейлиста: «Воспроизвести»,
+     «Добавить в медиатеку» и лайк. В одну строку они не помещаются — длинная
+     подпись второй кнопки переносится и ряд разъезжается. Раскладываем сеткой:
+     воспроизведение на всю ширину первой строкой, ниже — вторичное действие и
+     лайк. */
+  .playlist-actions.artist-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+  }
+
+  .artist-actions .play-button-large:first-child {
+    grid-column: 1 / -1;
+  }
+
+  /* flex:1 из общего мобильного правила в гриде только мешает: ширину теперь
+     задаёт колонка. */
+  .artist-actions .play-button-large {
+    flex: none;
+    min-width: 0;
+  }
+
+  .artist-actions .play-button-large.secondary {
+    /* Подпись длинная («Добавить в медиатеку» / «Открыть в медиатеке») и на
+       узкой колонке рвалась бы на две строки — ужимаем её, а не кнопку. */
+    font-size: var(--text-base);
+    padding: 12px 14px;
+    gap: 8px;
+  }
+
+  /* Лайк рядом с кнопкой — палец должен попадать, а не целиться. */
+  .artist-actions .action-button {
+    width: 44px;
+    height: 44px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-pill);
+  }
+
+  .track-inline-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    font-size: var(--text-sm);
+    color: #8a8a8a;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+}

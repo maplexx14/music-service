@@ -105,33 +105,13 @@
   flex: 0 0 auto;
 }
 
-.source-badge {
-  border: 1px solid rgba(162, 89, 255, 0.4);
-  border-radius: 999px;
-  color: #a259ff;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  padding: 6px 9px;
+/* Длительность трека в строке выдачи. Табличные цифры — чтобы столбик
+   значений не «дышал» по ширине от строки к строке. */
+.track-item-duration {
+  font-size: 13px;
+  color: #b3b3b3;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-/* FLAC (Soulseek, lossless) — фиолетовый = «премиум качество». */
-.source-badge--flac {
-  border-color: rgba(162, 89, 255, 0.4);
-  color: #a259ff;
-}
-
-/* MP3 (YouTube Music, быстро) — нейтральный зелёный = «доступно сразу». */
-.source-badge--mp3 {
-  border-color: rgba(80, 200, 120, 0.4);
-  color: #4ecb7a;
-}
-
-/* SoundCloud — фирменный оранжевый. */
-.source-badge--soundcloud {
-  border-color: rgba(255, 85, 0, 0.45);
-  color: #ff5500;
 }
 
 .track-download {
@@ -160,18 +140,15 @@
   transform: scale(0.94);
 }
 
-.playlists-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
-}
-
 .playlist-item {
   background-color: #181818;
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
   transition: background-color var(--duration-base) var(--ease-out);
+  /* Карточка живёт в карусели: ширину задаёт лента, а содержимое не должно
+     её распирать. */
+  min-width: 0;
 }
 
 .playlist-item:hover {
@@ -200,11 +177,21 @@
   font-weight: 600;
   color: #ffffff;
   margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playlist-item-description {
   font-size: 14px;
   color: #b3b3b3;
+  line-height: 1.4;
+  /* Две строки максимум: иначе описание плейлиста растягивает всю ленту по
+     высоте самой болтливой карточки. */
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .users-list {
@@ -296,17 +283,24 @@
     height: 48px;
   }
 
-  .source-badge {
-    padding: 4px 6px;
-    font-size: 0;
-    line-height: 1;
+  .track-item-duration {
+    font-size: 12px;
   }
 
-  /* На узких экранах показываем короткий лейбл из data-label (FLAC/MP3). */
-  .source-badge::before {
-    content: attr(data-label);
-    font-size: 11px;
-    line-height: 1;
+  .playlist-item {
+    padding: 10px;
+  }
+
+  .playlist-item-cover {
+    margin-bottom: 8px;
+  }
+
+  .playlist-item-name {
+    font-size: 14px;
+  }
+
+  .playlist-item-description {
+    font-size: 12px;
   }
 }
 

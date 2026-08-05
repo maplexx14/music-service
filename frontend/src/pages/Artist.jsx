@@ -8,6 +8,7 @@ import ArtistLink from '../components/ArtistLink'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { formatDuration } from '../utils/format'
 import './PlaylistDetail.css'
 import './Artist.css'
 
@@ -216,7 +217,7 @@ function Artist() {
               </>
             )}
           </div>
-          <div className="playlist-actions">
+          <div className="playlist-actions artist-actions">
             <button className="play-button-large" onClick={handlePlay} disabled={tracks.length === 0}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
@@ -312,6 +313,17 @@ function Artist() {
                       <div>
                         <div className="track-name">{track.title}</div>
                         <ArtistLink artist={track.artist} className="track-artist" />
+                        {/* Колонки «Альбом» и «Длительность» на узких экранах
+                            скрыты — источник и хронометраж возвращаем сюда
+                            строкой, иначе на мобильном о треке не видно
+                            ничего, кроме названия. */}
+                        <div className="track-inline-meta">
+                          {sourceLabel && <span>{sourceLabel}</span>}
+                          {sourceLabel && formatDuration(track.duration) && <span>·</span>}
+                          {formatDuration(track.duration) && (
+                            <span>{formatDuration(track.duration)}</span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="track-album">
@@ -319,9 +331,7 @@ function Artist() {
                         <span className="artist-track-source">{sourceLabel}</span>
                       ) : '-')}
                     </td>
-                    <td className="track-duration">
-                      {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
-                    </td>
+                    <td className="track-duration">{formatDuration(track.duration)}</td>
                     <td className="track-actions-cell">
                       <button
                         type="button"

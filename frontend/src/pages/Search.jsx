@@ -5,23 +5,14 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import Carousel from '../components/Carousel'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { artistPath } from '../utils/artists'
+import { formatDuration } from '../utils/format'
 import './Search.css'
 
 const SEARCH_DEBOUNCE_MS = 600
-
-// Лейбл и класс бейджа по источнику внешнего трека.
-const SOURCE_META = {
-  soulseek: { label: 'FLAC', className: 'source-badge--flac' },
-  ytmusic: { label: 'MP3', className: 'source-badge--mp3' },
-  soundcloud: { label: 'SC', className: 'source-badge--soundcloud' },
-}
-
-function sourceMeta(source) {
-  return SOURCE_META[source] || { label: source || 'EXT', className: '' }
-}
 
 function Search() {
   const navigate = useNavigate()
@@ -195,12 +186,12 @@ function Search() {
                 <ArtistLink artist={track.artist} className="track-item-artist" />
               </div>
               <div className="track-item-meta">
-                <span
-                  className={`source-badge ${sourceMeta(track.source).className}`}
-                  data-label={sourceMeta(track.source).label}
-                >
-                  {sourceMeta(track.source).label}
-                </span>
+                {/* Источник виден по заголовку секции, а вот длительности
+                    в выдаче не хватало: по ней отличают трек от часового
+                    микса или получасовой «версии» с тем же названием. */}
+                {formatDuration(track.duration) && (
+                  <span className="track-item-duration">{formatDuration(track.duration)}</span>
+                )}
                 {track.download_allowed && track.download_url && (
                   <a
                     className="track-download"
@@ -280,8 +271,10 @@ function Search() {
           {results.playlists.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Плейлисты</h2>
-              <div className="playlists-list">
-                {results.playlists.map((playlist) => (
+              <Carousel
+                items={results.playlists}
+                label="Плейлисты"
+                renderItem={(playlist) => (
                   <div
                     key={playlist.id}
                     className="playlist-item"
@@ -302,16 +295,18 @@ function Search() {
                       )}
                     </div>
                   </div>
-                ))}
-              </div>
+                )}
+              />
             </div>
           )}
 
           {externalPlaylists.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Плейлисты SoundCloud</h2>
-              <div className="playlists-list">
-                {externalPlaylists.map((playlist) => (
+              <Carousel
+                items={externalPlaylists}
+                label="Плейлисты SoundCloud"
+                renderItem={(playlist) => (
                   <div
                     key={playlist.id}
                     className="playlist-item"
@@ -322,6 +317,8 @@ function Search() {
                       src={playlist.cover_url || defaultCover}
                       alt={playlist.title}
                       className="playlist-item-cover"
+                      loading="lazy"
+                      decoding="async"
                       onError={handleCoverError}
                     />
                     <div className="playlist-item-info">
@@ -331,8 +328,8 @@ function Search() {
                       </div>
                     </div>
                   </div>
-                ))}
-              </div>
+                )}
+              />
             </div>
           )}
 
@@ -359,6 +356,11 @@ function Search() {
                       <div className="track-item-title">{track.title}</div>
                       <ArtistLink artist={track.artist} className="track-item-artist" />
                     </div>
+                    {formatDuration(track.duration) && (
+                      <div className="track-item-meta">
+                        <span className="track-item-duration">{formatDuration(track.duration)}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

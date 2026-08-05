@@ -1,0 +1,126 @@
+/* Горизонтальная лента карточек. Прокрутка нативная: на тач-устройствах это
+   даёт инерцию и «резинку» бесплатно, стрелки нужны только там, где есть
+   мышь. */
+
+.carousel {
+  position: relative;
+  /* Ширину карточки задаёт лента, а не карточка: так один и тот же
+     .playlist-item одинаково выглядит и в сетке, и в карусели. */
+  --carousel-item-width: 200px;
+}
+
+.carousel-track {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  /* Горизонтальный свайп не должен «протаскивать» страницу и триггерить
+     навигацию назад по краевому жесту. */
+  overscroll-behavior-x: contain;
+  /* Полоса прокрутки в теме тяжёлая (12px) и под лентой карточек смотрится
+     мусором — ориентиром служат стрелки и подрезанная карточка справа. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* Место под тень/приподнимание карточки при наведении. */
+  padding: 4px 0;
+}
+
+.carousel-track::-webkit-scrollbar {
+  display: none;
+}
+
+.carousel-track:focus-visible {
+  outline: 2px solid #a259ff;
+  outline-offset: 4px;
+  border-radius: var(--radius-card);
+}
+
+.carousel-track > * {
+  flex: 0 0 var(--carousel-item-width);
+  scroll-snap-align: start;
+}
+
+/* Маячок догрузки: нулевой по смыслу элемент, ширину карточки наследовать
+   не должен. */
+.carousel-track > .carousel-sentinel {
+  flex: 0 0 1px;
+  align-self: stretch;
+  pointer-events: none;
+}
+
+.carousel-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-avatar);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 18, 18, 0.92);
+  color: #ffffff;
+  display: none;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  transition: opacity var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.carousel-arrow--prev {
+  left: -8px;
+}
+
+.carousel-arrow--next {
+  right: -8px;
+}
+
+.carousel-arrow:hover {
+  background: rgba(40, 40, 40, 0.96);
+}
+
+/* Доехали до края — стрелка гаснет и перестаёт ловить клики, но остаётся в
+   потоке: лента от её исчезновения не должна дёргаться. */
+.carousel-arrow:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Стрелки — только там, где есть мышь. На тач-устройстве лента листается
+   пальцем, и кнопки поверх карточек только отнимают у них место. */
+@media (hover: hover) and (pointer: fine) {
+  .carousel-arrow {
+    display: grid;
+  }
+}
+
+@media (max-width: 768px) {
+  .carousel {
+    --carousel-item-width: 150px;
+  }
+
+  .carousel-track {
+    gap: 12px;
+    /* Лента идёт до самого края экрана, а подрезанная у края карточка
+       подсказывает, что список продолжается. Отступы страницы возвращаем
+       внутренним padding'ом, чтобы первая карточка стояла по общей сетке. */
+    margin-inline: -16px;
+    padding-inline: 16px;
+    /* Иначе последняя карточка прилипает к правому краю вплотную. */
+    scroll-padding-left: 16px;
+  }
+}
+
+@media (max-width: 380px) {
+  .carousel {
+    --carousel-item-width: 140px;
+  }
+
+  .carousel-track {
+    margin-inline: -12px;
+    padding-inline: 12px;
+    scroll-padding-left: 12px;
+  }
+}
