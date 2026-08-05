@@ -20,6 +20,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # IDEs
+.repowise/
 .vscode/
 .idea/
 *.swp
@@ -51,3 +52,4 @@ backups/
 
 # Cached external audio (YouTube Music etc.)
 backend/ytdlp_cache/
+

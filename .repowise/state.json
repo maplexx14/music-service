@@ -1,5 +1,5 @@
 {
-  "last_sync_commit": "d6d8788ac3102775dbd89e327222d302e71ee834",
+  "last_sync_commit": "bad31a8fd181cc8e07bea9fe36ef818d85512b7c",
   "docs_mode": "deterministic",
   "docs_enabled": false,
   "total_pages": 169,
@@ -35,7 +35,7 @@
     "has_summaries": true,
     "fingerprint": "784a1b9215091c00"
   },
-  "config_fingerprint": "b2d85f0007cefd7884e32fc9131aeffaded7e627a97f3b23ded2bc07ec6321b2",
+  "config_fingerprint": "fc6b8cf840399cb8b2490a45d4f3c7b87f9474e253ccdcb4b15c25db48b072b0",
   "store_format_version": 2,
   "written_by_version": "0.39.0"
 }
