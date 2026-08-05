@@ -4,7 +4,7 @@
   "project": {
     "name": "music-service",
     "is_monorepo": false,
-    "total_files": 147,
+    "total_files": 149,
     "entry_points": [
       "backend/app/main.py",
       "frontend/src/App.jsx",
@@ -441,6 +441,35 @@
       "summary": ""
     },
     {
+      "id": "file:.claude/CLAUDE.md",
+      "type": "document",
+      "filePath": ".claude/CLAUDE.md",
+      "language": "markdown",
+      "symbolCount": 0,
+      "lineCount": 229,
+      "complexity": "moderate",
+      "pagerank": 0.003447,
+      "communityId": 11,
+      "tags": [],
+      "summary": "Repository instructions and context for AI coding agents.",
+      "primaryOwner": "maplex"
+    },
+    {
+      "id": "file:.mcp.json",
+      "type": "config",
+      "filePath": ".mcp.json",
+      "language": "json",
+      "symbolCount": 0,
+      "lineCount": 8,
+      "complexity": "simple",
+      "pagerank": 0.003447,
+      "communityId": 12,
+      "tags": [
+        "config"
+      ],
+      "summary": "Configuration file: .mcp.json."
+    },
+    {
       "id": "file:backend/Dockerfile",
       "type": "service",
       "filePath": "backend/Dockerfile",
@@ -448,8 +477,8 @@
       "symbolCount": 2,
       "lineCount": 32,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 10,
+      "pagerank": 0.003447,
+      "communityId": 13,
       "tags": [
         "config",
         "infra"
@@ -464,11 +493,10 @@
       "symbolCount": 4,
       "lineCount": 35,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module env defining run_migrations_offline, run_migrations_online.",
-      "primaryOwner": "maplex"
+      "summary": "Application module env defining run_migrations_offline, run_migrations_online."
     },
     {
       "id": "file:backend/alembic/versions/0001_initial_schema.py",
@@ -478,11 +506,10 @@
       "symbolCount": 6,
       "lineCount": 13,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module 0001_initial_schema defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0001_initial_schema defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0002_add_is_admin.py",
@@ -492,11 +519,10 @@
       "symbolCount": 6,
       "lineCount": 15,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 11,
+      "pagerank": 0.003447,
+      "communityId": 14,
       "tags": [],
-      "summary": "Application module 0002_add_is_admin defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0002_add_is_admin defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0003_external_tracks.py",
@@ -506,11 +532,10 @@
       "symbolCount": 6,
       "lineCount": 55,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 12,
+      "pagerank": 0.003447,
+      "communityId": 15,
       "tags": [],
-      "summary": "Application module 0003_external_tracks defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0003_external_tracks defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0004_track_skips.py",
@@ -520,11 +545,10 @@
       "symbolCount": 6,
       "lineCount": 25,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 13,
+      "pagerank": 0.003447,
+      "communityId": 16,
       "tags": [],
-      "summary": "Application module 0004_track_skips defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0004_track_skips defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0005_perf_indexes.py",
@@ -534,11 +558,10 @@
       "symbolCount": 7,
       "lineCount": 77,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 14,
+      "pagerank": 0.003447,
+      "communityId": 17,
       "tags": [],
-      "summary": "Application module 0005_perf_indexes defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0005_perf_indexes defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0006_liked_playlist.py",
@@ -548,11 +571,10 @@
       "symbolCount": 6,
       "lineCount": 82,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 15,
+      "pagerank": 0.003447,
+      "communityId": 18,
       "tags": [],
-      "summary": "Application module 0006_liked_playlist defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0006_liked_playlist defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0007_reco_signals.py",
@@ -562,11 +584,10 @@
       "symbolCount": 6,
       "lineCount": 125,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 16,
+      "pagerank": 0.003447,
+      "communityId": 19,
       "tags": [],
-      "summary": "Application module 0007_reco_signals defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0007_reco_signals defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0008_user_preferences.py",
@@ -576,11 +597,10 @@
       "symbolCount": 6,
       "lineCount": 43,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 17,
+      "pagerank": 0.003447,
+      "communityId": 20,
       "tags": [],
-      "summary": "Application module 0008_user_preferences defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0008_user_preferences defining upgrade, downgrade."
     },
     {
       "id": "file:backend/alembic/versions/0009_track_dislikes.py",
@@ -590,11 +610,10 @@
       "symbolCount": 6,
       "lineCount": 29,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 18,
+      "pagerank": 0.003447,
+      "communityId": 21,
       "tags": [],
-      "summary": "Application module 0009_track_dislikes defining upgrade, downgrade.",
-      "primaryOwner": "maplex"
+      "summary": "Application module 0009_track_dislikes defining upgrade, downgrade."
     },
     {
       "id": "file:backend/app/__init__.py",
@@ -604,11 +623,10 @@
       "symbolCount": 0,
       "lineCount": 0,
       "complexity": "simple",
-      "pagerank": 0.021537,
+      "pagerank": 0.021388,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module __init__.",
-      "primaryOwner": "maplex"
+      "summary": "Application module __init__."
     },
     {
       "id": "file:backend/app/artist_genre.py",
@@ -618,11 +636,10 @@
       "symbolCount": 2,
       "lineCount": 142,
       "complexity": "moderate",
-      "pagerank": 0.004821,
+      "pagerank": 0.004787,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module artist_genre defining _word_re, artists_matching_keywords.",
-      "primaryOwner": "maplex"
+      "summary": "Application module artist_genre defining _word_re, artists_matching_keywords."
     },
     {
       "id": "file:backend/app/artist_utils.py",
@@ -632,11 +649,10 @@
       "symbolCount": 5,
       "lineCount": 93,
       "complexity": "moderate",
-      "pagerank": 0.012696,
+      "pagerank": 0.012609,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module artist_utils defining artist_key, norm_artist_name, query_names_artist.",
-      "primaryOwner": "maplex"
+      "summary": "Application module artist_utils defining artist_key, norm_artist_name, query_names_artist."
     },
     {
       "id": "file:backend/app/auth.py",
@@ -646,11 +662,10 @@
       "symbolCount": 9,
       "lineCount": 76,
       "complexity": "moderate",
-      "pagerank": 0.008812,
+      "pagerank": 0.008751,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module auth defining _truncate_password, verify_password, get_password_hash.",
-      "primaryOwner": "maplex"
+      "summary": "Application module auth defining _truncate_password, verify_password, get_password_hash."
     },
     {
       "id": "file:backend/app/cache.py",
@@ -660,11 +675,10 @@
       "symbolCount": 8,
       "lineCount": 93,
       "complexity": "moderate",
-      "pagerank": 0.011889,
+      "pagerank": 0.011807,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module cache defining get_cache, set_cache, get_cache_async.",
-      "primaryOwner": "maplex"
+      "summary": "Application module cache defining get_cache, set_cache, get_cache_async."
     },
     {
       "id": "file:backend/app/cooccurrence.py",
@@ -674,11 +688,10 @@
       "symbolCount": 7,
       "lineCount": 225,
       "complexity": "moderate",
-      "pagerank": 0.005384,
+      "pagerank": 0.005346,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module cooccurrence defining rebuild_cooccurrence, pair_scores, similar_track_ids.",
-      "primaryOwner": "maplex"
+      "summary": "Application module cooccurrence defining rebuild_cooccurrence, pair_scores, similar_track_ids."
     },
     {
       "id": "file:backend/app/database.py",
@@ -688,11 +701,10 @@
       "symbolCount": 7,
       "lineCount": 71,
       "complexity": "moderate",
-      "pagerank": 0.048707,
+      "pagerank": 0.048371,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module database defining get_db.",
-      "primaryOwner": "maplex"
+      "summary": "Application module database defining get_db."
     },
     {
       "id": "file:backend/app/dependencies.py",
@@ -702,11 +714,10 @@
       "symbolCount": 6,
       "lineCount": 49,
       "complexity": "moderate",
-      "pagerank": 0.010386,
+      "pagerank": 0.010314,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module dependencies defining get_current_user, get_current_user_optional, get_current_active_user.",
-      "primaryOwner": "maplex"
+      "summary": "Application module dependencies defining get_current_user, get_current_user_optional, get_current_active_user."
     },
     {
       "id": "file:backend/app/diversity.py",
@@ -716,11 +727,10 @@
       "symbolCount": 9,
       "lineCount": 329,
       "complexity": "moderate",
-      "pagerank": 0.005387,
+      "pagerank": 0.00535,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module diversity defining weighted_order, primary_artist_key, interleave_artists.",
-      "primaryOwner": "maplex"
+      "summary": "Application module diversity defining weighted_order, primary_artist_key, interleave_artists."
     },
     {
       "id": "file:backend/app/external_archive.py",
@@ -730,11 +740,10 @@
       "symbolCount": 30,
       "lineCount": 978,
       "complexity": "complex",
-      "pagerank": 0.008085,
+      "pagerank": 0.00803,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module external_archive defining ArchiveResult, _TooLarge, _audio_content_type.",
-      "primaryOwner": "maplex"
+      "summary": "Application module external_archive defining ArchiveResult, _TooLarge, _audio_content_type."
     },
     {
       "id": "file:backend/app/genre_keywords.py",
@@ -744,11 +753,10 @@
       "symbolCount": 8,
       "lineCount": 222,
       "complexity": "moderate",
-      "pagerank": 0.005624,
+      "pagerank": 0.005585,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module genre_keywords defining infer_genre_from_text, top_genre_keywords, build_keyword_filters.",
-      "primaryOwner": "maplex"
+      "summary": "Application module genre_keywords defining infer_genre_from_text, top_genre_keywords, build_keyword_filters."
     },
     {
       "id": "file:backend/app/get_tracks.py",
@@ -758,11 +766,10 @@
       "symbolCount": 0,
       "lineCount": 0,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 19,
+      "pagerank": 0.003447,
+      "communityId": 22,
       "tags": [],
-      "summary": "Application module get_tracks.",
-      "primaryOwner": "maplex"
+      "summary": "Application module get_tracks."
     },
     {
       "id": "file:backend/app/lang.py",
@@ -772,11 +779,10 @@
       "symbolCount": 6,
       "lineCount": 97,
       "complexity": "moderate",
-      "pagerank": 0.006187,
+      "pagerank": 0.006144,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module lang defining is_foreign_script, is_cyrillic, dominant_is_cyrillic.",
-      "primaryOwner": "maplex"
+      "summary": "Application module lang defining is_foreign_script, is_cyrillic, dominant_is_cyrillic."
     },
     {
       "id": "file:backend/app/main.py",
@@ -786,13 +792,12 @@
       "symbolCount": 13,
       "lineCount": 303,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "entry_point"
       ],
-      "summary": "Application module main defining _configure_threadpool, _init_async_storage_client, _close_async_storage_client.",
-      "primaryOwner": "maplex"
+      "summary": "Application module main defining _configure_threadpool, _init_async_storage_client, _close_async_storage_client."
     },
     {
       "id": "file:backend/app/models.py",
@@ -802,11 +807,10 @@
       "symbolCount": 10,
       "lineCount": 228,
       "complexity": "moderate",
-      "pagerank": 0.034535,
+      "pagerank": 0.034297,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module models defining User, Track, Playlist.",
-      "primaryOwner": "maplex"
+      "summary": "Application module models defining User, Track, Playlist."
     },
     {
       "id": "file:backend/app/rate_limit.py",
@@ -816,11 +820,10 @@
       "symbolCount": 4,
       "lineCount": 14,
       "complexity": "moderate",
-      "pagerank": 0.004188,
+      "pagerank": 0.004159,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module rate_limit (4 symbols).",
-      "primaryOwner": "maplex"
+      "summary": "Application module rate_limit (4 symbols)."
     },
     {
       "id": "file:backend/app/routers/__init__.py",
@@ -830,11 +833,10 @@
       "symbolCount": 0,
       "lineCount": 0,
       "complexity": "simple",
-      "pagerank": 0.010096,
+      "pagerank": 0.010026,
       "communityId": 0,
       "tags": [],
-      "summary": "API module __init__.",
-      "primaryOwner": "maplex"
+      "summary": "API module __init__."
     },
     {
       "id": "file:backend/app/routers/aggregate.py",
@@ -844,11 +846,10 @@
       "symbolCount": 9,
       "lineCount": 226,
       "complexity": "moderate",
-      "pagerank": 0.005594,
+      "pagerank": 0.005556,
       "communityId": 0,
       "tags": [],
-      "summary": "API module aggregate defining dedup_key, _merge_sources, dedup_sequential.",
-      "primaryOwner": "maplex"
+      "summary": "API module aggregate defining dedup_key, _merge_sources, dedup_sequential."
     },
     {
       "id": "file:backend/app/routers/artists.py",
@@ -858,11 +859,10 @@
       "symbolCount": 13,
       "lineCount": 419,
       "complexity": "moderate",
-      "pagerank": 0.004318,
+      "pagerank": 0.004288,
       "communityId": 0,
       "tags": [],
-      "summary": "API module artists defining _like_pattern, _local_tracks, _by_this_artist.",
-      "primaryOwner": "maplex"
+      "summary": "API module artists defining _like_pattern, _local_tracks, _by_this_artist."
     },
     {
       "id": "file:backend/app/routers/auth.py",
@@ -872,11 +872,10 @@
       "symbolCount": 4,
       "lineCount": 63,
       "complexity": "moderate",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 0,
       "tags": [],
-      "summary": "API module auth defining register, login, read_users_me.",
-      "primaryOwner": "maplex"
+      "summary": "API module auth defining register, login, read_users_me."
     },
     {
       "id": "file:backend/app/routers/external.py",
@@ -886,11 +885,10 @@
       "symbolCount": 7,
       "lineCount": 79,
       "complexity": "moderate",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 0,
       "tags": [],
-      "summary": "API module external defining normalize_jamendo_track, search_external_tracks.",
-      "primaryOwner": "maplex"
+      "summary": "API module external defining normalize_jamendo_track, search_external_tracks."
     },
     {
       "id": "file:backend/app/routers/flow.py",
@@ -900,11 +898,10 @@
       "symbolCount": 46,
       "lineCount": 1984,
       "complexity": "complex",
-      "pagerank": 0.004015,
+      "pagerank": 0.003987,
       "communityId": 2,
       "tags": [],
-      "summary": "API module flow defining _decay, _norm_key, _taste_profile.",
-      "primaryOwner": "maplex"
+      "summary": "API module flow defining _decay, _norm_key, _taste_profile."
     },
     {
       "id": "file:backend/app/routers/importer.py",
@@ -914,11 +911,10 @@
       "symbolCount": 26,
       "lineCount": 936,
       "complexity": "complex",
-      "pagerank": 0.004805,
+      "pagerank": 0.004772,
       "communityId": 0,
       "tags": [],
-      "summary": "API module importer defining _detect, _normalize_url, _artist_of.",
-      "primaryOwner": "maplex"
+      "summary": "API module importer defining _detect, _normalize_url, _artist_of."
     },
     {
       "id": "file:backend/app/routers/playlists.py",
@@ -928,11 +924,10 @@
       "symbolCount": 15,
       "lineCount": 271,
       "complexity": "moderate",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 0,
       "tags": [],
-      "summary": "API module playlists defining _paginated_playlist_response, get_playlists, get_my_playlists.",
-      "primaryOwner": "maplex"
+      "summary": "API module playlists defining _paginated_playlist_response, get_playlists, get_my_playlists."
     },
     {
       "id": "file:backend/app/routers/recommendations.py",
@@ -942,11 +937,10 @@
       "symbolCount": 29,
       "lineCount": 1349,
       "complexity": "complex",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 2,
       "tags": [],
-      "summary": "API module recommendations defining _hour_bucket, _varied_popular, _decay.",
-      "primaryOwner": "maplex"
+      "summary": "API module recommendations defining _hour_bucket, _varied_popular, _decay."
     },
     {
       "id": "file:backend/app/routers/search.py",
@@ -956,11 +950,10 @@
       "symbolCount": 6,
       "lineCount": 116,
       "complexity": "moderate",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 0,
       "tags": [],
-      "summary": "API module search defining _like_pattern, _all_tokens_match, search.",
-      "primaryOwner": "maplex"
+      "summary": "API module search defining _like_pattern, _all_tokens_match, search."
     },
     {
       "id": "file:backend/app/routers/soulseek.py",
@@ -970,11 +963,10 @@
       "symbolCount": 27,
       "lineCount": 326,
       "complexity": "complex",
-      "pagerank": 0.00462,
+      "pagerank": 0.004588,
       "communityId": 0,
       "tags": [],
-      "summary": "API module soulseek defining _headers, _token_encode, _token_decode.",
-      "primaryOwner": "maplex"
+      "summary": "API module soulseek defining _headers, _token_encode, _token_decode."
     },
     {
       "id": "file:backend/app/routers/soundcloud.py",
@@ -984,11 +976,10 @@
       "symbolCount": 55,
       "lineCount": 1387,
       "complexity": "complex",
-      "pagerank": 0.008176,
+      "pagerank": 0.00812,
       "communityId": 0,
       "tags": [],
-      "summary": "API module soundcloud defining _artist, _thumb, _encode_token.",
-      "primaryOwner": "maplex"
+      "summary": "API module soundcloud defining _artist, _thumb, _encode_token."
     },
     {
       "id": "file:backend/app/routers/spotify.py",
@@ -998,11 +989,10 @@
       "symbolCount": 40,
       "lineCount": 471,
       "complexity": "complex",
-      "pagerank": 0.005213,
+      "pagerank": 0.005178,
       "communityId": 0,
       "tags": [],
-      "summary": "API module spotify defining SpotifyTrack, is_configured, _get_token.",
-      "primaryOwner": "maplex"
+      "summary": "API module spotify defining SpotifyTrack, is_configured, _get_token."
     },
     {
       "id": "file:backend/app/routers/tracks.py",
@@ -1012,11 +1002,10 @@
       "symbolCount": 45,
       "lineCount": 1106,
       "complexity": "complex",
-      "pagerank": 0.006051,
+      "pagerank": 0.00601,
       "communityId": 0,
       "tags": [],
-      "summary": "API module tracks defining save_upload, get_tracks, get_track.",
-      "primaryOwner": "maplex"
+      "summary": "API module tracks defining save_upload, get_tracks, get_track."
     },
     {
       "id": "file:backend/app/routers/users.py",
@@ -1026,11 +1015,10 @@
       "symbolCount": 8,
       "lineCount": 136,
       "complexity": "moderate",
-      "pagerank": 0.003669,
+      "pagerank": 0.003643,
       "communityId": 0,
       "tags": [],
-      "summary": "API module users defining get_current_user_info, list_genres, suggest_artists.",
-      "primaryOwner": "maplex"
+      "summary": "API module users defining get_current_user_info, list_genres, suggest_artists."
     },
     {
       "id": "file:backend/app/routers/yandex_music.py",
@@ -1040,11 +1028,10 @@
       "symbolCount": 19,
       "lineCount": 345,
       "complexity": "complex",
-      "pagerank": 0.00709,
+      "pagerank": 0.007041,
       "communityId": 0,
       "tags": [],
-      "summary": "API module yandex_music defining YandexMusicTrack, _get_client, _get_client_async.",
-      "primaryOwner": "maplex"
+      "summary": "API module yandex_music defining YandexMusicTrack, _get_client, _get_client_async."
     },
     {
       "id": "file:backend/app/routers/ytdlp.py",
@@ -1054,11 +1041,10 @@
       "symbolCount": 93,
       "lineCount": 2746,
       "complexity": "complex",
-      "pagerank": 0.010425,
+      "pagerank": 0.010353,
       "communityId": 0,
       "tags": [],
-      "summary": "API module ytdlp defining _patch_watch_tab_parser, clean_title, _upscale_thumb.",
-      "primaryOwner": "maplex"
+      "summary": "API module ytdlp defining _patch_watch_tab_parser, clean_title, _upscale_thumb."
     },
     {
       "id": "file:backend/app/schemas.py",
@@ -1068,11 +1054,10 @@
       "symbolCount": 35,
       "lineCount": 218,
       "complexity": "complex",
-      "pagerank": 0.021517,
+      "pagerank": 0.021368,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module schemas defining UserBase, UserCreate, UserResponse.",
-      "primaryOwner": "maplex"
+      "summary": "Application module schemas defining UserBase, UserCreate, UserResponse."
     },
     {
       "id": "file:backend/app/scripts/__init__.py",
@@ -1082,11 +1067,10 @@
       "symbolCount": 0,
       "lineCount": 2,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 20,
+      "pagerank": 0.003447,
+      "communityId": 23,
       "tags": [],
-      "summary": "Docs & Tooling module __init__.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module __init__."
     },
     {
       "id": "file:backend/app/scripts/archive_external_to_minio.py",
@@ -1096,11 +1080,10 @@
       "symbolCount": 5,
       "lineCount": 180,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Docs & Tooling module archive_external_to_minio defining _candidate_ids, _worker, _run.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module archive_external_to_minio defining _candidate_ids, _worker, _run."
     },
     {
       "id": "file:backend/app/scripts/migrate_to_minio.py",
@@ -1110,11 +1093,10 @@
       "symbolCount": 7,
       "lineCount": 168,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Docs & Tooling module migrate_to_minio defining _local_music_file, _local_cover_file, migrate.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module migrate_to_minio defining _local_music_file, _local_cover_file, migrate."
     },
     {
       "id": "file:backend/app/scripts/transcode_to_aac.py",
@@ -1124,11 +1106,10 @@
       "symbolCount": 7,
       "lineCount": 229,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Docs & Tooling module transcode_to_aac defining _candidate_tracks, _audio_ext_from_path, _transcode_one.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module transcode_to_aac defining _candidate_tracks, _audio_ext_from_path, _transcode_one."
     },
     {
       "id": "file:backend/app/storage.py",
@@ -1138,11 +1119,10 @@
       "symbolCount": 46,
       "lineCount": 666,
       "complexity": "complex",
-      "pagerank": 0.01784,
+      "pagerank": 0.017717,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module storage defining is_minio_backend, is_minio_path, make_object_path.",
-      "primaryOwner": "maplex"
+      "summary": "Application module storage defining is_minio_backend, is_minio_path, make_object_path."
     },
     {
       "id": "file:backend/app/taste.py",
@@ -1152,11 +1132,10 @@
       "symbolCount": 3,
       "lineCount": 216,
       "complexity": "moderate",
-      "pagerank": 0.004821,
+      "pagerank": 0.004787,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module taste defining _keyword_pattern, make_relevance_check, track_check.",
-      "primaryOwner": "maplex"
+      "summary": "Application module taste defining _keyword_pattern, make_relevance_check, track_check."
     },
     {
       "id": "file:backend/app/title_tags.py",
@@ -1166,11 +1145,10 @@
       "symbolCount": 8,
       "lineCount": 157,
       "complexity": "moderate",
-      "pagerank": 0.003912,
+      "pagerank": 0.003885,
       "communityId": 2,
       "tags": [],
-      "summary": "Application module title_tags defining extract_words, build_title_tag_profile, build_tag_filters.",
-      "primaryOwner": "maplex"
+      "summary": "Application module title_tags defining extract_words, build_title_tag_profile, build_tag_filters."
     },
     {
       "id": "file:backend/app/transcode.py",
@@ -1180,11 +1158,10 @@
       "symbolCount": 16,
       "lineCount": 265,
       "complexity": "complex",
-      "pagerank": 0.006484,
+      "pagerank": 0.00644,
       "communityId": 0,
       "tags": [],
-      "summary": "Application module transcode defining _ffmpeg_available, _probe_duration, is_already_aac.",
-      "primaryOwner": "maplex"
+      "summary": "Application module transcode defining _ffmpeg_available, _probe_duration, is_already_aac."
     },
     {
       "id": "file:backend/scripts/backfill_durations.py",
@@ -1194,11 +1171,10 @@
       "symbolCount": 1,
       "lineCount": 37,
       "complexity": "simple",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Docs & Tooling module backfill_durations defining main.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module backfill_durations defining main."
     },
     {
       "id": "file:backend/scripts/make_admin.py",
@@ -1208,11 +1184,10 @@
       "symbolCount": 1,
       "lineCount": 21,
       "complexity": "simple",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [],
-      "summary": "Docs & Tooling module make_admin defining main.",
-      "primaryOwner": "maplex"
+      "summary": "Docs & Tooling module make_admin defining main."
     },
     {
       "id": "file:backend/tests/__init__.py",
@@ -1222,13 +1197,12 @@
       "symbolCount": 0,
       "lineCount": 5,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 50,
+      "pagerank": 0.003447,
+      "communityId": 53,
       "tags": [
         "test"
       ],
-      "summary": "Tests for __init__.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for __init__."
     },
     {
       "id": "file:backend/tests/conftest.py",
@@ -1238,13 +1212,12 @@
       "symbolCount": 7,
       "lineCount": 45,
       "complexity": "moderate",
-      "pagerank": 0.030937,
+      "pagerank": 0.030724,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for conftest.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for conftest."
     },
     {
       "id": "file:backend/tests/test_artist_page.py",
@@ -1254,13 +1227,12 @@
       "symbolCount": 21,
       "lineCount": 220,
       "complexity": "complex",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 2,
       "tags": [
         "test"
       ],
-      "summary": "Tests for artist_page.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for artist_page."
     },
     {
       "id": "file:backend/tests/test_auth.py",
@@ -1270,13 +1242,12 @@
       "symbolCount": 4,
       "lineCount": 29,
       "complexity": "moderate",
-      "pagerank": 0.00535,
-      "communityId": 50,
+      "pagerank": 0.005313,
+      "communityId": 53,
       "tags": [
         "test"
       ],
-      "summary": "Tests for auth.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for auth."
     },
     {
       "id": "file:backend/tests/test_cooccurrence.py",
@@ -1286,13 +1257,12 @@
       "symbolCount": 2,
       "lineCount": 73,
       "complexity": "simple",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 2,
       "tags": [
         "test"
       ],
-      "summary": "Tests for cooccurrence.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for cooccurrence."
     },
     {
       "id": "file:backend/tests/test_diversity.py",
@@ -1302,13 +1272,12 @@
       "symbolCount": 16,
       "lineCount": 191,
       "complexity": "complex",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 2,
       "tags": [
         "test"
       ],
-      "summary": "Tests for diversity.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for diversity."
     },
     {
       "id": "file:backend/tests/test_external_archive.py",
@@ -1318,13 +1287,12 @@
       "symbolCount": 9,
       "lineCount": 169,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for external_archive.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for external_archive."
     },
     {
       "id": "file:backend/tests/test_external_resolve.py",
@@ -1334,13 +1302,12 @@
       "symbolCount": 19,
       "lineCount": 372,
       "complexity": "complex",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for external_resolve.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for external_resolve."
     },
     {
       "id": "file:backend/tests/test_flow.py",
@@ -1350,13 +1317,12 @@
       "symbolCount": 10,
       "lineCount": 440,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for flow.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for flow."
     },
     {
       "id": "file:backend/tests/test_recommendations.py",
@@ -1366,13 +1332,12 @@
       "symbolCount": 5,
       "lineCount": 157,
       "complexity": "moderate",
-      "pagerank": 0.006259,
+      "pagerank": 0.006216,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for recommendations.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for recommendations."
     },
     {
       "id": "file:backend/tests/test_search_relevance.py",
@@ -1382,13 +1347,12 @@
       "symbolCount": 14,
       "lineCount": 166,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for search_relevance.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for search_relevance."
     },
     {
       "id": "file:backend/tests/test_soundcloud_drm_fallback.py",
@@ -1398,13 +1362,12 @@
       "symbolCount": 21,
       "lineCount": 151,
       "complexity": "complex",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for soundcloud_drm_fallback.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for soundcloud_drm_fallback."
     },
     {
       "id": "file:backend/tests/test_spotify_import.py",
@@ -1414,13 +1377,12 @@
       "symbolCount": 23,
       "lineCount": 334,
       "complexity": "complex",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for spotify_import.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for spotify_import."
     },
     {
       "id": "file:backend/tests/test_taste_relevance.py",
@@ -1430,13 +1392,12 @@
       "symbolCount": 12,
       "lineCount": 209,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 2,
       "tags": [
         "test"
       ],
-      "summary": "Tests for taste_relevance.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for taste_relevance."
     },
     {
       "id": "file:backend/tests/test_track_stream.py",
@@ -1446,13 +1407,12 @@
       "symbolCount": 4,
       "lineCount": 57,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for track_stream.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for track_stream."
     },
     {
       "id": "file:backend/tests/test_tracks.py",
@@ -1462,13 +1422,12 @@
       "symbolCount": 9,
       "lineCount": 98,
       "complexity": "moderate",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for tracks.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for tracks."
     },
     {
       "id": "file:backend/tests/test_user_taste.py",
@@ -1478,13 +1437,12 @@
       "symbolCount": 1,
       "lineCount": 50,
       "complexity": "simple",
-      "pagerank": 0.00535,
+      "pagerank": 0.005313,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for user_taste.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for user_taste."
     },
     {
       "id": "file:backend/tests/test_ytdlp_unavailable_classification.py",
@@ -1494,13 +1452,12 @@
       "symbolCount": 8,
       "lineCount": 102,
       "complexity": "moderate",
-      "pagerank": 0.003471,
+      "pagerank": 0.003447,
       "communityId": 0,
       "tags": [
         "test"
       ],
-      "summary": "Tests for ytdlp_unavailable_classification.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for ytdlp_unavailable_classification."
     },
     {
       "id": "file:docker-compose.override.yml",
@@ -1510,8 +1467,8 @@
       "symbolCount": 0,
       "lineCount": 8,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 21,
+      "pagerank": 0.003447,
+      "communityId": 24,
       "tags": [
         "config",
         "infra"
@@ -1526,8 +1483,8 @@
       "symbolCount": 0,
       "lineCount": 297,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 22,
+      "pagerank": 0.003447,
+      "communityId": 25,
       "tags": [
         "config",
         "infra"
@@ -1542,8 +1499,8 @@
       "symbolCount": 0,
       "lineCount": 223,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 23,
+      "pagerank": 0.003447,
+      "communityId": 26,
       "tags": [
         "config",
         "infra"
@@ -1558,8 +1515,8 @@
       "symbolCount": 3,
       "lineCount": 15,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 24,
+      "pagerank": 0.003447,
+      "communityId": 27,
       "tags": [
         "config",
         "infra"
@@ -1574,8 +1531,8 @@
       "symbolCount": 0,
       "lineCount": 12,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 25,
+      "pagerank": 0.003447,
+      "communityId": 28,
       "tags": [
         "config"
       ],
@@ -1589,11 +1546,10 @@
       "symbolCount": 0,
       "lineCount": 19,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 26,
+      "pagerank": 0.003447,
+      "communityId": 29,
       "tags": [],
-      "summary": "Application module docker-entrypoint.prod.",
-      "primaryOwner": "maplex"
+      "summary": "Application module docker-entrypoint.prod."
     },
     {
       "id": "file:frontend/docker-entrypoint.sh",
@@ -1603,11 +1559,10 @@
       "symbolCount": 0,
       "lineCount": 6,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 27,
+      "pagerank": 0.003447,
+      "communityId": 30,
       "tags": [],
-      "summary": "Application module docker-entrypoint.",
-      "primaryOwner": "maplex"
+      "summary": "Application module docker-entrypoint."
     },
     {
       "id": "file:frontend/index.html",
@@ -1617,8 +1572,8 @@
       "symbolCount": 0,
       "lineCount": 35,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 8,
+      "pagerank": 0.003447,
+      "communityId": 9,
       "tags": [
         "barrel"
       ],
@@ -1632,8 +1587,8 @@
       "symbolCount": 0,
       "lineCount": 3,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 28,
+      "pagerank": 0.003447,
+      "communityId": 31,
       "tags": [
         "config"
       ],
@@ -1647,8 +1602,8 @@
       "symbolCount": 0,
       "lineCount": 30,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 29,
+      "pagerank": 0.003447,
+      "communityId": 32,
       "tags": [
         "config"
       ],
@@ -1662,11 +1617,10 @@
       "symbolCount": 0,
       "lineCount": 2,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 30,
+      "pagerank": 0.003447,
+      "communityId": 33,
       "tags": [],
-      "summary": "Application module postcss.config.",
-      "primaryOwner": "maplex"
+      "summary": "Application module postcss.config."
     },
     {
       "id": "file:frontend/public/config.js",
@@ -1676,11 +1630,10 @@
       "symbolCount": 0,
       "lineCount": 1,
       "complexity": "simple",
-      "pagerank": 0.020846,
-      "communityId": 8,
+      "pagerank": 0.020702,
+      "communityId": 9,
       "tags": [],
-      "summary": "Application module config.",
-      "primaryOwner": "maplex"
+      "summary": "Application module config."
     },
     {
       "id": "file:frontend/src/App.jsx",
@@ -1690,13 +1643,12 @@
       "symbolCount": 1,
       "lineCount": 86,
       "complexity": "simple",
-      "pagerank": 0.004872,
-      "communityId": 6,
+      "pagerank": 0.004839,
+      "communityId": 5,
       "tags": [
         "entry_point"
       ],
-      "summary": "Application module App defining App.",
-      "primaryOwner": "maplex"
+      "summary": "Application module App defining App."
     },
     {
       "id": "file:frontend/src/components/ArtistLink.jsx",
@@ -1706,11 +1658,10 @@
       "symbolCount": 1,
       "lineCount": 45,
       "complexity": "simple",
-      "pagerank": 0.006009,
-      "communityId": 4,
+      "pagerank": 0.005968,
+      "communityId": 7,
       "tags": [],
-      "summary": "UI module ArtistLink defining ArtistLink.",
-      "primaryOwner": "maplex"
+      "summary": "UI module ArtistLink defining ArtistLink."
     },
     {
       "id": "file:frontend/src/components/Carousel.jsx",
@@ -1720,11 +1671,10 @@
       "symbolCount": 3,
       "lineCount": 108,
       "complexity": "moderate",
-      "pagerank": 0.003757,
-      "communityId": 1,
+      "pagerank": 0.003731,
+      "communityId": 6,
       "tags": [],
-      "summary": "UI module Carousel defining Carousel.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Carousel defining Carousel."
     },
     {
       "id": "file:frontend/src/components/FullScreenPlayer.jsx",
@@ -1734,11 +1684,10 @@
       "symbolCount": 3,
       "lineCount": 367,
       "complexity": "moderate",
-      "pagerank": 0.003864,
-      "communityId": 1,
+      "pagerank": 0.003838,
+      "communityId": 4,
       "tags": [],
-      "summary": "UI module FullScreenPlayer defining formatTime, FullScreenProgress, FullScreenPlayer.",
-      "primaryOwner": "maplex"
+      "summary": "UI module FullScreenPlayer defining formatTime, FullScreenProgress, FullScreenPlayer."
     },
     {
       "id": "file:frontend/src/components/Grainient.jsx",
@@ -1748,11 +1697,10 @@
       "symbolCount": 9,
       "lineCount": 405,
       "complexity": "moderate",
-      "pagerank": 0.003696,
-      "communityId": 5,
+      "pagerank": 0.00367,
+      "communityId": 3,
       "tags": [],
-      "summary": "UI module Grainient defining hexToRgb, lerp, Grainient.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Grainient defining hexToRgb, lerp, Grainient."
     },
     {
       "id": "file:frontend/src/components/Layout.jsx",
@@ -1762,11 +1710,10 @@
       "symbolCount": 1,
       "lineCount": 103,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 1,
+      "pagerank": 0.003675,
+      "communityId": 5,
       "tags": [],
-      "summary": "UI module Layout defining Layout.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Layout defining Layout."
     },
     {
       "id": "file:frontend/src/components/LyricsPanel.jsx",
@@ -1776,25 +1723,23 @@
       "symbolCount": 1,
       "lineCount": 95,
       "complexity": "simple",
-      "pagerank": 0.00394,
-      "communityId": 1,
+      "pagerank": 0.003913,
+      "communityId": 4,
       "tags": [],
-      "summary": "UI module LyricsPanel defining LyricsPanel.",
-      "primaryOwner": "maplex"
+      "summary": "UI module LyricsPanel defining LyricsPanel."
     },
     {
       "id": "file:frontend/src/components/Player.jsx",
       "type": "file",
       "filePath": "frontend/src/components/Player.jsx",
       "language": "javascript",
-      "symbolCount": 11,
-      "lineCount": 1828,
+      "symbolCount": 12,
+      "lineCount": 1981,
       "complexity": "complex",
-      "pagerank": 0.003864,
-      "communityId": 3,
+      "pagerank": 0.003838,
+      "communityId": 4,
       "tags": [],
-      "summary": "UI module Player defining resolveRawUrl, formatTime, resolveTrackDuration.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Player defining resolveRawUrl, formatTime, resolveTrackDuration."
     },
     {
       "id": "file:frontend/src/components/PreferencePicker.jsx",
@@ -1804,11 +1749,10 @@
       "symbolCount": 1,
       "lineCount": 227,
       "complexity": "moderate",
-      "pagerank": 0.004782,
-      "communityId": 3,
+      "pagerank": 0.004749,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module PreferencePicker defining PreferencePicker.",
-      "primaryOwner": "maplex"
+      "summary": "UI module PreferencePicker defining PreferencePicker."
     },
     {
       "id": "file:frontend/src/components/Sidebar.jsx",
@@ -1818,11 +1762,10 @@
       "symbolCount": 1,
       "lineCount": 134,
       "complexity": "moderate",
-      "pagerank": 0.003864,
-      "communityId": 1,
+      "pagerank": 0.003838,
+      "communityId": 5,
       "tags": [],
-      "summary": "UI module Sidebar defining Sidebar.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Sidebar defining Sidebar."
     },
     {
       "id": "file:frontend/src/components/Spinner.jsx",
@@ -1832,11 +1775,10 @@
       "symbolCount": 1,
       "lineCount": 7,
       "complexity": "simple",
-      "pagerank": 0.006464,
-      "communityId": 4,
+      "pagerank": 0.006419,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module Spinner defining Spinner.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Spinner defining Spinner."
     },
     {
       "id": "file:frontend/src/components/Toast.jsx",
@@ -1846,11 +1788,10 @@
       "symbolCount": 2,
       "lineCount": 27,
       "complexity": "simple",
-      "pagerank": 0.003864,
-      "communityId": 1,
+      "pagerank": 0.003838,
+      "communityId": 6,
       "tags": [],
-      "summary": "UI module Toast defining ToastContainer.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Toast defining ToastContainer."
     },
     {
       "id": "file:frontend/src/config.js",
@@ -1860,11 +1801,10 @@
       "symbolCount": 1,
       "lineCount": 18,
       "complexity": "simple",
-      "pagerank": 0.014984,
-      "communityId": 3,
+      "pagerank": 0.014881,
+      "communityId": 4,
       "tags": [],
-      "summary": "Application module config defining getApiUrl.",
-      "primaryOwner": "maplex"
+      "summary": "Application module config defining getApiUrl."
     },
     {
       "id": "file:frontend/src/hooks/useInfiniteScroll.js",
@@ -1874,11 +1814,10 @@
       "symbolCount": 2,
       "lineCount": 78,
       "complexity": "simple",
-      "pagerank": 0.0041,
-      "communityId": 4,
+      "pagerank": 0.004072,
+      "communityId": 1,
       "tags": [],
-      "summary": "Application module useInfiniteScroll defining useInfiniteScroll.",
-      "primaryOwner": "maplex"
+      "summary": "Application module useInfiniteScroll defining useInfiniteScroll."
     },
     {
       "id": "file:frontend/src/hooks/useLazyBatch.js",
@@ -1888,11 +1827,10 @@
       "symbolCount": 3,
       "lineCount": 115,
       "complexity": "moderate",
-      "pagerank": 0.005754,
-      "communityId": 1,
+      "pagerank": 0.005714,
+      "communityId": 6,
       "tags": [],
-      "summary": "Application module useLazyBatch defining useLazyBatch.",
-      "primaryOwner": "maplex"
+      "summary": "Application module useLazyBatch defining useLazyBatch."
     },
     {
       "id": "file:frontend/src/hooks/useLyrics.js",
@@ -1902,11 +1840,10 @@
       "symbolCount": 5,
       "lineCount": 116,
       "complexity": "moderate",
-      "pagerank": 0.005106,
-      "communityId": 1,
+      "pagerank": 0.005071,
+      "communityId": 4,
       "tags": [],
-      "summary": "Application module useLyrics defining parseLrcLine, parseLrc, useLyrics.",
-      "primaryOwner": "maplex"
+      "summary": "Application module useLyrics defining parseLrcLine, parseLrc, useLyrics."
     },
     {
       "id": "file:frontend/src/hooks/useSwipe.js",
@@ -1916,11 +1853,10 @@
       "symbolCount": 1,
       "lineCount": 52,
       "complexity": "simple",
-      "pagerank": 0.003799,
-      "communityId": 3,
+      "pagerank": 0.003773,
+      "communityId": 4,
       "tags": [],
-      "summary": "Application module useSwipe defining useSwipe.",
-      "primaryOwner": "maplex"
+      "summary": "Application module useSwipe defining useSwipe."
     },
     {
       "id": "file:frontend/src/lib/utils.ts",
@@ -1930,11 +1866,10 @@
       "symbolCount": 1,
       "lineCount": 4,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 9,
+      "pagerank": 0.003447,
+      "communityId": 10,
       "tags": [],
-      "summary": "Service module utils defining cn.",
-      "primaryOwner": "maplex"
+      "summary": "Service module utils defining cn."
     },
     {
       "id": "file:frontend/src/main.jsx",
@@ -1944,13 +1879,12 @@
       "symbolCount": 0,
       "lineCount": 28,
       "complexity": "simple",
-      "pagerank": 0.004946,
-      "communityId": 8,
+      "pagerank": 0.004912,
+      "communityId": 9,
       "tags": [
         "entry_point"
       ],
-      "summary": "Application module main.",
-      "primaryOwner": "maplex"
+      "summary": "Application module main."
     },
     {
       "id": "file:frontend/src/pages/Admin.jsx",
@@ -1960,11 +1894,10 @@
       "symbolCount": 1,
       "lineCount": 108,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 3,
+      "pagerank": 0.003675,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module Admin defining Admin.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Admin defining Admin."
     },
     {
       "id": "file:frontend/src/pages/Artist.jsx",
@@ -1974,11 +1907,10 @@
       "symbolCount": 2,
       "lineCount": 442,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 4,
+      "pagerank": 0.003675,
+      "communityId": 7,
       "tags": [],
-      "summary": "UI module Artist defining Artist.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Artist defining Artist."
     },
     {
       "id": "file:frontend/src/pages/ExternalPlaylist.jsx",
@@ -1988,11 +1920,10 @@
       "symbolCount": 1,
       "lineCount": 328,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 1,
+      "pagerank": 0.003675,
+      "communityId": 6,
       "tags": [],
-      "summary": "UI module ExternalPlaylist defining ExternalPlaylist.",
-      "primaryOwner": "maplex"
+      "summary": "UI module ExternalPlaylist defining ExternalPlaylist."
     },
     {
       "id": "file:frontend/src/pages/Home.jsx",
@@ -2002,11 +1933,10 @@
       "symbolCount": 2,
       "lineCount": 423,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 5,
+      "pagerank": 0.003675,
+      "communityId": 3,
       "tags": [],
-      "summary": "UI module Home defining handlePlayTrack, Home.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Home defining handlePlayTrack, Home."
     },
     {
       "id": "file:frontend/src/pages/LikedSongs.jsx",
@@ -2016,11 +1946,10 @@
       "symbolCount": 2,
       "lineCount": 316,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 4,
+      "pagerank": 0.003675,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module LikedSongs defining LikedSongs.",
-      "primaryOwner": "maplex"
+      "summary": "UI module LikedSongs defining LikedSongs."
     },
     {
       "id": "file:frontend/src/pages/Login.jsx",
@@ -2030,11 +1959,10 @@
       "symbolCount": 1,
       "lineCount": 58,
       "complexity": "simple",
-      "pagerank": 0.003701,
-      "communityId": 6,
+      "pagerank": 0.003675,
+      "communityId": 5,
       "tags": [],
-      "summary": "UI module Login defining Login.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Login defining Login."
     },
     {
       "id": "file:frontend/src/pages/PlaylistDetail.jsx",
@@ -2044,11 +1972,10 @@
       "symbolCount": 2,
       "lineCount": 318,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 4,
+      "pagerank": 0.003675,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module PlaylistDetail defining PlaylistDetail.",
-      "primaryOwner": "maplex"
+      "summary": "UI module PlaylistDetail defining PlaylistDetail."
     },
     {
       "id": "file:frontend/src/pages/Playlists.jsx",
@@ -2058,11 +1985,10 @@
       "symbolCount": 1,
       "lineCount": 423,
       "complexity": "moderate",
-      "pagerank": 0.003701,
+      "pagerank": 0.003675,
       "communityId": 6,
       "tags": [],
-      "summary": "UI module Playlists defining Playlists.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Playlists defining Playlists."
     },
     {
       "id": "file:frontend/src/pages/PreferencesOnboarding.jsx",
@@ -2072,11 +1998,10 @@
       "symbolCount": 1,
       "lineCount": 54,
       "complexity": "simple",
-      "pagerank": 0.003701,
-      "communityId": 6,
+      "pagerank": 0.003675,
+      "communityId": 5,
       "tags": [],
-      "summary": "UI module PreferencesOnboarding defining PreferencesOnboarding.",
-      "primaryOwner": "maplex"
+      "summary": "UI module PreferencesOnboarding defining PreferencesOnboarding."
     },
     {
       "id": "file:frontend/src/pages/Register.jsx",
@@ -2086,11 +2011,10 @@
       "symbolCount": 1,
       "lineCount": 87,
       "complexity": "simple",
-      "pagerank": 0.003701,
-      "communityId": 6,
+      "pagerank": 0.003675,
+      "communityId": 5,
       "tags": [],
-      "summary": "UI module Register defining Register.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Register defining Register."
     },
     {
       "id": "file:frontend/src/pages/Search.jsx",
@@ -2100,11 +2024,10 @@
       "symbolCount": 2,
       "lineCount": 443,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 4,
+      "pagerank": 0.003675,
+      "communityId": 7,
       "tags": [],
-      "summary": "UI module Search defining Search.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Search defining Search."
     },
     {
       "id": "file:frontend/src/pages/Settings.jsx",
@@ -2114,11 +2037,10 @@
       "symbolCount": 1,
       "lineCount": 156,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 5,
+      "pagerank": 0.003675,
+      "communityId": 3,
       "tags": [],
-      "summary": "UI module Settings defining Settings.",
-      "primaryOwner": "maplex"
+      "summary": "UI module Settings defining Settings."
     },
     {
       "id": "file:frontend/src/pages/UploadTrack.jsx",
@@ -2128,11 +2050,10 @@
       "symbolCount": 1,
       "lineCount": 305,
       "complexity": "moderate",
-      "pagerank": 0.003701,
-      "communityId": 3,
+      "pagerank": 0.003675,
+      "communityId": 1,
       "tags": [],
-      "summary": "UI module UploadTrack defining UploadTrack.",
-      "primaryOwner": "maplex"
+      "summary": "UI module UploadTrack defining UploadTrack."
     },
     {
       "id": "file:frontend/src/services/api.js",
@@ -2142,11 +2063,10 @@
       "symbolCount": 3,
       "lineCount": 81,
       "complexity": "simple",
-      "pagerank": 0.01838,
-      "communityId": 3,
+      "pagerank": 0.018253,
+      "communityId": 1,
       "tags": [],
-      "summary": "Service module api defining setApiAuthToken.",
-      "primaryOwner": "maplex"
+      "summary": "Service module api defining setApiAuthToken."
     },
     {
       "id": "file:frontend/src/services/chunkedUpload.js",
@@ -2156,11 +2076,10 @@
       "symbolCount": 17,
       "lineCount": 134,
       "complexity": "complex",
-      "pagerank": 0.003995,
-      "communityId": 3,
+      "pagerank": 0.003968,
+      "communityId": 1,
       "tags": [],
-      "summary": "Service module chunkedUpload defining getStorageKey, saveProgress, loadProgress.",
-      "primaryOwner": "maplex"
+      "summary": "Service module chunkedUpload defining getStorageKey, saveProgress, loadProgress."
     },
     {
       "id": "file:frontend/src/store/authStore.js",
@@ -2170,11 +2089,10 @@
       "symbolCount": 2,
       "lineCount": 107,
       "complexity": "moderate",
-      "pagerank": 0.008155,
-      "communityId": 6,
+      "pagerank": 0.008099,
+      "communityId": 5,
       "tags": [],
-      "summary": "Data module authStore defining getStoredAuth, setStoredAuth.",
-      "primaryOwner": "maplex"
+      "summary": "Data module authStore defining getStoredAuth, setStoredAuth."
     },
     {
       "id": "file:frontend/src/store/playerStore.js",
@@ -2184,11 +2102,10 @@
       "symbolCount": 12,
       "lineCount": 913,
       "complexity": "complex",
-      "pagerank": 0.00724,
-      "communityId": 4,
+      "pagerank": 0.00719,
+      "communityId": 3,
       "tags": [],
-      "summary": "Data module playerStore defining shuffleArray, prefetchKeyFor, isTrackResolved.",
-      "primaryOwner": "maplex"
+      "summary": "Data module playerStore defining shuffleArray, prefetchKeyFor, isTrackResolved."
     },
     {
       "id": "file:frontend/src/store/toastStore.js",
@@ -2198,11 +2115,10 @@
       "symbolCount": 2,
       "lineCount": 30,
       "complexity": "simple",
-      "pagerank": 0.014175,
-      "communityId": 5,
+      "pagerank": 0.014077,
+      "communityId": 1,
       "tags": [],
-      "summary": "Data module toastStore (2 symbols).",
-      "primaryOwner": "maplex"
+      "summary": "Data module toastStore (2 symbols)."
     },
     {
       "id": "file:frontend/src/store/uiSettingsStore.js",
@@ -2212,11 +2128,10 @@
       "symbolCount": 3,
       "lineCount": 30,
       "complexity": "simple",
-      "pagerank": 0.00422,
-      "communityId": 5,
+      "pagerank": 0.004191,
+      "communityId": 3,
       "tags": [],
-      "summary": "Data module uiSettingsStore defining loadSettings, applyLiteModeClass.",
-      "primaryOwner": "maplex"
+      "summary": "Data module uiSettingsStore defining loadSettings, applyLiteModeClass."
     },
     {
       "id": "file:frontend/src/store/waveSettingsStore.js",
@@ -2226,11 +2141,10 @@
       "symbolCount": 2,
       "lineCount": 33,
       "complexity": "simple",
-      "pagerank": 0.00422,
-      "communityId": 5,
+      "pagerank": 0.004191,
+      "communityId": 3,
       "tags": [],
-      "summary": "Data module waveSettingsStore defining loadSettings.",
-      "primaryOwner": "maplex"
+      "summary": "Data module waveSettingsStore defining loadSettings."
     },
     {
       "id": "file:frontend/src/utils/artists.js",
@@ -2240,11 +2154,10 @@
       "symbolCount": 3,
       "lineCount": 51,
       "complexity": "simple",
-      "pagerank": 0.005459,
-      "communityId": 4,
+      "pagerank": 0.005422,
+      "communityId": 7,
       "tags": [],
-      "summary": "Utility module artists defining artistKey, splitArtists, artistPath.",
-      "primaryOwner": "maplex"
+      "summary": "Utility module artists defining artistKey, splitArtists, artistPath."
     },
     {
       "id": "file:frontend/src/utils/format.js",
@@ -2254,11 +2167,10 @@
       "symbolCount": 1,
       "lineCount": 17,
       "complexity": "simple",
-      "pagerank": 0.004043,
-      "communityId": 4,
+      "pagerank": 0.004015,
+      "communityId": 7,
       "tags": [],
-      "summary": "Utility module format defining formatDuration.",
-      "primaryOwner": "maplex"
+      "summary": "Utility module format defining formatDuration."
     },
     {
       "id": "file:frontend/src/utils/media.js",
@@ -2268,11 +2180,10 @@
       "symbolCount": 3,
       "lineCount": 46,
       "complexity": "simple",
-      "pagerank": 0.007031,
-      "communityId": 3,
+      "pagerank": 0.006983,
+      "communityId": 4,
       "tags": [],
-      "summary": "Utility module media defining upscaleCover, resolveCoverUrl, handleCoverError.",
-      "primaryOwner": "maplex"
+      "summary": "Utility module media defining upscaleCover, resolveCoverUrl, handleCoverError."
     },
     {
       "id": "file:frontend/tailwind.config.js",
@@ -2282,11 +2193,10 @@
       "symbolCount": 0,
       "lineCount": 6,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 32,
+      "pagerank": 0.003447,
+      "communityId": 35,
       "tags": [],
-      "summary": "Application module tailwind.config.",
-      "primaryOwner": "maplex"
+      "summary": "Application module tailwind.config."
     },
     {
       "id": "file:frontend/tsconfig.json",
@@ -2296,8 +2206,8 @@
       "symbolCount": 0,
       "lineCount": 11,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 33,
+      "pagerank": 0.003447,
+      "communityId": 36,
       "tags": [
         "config"
       ],
@@ -2311,11 +2221,10 @@
       "symbolCount": 0,
       "lineCount": 31,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 7,
+      "pagerank": 0.003447,
+      "communityId": 8,
       "tags": [],
-      "summary": "Application module vite.config.",
-      "primaryOwner": "maplex"
+      "summary": "Application module vite.config."
     },
     {
       "id": "file:invidious/docker-compose.prod.yml",
@@ -2325,8 +2234,8 @@
       "symbolCount": 0,
       "lineCount": 49,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 34,
+      "pagerank": 0.003447,
+      "communityId": 37,
       "tags": [
         "config",
         "infra"
@@ -2341,11 +2250,10 @@
       "symbolCount": 4,
       "lineCount": 99,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 35,
+      "pagerank": 0.003447,
+      "communityId": 38,
       "tags": [],
-      "summary": "Application module loadtest defining req, login, run.",
-      "primaryOwner": "maplex"
+      "summary": "Application module loadtest defining req, login, run."
     },
     {
       "id": "file:nginx/Dockerfile",
@@ -2355,8 +2263,8 @@
       "symbolCount": 2,
       "lineCount": 158,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 36,
+      "pagerank": 0.003447,
+      "communityId": 39,
       "tags": [
         "config",
         "infra"
@@ -2371,11 +2279,10 @@
       "symbolCount": 1,
       "lineCount": 65,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 37,
+      "pagerank": 0.003447,
+      "communityId": 40,
       "tags": [],
-      "summary": "Application module docker-entrypoint defining render.",
-      "primaryOwner": "maplex"
+      "summary": "Application module docker-entrypoint defining render."
     },
     {
       "id": "file:package.json",
@@ -2385,8 +2292,8 @@
       "symbolCount": 0,
       "lineCount": 2,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 38,
+      "pagerank": 0.003447,
+      "communityId": 41,
       "tags": [
         "config"
       ],
@@ -2400,8 +2307,8 @@
       "symbolCount": 0,
       "lineCount": 88,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 39,
+      "pagerank": 0.003447,
+      "communityId": 42,
       "tags": [],
       "summary": "Documentation: 001-motion-tokens-and-transition-all.md."
     },
@@ -2413,8 +2320,8 @@
       "symbolCount": 0,
       "lineCount": 141,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 40,
+      "pagerank": 0.003447,
+      "communityId": 43,
       "tags": [],
       "summary": "Documentation: 002-fullscreen-player-open-close.md."
     },
@@ -2426,8 +2333,8 @@
       "symbolCount": 0,
       "lineCount": 86,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 41,
+      "pagerank": 0.003447,
+      "communityId": 44,
       "tags": [],
       "summary": "Documentation: 003-toast-exit-animation.md."
     },
@@ -2439,8 +2346,8 @@
       "symbolCount": 0,
       "lineCount": 102,
       "complexity": "moderate",
-      "pagerank": 0.003471,
-      "communityId": 42,
+      "pagerank": 0.003447,
+      "communityId": 45,
       "tags": [],
       "summary": "Documentation: 004-reduced-motion-and-hover-gating.md."
     },
@@ -2452,8 +2359,8 @@
       "symbolCount": 0,
       "lineCount": 82,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 43,
+      "pagerank": 0.003447,
+      "communityId": 46,
       "tags": [],
       "summary": "Documentation: 005-dropdowns-from-trigger.md."
     },
@@ -2465,8 +2372,8 @@
       "symbolCount": 0,
       "lineCount": 62,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 44,
+      "pagerank": 0.003447,
+      "communityId": 47,
       "tags": [],
       "summary": "Documentation: 006-playlist-forms-entrance.md."
     },
@@ -2478,8 +2385,8 @@
       "symbolCount": 0,
       "lineCount": 46,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 45,
+      "pagerank": 0.003447,
+      "communityId": 48,
       "tags": [],
       "summary": "Documentation: 007-upload-success-entrance.md."
     },
@@ -2491,8 +2398,8 @@
       "symbolCount": 0,
       "lineCount": 86,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 46,
+      "pagerank": 0.003447,
+      "communityId": 49,
       "tags": [],
       "summary": "Documentation: 008-onboarding-picker-feedback.md."
     },
@@ -2504,8 +2411,8 @@
       "symbolCount": 0,
       "lineCount": 56,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 47,
+      "pagerank": 0.003447,
+      "communityId": 50,
       "tags": [],
       "summary": "Documentation: 009-mobile-topbar-fade.md."
     },
@@ -2517,8 +2424,8 @@
       "symbolCount": 0,
       "lineCount": 42,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 48,
+      "pagerank": 0.003447,
+      "communityId": 51,
       "tags": [],
       "summary": "Project overview and entry point for new readers."
     },
@@ -2530,8 +2437,8 @@
       "symbolCount": 0,
       "lineCount": 20,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 49,
+      "pagerank": 0.003447,
+      "communityId": 52,
       "tags": [
         "config"
       ],
@@ -2545,13 +2452,12 @@
       "symbolCount": 3,
       "lineCount": 19,
       "complexity": "simple",
-      "pagerank": 0.003471,
-      "communityId": 50,
+      "pagerank": 0.003447,
+      "communityId": 53,
       "tags": [
         "test"
       ],
-      "summary": "Tests for recs.",
-      "primaryOwner": "maplex"
+      "summary": "Tests for recs."
     },
     {
       "id": "function:backend/app/artist_utils.py:artist_key",
@@ -9207,6 +9113,16 @@
       "order_basis": "imports"
     },
     {
+      "id": "layer:config",
+      "name": "Config",
+      "description": "",
+      "nodeIds": [
+        "file:.claude/CLAUDE.md"
+      ],
+      "display_order": 2,
+      "order_basis": "imports"
+    },
+    {
       "id": "layer:service",
       "name": "Service",
       "description": "",
@@ -9215,7 +9131,7 @@
         "file:frontend/src/services/api.js",
         "file:frontend/src/services/chunkedUpload.js"
       ],
-      "display_order": 2,
+      "display_order": 3,
       "order_basis": "imports"
     },
     {
@@ -9227,7 +9143,7 @@
         "file:frontend/src/utils/format.js",
         "file:frontend/src/utils/media.js"
       ],
-      "display_order": 3,
+      "display_order": 4,
       "order_basis": "imports"
     },
     {
@@ -9241,7 +9157,7 @@
         "file:frontend/src/store/uiSettingsStore.js",
         "file:frontend/src/store/waveSettingsStore.js"
       ],
-      "display_order": 4,
+      "display_order": 5,
       "order_basis": "imports"
     },
     {
@@ -9249,6 +9165,7 @@
       "name": "Application",
       "description": "",
       "nodeIds": [
+        "file:.mcp.json",
         "file:backend/Dockerfile",
         "file:backend/alembic/env.py",
         "file:backend/alembic/versions/0001_initial_schema.py",
@@ -9320,13 +9237,14 @@
         "file:plans/README.md",
         "file:slskd/slskd.yml"
       ],
-      "display_order": 5,
+      "display_order": 6,
       "order_basis": "imports",
       "subGroups": [
         {
           "id": "layer:application:root",
           "name": "(root)",
           "nodeIds": [
+            "file:.mcp.json",
             "file:docker-compose.override.yml",
             "file:docker-compose.prod.yml",
             "file:docker-compose.yml",
@@ -9449,7 +9367,7 @@
         "file:backend/scripts/backfill_durations.py",
         "file:backend/scripts/make_admin.py"
       ],
-      "display_order": 6,
+      "display_order": 7,
       "order_basis": "imports"
     },
     {
@@ -9477,7 +9395,7 @@
         "file:backend/tests/test_ytdlp_unavailable_classification.py",
         "file:test_recs.py"
       ],
-      "display_order": 7,
+      "display_order": 8,
       "order_basis": "imports"
     }
   ],
@@ -9524,6 +9442,16 @@
     },
     {
       "order": 5,
+      "target_path": "backend/app/database.py",
+      "page_type": "file_page",
+      "title": "database.py",
+      "depth": 1,
+      "kind": "code",
+      "reason": "Directly used by the entry points above; a core collaborator.",
+      "layer_id": "layer:application"
+    },
+    {
+      "order": 6,
       "target_path": "backend/app/scripts/__init__.py",
       "page_type": "file_page",
       "title": "__init__.py",
@@ -9533,7 +9461,7 @@
       "layer_id": "layer:docs-tooling"
     },
     {
-      "order": 6,
+      "order": 7,
       "target_path": "frontend/src/store/toastStore.js",
       "page_type": "file_page",
       "title": "toastStore.js",
@@ -9543,7 +9471,7 @@
       "layer_id": "layer:data"
     },
     {
-      "order": 7,
+      "order": 8,
       "target_path": "frontend/src/utils/media.js",
       "page_type": "file_page",
       "title": "media.js",
@@ -9551,16 +9479,6 @@
       "kind": "code",
       "reason": "The Utility layer's anchor \u2014 its most depended-on file.",
       "layer_id": "layer:utility"
-    },
-    {
-      "order": 8,
-      "target_path": "frontend/src/services/api.js",
-      "page_type": "file_page",
-      "title": "api.js",
-      "depth": 1,
-      "kind": "code",
-      "reason": "The Service layer's anchor \u2014 its most depended-on file.",
-      "layer_id": "layer:service"
     },
     {
       "order": 9,
@@ -9574,22 +9492,22 @@
     },
     {
       "order": 10,
+      "target_path": "frontend/src/services/api.js",
+      "page_type": "file_page",
+      "title": "api.js",
+      "depth": 1,
+      "kind": "code",
+      "reason": "The Service layer's anchor \u2014 its most depended-on file.",
+      "layer_id": "layer:service"
+    },
+    {
+      "order": 11,
       "target_path": "frontend/src/components/Spinner.jsx",
       "page_type": "file_page",
       "title": "Spinner.jsx",
       "depth": 1,
       "kind": "code",
       "reason": "The UI layer's anchor \u2014 its most depended-on file.",
-      "layer_id": "layer:ui"
-    },
-    {
-      "order": 11,
-      "target_path": "frontend/src/components/Player.jsx",
-      "page_type": "file_page",
-      "title": "Player.jsx",
-      "depth": 0,
-      "kind": "code",
-      "reason": "A top churn hotspot \u2014 one of the most frequently changed files in the repo; worth understanding early.",
       "layer_id": "layer:ui"
     },
     {
@@ -9712,6 +9630,7 @@
       "path": "",
       "layerId": "layer:application",
       "nodeIds": [
+        "file:.mcp.json",
         "file:backend/Dockerfile",
         "file:backend/alembic/env.py",
         "file:backend/alembic/versions/0001_initial_schema.py",

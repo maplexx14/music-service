@@ -1,5 +1,5 @@
 {
-  "last_sync_commit": "bad31a8fd181cc8e07bea9fe36ef818d85512b7c",
+  "last_sync_commit": "b9ba174a4da99f4e71fbdf34959ef02c21b0cbbf",
   "docs_mode": "deterministic",
   "docs_enabled": false,
   "total_pages": 169,
@@ -29,13 +29,16 @@
   },
   "knowledge_graph": {
     "version": "1.0.0",
-    "node_count": 400,
-    "layer_count": 8,
+    "node_count": 402,
+    "layer_count": 9,
     "tour_steps": 12,
     "has_summaries": true,
-    "fingerprint": "784a1b9215091c00"
+    "fingerprint": "4230669904588d56"
   },
   "config_fingerprint": "fc6b8cf840399cb8b2490a45d4f3c7b87f9474e253ccdcb4b15c25db48b072b0",
   "store_format_version": 2,
-  "written_by_version": "0.39.0"
+  "written_by_version": "0.39.0",
+  "last_docs_commit": "b9ba174a4da99f4e71fbdf34959ef02c21b0cbbf",
+  "last_full_rescore_at": 1785972821.0,
+  "renderer_fingerprint": "3ccf0a761d6507c15360006a197bf56cd6d46c2698c8ae631ca6b789b87f06c4:2d6407057d94311810c91100d0497e1dc2b78aa2fab0fa8e08e4e8e789045f72"
 }
