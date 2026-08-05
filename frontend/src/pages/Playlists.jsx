@@ -4,6 +4,7 @@ import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
+import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
@@ -29,6 +30,12 @@ function Playlists() {
   const [cookiesFile, setCookiesFile] = useState(null)
   const [cookiesExists, setCookiesExists] = useState(false)
   const [uploadingCookies, setUploadingCookies] = useState(false)
+
+  // Медиатека растёт без потолка, а обложка у каждого плейлиста своя — рисуем
+  // карточки партиями по мере прокрутки. keepRendered: создание и удаление
+  // правят список на месте, и схлопывать из-за них отрисованное не нужно.
+  const { visibleItems: visiblePlaylists, sentinelRef: playlistsSentinelRef } =
+    useLazyBatch(playlists, { keepRendered: true })
 
   useEffect(() => {
     fetchPlaylists()
@@ -384,38 +391,43 @@ function Playlists() {
           <p className="empty-state-subtitle">Создайте свой первый плейлист</p>
         </div>
       ) : (
-        <div className="playlists-grid">
-          {playlists.map((playlist) => (
-            <div key={playlist.id} className="playlist-card">
-              <button
-                className="playlist-delete-btn"
-                title="Удалить плейлист"
-                onClick={(e) => handleDeletePlaylist(e, playlist)}
-              >
-                <Trash2 size={18} />
-              </button>
-              <Link to={`/playlists/${playlist.id}`} className="playlist-card-link">
-                <img
-                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                  alt={playlist.name}
-                  className="playlist-cover"
-                  loading="lazy"
-                  decoding="async"
-                  onError={handleCoverError}
-                />
-                <div className="playlist-info">
-                  <div className="playlist-name">{playlist.name}</div>
-                  {playlist.description && (
-                    <div className="playlist-description">{playlist.description}</div>
-                  )}
-                  <div className="playlist-tracks-count">
-                    {playlist.track_count ?? playlist.tracks?.length ?? 0} треков
+        <>
+          <div className="playlists-grid">
+            {visiblePlaylists.map((playlist) => (
+              <div key={playlist.id} className="playlist-card">
+                <button
+                  className="playlist-delete-btn"
+                  title="Удалить плейлист"
+                  onClick={(e) => handleDeletePlaylist(e, playlist)}
+                >
+                  <Trash2 size={18} />
+                </button>
+                <Link to={`/playlists/${playlist.id}`} className="playlist-card-link">
+                  <img
+                    src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                    alt={playlist.name}
+                    className="playlist-cover"
+                    loading="lazy"
+                    decoding="async"
+                    onError={handleCoverError}
+                  />
+                  <div className="playlist-info">
+                    <div className="playlist-name">{playlist.name}</div>
+                    {playlist.description && (
+                      <div className="playlist-description">{playlist.description}</div>
+                    )}
+                    <div className="playlist-tracks-count">
+                      {playlist.track_count ?? playlist.tracks?.length ?? 0} треков
+                    </div>
                   </div>
-                </div>
-              </Link>
-            </div>
-          ))}
-        </div>
+                </Link>
+              </div>
+            ))}
+          </div>
+          {/* Маячок догрузки — соседом, а не ячейкой сетки: внутри
+              .playlists-grid он занял бы колонку и порвал ряд. */}
+          <div ref={playlistsSentinelRef} aria-hidden="true" />
+        </>
       )}
     </div>
   )

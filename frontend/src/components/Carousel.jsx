@@ -1,44 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useLazyBatch } from '../hooks/useLazyBatch'
 import './Carousel.css'
 
-// Сколько карточек рисуем сразу и сколько добавляем за шаг догрузки.
 const DEFAULT_BATCH = 8
-// Запас за правым краем ленты, при заходе в который подгружается следующая
-// партия. Карточки успевают смонтироваться и загрузить обложки до того, как
-// пользователь до них доскроллит.
+// Запас считается по горизонтали: у вертикальной оси ленты прокрутки нет.
 const PRELOAD_MARGIN = '0px 400px'
 
 /**
- * Горизонтальная лента карточек с ленивой отрисовкой.
- *
- * В DOM живёт только видимая часть списка: остальное дорисовывается партиями,
- * когда маячок в конце ленты входит в зону предзагрузки. Это важнее, чем
- * кажется — карточка плейлиста тянет обложку, и рисовать сразу все результаты
- * поиска значит выстрелить десятками запросов за обложками, которые никто не
- * увидит.
+ * Горизонтальная лента карточек с ленивой отрисовкой (см. useLazyBatch).
  *
  * renderItem работает как колбэк .map: он же и проставляет key.
  */
 function Carousel({ items, renderItem, batchSize = DEFAULT_BATCH, label, itemWidth }) {
   const trackRef = useRef(null)
-  const sentinelRef = useRef(null)
-  const [visibleCount, setVisibleCount] = useState(batchSize)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
 
-  // Новый список (другой запрос в поиске) — снова первая партия. Сброс идёт
-  // прямо в рендере, а не в эффекте: в эффекте новый список успел бы
-  // отрисоваться со старым visibleCount, то есть десятком лишних карточек с
-  // обложками, которые тут же размонтируются.
-  const [renderedItems, setRenderedItems] = useState(items)
-  if (items !== renderedItems) {
-    setRenderedItems(items)
-    setVisibleCount(batchSize)
-  }
+  // root — сама лента, так что считается горизонтальная видимость внутри неё,
+  // а не во вьюпорте страницы.
+  const { visibleItems, sentinelRef } = useLazyBatch(items, {
+    batchSize,
+    rootRef: trackRef,
+    rootMargin: PRELOAD_MARGIN,
+  })
 
-  // Лента при этом остаётся прокрученной на позицию прошлой выдачи — мотаем
-  // в начало. Мгновенно: плавная прокрутка по CSS здесь только смазала бы
+  // Новый список — лента остаётся прокрученной на позицию прошлой выдачи.
+  // Мотаем в начало мгновенно: плавная прокрутка по CSS здесь только смазала бы
   // подмену содержимого.
   useEffect(() => {
     if (trackRef.current) trackRef.current.scrollTo({ left: 0, behavior: 'instant' })
@@ -55,7 +43,7 @@ function Carousel({ items, renderItem, batchSize = DEFAULT_BATCH, label, itemWid
 
   useEffect(() => {
     updateArrows()
-  }, [updateArrows, items, visibleCount])
+  }, [updateArrows, items, visibleItems.length])
 
   useEffect(() => {
     const el = trackRef.current
@@ -66,24 +54,6 @@ function Carousel({ items, renderItem, batchSize = DEFAULT_BATCH, label, itemWid
     observer.observe(el)
     return () => observer.disconnect()
   }, [updateArrows])
-
-  // Догрузка: root — сама лента, так что считается горизонтальная видимость
-  // внутри неё, а не во вьюпорте страницы.
-  useEffect(() => {
-    const root = trackRef.current
-    const sentinel = sentinelRef.current
-    if (!root || !sentinel || visibleCount >= items.length) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((count) => Math.min(count + batchSize, items.length))
-        }
-      },
-      { root, rootMargin: PRELOAD_MARGIN },
-    )
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [items, visibleCount, batchSize])
 
   // Шаг стрелки — 80% ширины ленты: на экране остаётся карточка-«якорь» из
   // прошлого экрана, и не теряется ощущение непрерывности списка.
@@ -117,7 +87,7 @@ function Carousel({ items, renderItem, batchSize = DEFAULT_BATCH, label, itemWid
         tabIndex={0}
         aria-label={label}
       >
-        {items.slice(0, visibleCount).map(renderItem)}
+        {visibleItems.map(renderItem)}
         <div ref={sentinelRef} className="carousel-sentinel" aria-hidden="true" />
       </div>
 

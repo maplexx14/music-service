@@ -1,3 +1,14 @@
+/* Обёртка списка имён. Блок, а не строчный элемент: на инлайне overflow и
+   text-overflow не работают вовсе, поэтому обрезка по многоточию, заданная в
+   местах использования (.track-artist, .track-item-artist, .fullscreen-artist),
+   молча игнорировалась — длинное имя исполнителя вылезало за границы карточки
+   трека. white-space: nowrap при этом действовал, так что строка не
+   переносилась, а просто уезжала наружу. */
+.artist-names {
+  display: block;
+  min-width: 0;
+}
+
 .artist-link {
   color: inherit;
   text-decoration: none;

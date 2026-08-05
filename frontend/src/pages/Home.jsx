@@ -5,6 +5,7 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useAuthStore } from '../store/authStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
+import { useLazyBatch } from '../hooks/useLazyBatch'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -66,6 +67,11 @@ function Home() {
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
+  // Подборок с бэка может прийти много, а обложка у каждой своя — рисуем их
+  // партиями по мере прокрутки.
+  const { visibleItems: visiblePlaylists, sentinelRef: playlistsSentinelRef } = useLazyBatch(
+    recommendations.playlists,
+  )
   // Профиль в верхней шапке — единственное место выхода из аккаунта
   // на мобильных (сайдбар скрыт, в нижней навигации профиля нет).
   const user = useAuthStore((s) => s.user)
@@ -344,7 +350,7 @@ function Home() {
             <div className="content-section">
               <h2 className="section-title">Рекомендуемые плейлисты</h2>
               <div className="playlists-grid">
-                {recommendations.playlists.map((playlist) => (
+                {visiblePlaylists.map((playlist) => (
                   <div
                     key={playlist.id}
                     className="playlist-card"
@@ -367,6 +373,9 @@ function Home() {
                   </div>
                 ))}
               </div>
+              {/* Маячок догрузки — соседом, а не ячейкой сетки: внутри
+                  .playlists-grid он занял бы колонку и порвал ряд. */}
+              <div ref={playlistsSentinelRef} aria-hidden="true" />
             </div>
           )}
         </>

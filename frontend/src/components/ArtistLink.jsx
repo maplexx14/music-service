@@ -22,7 +22,7 @@ function ArtistLink({ artist, className = '', onNavigate }) {
   }
 
   return (
-    <span className={className}>
+    <span className={`artist-names ${className}`}>
       {names.map((name, index) => (
         <span key={`${name}-${index}`}>
           {index > 0 && <span className="artist-link-sep">, </span>}

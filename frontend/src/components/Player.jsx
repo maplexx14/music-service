@@ -1211,7 +1211,7 @@ function PlayerInner() {
             {isExternalTrack && isBuffering ? (
               'Загрузка…'
             ) : (
-              <ArtistLink artist={currentTrack.artist} />
+              <ArtistLink artist={currentTrack.artist} className="player-artist-names" />
             )}
           </div>
         </div>
