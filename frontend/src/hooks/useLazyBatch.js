@@ -19,17 +19,19 @@ const DEFAULT_MARGIN = '400px'
  * rootRef — скроллящийся контейнер, если список прокручивается не страницей
  * (горизонтальная лента). По умолчанию считается видимость во вьюпорте.
  *
- * keepRendered — не возвращаться к первой партии при смене списка. Нужно там,
- * где список правится на месте (создание, удаление): схлопывать из-за одной
- * такой правки всё уже отрисованное незачем. По умолчанию новый список — это
- * новая выдача, и счётчик сбрасывается.
+ * resetKey — значение, при смене которого счётчик возвращается к первой партии.
+ * По умолчанию это сам список: новый массив — новая выдача. Там, где список
+ * правится на месте (создание плейлиста, материализация внешнего трека в БД),
+ * так нельзя — одна такая правка схлопнула бы всё отрисованное. Такие места
+ * передают то, что действительно означает «список другой»: id плейлиста, имя
+ * исполнителя или константу, если списку меняться не на что.
  *
  * Маячок ставится сразу после списка: sentinelRef нужно повесить на пустой
  * элемент-сосед, а не на последнюю карточку.
  */
 export function useLazyBatch(
   items,
-  { batchSize = DEFAULT_BATCH, rootRef, rootMargin = DEFAULT_MARGIN, keepRendered = false } = {},
+  { batchSize = DEFAULT_BATCH, rootRef, rootMargin = DEFAULT_MARGIN, resetKey } = {},
 ) {
   // Маячок держим в состоянии, а не в useRef: секция со списком может
   // отмонтироваться и вернуться (переключение вкладок на главной), а смену
@@ -39,14 +41,14 @@ export function useLazyBatch(
   const sentinelRef = useCallback((node) => setSentinel(node), [])
   const [visibleCount, setVisibleCount] = useState(batchSize)
 
-  // Новый список (другой поисковый запрос) — снова первая партия. Сброс идёт
-  // прямо в рендере, а не в эффекте: в эффекте новый список успел бы
+  // Сброс идёт прямо в рендере, а не в эффекте: в эффекте новый список успел бы
   // отрисоваться со старым visibleCount, то есть десятком лишних карточек с
   // обложками, которые тут же размонтируются.
-  const [renderedItems, setRenderedItems] = useState(items)
-  if (items !== renderedItems) {
-    setRenderedItems(items)
-    if (!keepRendered) setVisibleCount(batchSize)
+  const key = resetKey === undefined ? items : resetKey
+  const [prevKey, setPrevKey] = useState(key)
+  if (key !== prevKey) {
+    setPrevKey(key)
+    setVisibleCount(batchSize)
   }
 
   useEffect(() => {

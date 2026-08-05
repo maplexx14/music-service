@@ -5,6 +5,7 @@ import { Play, Plus, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { handleCoverError } from '../utils/media'
@@ -30,6 +31,17 @@ function ExternalPlaylist() {
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
+
+  // Внешний плейлист приходит целиком, одним ответом — постранично его тянуть
+  // неоткуда. Зато рисовать сразу все строки незачем: у каждой своя обложка,
+  // и на плейлисте в пару сотен треков это залп запросов за картинками,
+  // которых никто не увидит. Рисуем партиями по мере прокрутки. Сброс по id
+  // плейлиста, а не по списку: материализация внешнего трека правит список на
+  // месте, и лишний раз схлопывать отрисованное не нужно.
+  const { visibleItems: visibleTracks, sentinelRef: tracksSentinelRef } = useLazyBatch(tracks, {
+    batchSize: 30,
+    resetKey: id,
+  })
 
   useEffect(() => {
     fetchPlaylist()
@@ -204,7 +216,7 @@ function ExternalPlaylist() {
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track, index) => {
+              {visibleTracks.map((track, index) => {
                 const isCurrent = currentTrack?.id === track.id
                 const dbId = typeof track.db_id === 'number' ? track.db_id : null
                 const isLiked = dbId ? likedTrackIds.includes(dbId) : false
@@ -292,6 +304,9 @@ function ExternalPlaylist() {
             <p>В этом плейлисте пока нет треков</p>
           </div>
         )}
+        {/* Маячок догрузки — после таблицы: внутри <tbody> лежать может только
+            строка, произвольный div туда браузер не пустит. */}
+        <div ref={tracksSentinelRef} aria-hidden="true" />
       </div>
     </div>
   )

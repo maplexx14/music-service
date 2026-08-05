@@ -5,6 +5,7 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -42,6 +43,16 @@ function Artist() {
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
+
+  // Каталог исполнителя (библиотека + оба внешних источника) приходит одним
+  // ответом и легко переваливает за сотню строк — рисуем партиями по мере
+  // прокрутки, чтобы не тянуть сразу все обложки. Сброс по имени, а не по
+  // списку: материализация внешнего трека правит список на месте, и лишний раз
+  // схлопывать отрисованное не нужно.
+  const { visibleItems: visibleTracks, sentinelRef: tracksSentinelRef } = useLazyBatch(tracks, {
+    batchSize: 30,
+    resetKey: name,
+  })
 
   useEffect(() => {
     fetchArtist()
@@ -275,7 +286,7 @@ function Artist() {
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track, index) => {
+              {visibleTracks.map((track, index) => {
                 const isCurrent = currentTrack?.id === track.id
                 const dbId =
                   typeof track.id === 'number'
@@ -382,6 +393,9 @@ function Artist() {
             <p>Треков этого исполнителя не нашлось</p>
           </div>
         )}
+        {/* Маячок догрузки — после таблицы: внутри <tbody> лежать может только
+            строка, произвольный div туда браузер не пустит. */}
+        <div ref={tracksSentinelRef} aria-hidden="true" />
       </div>
     </div>
   )

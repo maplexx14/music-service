@@ -5,6 +5,7 @@ import { Play, Heart, MoreVertical, Plus } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -19,6 +20,10 @@ function PlaylistDetail() {
   const [loading, setLoading] = useState(true)
   const [totalTracks, setTotalTracks] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  // Упавший запрос гасит автоподгрузку и возвращает кнопку: иначе наблюдатель
+  // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
+  // падающих запросов.
+  const [loadError, setLoadError] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
@@ -61,6 +66,7 @@ function PlaylistDetail() {
   const handleLoadMore = async () => {
     if (loadingMore) return
     setLoadingMore(true)
+    setLoadError(false)
     try {
       const response = await api.get(`/playlists/${id}`, {
         params: { skip: playlist.tracks.length, limit: TRACKS_PAGE_SIZE },
@@ -69,11 +75,19 @@ function PlaylistDetail() {
       setTotalTracks(Number(response.headers['x-total-count']) || totalTracks)
     } catch (error) {
       console.error('Error loading more tracks:', error)
+      setLoadError(true)
       toast.error('Не удалось загрузить ещё треки')
     } finally {
       setLoadingMore(false)
     }
   }
+
+  const hasMoreTracks = !!playlist && playlist.tracks.length < totalTracks
+  // Следующая страница тянется сама, когда пользователь доскроллил до низа
+  // списка. Кнопка остаётся только как способ повторить упавший запрос.
+  const loadMoreRef = useInfiniteScroll(handleLoadMore, {
+    enabled: hasMoreTracks && !loadingMore && !loadError,
+  })
 
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
@@ -283,16 +297,20 @@ function PlaylistDetail() {
             <p>В этом плейлисте пока нет треков</p>
           </div>
         )}
-        {playlist.tracks.length < totalTracks && (
-          <div className="load-more-wrapper">
-            <button
-              type="button"
-              className="load-more-btn"
-              onClick={handleLoadMore}
-              disabled={loadingMore}
-            >
-              {loadingMore ? 'Загрузка…' : 'Показать ещё'}
-            </button>
+        {hasMoreTracks && (
+          <div className="load-more-wrapper" ref={loadMoreRef}>
+            {loadError ? (
+              <button
+                type="button"
+                className="load-more-btn"
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? 'Загрузка…' : 'Показать ещё'}
+              </button>
+            ) : (
+              <Spinner label="Загрузка треков…" />
+            )}
           </div>
         )}
       </div>

@@ -32,10 +32,11 @@ function Playlists() {
   const [uploadingCookies, setUploadingCookies] = useState(false)
 
   // Медиатека растёт без потолка, а обложка у каждого плейлиста своя — рисуем
-  // карточки партиями по мере прокрутки. keepRendered: создание и удаление
-  // правят список на месте, и схлопывать из-за них отрисованное не нужно.
+  // карточки партиями по мере прокрутки. resetKey константный: медиатека здесь
+  // одна, а создание и удаление правят список на месте — схлопывать из-за них
+  // уже отрисованное не нужно.
   const { visibleItems: visiblePlaylists, sentinelRef: playlistsSentinelRef } =
-    useLazyBatch(playlists, { keepRendered: true })
+    useLazyBatch(playlists, { resetKey: 'library' })
 
   useEffect(() => {
     fetchPlaylists()
