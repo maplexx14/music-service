@@ -227,6 +227,38 @@ async def search_ytmusic_artists(q: str, limit: int = 20) -> List[str]:
     return results
 
 
+async def search_ytmusic_artist_cards(q: str, limit: int = 6) -> List[dict]:
+    """То же, что search_ytmusic_artists, но с аватаром: [{name, cover_url}].
+
+    Нужно секции «Исполнители» в поиске — карточка без картинки выглядит
+    сломанной, а одних имён (как отдаёт search_ytmusic_artists для подсказок в
+    настройках) для неё мало.
+    """
+    if _ytmusic is None or not (q or "").strip():
+        return []
+
+    try:
+        raw = await asyncio.to_thread(
+            _ytmusic.search, q, filter="artists", limit=limit
+        )
+    except Exception:  # noqa: BLE001 — провайдер, выдача поиска падать не должна
+        logger.warning("YouTube Music artist cards search failed for %s", q)
+        return []
+
+    out: List[dict] = []
+    seen: set = set()
+    for item in raw or []:
+        name = (item.get("artist") or item.get("title") or item.get("name") or "").strip()
+        key = norm_artist_name(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "cover_url": _thumb(item.get("thumbnails"))})
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def related_ytmusic_artists(artist: str, limit: int = 6) -> List[dict]:
     """Артисты, похожие на переданного, по графу YouTube Music.
 

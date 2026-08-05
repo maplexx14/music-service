@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
@@ -7,6 +7,7 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import defaultCover from '../assets/default-cover.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { artistPath } from '../utils/artists'
 import './Search.css'
 
 const SEARCH_DEBOUNCE_MS = 600
@@ -30,6 +31,7 @@ function Search() {
   // секциями в фиксированном порядке (см. рендер ниже).
   const [externalTracks, setExternalTracks] = useState({ ytmusic: [], soundcloud: [] })
   const [externalPlaylists, setExternalPlaylists] = useState([])
+  const [artists, setArtists] = useState([])
   const [loading, setLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
 
@@ -49,6 +51,7 @@ function Search() {
     setResults({ tracks: [], playlists: [], users: [] })
     setExternalTracks({ ytmusic: [], soundcloud: [] })
     setExternalPlaylists([])
+    setArtists([])
     setLoading(false)
   }, [query])
 
@@ -59,6 +62,22 @@ function Search() {
     // должны миксоваться с новым запросом.
     setExternalTracks({ ytmusic: [], soundcloud: [] })
     setExternalPlaylists([])
+    setArtists([])
+
+    // Исполнители — отдельным лёгким запросом: секция только ведёт на
+    // страницу артиста и не должна ждать медленную выдачу треков.
+    api
+      .get('/artists/search', {
+        params: { q: searchQuery, limit: 6 },
+        skipErrorToast: true,
+        signal,
+      })
+      .then((response) => {
+        if (!signal.aborted) setArtists(response.data || [])
+      })
+      .catch((error) => {
+        if (!signal.aborted) console.error('Artist search error:', error)
+      })
 
     // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
     // его секции дорисовываются по мере прихода ответов.
@@ -142,6 +161,7 @@ function Search() {
     externalTracks.soundcloud.length > 0 ||
     results.playlists.length > 0 ||
     externalPlaylists.length > 0 ||
+    artists.length > 0 ||
     results.users.length > 0
 
   // Секция внешних треков: разметка одна на оба источника, отличаются только
@@ -222,12 +242,41 @@ function Search() {
         <div className="search-error">{searchError}</div>
       )}
 
-      {/* Порядок секций фиксирован: плейлисты → треки из медиатеки →
-          YouTube Music → SoundCloud → пользователи. Плейлисты сверху потому,
-          что это готовая подборка (одно попадание вместо десятка треков), а
-          дальше — от «уже своё» к внешнему. */}
+      {/* Порядок секций фиксирован: исполнители → плейлисты → треки из
+          медиатеки → YouTube Music → SoundCloud → пользователи. Исполнители
+          сверху — это не результат, а переход: одно нажатие вместо
+          выискивания артиста среди его же треков. */}
       {!loading && query && (
         <div className="search-results">
+          {artists.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Исполнители</h2>
+              <div className="artists-list">
+                {artists.map((item) => (
+                  <Link
+                    key={item.name}
+                    to={artistPath(item.name)}
+                    className="artist-card"
+                    title={`Открыть страницу «${item.name}»`}
+                  >
+                    <img
+                      src={resolveCoverUrl(item.cover_url) || defaultCover}
+                      alt={item.name}
+                      className="artist-card-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="artist-card-name">{item.name}</div>
+                    <div className="artist-card-meta">
+                      {item.in_library ? 'В медиатеке' : 'Исполнитель'}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
           {results.playlists.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Плейлисты</h2>

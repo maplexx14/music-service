@@ -224,8 +224,41 @@ class ArtistPageResponse(BaseModel):
     числовой id (лайк и добавление в плейлист работают сразу), у внешних —
     строковый ("ytmusic:...", материализуются по действию пользователя).
     Порядок склейки на фронте: tracks, затем external.
+
+    is_liked — исполнитель в избранном пользователя (User.preferred_artists,
+    оттуда же его берёт волна). playlist_id — плейлист этого артиста, если он
+    уже сохранён в медиатеку; по нему кнопка показывает «Открыть», а не
+    «Добавить» повторно.
     """
     name: str
     cover_url: Optional[str] = None
     tracks: List[TrackResponse] = []
     external: List[ExternalTrackResponse] = []
+    is_liked: bool = False
+    playlist_id: Optional[int] = None
+
+
+class ArtistSummary(BaseModel):
+    """Карточка исполнителя в выдаче поиска — ведёт на его страницу."""
+    name: str
+    cover_url: Optional[str] = None
+    # Есть ли треки этого артиста в медиатеке (карточка помечается «в медиатеке»).
+    in_library: bool = False
+
+
+class ArtistNameRequest(BaseModel):
+    name: str
+
+
+class ArtistLikeResponse(BaseModel):
+    name: str
+    liked: bool
+
+
+class ArtistSaveResponse(BaseModel):
+    """Итог сохранения плейлиста исполнителя в медиатеку."""
+    playlist_id: int
+    name: str
+    created: bool  # плейлист создан (False — дополнили существующий)
+    added: int     # сколько треков добавлено этим вызовом
+    total: int     # сколько всего треков в плейлисте

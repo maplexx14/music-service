@@ -28,6 +28,8 @@ function Artist() {
   const [artist, setArtist] = useState(null)
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [liking, setLiking] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
@@ -74,6 +76,52 @@ function Artist() {
 
   const handlePlay = () => {
     if (tracks.length > 0) playPlaylist(tracks, 0, 'artist')
+  }
+
+  // Лайк артиста пишется в явные предпочтения пользователя (те же, что в
+  // онбординге) — оттуда его читают волна и рекомендации.
+  const handleToggleArtistLike = async () => {
+    if (liking) return
+    setLiking(true)
+    try {
+      const { data } = await api.post('/artists/like', { name: artist.name })
+      setArtist((prev) => ({ ...prev, is_liked: data.liked }))
+      toast.success(
+        data.liked
+          ? `«${artist.name}» в понравившихся исполнителях`
+          : `«${artist.name}» убран из понравившихся`,
+      )
+    } catch (error) {
+      console.error('Error toggling artist like:', error)
+      toast.error('Не удалось обновить понравившихся исполнителей')
+    } finally {
+      setLiking(false)
+    }
+  }
+
+  // Сохранение плейлиста артиста в медиатеку: внешние треки при этом
+  // материализуются в БД на бэке (см. routers/artists.py).
+  const handleSaveToLibrary = async () => {
+    if (saving) return
+    if (artist.playlist_id) {
+      navigate(`/playlists/${artist.playlist_id}`)
+      return
+    }
+    setSaving(true)
+    try {
+      const { data } = await api.post('/artists/library', { name: artist.name })
+      setArtist((prev) => ({ ...prev, playlist_id: data.playlist_id }))
+      toast.success(
+        data.created
+          ? `Плейлист «${data.name}» добавлен в медиатеку (${data.total} треков)`
+          : `В «${data.name}» добавлено треков: ${data.added}`,
+      )
+    } catch (error) {
+      console.error('Error saving artist playlist:', error)
+      toast.error('Не удалось добавить плейлист в медиатеку')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handlePlayTrack = (index) => {
@@ -172,6 +220,42 @@ function Artist() {
             <button className="play-button-large" onClick={handlePlay} disabled={tracks.length === 0}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
+            </button>
+            <button
+              className="play-button-large secondary"
+              onClick={handleSaveToLibrary}
+              disabled={saving || tracks.length === 0}
+              title={
+                artist.playlist_id
+                  ? 'Плейлист исполнителя уже в медиатеке — открыть'
+                  : 'Сохранить все треки исполнителя плейлистом'
+              }
+            >
+              <Plus size={20} />
+              {saving
+                ? 'Добавление...'
+                : artist.playlist_id
+                  ? 'Открыть в медиатеке'
+                  : 'Добавить в медиатеку'}
+            </button>
+            <button
+              type="button"
+              className={`action-button${artist.is_liked ? ' liked' : ''}`}
+              onClick={handleToggleArtistLike}
+              disabled={liking}
+              title={
+                artist.is_liked
+                  ? 'Убрать исполнителя из понравившихся'
+                  : 'Добавить исполнителя в понравившиеся'
+              }
+              aria-label={
+                artist.is_liked
+                  ? 'Убрать исполнителя из понравившихся'
+                  : 'Добавить исполнителя в понравившиеся'
+              }
+              aria-pressed={!!artist.is_liked}
+            >
+              <Heart size={20} fill={artist.is_liked ? 'currentColor' : 'none'} />
             </button>
           </div>
         </div>

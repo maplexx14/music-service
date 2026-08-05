@@ -6,6 +6,21 @@
   border-radius: 50%;
 }
 
+/* Лайк исполнителя: у .action-button из PlaylistDetail.css нет активного
+   состояния (там кнопка декоративная), а здесь она несёт статус. */
+.playlist-actions .action-button.liked {
+  color: #a259ff;
+}
+
+.playlist-actions .action-button.liked:hover {
+  color: #b981ff;
+}
+
+.playlist-actions .action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Бейдж источника в строке трека: MP3/SC как в поиске, но приглушённее —
    в таблице он справочный, а не главный элемент. */
 .artist-track-source {
