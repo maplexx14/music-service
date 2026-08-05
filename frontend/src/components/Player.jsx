@@ -97,6 +97,25 @@ function resolveTrackDuration(audio, track) {
   return Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : 0
 }
 
+// Повторный load() — не бесплатная операция: он ОТМЕНЯЕТ уже летящий запрос
+// за аудио, сбрасывает элемент в HAVE_NOTHING, а в WebKit заодно снимает
+// разрешение играть, выданное элементу по жесту. Из-за этого на iOS трек
+// «переключался» молча: playAdjacentNow() стартовал новый src синхронно в
+// контексте media-key (единственный момент, когда фоновый play() разрешён), а
+// следом React-эффект видел readyState === 0 — нормальное состояние ТОЛЬКО ЧТО
+// начатой загрузки — принимал его за «данных нет» и рвал загрузку вторым
+// load() + play(), уже вне жеста. Система при этом считала, что играет.
+//
+// Свежая загрузка нужна ровно тогда, когда элемент реально простаивает: src
+// есть, данных нет (HAVE_NOTHING) и сеть не работает (NETWORK_IDLE — браузер
+// отложил загрузку в фоне либо вытеснил буфер после долгой паузы). Сразу
+// после смены src / load() networkState равен NO_SOURCE или LOADING, и в этот
+// момент мы не вмешиваемся.
+function needsFreshLoad(audio) {
+  if (!audio?.src) return false
+  return audio.readyState === audio.HAVE_NOTHING && audio.networkState === audio.NETWORK_IDLE
+}
+
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
 // currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
 // этой подписки не перерисовывается на каждом тике — обложка, кнопки,
@@ -377,7 +396,7 @@ function PlayerInner() {
         if (playing && audio.paused && !audio.ended) {
           // После длительного отсутствия на вкладке буфер мог быть вытеснен.
           // play() на пустом буфере молча ничего не делает — нужен load().
-          if (audio.readyState < audio.HAVE_CURRENT_DATA) {
+          if (needsFreshLoad(audio)) {
             audio.load()
           }
           audio.play().catch(() => {})
@@ -431,7 +450,14 @@ function PlayerInner() {
       // если браузер честно исполняет фоновый seek — звук чинится ещё в
       // фоне. Один nudge на трек: seek сам триггерит повторный 'playing',
       // без guard'а получился бы цикл.
-      if (document.hidden) {
+      //
+      // iOS сюда НЕ попадает. «Беззвучный фоновый старт» — болезнь
+      // Chromium-подобных движков, а в WebKit ровно этот микро-seek фоновый
+      // старт ломает: перемотка по свежеоткрытому потоку (Opus/WebM от yt-dlp
+      // без индекса перемотки) заставляет перезапросить диапазон, и элемент
+      // остаётся в seeking — система считает, что играет, звука нет. На экране
+      // блокировки это бьёт по каждому треку: там КАЖДЫЙ старт — фоновый.
+      if (document.hidden && !isIOS) {
         silentStartRiskRef.current = true
         const trackId = usePlayerStore.getState().currentTrack?.id
         if (trackId != null && bgNudgeForRef.current !== trackId) {
@@ -449,6 +475,16 @@ function PlayerInner() {
       }
     }
     const handlePause = () => syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
+    // Источник сменился (audio.src = ... / load()) — элемент сброшен и ещё
+    // ничего не играет. Пока не придёт настоящее 'playing', система не должна
+    // считать, что мы играем: iOS в состоянии playbackState === 'playing'
+    // экстраполирует позицию из последнего setPositionState и крутит часы на
+    // экране блокировки поверх молчащего элемента. Раньше 'playing' оставался
+    // от ПРЕДЫДУЩЕГО трека и не сбрасывался никогда (store.isPlaying всё ещё
+    // true), отсюда и «время идёт, обложка есть, звука нет». Честный 'paused'
+    // вдобавок возвращает на виджете рабочую кнопку ▶ — её нажатие жест, и
+    // play() в нём разрешён даже в фоне.
+    const handleEmptied = () => syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     const handleEnded = () => {
       if (usePlayerStore.getState().isRepeatOne) {
         audio.currentTime = 0
@@ -516,6 +552,7 @@ function PlayerInner() {
     // блокировки не появляется. timeupdate стреляет слишком поздно.
     audio.addEventListener('playing', () => { handlePlaying(); syncPositionState() })
     audio.addEventListener('pause', handlePause)
+    audio.addEventListener('emptied', handleEmptied)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('stalled', handleLoadStall)
     audio.addEventListener('suspend', handleLoadStall)
@@ -534,6 +571,7 @@ function PlayerInner() {
       audio.removeEventListener('ratechange', syncPositionState)
       audio.removeEventListener('playing', handlePlaying)
       audio.removeEventListener('pause', handlePause)
+      audio.removeEventListener('emptied', handleEmptied)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('stalled', handleLoadStall)
       audio.removeEventListener('suspend', handleLoadStall)
@@ -696,17 +734,33 @@ function PlayerInner() {
       // После длительной паузы браузер может вытеснить буфер аудио
       // (readyStateHAVE_ENOUGH_DATA). В этом случае play() молча не
       // воспроизводит — нужен явный load() для повторной загрузки данных.
-      if (audio.readyState < audio.HAVE_CURRENT_DATA) {
+      //
+      // Но ТОЛЬКО если элемент действительно простаивает (см. needsFreshLoad).
+      // Прежняя проверка `readyState < HAVE_CURRENT_DATA` срабатывала и на
+      // абсолютно здоровой, только что начатой загрузке: playAdjacentNow()
+      // (ended / кнопки виджета) стартует новый src синхронно в жестовом
+      // контексте, а этот эффект прилетает следом, через микротаск, и видит
+      // readyState === 0. Вызванный тут load() рвал летящий запрос, а
+      // следующий за ним play() шёл уже вне жеста — в фоне iOS его
+      // блокировал. Итог: трек «переключился» (обложка, длительность,
+      // тикающие часы на экране блокировки), но не звучит. Именно этот путь
+      // отрабатывает при каждом переходе на треке с заблокированным экраном.
+      if (needsFreshLoad(audio)) {
         audio.load()
       }
-      audio.play().catch(err => {
-        // AbortError — штатное прерывание play() новой сменой src (быстрое
-        // перелистывание). NotAllowedError — браузер заблокировал play() из-за
-        // autoplay-политики (мобильный фон / отсутствие жеста); handleCanPlay
-        // или handleVisibility повторят попытку позже.
-        if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
-          console.error('Error playing audio:', err)
-      })
+      // Элемент уже стартовал (paused === false) — повторный play() ничего не
+      // добавляет: он вернёт тот же висящий промис. Зависший старт лечит
+      // вотчдог/kickStalled, а не ещё один play().
+      if (audio.paused) {
+        audio.play().catch(err => {
+          // AbortError — штатное прерывание play() новой сменой src (быстрое
+          // перелистывание). NotAllowedError — браузер заблокировал play() из-за
+          // autoplay-политики (мобильный фон / отсутствие жеста); handleCanPlay
+          // или handleVisibility повторят попытку позже.
+          if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError')
+            console.error('Error playing audio:', err)
+        })
+      }
     } else {
       audio.pause()
     }
@@ -900,7 +954,14 @@ function PlayerInner() {
       },
       nexttrack: () => {
         // Тот же гейт, что и на кнопке: не прыгаем на ещё не подгруженный трек.
-        if (!usePlayerStore.getState().isNextTrackReady()) return
+        // Но только пока приложение на экране. В фоне iOS замораживает таймеры,
+        // поллинг готовности (_pollPrefetchReady) перестаёт тикать, и гейт уже
+        // никогда не откроется сам — кнопка «вперёд» на экране блокировки
+        // становится мёртвой (нажатие ничего не делает, и вернуть управление
+        // можно только открыв PWA). Там гейт пропускаем: резолв доедет, пока
+        // <audio> буферизует, а честный playbackState покажет паузу, если не
+        // доедет.
+        if (!document.hidden && !usePlayerStore.getState().isNextTrackReady()) return
         playAdjacentNow(1)
         usePlayerStore.getState().nextTrack()
       },

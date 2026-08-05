@@ -1,0 +1,8 @@
+commit_limit: 1000
+embedder: mock
+distill:
+  commands:
+    enabled: true
+hooks:
+  read_skeleton: true
+  search_digest: true
