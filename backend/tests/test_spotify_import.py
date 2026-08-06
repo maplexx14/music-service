@@ -1,6 +1,7 @@
 """Импорт из Spotify: разбор ссылок, пагинация метаданных, поведение без ключей."""
 
 import asyncio
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -217,6 +218,9 @@ def test_fetch_by_url_dispatches_by_kind(monkeypatch):
     async def playlist(entity_id):
         return f"playlist:{entity_id}", None, []
 
+    # С ключами fetch_by_url идёт в Web API, без них — в embed.
+    monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_ID", "id")
+    monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_SECRET", "secret")
     monkeypatch.setattr(spotify, "get_playlist_tracks", playlist)
     title, _, _ = asyncio.run(
         spotify.fetch_by_url("https://open.spotify.com/playlist/pl1?si=x")
@@ -230,10 +234,32 @@ def test_fetch_by_url_rejects_non_spotify():
     assert exc.value.status_code == 400
 
 
-# ─── Без ключей ───
+# ─── Без ключей: страница встроенного плеера ───
+
+
+def _embed_html(entity: dict) -> str:
+    """Минимальный HTML embed-страницы с тем же контейнером, что у Spotify."""
+    payload = {"props": {"pageProps": {"state": {"data": {"entity": entity}}}}}
+    return (
+        '<html><body><div id="__next"></div>'
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload)
+        + "</script></body></html>"
+    )
+
+
+def _embed_item(uri: str, title: str, subtitle: str, duration_ms: int = 60_000) -> dict:
+    return {
+        "uri": uri,
+        "title": title,
+        "subtitle": subtitle,
+        "duration": duration_ms,
+        "entityType": "track",
+    }
 
 
 def test_search_returns_empty_when_unconfigured(monkeypatch):
+    # Поиска без ключей у Spotify нет — только импорт по ссылке.
     monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_ID", "")
     monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_SECRET", "")
     assert asyncio.run(spotify.search_spotify("anything")) == []
@@ -248,12 +274,140 @@ def test_api_get_without_credentials_raises_503(monkeypatch):
     assert "SPOTIFY_CLIENT_ID" in exc.value.detail
 
 
-def test_status_endpoint_reports_unconfigured(client):
+def test_status_endpoint_reports_unconfigured_but_keyless(client):
     resp = client.get("/api/spotify/status")
     assert resp.status_code == 200
     body = resp.json()
     assert body["configured"] is False
     assert body["connected"] is False
+    # Ключей нет, но импорт всё равно доступен.
+    assert body["keyless"] is True
+
+
+def test_entity_from_embed_html_extracts_entity():
+    entity = {"type": "playlist", "name": "My Mix"}
+    assert spotify._entity_from_embed_html(_embed_html(entity)) == entity
+
+
+def test_entity_from_embed_html_reports_missing_entity():
+    # Так Spotify отвечает на скрытый/несуществующий id: 200 и страница-ошибка.
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        '{"props": {"pageProps": {"status": 404}}}</script>'
+    )
+    with pytest.raises(HTTPException) as exc:
+        spotify._entity_from_embed_html(html)
+    assert exc.value.status_code == 404
+
+
+def test_entity_from_embed_html_reports_markup_change():
+    with pytest.raises(HTTPException) as exc:
+        spotify._entity_from_embed_html("<html>no next data</html>")
+    assert exc.value.status_code == 502
+
+
+def test_embed_artist_unwraps_nbsp():
+    # В списке треков артисты склеены запятой с неразрывным пробелом.
+    assert spotify._embed_artist({"subtitle": "Pitbull, Sensato"}) == "Pitbull, Sensato"
+    # У одиночного трека вместо subtitle приходит массив.
+    assert spotify._embed_artist({"artists": [{"name": "A"}, {"name": "B"}]}) == "A, B"
+    assert spotify._embed_artist({}) == "Unknown Artist"
+
+
+def test_embed_cover_falls_back_to_visual_identity():
+    playlist = {"coverArt": {"sources": [{"url": "cover", "width": 640}]}}
+    assert spotify._embed_cover(playlist) == "cover"
+    # У альбомов/треков обложка лежит в visualIdentity, ширина — maxWidth.
+    album = {"visualIdentity": {"image": [{"url": "small", "maxWidth": 64},
+                                          {"url": "big", "maxWidth": 640}]}}
+    assert spotify._embed_cover(album) == "big"
+    assert spotify._embed_cover({}) is None
+
+
+def test_fetch_embed_maps_playlist(monkeypatch):
+    entity = {
+        "type": "playlist",
+        "name": "My Mix",
+        "coverArt": {"sources": [{"url": "cover", "width": 640}]},
+        "trackList": [
+            _embed_item("spotify:track:t1", "One", "A, B", 200_000),
+            # Эпизоды подкастов в плейлисте — не музыка.
+            {"uri": "spotify:episode:e1", "title": "Talk", "entityType": "episode"},
+        ],
+    }
+
+    async def fake_html(kind, entity_id):
+        assert (kind, entity_id) == ("playlist", "pl1")
+        return _embed_html(entity)
+
+    monkeypatch.setattr(spotify, "_fetch_embed_html", fake_html)
+
+    title, cover, tracks = asyncio.run(spotify.fetch_embed("playlist", "pl1"))
+    assert (title, cover) == ("My Mix", "cover")
+    assert len(tracks) == 1
+    assert tracks[0].id == "t1"
+    assert tracks[0].artist == "A, B"
+    assert tracks[0].duration == 200  # embed отдаёт миллисекунды
+    # У элементов списка своей обложки нет — берём обложку коллекции.
+    assert tracks[0].cover_url == "cover"
+    assert tracks[0].album is None
+
+
+def test_fetch_embed_names_album_for_its_tracks(monkeypatch):
+    entity = {
+        "type": "album",
+        "name": "The Album",
+        "visualIdentity": {"image": [{"url": "album-cover", "maxWidth": 640}]},
+        "trackList": [_embed_item("spotify:track:t1", "One", "A")],
+    }
+
+    async def fake_html(kind, entity_id):
+        return _embed_html(entity)
+
+    monkeypatch.setattr(spotify, "_fetch_embed_html", fake_html)
+
+    title, cover, tracks = asyncio.run(spotify.fetch_embed("album", "al1"))
+    assert (title, cover) == ("The Album", "album-cover")
+    assert tracks[0].album == "The Album"
+
+
+def test_fetch_embed_maps_single_track(monkeypatch):
+    entity = {
+        "type": "track",
+        "id": "t1",
+        "name": "One",
+        "artists": [{"name": "A"}],
+        "duration": 184_000,
+        "visualIdentity": {"image": [{"url": "art", "maxWidth": 300}]},
+    }
+
+    async def fake_html(kind, entity_id):
+        return _embed_html(entity)
+
+    monkeypatch.setattr(spotify, "_fetch_embed_html", fake_html)
+
+    title, cover, tracks = asyncio.run(spotify.fetch_embed("track", "t1"))
+    assert title == "One"
+    assert cover == "art"
+    assert [(t.id, t.artist, t.duration) for t in tracks] == [("t1", "A", 184)]
+
+
+def test_fetch_entity_prefers_api_and_falls_back_to_embed(monkeypatch):
+    monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_ID", "id")
+    monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_SECRET", "secret")
+
+    async def failing_api(entity_id):
+        # Так Web API отвечает на редакционные подборки, недоступные приложению.
+        raise HTTPException(status_code=404, detail="not found")
+
+    async def fake_embed(kind, entity_id):
+        return "from embed", None, []
+
+    monkeypatch.setattr(spotify, "get_playlist_tracks", failing_api)
+    monkeypatch.setattr(spotify, "fetch_embed", fake_embed)
+
+    title, _, _ = asyncio.run(spotify.fetch_entity("playlist", "pl1"))
+    assert title == "from embed"
 
 
 # ─── Эндпоинты импорта ───
@@ -298,19 +452,40 @@ def test_import_preview_uses_spotify_metadata(client, db, monkeypatch):
     }
 
 
-def test_import_preview_spotify_without_credentials_returns_503(client, db, monkeypatch):
+def test_import_preview_spotify_without_credentials_uses_embed(client, db, monkeypatch):
+    """Без ключей превью не отваливается, а идёт на страницу embed."""
     create_user(db)
     headers = auth_headers(client)
     monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_ID", "")
     monkeypatch.setattr(spotify, "SPOTIFY_CLIENT_SECRET", "")
+
+    async def fake_html(kind, entity_id):
+        assert (kind, entity_id) == ("playlist", "pl1")
+        return _embed_html({
+            "type": "playlist",
+            "name": "Keyless Mix",
+            "coverArt": {"sources": [{"url": "cover", "width": 640}]},
+            "trackList": [_embed_item("spotify:track:t1", "One", "A", 200_000)],
+        })
+
+    monkeypatch.setattr(spotify, "_fetch_embed_html", fake_html)
 
     resp = client.post(
         "/api/import/preview",
         json={"url": "https://open.spotify.com/playlist/pl1"},
         headers=headers,
     )
-    assert resp.status_code == 503
-    assert "SPOTIFY_CLIENT_ID" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "spotify"
+    assert body["title"] == "Keyless Mix"
+    assert body["tracks"] == [{
+        "title": "One",
+        "artist": "A",
+        "duration": 200,
+        "cover_url": "cover",
+        "source": "spotify",
+    }]
 
 
 def test_import_spotify_matches_tracks_in_ytmusic(client, db, monkeypatch):

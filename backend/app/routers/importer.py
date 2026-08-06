@@ -1,13 +1,18 @@
 """Импорт треков и плейлистов из внешних сервисов (SoundCloud, Yandex Music, Spotify).
 
-Разбирает ссылку через yt-dlp (extract_flat — только метаданные, быстро), затем
-делает каждый трек играбельным и складывает в новый плейлист пользователя:
+Разбирает ссылку, делает каждый трек играбельным и складывает в новый плейлист
+пользователя:
 
 * SoundCloud — материализуем нативно (свой стрим-движок, см. soundcloud.py).
-* Yandex Music — нативная интеграция через API (см. yandex_music.py), с фолбэком
-  на yt-dlp + матчинг в YouTube Music.
-* Spotify — только метаданные через Web API (см. spotify.py): аудио закрыто DRM,
-  поэтому каждый трек подбирается матчингом в YouTube Music.
+* Yandex Music — метаданные из yandex_music.py (публичные веб-хендлеры без
+  токена, либо API по токену, если он задан), с фолбэком на yt-dlp; аудио
+  подбирается матчингом в YouTube Music.
+* Spotify — метаданные из spotify.py (страница встроенного плеера без ключей,
+  либо Web API, если ключи заданы): аудио закрыто DRM, поэтому каждый трек
+  тоже подбирается матчингом в YouTube Music.
+
+Ключи и токены нигде не обязательны — они лишь снимают ограничения (длинные
+плейлисты в Spotify, приватные коллекции в Yandex).
 """
 
 import asyncio
@@ -35,6 +40,8 @@ from app.schemas import (
     PlaylistResponse,
 )
 
+logger = logging.getLogger(__name__)
+
 # Пытаемся импортировать нативный клиент Yandex Music
 try:
     from app.routers import yandex_music as yandex_music_native
@@ -42,8 +49,6 @@ try:
 except ImportError:
     HAS_YANDEX_MUSIC_NATIVE = False
     logger.warning("Нативный клиент Yandex Music недоступен")
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -92,34 +97,13 @@ def _detect(url: str) -> Tuple[str, str]:
         return "soundcloud", "track"
 
     if "music.yandex." in host:
-        # /users/{user_id}/likes/tracks — избранное/лайки пользователя
-        if re.search(r"/users/\d+/likes(/tracks)?$", path):
-            return "yandex", "likes"
-        # /users/{user_id}/playlists/{playlist_id} — плейлист пользователя
-        if re.search(r"/users/\d+/playlists/\d+", path):
-            return "yandex", "playlist"
-        # /playlists/{owner_id}/{playlist_id} — плейлист (короткий URL)
-        if re.search(r"/playlists/\d+/\d+", path):
-            return "yandex", "playlist"
-        # /album/{id}/track/{id} — одиночный трек внутри альбома
-        if re.search(r"/album/\d+/track/\d+", path):
-            return "yandex", "track"
-        # /album/{id} — альбом
-        if re.search(r"/album/\d+$", path):
-            return "yandex", "album"
-        # /artist/{id}/tracks — все треки артиста
-        if re.search(r"/artist/\d+/tracks", path):
-            return "yandex", "artist"
-        # /artist/{id} — страница артиста (берём треки)
-        if re.search(r"/artist/\d+$", path):
-            return "yandex", "artist"
-        # /track/{id} — одиночный трек
-        if re.search(r"/track/\d+$", path):
-            return "yandex", "track"
-        # /playlists/ — список плейлистов (фолбэк)
-        if "/playlists/" in path:
-            return "yandex", "playlist"
-        # Неизвестный формат — пробуем как плейлист
+        # Разбор ссылок Yandex живёт в yandex_music.py — там же, где по этим
+        # id ходят за метаданными.
+        if HAS_YANDEX_MUSIC_NATIVE:
+            parsed = yandex_music_native.parse_url(url)
+            if parsed:
+                return "yandex", parsed[0]
+        # Неизвестный формат — пробуем как плейлист (дальше подхватит yt-dlp).
         return "yandex", "playlist"
 
     raise HTTPException(
@@ -265,153 +249,9 @@ def _build_match_query(artist: str, title: str) -> str:
         return f"{artist} {title}".strip()
 
 
-async def _extract_yandex_native(
-    request: Request, url: str, kind: str
-) -> Optional[Tuple[Optional[str], Optional[str], List[dict]]]:
-    """Пытается извлечь данные из Yandex Music через нативный API.
-
-    Возвращает (title, cover, entries) или None, если нативный клиент недоступен.
-    """
-    if not HAS_YANDEX_MUSIC_NATIVE:
-        return None
-
-    # Проверяем, что нативный клиент настроен
-    status = await yandex_music_native.check_status()
-    if not status.get("connected"):
-        return None
-
-    # Парсим URL для извлечения ID
-    from urllib.parse import urlparse
-    import re
-
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/")
-
-    try:
-        # Определяем тип контента по URL
-        if re.search(r"/album/(\d+)$", path):
-            # Альбом
-            album_id = re.search(r"/album/(\d+)$", path).group(1)
-            title, cover, tracks = await yandex_music_native.get_album_tracks(request, album_id)
-            entries = [
-                {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                for t in tracks
-            ]
-            return title, cover, entries
-
-        elif re.search(r"/artist/(\d+)", path):
-            # Артист
-            artist_id = re.search(r"/artist/(\d+)", path).group(1)
-            name, cover, tracks = await yandex_music_native.get_artist_tracks(request, artist_id)
-            entries = [
-                {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                for t in tracks
-            ]
-            return name, cover, entries
-
-        elif re.search(r"/users/(\d+)/playlists/(\d+)", path):
-            # Плейлист пользователя
-            match = re.search(r"/users/(\d+)/playlists/(\d+)", path)
-            user_id, playlist_id = match.group(1), match.group(2)
-            title, cover, tracks = await yandex_music_native.get_playlist_tracks(
-                request, user_id, playlist_id
-            )
-            entries = [
-                {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                for t in tracks
-            ]
-            return title, cover, entries
-
-        elif re.search(r"/users/(\d+)/likes", path):
-            # Избранное/лайки
-            user_id = re.search(r"/users/(\d+)", path).group(1)
-            title, cover, tracks = await yandex_music_native.get_user_likes(request, user_id)
-            entries = [
-                {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                for t in tracks
-            ]
-            return title, cover, entries
-
-        elif re.search(r"/track/(\d+)$", path):
-            # Одиночный трек
-            track_id = re.search(r"/track/(\d+)$", path).group(1)
-            tracks = await yandex_music_native.search_yandex_music(request, f"track:{track_id}", limit=1)
-            if tracks:
-                t = tracks[0]
-                entry = {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                return t.title, t.cover_url, [entry]
-
-        elif re.search(r"/playlists/(\d+)/(\d+)", path):
-            # Плейлист (короткий URL)
-            match = re.search(r"/playlists/(\d+)/(\d+)", path)
-            owner_id, playlist_id = match.group(1), match.group(2)
-            title, cover, tracks = await yandex_music_native.get_playlist_tracks(
-                request, owner_id, playlist_id
-            )
-            entries = [
-                {
-                    "title": t.title,
-                    "artists": [t.artist],
-                    "album": t.album,
-                    "duration": t.duration,
-                    "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
-                    "id": t.id,
-                }
-                for t in tracks
-            ]
-            return title, cover, entries
-
-    except Exception as e:
-        logger.warning("Native Yandex Music extraction failed for %s: %s", url, e)
-        # Возвращаем None, чтобы фолбэк на yt-dlp
-        return None
-
-    return None
-
-
-async def _extract_spotify(url: str) -> Tuple[Optional[str], Optional[str], List[dict]]:
-    """Метаданные коллекции/трека Spotify через Web API → entries.
-
-    Фолбэка на yt-dlp нет: yt-dlp не умеет Spotify (аудио под DRM). Ошибки
-    (не настроен, приватный плейлист, 404) уходят наружу как есть.
-    """
-    title, cover, tracks = await spotify.fetch_by_url(url)
-    entries = [
+def _tracks_to_entries(tracks: List) -> List[dict]:
+    """Треки Spotify/Yandex → entries в формате yt-dlp (общий вход матчинга)."""
+    return [
         {
             "title": t.title,
             "artists": [t.artist],
@@ -422,7 +262,36 @@ async def _extract_spotify(url: str) -> Tuple[Optional[str], Optional[str], List
         }
         for t in tracks
     ]
-    return title, cover, entries
+
+
+async def _extract_yandex_native(
+    request: Request, url: str, kind: str
+) -> Optional[Tuple[Optional[str], Optional[str], List[dict]]]:
+    """Метаданные Yandex Music без yt-dlp: публичные хендлеры или API по токену.
+
+    None — ссылка не разобрана либо сервис не ответил (тогда пробуем yt-dlp).
+    """
+    if not HAS_YANDEX_MUSIC_NATIVE:
+        return None
+
+    result = await yandex_music_native.fetch_by_url(request, url)
+    if result is None:
+        return None
+
+    title, cover, tracks = result
+    if not tracks:
+        return None
+    return title, cover, _tracks_to_entries(tracks)
+
+
+async def _extract_spotify(url: str) -> Tuple[Optional[str], Optional[str], List[dict]]:
+    """Метаданные коллекции/трека Spotify → entries.
+
+    Фолбэка на yt-dlp нет: yt-dlp не умеет Spotify (аудио под DRM). Ошибки
+    (приватный плейлист, 404, недоступность) уходят наружу как есть.
+    """
+    title, cover, tracks = await spotify.fetch_by_url(url)
+    return title, cover, _tracks_to_entries(tracks)
 
 
 async def _extract_collection(
@@ -462,13 +331,17 @@ async def _extract_collection(
         info = await asyncio.to_thread(_extract_blocking, url, cookies_file)
     except Exception as exc:  # noqa: BLE001 — сеть/капча/недоступно
         logger.warning("import extract failed for %s: %s", url, exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Не удалось прочитать ссылку. Возможные решения:\n"
-                   "1. Настройте нативный клиент Yandex Music (задайте YANDEX_MUSIC_TOKEN в .env)\n"
-                   "2. Загрузите cookies файл через /api/import/cookies\n"
-                   "3. Проверьте доступность сервиса",
-        ) from exc
+        detail = "Не удалось прочитать ссылку. "
+        if source == "yandex":
+            detail += (
+                "Публичные данные Yandex Music тоже не отдались. Возможные причины:\n"
+                "1. Сервис недоступен с IP сервера (геоблокировка вне РФ/РБ) — нужен прокси\n"
+                "2. Yandex показал капчу — загрузите cookies через /api/import/cookies\n"
+                "3. Коллекция приватная — задайте YANDEX_MUSIC_TOKEN в .env"
+            )
+        else:
+            detail += "Проверьте ссылку и доступность сервиса."
+        raise HTTPException(status_code=502, detail=detail) from exc
 
     entries = info.get("entries")
     if entries is None:

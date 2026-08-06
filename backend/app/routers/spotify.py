@@ -1,22 +1,32 @@
-"""Нативная интеграция с Spotify Web API (только метаданные).
+"""Нативная интеграция со Spotify (только метаданные).
 
-Аудио Spotify закрыто DRM и через Web API не отдаётся — поэтому здесь мы
-забираем ТОЛЬКО метаданные (плейлисты, альбомы, треки, топ артиста), а
-играбельными треки делает матчинг в YouTube Music (см. importer.py), тем же
-путём, что уже используется для Yandex Music.
+Аудио Spotify закрыто DRM и через API не отдаётся — поэтому здесь мы забираем
+ТОЛЬКО метаданные (плейлисты, альбомы, треки, топ артиста), а играбельными
+треки делает матчинг в YouTube Music (см. importer.py), тем же путём, что уже
+используется для Yandex Music.
 
-Требования:
-- Создать приложение: https://developer.spotify.com/dashboard
-- Задать SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET в .env
+Два источника метаданных, в порядке предпочтения:
 
-Авторизация — Client Credentials (без пользователя): доступны публичные
-плейлисты, альбомы, артисты, треки. Приватные плейлисты и библиотека
-пользователя требуют OAuth-флоу с его согласия и здесь не поддерживаются.
-Алгоритмические/редакционные подборки Spotify (Discover Weekly, Radio,
-«Made For You») новым приложениям недоступны — API отдаёт на них 404.
+1. Web API (нужны SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET из
+   https://developer.spotify.com/dashboard). Авторизация Client Credentials:
+   публичные плейлисты, альбомы, артисты, треки — с полной пагинацией и ISRC.
+   Приватные плейлисты и библиотека пользователя требуют OAuth с его согласия и
+   здесь не поддерживаются; алгоритмические/редакционные подборки (Discover
+   Weekly, Radio, «Made For You») новым приложениям недоступны — API отдаёт 404.
+
+2. Страница встроенного плеера open.spotify.com/embed/... — БЕЗ ключей. Это
+   публичный HTML со сервер-рендеренным JSON (`__NEXT_DATA__`), тот же, что
+   отдаётся любому сайту со вставленным виджетом Spotify. Работает без всякой
+   авторизации и вытягивает в том числе редакционные подборки, на которые Web
+   API отвечает 404. Ограничение: не больше _EMBED_TRACK_LIMIT треков коллекции
+   и нет ISRC — за длинными плейлистами нужен путь (1).
+
+Если ключей нет, используется только (2); если есть — (1), а (2) остаётся
+фолбэком на случай, когда Web API отказал.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -39,11 +49,24 @@ SPOTIFY_MARKET = os.getenv("SPOTIFY_MARKET", "US")
 
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
 _API_BASE = "https://api.spotify.com/v1"
+_EMBED_BASE = "https://open.spotify.com/embed"
 
 _TIMEOUT = httpx.Timeout(10.0, read=20.0)
 # Предохранители на размер коллекции: страницы по 50-100 элементов.
 _PAGE_LIMIT = 100
 _MAX_ITEMS = 10_000
+# Сколько треков коллекции отдаёт страница встроенного плеера. Это её потолок,
+# пагинации там нет — за остальным нужен Web API с ключами.
+_EMBED_TRACK_LIMIT = 100
+
+# Страница embed отдаётся только «браузеру»: с curl-подобным UA прилетает 403.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL
+)
 
 # Кэш access-токена процесса: (token, expires_at_monotonic).
 _token: Optional[str] = None
@@ -326,6 +349,143 @@ async def get_track(track_id: str) -> Tuple[Optional[str], Optional[str], List[S
     return track.title, track.cover_url, [track]
 
 
+# ─── Без ключей: страница встроенного плеера ───
+
+
+async def _fetch_embed_html(kind: str, entity_id: str) -> str:
+    """HTML страницы open.spotify.com/embed/{kind}/{id}. 404 — нет такой сущности."""
+    url = f"{_EMBED_BASE}/{kind}/{entity_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={"User-Agent": _BROWSER_UA, "Accept-Language": "en"},
+            )
+    except Exception as exc:  # noqa: BLE001 — сеть
+        logger.warning("Spotify embed request failed for %s: %s", url, exc)
+        raise HTTPException(status_code=502, detail="Spotify недоступен") from exc
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Ресурс Spotify не найден или скрыт")
+    if resp.status_code != 200:
+        logger.warning("Spotify embed %s for %s", resp.status_code, url)
+        raise HTTPException(status_code=502, detail="Ошибка Spotify")
+    return resp.text
+
+
+def _entity_from_embed_html(html: str) -> dict:
+    """`__NEXT_DATA__` из HTML embed → объект сущности (плейлист/альбом/трек).
+
+    Страница может отрендериться и с 200, но без сущности — тогда в pageProps
+    лежит страница-ошибка со своим status (так отвечает Spotify на скрытые и
+    несуществующие id).
+    """
+    match = _NEXT_DATA_RE.search(html or "")
+    if not match:
+        logger.warning("Spotify embed: __NEXT_DATA__ не найден (разметка изменилась)")
+        raise HTTPException(status_code=502, detail="Не удалось разобрать ответ Spotify")
+
+    try:
+        page = json.loads(match.group(1))["props"]["pageProps"]
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.warning("Spotify embed: неожиданная структура __NEXT_DATA__: %s", exc)
+        raise HTTPException(status_code=502, detail="Не удалось разобрать ответ Spotify") from exc
+
+    entity = ((page.get("state") or {}).get("data") or {}).get("entity") or {}
+    if not entity:
+        if int(page.get("status") or 0) == 404:
+            raise HTTPException(status_code=404, detail="Ресурс Spotify не найден или скрыт")
+        raise HTTPException(status_code=502, detail="Spotify не отдал содержимое")
+    return entity
+
+
+def _embed_cover(obj: dict) -> Optional[str]:
+    """Обложка сущности embed.
+
+    У плейлистов она лежит в coverArt.sources, у альбомов/треков/артистов —
+    в visualIdentity.image (там ширина называется maxWidth).
+    """
+    cover = _biggest_image((obj.get("coverArt") or {}).get("sources"))
+    if cover:
+        return cover
+    images = (obj.get("visualIdentity") or {}).get("image") or []
+    return _biggest_image(
+        [{"url": i.get("url"), "width": i.get("maxWidth")} for i in images if i]
+    )
+
+
+def _embed_artist(obj: dict) -> str:
+    """Артисты элемента embed.
+
+    В списке треков они склеены в subtitle через запятую с неразрывным пробелом
+    (U+00A0) — его надо развернуть, иначе строка поедет в матчинг как есть.
+    У одиночного трека вместо subtitle приходит массив artists.
+    """
+    names = [a.get("name") for a in (obj.get("artists") or []) if a.get("name")]
+    if names:
+        return ", ".join(names)
+    #   — тот самый неразрывный пробел после запятой.
+    subtitle = (obj.get("subtitle") or "").replace(" ", " ").strip()
+    return subtitle or "Unknown Artist"
+
+
+def _track_from_embed(
+    obj: dict, fallback_cover: Optional[str] = None, album: Optional[str] = None
+) -> Optional[SpotifyTrack]:
+    """Элемент trackList (или сам трек) → SpotifyTrack. None — если это не трек."""
+    if not obj:
+        return None
+    uri = obj.get("uri") or ""
+    track_id = obj.get("id")
+    if not track_id and uri.startswith("spotify:track:"):
+        track_id = uri.rsplit(":", 1)[-1]
+    title = obj.get("title") or obj.get("name")
+    if not track_id or not title:
+        # Эпизоды подкастов и локальные файлы — не музыка, пропускаем.
+        return None
+    if obj.get("entityType") not in (None, "track") or obj.get("type") not in (None, "track"):
+        return None
+
+    return SpotifyTrack(
+        id=str(track_id),
+        title=title,
+        artist=_embed_artist(obj),
+        album=album,
+        # duration тут в миллисекундах, как и в Web API.
+        duration=int(obj.get("duration") or 0) // 1000,
+        cover_url=_embed_cover(obj) or fallback_cover,
+    )
+
+
+async def fetch_embed(kind: str, entity_id: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:
+    """Метаданные коллекции/трека без ключей → (название, обложка, треки)."""
+    entity = _entity_from_embed_html(await _fetch_embed_html(kind, entity_id))
+
+    name = entity.get("name") or entity.get("title")
+    cover = _embed_cover(entity)
+    items = entity.get("trackList") or []
+
+    if not items:
+        # Одиночный трек: сущность и есть трек, списка нет.
+        track = _track_from_embed(entity, cover)
+        if not track:
+            raise HTTPException(status_code=404, detail="По ссылке Spotify не найдено треков")
+        return name, cover, [track]
+
+    # У элементов списка нет ни своей обложки, ни альбома: для альбома название
+    # известно, для плейлиста — нет (там треки из разных альбомов).
+    album = name if kind == "album" else None
+    tracks = [t for t in (_track_from_embed(i, cover, album) for i in items) if t]
+
+    if len(items) >= _EMBED_TRACK_LIMIT:
+        logger.info(
+            "Spotify embed отдал %s треков (%s/%s) — это его потолок, "
+            "хвост коллекции доступен только с SPOTIFY_CLIENT_ID/SECRET",
+            len(items), kind, entity_id,
+        )
+    return name, cover, tracks
+
+
 # ─── Разбор ссылок ───
 
 # https://open.spotify.com/playlist/{id}, с необязательным локальным префиксом
@@ -371,13 +531,8 @@ async def resolve_short_link(url: str) -> str:
         return url
 
 
-async def fetch_by_url(url: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:
-    """Ссылка Spotify → (название, обложка, треки). 400 на нераспознанную."""
-    parsed = parse_url(url)
-    if not parsed:
-        raise HTTPException(status_code=400, detail="Не распознана ссылка Spotify")
-
-    kind, entity_id = parsed
+async def _fetch_via_api(kind: str, entity_id: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:
+    """Ссылка → метаданные через Web API (нужны ключи)."""
     if kind == "playlist":
         return await get_playlist_tracks(entity_id)
     if kind == "album":
@@ -385,6 +540,32 @@ async def fetch_by_url(url: str) -> Tuple[Optional[str], Optional[str], List[Spo
     if kind == "artist":
         return await get_artist_tracks(entity_id)
     return await get_track(entity_id)
+
+
+async def fetch_entity(kind: str, entity_id: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:
+    """(kind, id) → (название, обложка, треки).
+
+    С ключами идём в Web API (полная пагинация), без ключей — сразу на страницу
+    встроенного плеера. Если Web API отказал (истёкшие ключи, недоступная
+    приложению редакционная подборка), embed остаётся вторым шансом.
+    """
+    if is_configured():
+        try:
+            return await _fetch_via_api(kind, entity_id)
+        except HTTPException as exc:
+            logger.warning(
+                "Spotify Web API отказал (%s: %s) для %s/%s — пробуем embed",
+                exc.status_code, exc.detail, kind, entity_id,
+            )
+    return await fetch_embed(kind, entity_id)
+
+
+async def fetch_by_url(url: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:
+    """Ссылка Spotify → (название, обложка, треки). 400 на нераспознанную."""
+    parsed = parse_url(url)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Не распознана ссылка Spotify")
+    return await fetch_entity(*parsed)
 
 
 # ─── HTTP-эндпоинты ───
@@ -403,37 +584,43 @@ async def search_endpoint(
 @router.get("/playlist/{playlist_id}")
 async def playlist_endpoint(playlist_id: str):
     """Плейлист Spotify и его треки."""
-    title, cover, tracks = await get_playlist_tracks(playlist_id)
+    title, cover, tracks = await fetch_entity("playlist", playlist_id)
     return {"title": title, "cover_url": cover, "tracks": tracks, "track_count": len(tracks)}
 
 
 @router.get("/album/{album_id}")
 async def album_endpoint(album_id: str):
     """Альбом Spotify и его треки."""
-    title, cover, tracks = await get_album_tracks(album_id)
+    title, cover, tracks = await fetch_entity("album", album_id)
     return {"title": title, "cover_url": cover, "tracks": tracks, "track_count": len(tracks)}
 
 
 @router.get("/artist/{artist_id}")
 async def artist_endpoint(artist_id: str):
     """Артист Spotify и его топ-треки."""
-    name, cover, tracks = await get_artist_tracks(artist_id)
+    name, cover, tracks = await fetch_entity("artist", artist_id)
     return {"title": name, "cover_url": cover, "tracks": tracks, "track_count": len(tracks)}
 
 
 @router.get("/track/{track_id}")
 async def track_endpoint(track_id: str):
     """Одиночный трек Spotify."""
-    title, cover, tracks = await get_track(track_id)
+    title, cover, tracks = await fetch_entity("track", track_id)
     return {"title": title, "cover_url": cover, "tracks": tracks, "track_count": len(tracks)}
 
 
 @router.get("/status")
 async def check_status():
-    """Статус интеграции: настроены ли ключи и выдаётся ли токен."""
+    """Статус интеграции: есть ли ключи и выдаётся ли токен.
+
+    Импорт работает и без ключей (через страницу встроенного плеера), поэтому
+    connected=false здесь не означает «Spotify недоступен».
+    """
     token = await _get_token() if is_configured() else None
     return {
         "configured": is_configured(),
         "connected": bool(token),
+        "keyless": True,
+        "keyless_track_limit": _EMBED_TRACK_LIMIT,
         "market": SPOTIFY_MARKET,
     }
