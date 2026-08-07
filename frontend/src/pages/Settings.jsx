@@ -4,6 +4,7 @@ import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
 import PreferencePicker from '../components/PreferencePicker'
+import { formatDiag, clearDiag } from '../utils/playerDiag'
 import './Settings.css'
 
 function Settings() {
@@ -59,6 +60,26 @@ function Settings() {
   const handleGifClear = () => {
     setWaveGif(null)
     setGifError('')
+  }
+
+  // Диагностика плеера. Баги воспроизведения проявляются на iOS с
+  // заблокированным экраном, где нет ни консоли, ни devtools, поэтому лог
+  // событий media-элемента пишется на устройство (см. utils/playerDiag) и
+  // читается здесь — уже ПОСЛЕ того, как проблема воспроизвелась.
+  const [diagText, setDiagText] = useState(null)
+
+  const handleShowDiag = () => {
+    const text = formatDiag()
+    setDiagText(text || 'Лог пуст — включите музыку и повторите проблему.')
+  }
+
+  const handleCopyDiag = async () => {
+    try {
+      await navigator.clipboard.writeText(formatDiag())
+      toast.success('Лог скопирован')
+    } catch {
+      toast.error('Не удалось скопировать — выделите текст вручную')
+    }
   }
 
   return (
@@ -169,6 +190,36 @@ function Settings() {
             {gifError && <div className="settings-error">{gifError}</div>}
           </div>
         </div>
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-section-title">Диагностика плеера</div>
+        <p className="settings-hint settings-section-hint">
+          Журнал событий воспроизведения на этом устройстве. Чтобы поймать
+          проблему: очистите лог, включите музыку, заблокируйте экран,
+          воспроизведите сбой — и вернитесь сюда.
+        </p>
+        <div className="settings-prefs-actions">
+          <button type="button" className="settings-save-btn" onClick={handleShowDiag}>
+            Показать лог
+          </button>
+          <button type="button" className="settings-save-btn" onClick={handleCopyDiag}>
+            Скопировать
+          </button>
+          <button
+            type="button"
+            className="settings-save-btn"
+            onClick={() => {
+              clearDiag()
+              setDiagText('Лог очищен.')
+            }}
+          >
+            Очистить
+          </button>
+        </div>
+        {diagText !== null && (
+          <pre className="settings-diag-log">{diagText}</pre>
+        )}
       </div>
     </div>
   )

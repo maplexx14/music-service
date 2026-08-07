@@ -228,3 +228,18 @@
     width: 100%;
   }
 }
+
+.settings-diag-log {
+  margin: 12px 0 0;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
+}
