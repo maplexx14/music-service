@@ -11,6 +11,7 @@ import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
+import * as engine from '../services/audioEngine'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
@@ -23,6 +24,11 @@ const RETRY_DELAY_MS = 900
 // Проверочный range-запрос при ошибке не должен зависать дольше этого —
 // иначе зависший probe держит трек в состоянии "буферизуется" бесконечно.
 const PROBE_TIMEOUT_MS = 6000
+// За сколько секунд до конца трека начинать прогрев следующего во второй
+// <audio>, если текущий ещё не докачан целиком. Запас должен покрывать
+// холодный резолв на бэке (yt-dlp — единицы секунд) плюс загрузку первых
+// килобайт через узкий канал.
+const PRELOAD_LEAD_SEC = 45
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -32,9 +38,6 @@ const PROBE_TIMEOUT_MS = 6000
 // остаётся нейтральной зоной — ни плюс, ни минус.
 const PLAY_RECORD_RATIO = 0.5
 const PLAY_RECORD_MIN_SEC = 60
-// Сколько ждём буфер при отложенном переключении, прежде чем переключиться
-// как есть. Больше — дольше играет уже «прошлый» трек; меньше — чаще пауза.
-const DEFERRED_SWAP_TIMEOUT_MS = 8000
 
 // Зеркало EXTERNAL_STREAM_PREFIX из backend/app/routers/tracks.py: сюда
 // stream_track сам редиректит (307) материализованные внешние треки.
@@ -80,6 +83,19 @@ function resolveRawUrl(track, isExternal) {
   return undefined
 }
 
+// Источники, чей поток резолвится на бэке лениво (в отличие от локальных
+// файлов). Один список на весь модуль — раньше он был размножен по вызовам.
+const EXTERNAL_SOURCES = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud']
+
+// URL соседнего трека очереди. Общая точка для прогрева (engine.preload),
+// подмены элементов (playAdjacentNow) и гейта скипа: все трое должны говорить
+// про ОДИН и тот же URL, иначе «заряжено» и «сейчас включим» разъезжаются.
+function nextTrackUrl(offset = 1) {
+  const next = usePlayerStore.getState().getNextTrack(offset)
+  if (!next) return null
+  return resolveRawUrl(next, EXTERNAL_SOURCES.includes(next.source)) || null
+}
+
 function formatTime(seconds) {
   if (!seconds || isNaN(seconds)) return '0:00'
   const mins = Math.floor(seconds / 60)
@@ -119,11 +135,6 @@ function needsFreshLoad(audio) {
   if (!audio?.src) return false
   return audio.readyState === audio.HAVE_NOTHING && audio.networkState === audio.NETWORK_IDLE
 }
-
-// 12 мс тишины (8 кГц, моно, 8 бит) — ровно чтобы дать деке «сыграть» внутри
-// жеста и снять с неё ограничение автоплея (см. эффект разблокировки).
-const SILENT_WAV =
-  'data:audio/wav;base64,UklGRoQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YWAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA='
 
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
 // currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
@@ -254,51 +265,38 @@ function PlayerInner() {
   // подписка заставляет пересчитать canSkipNext (гейт кнопки «следующий»).
   const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
 
-  // --- Два аудиоэлемента (деки A/B) ---
-  //
-  // Раньше элемент был один, и переключение трека означало смену src на нём:
-  // элемент сбрасывался в HAVE_NOTHING, начиналась загрузка с нуля, и между
-  // треками возникало окно тишины в секунды. На iOS с заблокированным экраном
-  // это окно и есть корень всех бед: WebKit разрешает воспроизведение элементу,
-  // которому это разрешение выдал жест, но НОВУЮ загрузку в фоне откладывает, а
-  // молчащий элемент теряет аудиосессию — вместе с виджетом на экране блокировки.
-  // Все предыдущие заплатки (детектор стойла, микро-seek, гейты) лечили симптомы
-  // этого окна, не убирая его.
-  //
-  // Деки убирают окно как класс: пока дека A играет, дека B молча буферизует
-  // следующий трек. Переключение — это `B.play()` на уже загруженных данных:
-  // ни смены src, ни load(), ни ожидания сети. Обе деки заранее «разблокированы»
-  // жестом (см. unlockDecks), поэтому play() на них законен и в фоне.
-  //
-  // audioRef указывает на активную деку — весь остальной код плеера (прогресс,
-  // перемотка, вотчдог, Media Session, обработка ошибок) работает через него и
-  // про деки не знает.
-  const deckARef = useRef(null)
-  const deckBRef = useRef(null)
   const audioRef = useRef(null)
-  const activeDeckRef = useRef('a')
-  const unlockedDecksRef = useRef(new Set())
-  // Отложенное переключение: цель грузится на свободной деке, пока играет
-  // текущая (см. playAdjacentNow).
-  const pendingSwapRef = useRef(null)
-  const getActiveDeck = () => (activeDeckRef.current === 'a' ? deckARef.current : deckBRef.current)
-  const getIdleDeck = () => (activeDeckRef.current === 'a' ? deckBRef.current : deckARef.current)
-  // Обработчики событий живут на конкретном элементе и переживают смену активной
-  // деки (эффект переподпишется только на следующем рендере). Всё, что меняет
-  // общее состояние, обязано игнорировать события НЕактивной деки — иначе,
-  // например, pause старой деки при переключении погасил бы store.isPlaying и
-  // остановил только что начатый трек.
-  const isActiveDeck = (el) => !!el && el === audioRef.current
-  // Стабильные ref-колбэки. Инлайновый колбэк React пересоздаёт каждый рендер и
-  // потому отвязывает/привязывает ref заново — audioRef.current на миг
-  // обнулялся бы на каждом рендере, а по нему сверяются все обработчики.
-  const setDeckA = useCallback((el) => {
-    deckARef.current = el
-    if (activeDeckRef.current === 'a') audioRef.current = el
-  }, [])
-  const setDeckB = useCallback((el) => {
-    deckBRef.current = el
-    if (activeDeckRef.current === 'b') audioRef.current = el
+  // Активный <audio> живёт не в JSX, а в модульном движке (services/audioEngine):
+  // два элемента, второй заранее догружает следующий трек, чтобы переход в фоне
+  // не требовал новой сетевой загрузки. audioRef остаётся указателем на
+  // АКТИВНЫЙ элемент — весь код ниже работает с ним как раньше.
+  //
+  // Инициализация в теле рендера, а не в эффекте: эффекты ниже читают
+  // audioRef.current сразу, а бегут они позже первого рендера — ленивая
+  // инициализация здесь гарантирует, что к моменту их запуска указатель уже
+  // ведёт на живой элемент.
+  if (audioRef.current === null) audioRef.current = engine.getActive()
+  // Растёт при подмене активного элемента: заставляет эффекты, навешивающие
+  // слушатели, перевеситься на новый элемент.
+  const [swapVersion, setSwapVersion] = useState(0)
+  // Растёт, когда заряженный элемент догрузился — пересчитывает гейт скипа.
+  const [idleReadyVersion, setIdleReadyVersion] = useState(0)
+
+  useEffect(() => {
+    engine.mount()
+    audioRef.current = engine.getActive()
+    const offSwap = engine.onSwap(() => {
+      // Указатель обновляем синхронно, прямо в момент подмены: swapTo зовётся
+      // из жестового контекста (ended / кнопка виджета), и код после него
+      // должен видеть уже новый активный элемент, не дожидаясь ре-рендера.
+      audioRef.current = engine.getActive()
+      setSwapVersion((v) => v + 1)
+    })
+    const offIdleReady = engine.onIdleReady(() => setIdleReadyVersion((v) => v + 1))
+    return () => {
+      offSwap()
+      offIdleReady()
+    }
   }, [])
 
   const lastRecordedTrackIdRef = useRef(null)
@@ -320,6 +318,10 @@ function PlayerInner() {
   // kick качает трек с нуля — на честно медленной сети бесконечные рестарты
   // сделали бы только хуже. Сбрасывается на 'playing' и на смене трека.
   const stallKickCountRef = useRef(0)
+  // Всегда актуальная ссылка на handleAudioError. Слушатель 'error' вешается
+  // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
+  // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
+  const audioErrorRef = useRef(null)
   const [audioSrc, setAudioSrc] = useState(null)
   // Спиннер на время резолва/загрузки потока внешнего трека — иначе долгий
   // (но живой) резолв YouTube Music выглядит как зависший плеер.
@@ -331,7 +333,7 @@ function PlayerInner() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
   const [loadingPlaylists, setLoadingPlaylists] = useState(false)
   const [addError, setAddError] = useState('')
-  const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
+  const isExternalTrack = EXTERNAL_SOURCES.includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
@@ -347,13 +349,21 @@ function PlayerInner() {
   // трогает — там переход штатный, не пользовательский скип.
   // isNextTrackReady читает актуальный store; resolvedPrefetchVersion в
   // зависимостях подписки гарантирует пересчёт при завершении резолва.
-  const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
+  //
+  // Второе основание готовности — заряженный движком элемент: если следующий
+  // трек уже догружен в буфер, скипать можно независимо от того, что думает
+  // бэковый прогрев (буфер — более сильный сигнал, чем «резолв завершён»).
+  // idleReadyVersion в подписке пересчитывает гейт по факту догрузки.
+  const canSkipNext =
+    (resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()) ||
+    (idleReadyVersion >= 0 && engine.isReady(nextTrackUrl()))
 
   // Пользовательский скип вперёд (кнопка/свайп): выполняем только если
   // следующий трек готов. Готовность читаем из store в момент вызова —
   // защита от устаревшего замыкания в обработчиках свайпа.
   const handleSkipForward = () => {
-    if (!usePlayerStore.getState().isNextTrackReady()) return
+    if (!usePlayerStore.getState().isNextTrackReady() && !engine.isReady(nextTrackUrl())) return
+    playAdjacentNow(1)
     nextTrack()
   }
 
@@ -370,6 +380,16 @@ function PlayerInner() {
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
+
+    // Слушатели этого эффекта живут на КОНКРЕТНОМ элементе. При подмене
+    // (engine.swapTo) активным становится другой, а отписка от прежнего
+    // случится только на следующем рендере — и в это окно прежний элемент ещё
+    // успевает выстрелить pause/emptied/ended: его прямо в swapTo и
+    // останавливают, и освобождают. Без этой проверки такие события правили бы
+    // ОБЩЕЕ состояние: виджет на экране блокировки уходил бы в 'paused' поверх
+    // только что начавшегося трека, а 'ended' от старого элемента промотал бы
+    // очередь на лишний трек.
+    const isLive = () => engine.getActive() === audio
 
     const syncPositionState = () => {
       if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
@@ -394,13 +414,34 @@ function PlayerInner() {
     // позиция синхронизируется через visibilitychange ниже.
     let lastTickSecond = -1
     const updateTime = () => {
-      if (!isActiveDeck(audio)) return
+      if (!isLive()) return
       maybeRecordPlay(audio)
       const sec = Math.floor(audio.currentTime)
       if (sec === lastTickSecond) return
       lastTickSecond = sec
       if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
+      maybePreloadNext(audio)
+    }
+    // Прогрев следующего трека во ВТОРОЙ <audio> — то, ради чего затевался
+    // движок: к моменту перехода данные уже в буфере, и в фоне переключение
+    // не зависит ни от load(), ни от новой сетевой загрузки.
+    //
+    // Момент старта прогрева выбран по полосе, а не по времени: канал бывает
+    // узкий (~140 КБ/с через туннель), и качать два потока разом значит отобрать
+    // байты у играющего трека — он начнёт запинаться. Поэтому греем, только
+    // когда текущий трек за сеть уже не борется (докачан целиком) либо когда
+    // до конца осталось меньше PRELOAD_LEAD_SEC — там прогрев важнее
+    // возможной запинки в последние секунды.
+    const maybePreloadNext = (el) => {
+      if (!usePlayerStore.getState().isPlaying) return
+      const url = nextTrackUrl(1)
+      if (!url || engine.hasPrimedSrc(url)) return
+      const trackDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
+      const nearEnd =
+        trackDuration > 0 && trackDuration - el.currentTime <= PRELOAD_LEAD_SEC
+      if (!nearEnd && !engine.isFullyBuffered(el)) return
+      engine.preload(url)
     }
     // Зависший старт: play() уже принят (paused === false), а currentTime
     // замер на нуле. Две разновидности, у каждой своё лекарство:
@@ -458,6 +499,7 @@ function PlayerInner() {
     // если должно было играть. На мобильных браузерах audio может быть приостановлен
     // при уходе в фон (переключение приложения, блокировка экрана).
     const handleVisibility = () => {
+      if (!isLive()) return
       if (!document.hidden) {
         setCurrentTime(audio.currentTime)
         const { isPlaying: playing } = usePlayerStore.getState()
@@ -485,6 +527,7 @@ function PlayerInner() {
       }
     }
     const updateDuration = () => {
+      if (!isLive()) return
       const mediaDuration = resolveTrackDuration(audio, currentTrack)
       if (mediaDuration > 0) {
         setDuration(mediaDuration)
@@ -504,7 +547,7 @@ function PlayerInner() {
     // задержек — это единственный быстрый сигнал «после ended ничего не
     // грузится», из-за которого раньше следующий трек висел до ручного skip.
     const handleLoadStall = () => {
-      if (!isActiveDeck(audio)) return
+      if (!isLive()) return
       if (!usePlayerStore.getState().isPlaying) return
       if (!isStalledStart()) return
       if (stallKickCountRef.current >= 3) return // дальше — вотчдог/пользователь
@@ -512,7 +555,7 @@ function PlayerInner() {
       kickStalled()
     }
     const handlePlaying = () => {
-      if (!isActiveDeck(audio)) return
+      if (!isLive()) return
       stallKickCountRef.current = 0
       syncSystemPlaybackState('playing')
       // Старт в скрытой вкладке — риск беззвучного воспроизведения.
@@ -545,27 +588,8 @@ function PlayerInner() {
       }
     }
     const handlePause = () => {
-      // Событие неактивной деки: её глушит переключение (см. playAdjacentNow),
-      // и принимать это за пользовательскую паузу нельзя — иначе смена трека
-      // сама себя останавливала бы.
-      if (!isActiveDeck(audio)) return
+      if (!isLive()) return
       syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
-      // Пауза не всегда наша: её ставит система (звонок, аудиофокус ушёл другому
-      // приложению, отключились наушники, iOS усыпил страницу). В этих случаях
-      // store оставался с isPlaying === true, и дальше всё врало: в приложении
-      // горела кнопка «пауза» у молчащего плеера, первое нажатие на неё только
-      // приводило состояние в согласие (играть начинало лишь второе), а вотчдог
-      // считал трек играющим. Приводим store к факту.
-      //
-      // Отсеиваем чужие pause-события. Смена src (playAdjacentNow) тоже гасит
-      // элемент и ставит pause в очередь — но к моменту нашего обработчика
-      // элемент уже сброшен в HAVE_NOTHING и заново запущен, так что оба
-      // признака ниже отличают настоящую паузу от служебной. Иначе синхронизация
-      // сама убивала бы только что начатое переключение.
-      if (!audio.paused || audio.ended) return
-      if (audio.readyState === audio.HAVE_NOTHING) return
-      const state = usePlayerStore.getState()
-      if (state.isPlaying) state.togglePlayPause()
     }
     // Источник сменился (audio.src = ... / load()) — элемент сброшен и ещё
     // ничего не играет. Пока не придёт настоящее 'playing', система не должна
@@ -577,9 +601,7 @@ function PlayerInner() {
     // вдобавок возвращает на виджете рабочую кнопку ▶ — её нажатие жест, и
     // play() в нём разрешён даже в фоне.
     const handleEmptied = () => {
-      // Прогрев свободной деки тоже шлёт emptied — к состоянию воспроизведения
-      // это отношения не имеет.
-      if (!isActiveDeck(audio)) return
+      if (!isLive()) return
       syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
       // Новый источник — детектору зависания нужно начать отсчёт заново, иначе
       // он судит свежую загрузку по активности ПРЕДЫДУЩЕГО трека.
@@ -602,17 +624,10 @@ function PlayerInner() {
       stallKickCountRef.current = 0
     }
     const handleEnded = () => {
-      if (!isActiveDeck(audio)) return
-      // Трек доиграл, пока ждали буфер отложенного переключения: очередь уже
-      // сдвинута, ждать больше нечего — отдаём звук цели немедленно, иначе
-      // handleEnded увёл бы плеер ещё на один трек вперёд.
-      const pending = pendingSwapRef.current
-      if (pending) {
-        cancelPendingSwap()
-        diag('swap:endedWhileDeferred', snapshotAudio(pending.deck))
-        finishSwap(pending.deck, audio, 'swap:next:endedDeferred')
-        return
-      }
+      // Доигравший СТАРЫЙ элемент (его оставили заряженным на «предыдущий
+      // трек») тоже шлёт ended — но очередь по нему двигать нельзя, иначе один
+      // переход промотал бы сразу два трека.
+      if (!isLive()) return
       if (usePlayerStore.getState().isRepeatOne) {
         audio.currentTime = 0
         playWithDiag(audio, 'repeatOne')
@@ -640,6 +655,7 @@ function PlayerInner() {
     // не мгновенный; мгновенный путь — кнопка ▶ виджета (жест).
     let stalledTicks = 0
     const watchdog = setInterval(() => {
+      if (!isLive()) return
       const { isPlaying: playing } = usePlayerStore.getState()
       if (!playing || !audio.src || audio.ended) {
         stalledTicks = 0
@@ -661,6 +677,47 @@ function PlayerInner() {
       }
     }, 3000)
 
+    // Бывшие JSX-атрибуты <audio>: элемент уехал в движок, поэтому те же
+    // обработчики навешиваем здесь руками.
+    //
+    // Ошибку прокидываем через ref: handleAudioError замыкает актуальный
+    // currentTrack и пересоздаётся каждый рендер, а этот эффект
+    // переподписывается заметно реже — прямая ссылка застревала бы на треке,
+    // который был текущим в момент подписки.
+    const handleElementError = (event) => {
+      if (!isLive()) return
+      audioErrorRef.current?.(event)
+    }
+    const handleSourceCanPlay = () => {
+      if (!isLive()) return
+      // Раз дошли до canplay — источник рабочий, ретраи для этой сессии
+      // трека больше не нужны, скрываем спиннер.
+      retryCountRef.current = 0
+      setIsBuffering(false)
+      if (usePlayerStore.getState().isPlaying && audio.paused) {
+        playWithDiag(audio, 'listener:canplay')
+      }
+    }
+    const handleWaiting = () => {
+      if (!isLive()) return
+      setIsBuffering(true)
+    }
+    // Один именованный обработчик 'playing' вместо анонимной стрелки: снять
+    // с элемента можно только ту же ссылку, что вешал. Раньше вешалась стрелка,
+    // а снимался handlePlaying — то есть не снималось ничего. Пока элемент
+    // умирал вместе с компонентом, это сходило с рук; теперь элементы живут всю
+    // сессию страницы, и каждая переподписка эффекта добавляла бы ещё один
+    // висящий слушатель поверх старых.
+    const handlePlayingSync = () => {
+      if (!isLive()) return
+      handlePlaying()
+      setIsBuffering(false)
+      // syncPositionState на playing: iOS требует setPositionState ДО того,
+      // как система «признает» воспроизведение — иначе виджет на экране
+      // блокировки не появляется. timeupdate стреляет слишком поздно.
+      syncPositionState()
+    }
+
     audio.addEventListener('timeupdate', updateTime)
     // progress/loadstart питают детектор зависания (см. isStalledStart):
     // пока браузер докладывает о новых байтах, загрузка живая — рвать её
@@ -672,12 +729,12 @@ function PlayerInner() {
     audio.addEventListener('loadedmetadata', updateDuration)
     audio.addEventListener('durationchange', updateDuration)
     audio.addEventListener('canplay', updateDuration)
+    audio.addEventListener('canplay', handleSourceCanPlay)
+    audio.addEventListener('waiting', handleWaiting)
+    audio.addEventListener('error', handleElementError)
     audio.addEventListener('seeked', syncPositionState)
     audio.addEventListener('ratechange', syncPositionState)
-    // syncPositionState на playing: iOS требует setPositionState ДО того,
-    // как система «признает» воспроизведение — иначе виджет на экране
-    // блокировки не появляется. timeupdate стреляет слишком поздно.
-    audio.addEventListener('playing', () => { handlePlaying(); syncPositionState() })
+    audio.addEventListener('playing', handlePlayingSync)
     audio.addEventListener('pause', handlePause)
     audio.addEventListener('emptied', handleEmptied)
     audio.addEventListener('ended', handleEnded)
@@ -698,11 +755,10 @@ function PlayerInner() {
     const logVisibility = () => diag('visibility', snapshotAudio(audio))
     document.addEventListener('visibilitychange', logVisibility)
 
-    // Слушатели переезжают на новую деку уже ПОСЛЕ того, как переключение её
-    // запустило (свап синхронный, эффект — на следующем рендере), поэтому её
-    // события playing/canplay/loadedmetadata мы гарантированно пропустили.
-    // Приводим производное состояние к факту, иначе на играющем треке виджет
-    // остаётся с 'paused', а длительность и позиция — от предыдущего.
+    // playAdjacentNow стартует трек синхронно, а этот эффект переподписывается
+    // только на следующем рендере — часть событий элемента к этому моменту уже
+    // прошла. Приводим производное состояние к факту, иначе на играющем треке
+    // виджет остаётся с 'paused', а длительность и позиция — от предыдущего.
     if (!audio.paused && audio.readyState >= audio.HAVE_CURRENT_DATA) {
       syncSystemPlaybackState('playing')
       setIsBuffering(false)
@@ -722,16 +778,19 @@ function PlayerInner() {
       audio.removeEventListener('loadedmetadata', updateDuration)
       audio.removeEventListener('durationchange', updateDuration)
       audio.removeEventListener('canplay', updateDuration)
+      audio.removeEventListener('canplay', handleSourceCanPlay)
+      audio.removeEventListener('waiting', handleWaiting)
+      audio.removeEventListener('error', handleElementError)
       audio.removeEventListener('seeked', syncPositionState)
       audio.removeEventListener('ratechange', syncPositionState)
-      audio.removeEventListener('playing', handlePlaying)
+      audio.removeEventListener('playing', handlePlayingSync)
       audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('emptied', handleEmptied)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('stalled', handleLoadStall)
       audio.removeEventListener('suspend', handleLoadStall)
     }
-  }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack])
+  }, [currentTrack?.id, setCurrentTime, setDuration, nextTrack, swapVersion])
 
   useEffect(() => {
     if (dbTrackId) {
@@ -772,11 +831,6 @@ function PlayerInner() {
       return
     }
     const abs = new URL(audioSrc, window.location.href).href
-    // Отложенное переключение: store уже показывает новый трек, но играет ещё
-    // предыдущий, а цель грузится на свободной деке. Тронуть здесь src активной
-    // деки значило бы оборвать этот звук — то есть вернуть окно тишины, ради
-    // устранения которого отсрочка и сделана.
-    if (pendingSwapRef.current?.url === abs) return
     const srcChanged = audio.src !== abs
     if (srcChanged) audio.src = abs
     // iOS Safari: explicit load() is required to start downloading.
@@ -787,215 +841,47 @@ function PlayerInner() {
     if (usePlayerStore.getState().isPlaying && audio.paused) {
       playWithDiag(audio, 'effect:srcChanged')
     }
-  }, [audioSrc])
+    // swapVersion: после подмены активного элемента эффект обязан переспросить
+    // src уже у НОВОГО элемента — иначе он остался бы уверен, что выставил
+    // нужный источник, тогда как проверял состояние предыдущего.
+  }, [audioSrc, swapVersion])
 
-  // Прогрев следующего трека на свободной деке — то, ради чего деки и заведены.
-  // Зовём при смене трека, при завершении резолва на бэке
-  // (resolvedPrefetchVersion) и после разблокировки деки. У внешнего трека до
-  // конца резолва URL ещё отдаёт 503 — пока бэк не подтвердил готовность, греть
-  // нечего, дождёмся сигнала.
-  const warmIdleDeck = useCallback(() => {
-    const idle = getIdleDeck()
-    if (!idle) return
-    // На свободной деке грузится цель отложенного переключения — перебивать её
-    // прогревом нельзя, иначе переключение не состоится никогда.
-    if (pendingSwapRef.current) return
-    // Дека сейчас проигрывает тишину разблокировки — её src трогать нельзя,
-    // прогрев довызовется сам по завершении процедуры.
-    if (idle.src === SILENT_WAV) return
-    const state = usePlayerStore.getState()
-    if (!state.currentTrack || !state.isNextTrackReady()) return
-    const next = state.getNextTrack(1)
-    if (!next) return
-    const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(next.source)
-    const url = resolveRawUrl(next, nextIsExternal)
-    if (!url) return
-    const abs = new URL(url, window.location.href).href
-    if (idle.src === abs) return
-    idle.src = abs
-    idle.load()
-    diag('preload:start', { trackId: next.id })
-  }, [])
-
-  useEffect(() => {
-    warmIdleDeck()
-  }, [currentTrack?.id, resolvedPrefetchVersion, warmIdleDeck])
-
-  // «Разблокировка» дек жестом пользователя.
+  // Синхронный (в контексте текущего жеста/события) старт соседнего трека
+  // очереди прямо на <audio>-элементе — общий путь для естественного конца
+  // трека (ended) и кнопок next/prev системного виджета. Store после этого
+  // обновляется отдельно вызывающей стороной; эффект src выше увидит тот же
+  // URL и ничего не перезапустит.
   //
-  // WebKit выдаёт разрешение играть не странице, а КОНКРЕТНОМУ media-элементу, и
-  // только когда play() случился внутри пользовательского жеста. Дальше элемент
-  // хранит это разрешение навсегда, в том числе после смены src. Активная дека
-  // получает его сама (пользователь нажал play), а вот свободная стартует уже
-  // без жеста — при переключении трека, — и без этой процедуры её play() в фоне
-  // отвергается. Проигрываем на ней 12 мс тишины: этого достаточно.
+  // Быстрый путь — подмена элемента (engine.swapTo): если движок заранее
+  // догрузил этот трек во второй <audio>, играть можно немедленно, без
+  // обращения к сети. Именно это чинит фон: в скрытой вкладке / на
+  // заблокированном экране нам больше не нужно ни load(), ни успешная загрузка
+  // нового потока — только play() на уже тёплом элементе.
   //
-  // Слушатель намеренно НЕ одноразовый и снимается только когда обе деки
-  // разблокированы. На первом тапе по приложению трека ещё нет, Player
-  // возвращает null и элементов не существует — одноразовый слушатель сгорел бы
-  // впустую. Разблокировать пробуем на каждом жесте, пока не выйдет.
-  useEffect(() => {
-    const unlockDeck = (name, deck) => {
-      if (!deck || unlockedDecksRef.current.has(name)) return
-      // Активную деку не трогаем: своё разрешение она получает от настоящего
-      // play() пользователя, а вмешательство сорвало бы играющий трек.
-      if (deck === audioRef.current) return
-      // Разблокируем на том src, который на деке уже есть: прогретый буфер
-      // сохраняется, стоимость процедуры — мгновение muted-воспроизведения и
-      // возврат currentTime к нулю. Тишина нужна только когда греть ещё нечего.
-      const usingPlaceholder = !deck.src
-      if (usingPlaceholder) deck.src = SILENT_WAV
-      // Глушим всегда: незаглушённый старт второй деки iOS воспринял бы как
-      // заявку на аудиосессию и прервал бы играющий трек.
-      deck.muted = true
-      const restore = (ok) => {
-        if (ok) unlockedDecksRef.current.add(name)
-        // Пока процедура шла (play() асинхронный), дека могла стать активной —
-        // переключением трека. Тогда она уже играет нужный трек, и pause() со
-        // сбросом src остановили бы его: ровно это и заставляло жать play вручную.
-        // Размьютить, впрочем, обязаны в любом случае, иначе трек идёт беззвучно.
-        deck.muted = false
-        if (deck === audioRef.current) {
-          diag('unlock:deckWentLive', { deck: name })
-          return
-        }
-        deck.pause()
-        if (usingPlaceholder) {
-          deck.removeAttribute('src')
-          warmIdleDeck()
-        } else {
-          // Буфер трека остаётся, отматываем только позицию.
-          try {
-            deck.currentTime = 0
-          } catch {
-            /* поток без seekable-диапазона — перемотка не нужна */
-          }
-        }
-      }
-      deck
-        .play()
-        .then(() => {
-          diag('unlock:ok', { deck: name, placeholder: usingPlaceholder })
-          restore(true)
-        })
-        .catch((error) => {
-          diag('unlock:fail', { deck: name, placeholder: usingPlaceholder, name: error?.name })
-          restore(false)
-        })
-    }
-    const unlock = () => {
-      unlockDeck('a', deckARef.current)
-      unlockDeck('b', deckBRef.current)
-      if (unlockedDecksRef.current.size >= 2) {
-        window.removeEventListener('pointerdown', unlock)
-        window.removeEventListener('keydown', unlock)
-      }
-    }
-    window.addEventListener('pointerdown', unlock)
-    window.addEventListener('keydown', unlock)
-    return () => {
-      window.removeEventListener('pointerdown', unlock)
-      window.removeEventListener('keydown', unlock)
-    }
-  }, [warmIdleDeck])
-
-  // Переход на соседний трек очереди. Store обновляется отдельно вызывающей
-  // стороной; эффект audioSrc увидит тот же URL на активной деке и ничего не
-  // перезапустит.
-  //
-  // Быстрый путь (ради него всё и затевалось): трек уже буферизуется на
-  // свободной деке — переключение это просто play() на готовых данных. Ни смены
-  // src, ни load(), ни сетевого ожидания, а значит и без окна тишины, в котором
-  // iOS отбирал аудиосессию.
-  //
-  // deferIfCold — для случая, когда прогрев не успел (классика: два скипа
-  // подряд, ведь прогрев следующего стартует только ПОСЛЕ первого). Раньше это
-  // означало немедленный свап на пустую деку, то есть ровно ту тишину, ради
-  // устранения которой всё и делалось. Вместо этого не трогаем играющую деку:
-  // грузим цель на свободной и переключаемся, когда данные готовы. Трек
-  // сменится на секунду-другую позже, но звук не прервётся, а сессия и виджет
-  // останутся живы. При естественном конце трека откладывать некуда — там
-  // играть уже нечего, идём напрямую.
-  const finishSwap = (idle, active, label) => {
-    // Активную деку переназначаем ДО остановки старой: обработчики событий
-    // сверяются с audioRef (см. isActiveDeck), и без этого пауза старой деки
-    // прилетела бы в handlePause как «пользователь остановил воспроизведение».
-    activeDeckRef.current = activeDeckRef.current === 'a' ? 'b' : 'a'
-    audioRef.current = idle
-    idle.volume = usePlayerStore.getState().volume
-    // Деку могла перехватить разблокировка (она играет muted и не с нуля) —
-    // без этого трек пошёл бы беззвучно и с середины.
-    idle.muted = false
-    if (idle.currentTime > 0) {
-      try {
-        idle.currentTime = 0
-      } catch {
-        /* seekable ещё пуст — стартуем как есть */
-      }
-    }
-    playWithDiag(idle, label)
-    // Старую деку освобождаем только после старта новой: одновременно звучащих
-    // дек быть не должно, но и глушить старую до того, как новая подхватила,
-    // нельзя — иначе получаем ту самую паузу в звуке.
-    active.pause()
-  }
-
-  const cancelPendingSwap = () => {
-    const pending = pendingSwapRef.current
-    if (!pending) return
-    pendingSwapRef.current = null
-    pending.deck.removeEventListener('canplay', pending.onReady)
-    clearTimeout(pending.timer)
-  }
-
-  const playAdjacentNow = (offset, { deferIfCold = false } = {}) => {
-    const active = getActiveDeck()
-    const idle = getIdleDeck()
-    if (!active || !idle) return
+  // Медленный путь (буфера нет — прогрев не успел, очередь только что
+  // изменилась, прогрев отвалился) — ровно прежнее поведение: src + load +
+  // play на активном элементе. В фоне он по-прежнему ненадёжен, но это не
+  // регресс, а та же вероятность, что была до движка.
+  const playAdjacentNow = (offset) => {
     const next = usePlayerStore.getState().getNextTrack(offset)
     if (!next) return
-    const nextIsExternal = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(next.source)
-    const url = resolveRawUrl(next, nextIsExternal)
+    const url = resolveRawUrl(next, EXTERNAL_SOURCES.includes(next.source))
     if (!url) return
-    const abs = new URL(url, window.location.href).href
-    const preloaded = idle.src === abs && idle.readyState >= idle.HAVE_CURRENT_DATA
-    const direction = offset > 0 ? 'next' : 'prev'
-    cancelPendingSwap()
-    diag('swap:start', {
-      offset,
-      preloaded,
-      deferred: !preloaded && deferIfCold,
-      idleRs: idle.readyState,
-      ...snapshotAudio(active),
-    })
 
-    if (preloaded) {
-      finishSwap(idle, active, `swap:${direction}:warm`)
+    const primed = engine.swapTo(url)
+    if (primed) {
+      primed.volume = usePlayerStore.getState().volume
+      diag('swap:primed', { offset, ...snapshotAudio(primed) })
+      playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
       return
     }
 
-    if (idle.src !== abs) idle.src = abs
-    idle.load()
-
-    // Играющую деку не трогаем — переключимся, когда цель будет готова.
-    if (deferIfCold && !active.paused) {
-      const onReady = () => {
-        cancelPendingSwap()
-        finishSwap(idle, active, `swap:${direction}:deferred`)
-      }
-      // Потолок ожидания: если данные так и не пришли, переключаемся как есть —
-      // лучше пауза, чем застрявший на месте плеер.
-      const timer = setTimeout(() => {
-        cancelPendingSwap()
-        diag('swap:deferTimeout', snapshotAudio(idle))
-        finishSwap(idle, active, `swap:${direction}:cold`)
-      }, DEFERRED_SWAP_TIMEOUT_MS)
-      pendingSwapRef.current = { deck: idle, url: abs, onReady, timer }
-      idle.addEventListener('canplay', onReady, { once: true })
-      return
-    }
-
-    finishSwap(idle, active, `swap:${direction}:cold`)
+    const audio = audioRef.current
+    if (!audio) return
+    diag('swap:start', { offset, ...snapshotAudio(audio) })
+    audio.src = url
+    audio.load()
+    playWithDiag(audio, `swap:${offset > 0 ? 'next' : 'prev'}`)
   }
 
   // Reload audio when track changes
@@ -1013,6 +899,13 @@ function PlayerInner() {
     }
     setIsBuffering(false)
 
+    // Очередь могла перестроиться (пользователь выбрал другой список/трек), и
+    // заряженный в движке трек больше не соседний. Такой прогрев не только
+    // бесполезен — он продолжает качать байты и отбирает полосу у того, что
+    // сейчас играет. Актуальные соседи (следующий и предыдущий) остаются:
+    // предыдущий делает мгновенной кнопку ◀ сразу после перехода.
+    engine.clearStalePreload([nextTrackUrl(1), nextTrackUrl(-1)])
+
     // Сам load() тут не нужен: смена src (через audioSrc, см. эффект выше)
     // уже запускает алгоритм загрузки ресурса сама по себе — явный load()
     // здесь означал повторную полную загрузку того же потока (раньше element
@@ -1021,12 +914,9 @@ function PlayerInner() {
     // сама, но выставляем явно для надёжности.
     audio.volume = usePlayerStore.getState().volume
     setCurrentTime(0)
-    // НЕ ноль: длительность берём сразу из трека (в БД она точнее, чем оценка
-    // браузера). Обнуление осталось от одного элемента, где её тут же
-    // восстанавливал loadedmetadata новой загрузки. У прогретой деки эти события
-    // отгремели, пока она была свободной, так что восстанавливать было некому:
-    // duration оставалась нулём, из-за чего перемотка в начале трека умножала
-    // позицию на ноль и прыгала в самое начало.
+    // Длительность берём сразу из трека (в БД она точнее оценки браузера).
+    // Прежнее обнуление оставляло окно, в котором duration === 0 — а на нулевой
+    // длительности перемотка умножает позицию на ноль и прыгает в самое начало.
     setDuration(resolveTrackDuration(audio, currentTrack))
     setShowAddToPlaylist(false)
     setAddError('')
@@ -1034,17 +924,11 @@ function PlayerInner() {
 
   }, [currentTrack?.id, setCurrentTime, setDuration])
 
-  // Отменяем висящий ретрай и отложенное переключение при размонтировании.
+  // Отменяем висящий ретрай при размонтировании.
   useEffect(() => {
     return () => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current)
-      }
-      const pending = pendingSwapRef.current
-      if (pending) {
-        pending.deck.removeEventListener('canplay', pending.onReady)
-        clearTimeout(pending.timer)
-        pendingSwapRef.current = null
       }
     }
   }, [])
@@ -1053,11 +937,19 @@ function PlayerInner() {
     const audio = audioRef.current
     if (!audio || !currentTrack) return
 
+    // См. isLive в эффекте выше: подменённый элемент не должен продолжать
+    // управлять воспроизведением. Здесь это особенно важно — handleCanPlay
+    // зовёт play(), и на освобождаемом элементе он запустил бы второй звук
+    // поверх только что начавшегося трека.
+    const isLive = () => engine.getActive() === audio
+
     const handleLoad = () => {
+      if (!isLive()) return
       setDuration(resolveTrackDuration(audio, currentTrack))
     }
 
     const handleCanPlay = () => {
+      if (!isLive()) return
       if (isPlaying && audio.paused) {
         playWithDiag(audio, 'canplay')
       }
@@ -1125,7 +1017,7 @@ function PlayerInner() {
       audio.removeEventListener('canplay', handleCanPlay)
       audio.removeEventListener('error', handleError)
     }
-  }, [isPlaying, currentTrack, setDuration])
+  }, [isPlaying, currentTrack, setDuration, swapVersion])
 
   // Как только заиграл текущий трек — прогреваем следующий в очереди на бэке
   // и, если играет «Моя волна», подтягиваем следующую порцию потока.
@@ -1146,7 +1038,7 @@ function PlayerInner() {
     const track = state.currentTrack
     if (!state.isPlaying || !track) return
     const dbId = track.db_id ?? (typeof track.id === 'number' ? track.id : null)
-    const external = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(track.source)
+    const external = EXTERNAL_SOURCES.includes(track.source)
     if (dbId === null && !external) return
     const dur = audio.duration
     const listenedEnough =
@@ -1167,12 +1059,10 @@ function PlayerInner() {
     })()
   }
 
+  // Громкость — на оба элемента движка: после подмены новый активный должен
+  // играть так же громко, как предыдущий (иначе трек «начинается тише»).
   useEffect(() => {
-    // Обе деки: свободная станет активной при следующем переключении, и
-    // громкость на ней должна быть уже правильной.
-    for (const deck of [deckARef.current, deckBRef.current]) {
-      if (deck) deck.volume = volume
-    }
+    engine.setVolume(volume)
   }, [volume])
 
   // Перемотка, инициированная из полноэкранного плеера (у него нет доступа к
@@ -1270,36 +1160,6 @@ function PlayerInner() {
       setCurrentTime(nextTime)
       syncPositionState(audio)
     }
-    // Можно ли ПРЯМО СЕЙЧАС менять источник по команде виджета.
-    //
-    // Ключевое ограничение iOS: аудиосессию (ту самую, из-за которой на экране
-    // блокировки вообще есть виджет) система держит за страницей, только пока
-    // элемент находится в осмысленном состоянии — играет либо сознательно
-    // поставлен на паузу. Смена src элемент сбрасывает; если он к этому моменту
-    // ещё НИ РАЗУ не зазвучал (предыдущее переключение всё ещё качает трек),
-    // сессии нет, и новый фоновый старт система не разрешает. Виджет тогда не
-    // «замирает», а пропадает совсем («нет аудио»), и вернуть звук можно только
-    // открыв PWA. Ровно это ловится при двух скипах подряд: первый уходит с
-    // играющего трека и проходит, второй — с ещё молчащего.
-    //
-    // ПАУЗА — законное состояние, а не «молчит, значит сессии нет»: виджет на
-    // паузе виден, сессия жива, и next/prev обязаны работать. Проверять здесь
-    // `!audio.paused` (как было в первой версии этого гейта) означало намертво
-    // заблокировать переключение у поставившего на паузу — кнопки виджета не
-    // делали ничего до открытия PWA. Отличает одно от другого не пауза, а
-    // наличие данных: у сознательной паузы буфер и позиция есть, у зависшего
-    // старта — нет.
-    //
-    // На видимой странице ограничение не нужно: там сессия восстанавливается
-    // по любому касанию, а гейт только мешал бы листать очередь.
-    const canSwapSourceNow = () => {
-      const audio = audioRef.current
-      if (!audio || !document.hidden) return true
-      const ok = audio.readyState >= audio.HAVE_CURRENT_DATA
-        && (audio.paused || audio.currentTime > 0)
-      if (!ok) diag('gate:swapBlocked', snapshotAudio(audio))
-      return ok
-    }
     const handlers = {
       play: async () => {
         const audio = audioRef.current
@@ -1345,26 +1205,32 @@ function PlayerInner() {
       // «переключался», но не играл.
       previoustrack: () => {
         diag('widget:previoustrack', snapshotAudio(audioRef.current))
-        if (!canSwapSourceNow()) return
-        playAdjacentNow(-1, { deferIfCold: true })
+        playAdjacentNow(-1)
         usePlayerStore.getState().previousTrack()
       },
       nexttrack: () => {
         diag('widget:nexttrack', snapshotAudio(audioRef.current))
-        if (!canSwapSourceNow()) return
         // Тот же гейт, что и на кнопке: не прыгаем на ещё не подгруженный трек.
         // Гейт действует и в фоне — там он даже важнее: прыжок на трек, резолв
-        // которого на бэке ещё не готов, означает секунды тишины, а тишина в
-        // фоне стоит потерянной аудиосессии (см. canSwapSourceNow). Отказ же
+        // которого на бэке ещё не готов, означает секунды тишины. Отказ же
         // ничего не ломает: текущий трек продолжает играть, а гейт открывается
         // сам, как только доедет прогрев (_pollPrefetchReady, потолок ~24 с).
         // Заодно пинаем прогрев, чтобы следующее нажатие сработало раньше.
-        if (!usePlayerStore.getState().isNextTrackReady()) {
+        //
+        // Заряженный движком буфер гейт открывает сразу и минуя бэковый
+        // прогрев: если байты следующего трека уже лежат во втором элементе,
+        // ждать нечего — это и есть та готовность, ради которой гейт заводился.
+        const url = nextTrackUrl(1)
+        if (!engine.isReady(url) && !usePlayerStore.getState().isNextTrackReady()) {
           diag('gate:nextNotReady', {})
           usePlayerStore.getState().prefetchNext()
+          // Прогрев по-хорошему стартует по таймеру воспроизведения, но раз
+          // пользователь уже жмёт «вперёд» — заряжаем второй элемент немедленно,
+          // не дожидаясь окна по полосе. Следующее нажатие сработает мгновенно.
+          if (url) engine.preload(url)
           return
         }
-        playAdjacentNow(1, { deferIfCold: true })
+        playAdjacentNow(1)
         usePlayerStore.getState().nextTrack()
       },
       seekto: (details) => {
@@ -1383,6 +1249,22 @@ function PlayerInner() {
         setCurrentTime(seekTime)
         syncPositionState(audio)
       },
+      stop: () => {
+        diag('widget:stop', snapshotAudio(audioRef.current))
+        audioRef.current?.pause()
+        if (usePlayerStore.getState().isPlaying) togglePlayPause()
+      },
+    }
+
+    // Перемотка ±N секунд кнопками виджета. Регистрируем ТОЛЬКО не на iOS:
+    // там Control Center, увидев seekbackward/seekforward, подменяет ими
+    // кнопки предыдущего/следующего трека — то есть перемотка появляется
+    // ценой пропуска треков. На iOS перемотка и так доступна: шкала виджета
+    // работает через seekto (он зарегистрирован выше), а положение бегунка
+    // питает setPositionState.
+    if (!isIOS) {
+      handlers.seekbackward = (details) => seekBy(-(details?.seekOffset || 10))
+      handlers.seekforward = (details) => seekBy(details?.seekOffset || 10)
     }
     const registerHandlers = () => {
       for (const [action, handler] of Object.entries(handlers)) {
@@ -1417,7 +1299,9 @@ function PlayerInner() {
     // prev/next/seek не перерегистрировались после начала воспроизведения и
     // оставались неактивными в системном виджете. Перезапуск на смене трека
     // навешивает слушатель на реальный <audio> и заново регистрирует хендлеры.
-  }, [currentTrack?.id, togglePlayPause, setCurrentTime])
+    // swapVersion — по той же причине: после подмены слушатель 'playing' нужен
+    // на новом активном элементе, на старом он уже бесполезен.
+  }, [currentTrack?.id, togglePlayPause, setCurrentTime, swapVersion])
 
   // Статус воспроизведения в виджете (play/pause индикатор).
   // 'playing' здесь НЕ выставляем: это делает только реальное событие play
@@ -1618,62 +1502,20 @@ function PlayerInner() {
         scheduleRetry()
       })
   }
+  audioErrorRef.current = handleAudioError
 
   return (
     <div className="player">
       <PlayerProgress audioRef={audioRef} />
-      {/* src намеренно НЕ атрибут JSX: им управляет эффект audioSrc выше,
-          чтобы React-коммит не перезапускал media load поверх синхронного
-          старта из handleEnded/виджета. */}
-      {/* Две деки. Играет всегда одна (на неё смотрит audioRef), вторая молча
-          догружает следующий трек. preload="auto" теперь обязателен и на iOS:
-          прежнее "metadata" берегло трафик, но именно оно и оставляло
-          переключение без буфера — ради чего деки и появились. */}
-      {['a', 'b'].map((deck) => (
-        <audio
-          key={deck}
-          ref={deck === 'a' ? setDeckA : setDeckB}
-          preload="auto"
-          playsInline
-          onError={(event) => {
-            // Ошибка прогрева свободной деки не должна ни скипать трек, ни
-            // показывать ошибку: играющая дека в порядке. Переключение на
-            // этот трек само уйдёт на холодный путь и разберётся уже там.
-            if (!isActiveDeck(event.currentTarget)) {
-              diag('preload:error', { code: event.currentTarget?.error?.code })
-              // Сломалась цель отложенного переключения — ждать её буфер
-              // бессмысленно. Переключаемся сразу: обработка ошибки (ретраи,
-              // скип на 404) отработает уже на активной деке, как обычно.
-              const pending = pendingSwapRef.current
-              if (pending?.deck === event.currentTarget) {
-                cancelPendingSwap()
-                finishSwap(pending.deck, getActiveDeck(), 'swap:next:errorDeferred')
-              }
-              return
-            }
-            handleAudioError(event)
-          }}
-          onCanPlay={(event) => {
-            if (!isActiveDeck(event.currentTarget)) {
-              diag('preload:canplay', {})
-              return
-            }
-            // Раз дошли до canplay — источник рабочий, ретраи для этой сессии
-            // трека больше не нужны, скрываем спиннер.
-            retryCountRef.current = 0
-            setIsBuffering(false)
-            if (isPlaying) {
-              playWithDiag(audioRef.current, 'jsx:onCanPlay')
-            }
-          }}
-          onWaiting={(event) => {
-            if (isActiveDeck(event.currentTarget)) setIsBuffering(true)
-          }}
-          onPlaying={(event) => {
-            if (isActiveDeck(event.currentTarget)) setIsBuffering(false)
-          }}
-        />
-      ))}
+      {/* <audio> здесь больше нет: оба элемента живут в services/audioEngine,
+          вне дерева React. Причина — не эстетика, а фон: React волен
+          перемонтировать поддерево и перекоммитить атрибуты в любой момент, а
+          коммит src перезапускает media load algorithm и убивает уже
+          стартовавший play(). Пока элемент был в JSX, от этого спасались тем,
+          что src ставили императивно; с двумя элементами (текущий + заряженный
+          следующим треком) держать их в дереве стало нечем — их время жизни
+          принципиально длиннее любого компонента. Слушатели навешиваются в
+          эффектах выше и переезжают на новый элемент по swapVersion. */}
       <div className="player-left" {...swipeHandlers}>
         <button
           type="button"
