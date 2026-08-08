@@ -198,6 +198,22 @@ export function isFullyBuffered(el) {
   return buffered.end(buffered.length - 1) >= duration - 1
 }
 
+// Сколько секунд непрерывного буфера есть впереди текущей позиции. Мера
+// «насколько спокойно себя чувствует играющий трек»: пока запас велик, можно
+// без ущерба для него начинать качать следующий.
+export function bufferedAhead(el) {
+  if (!el) return 0
+  const buffered = el.buffered
+  if (!buffered || buffered.length === 0) return 0
+  const position = el.currentTime
+  for (let i = 0; i < buffered.length; i += 1) {
+    if (buffered.start(i) <= position && position <= buffered.end(i)) {
+      return buffered.end(i) - position
+    }
+  }
+  return 0
+}
+
 function release(el) {
   if (!el) return
   try {
@@ -290,7 +306,10 @@ export function swapTo(url) {
   const abs = absolutize(url)
   const idle = getIdle()
   if (!abs || !idle || idle.src !== abs) return null
-  if (idle.readyState < idle.HAVE_CURRENT_DATA) return null
+  // Тот же порог, что в isReady: HAVE_CURRENT_DATA означает лишь «первый кадр
+  // есть» — стартовав на нём, элемент немедленно уходит в waiting, а в фоне
+  // waiting неотличим от тишины. Нужен запас вперёд.
+  if (idle.readyState < idle.HAVE_FUTURE_DATA) return null
 
   const previous = getActive()
   activeIndex = 1 - activeIndex

@@ -29,6 +29,13 @@ const PROBE_TIMEOUT_MS = 6000
 // холодный резолв на бэке (yt-dlp — единицы секунд) плюс загрузку первых
 // килобайт через узкий канал.
 const PRELOAD_LEAD_SEC = 45
+// Запас буфера у играющего трека, при котором можно начинать качать следующий,
+// не отбирая у него полосу. Раньше ждали полной докачки — но на длинном треке
+// и узком канале она наступает поздно, а фоновый переход теперь ЖЁСТКО требует
+// готового буфера (см. playAdjacentNow): опоздавший прогрев означает не «чуть
+// медленнее», а «переход не состоялся». Полминуты запаса — компромисс: текущий
+// трек уже вне опасности, а у следующего есть время догрузиться.
+const PRELOAD_MIN_BUFFER_SEC = 30
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -292,7 +299,12 @@ function PlayerInner() {
       audioRef.current = engine.getActive()
       setSwapVersion((v) => v + 1)
     })
-    const offIdleReady = engine.onIdleReady(() => setIdleReadyVersion((v) => v + 1))
+    const offIdleReady = engine.onIdleReady(() => {
+      setIdleReadyVersion((v) => v + 1)
+      // Буфер следующего трека доехал — если переход был отложен (кончился трек
+      // в фоне, играть было нечего), доигрываем его прямо сейчас.
+      resumeDeferredRef.current?.()
+    })
     return () => {
       offSwap()
       offIdleReady()
@@ -322,6 +334,11 @@ function PlayerInner() {
   // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
   // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
   const audioErrorRef = useRef(null)
+  // Переход, отложенный из-за незагруженного следующего трека (см.
+  // playAdjacentNow / handleEnded). Флаг + функция доигрывания, которую зовёт
+  // движок по факту догрузки буфера.
+  const pendingAdvanceRef = useRef(false)
+  const resumeDeferredRef = useRef(null)
   const [audioSrc, setAudioSrc] = useState(null)
   // Спиннер на время резолва/загрузки потока внешнего трека — иначе долгий
   // (но живой) резолв YouTube Music выглядит как зависший плеер.
@@ -363,7 +380,7 @@ function PlayerInner() {
   // защита от устаревшего замыкания в обработчиках свайпа.
   const handleSkipForward = () => {
     if (!usePlayerStore.getState().isNextTrackReady() && !engine.isReady(nextTrackUrl())) return
-    playAdjacentNow(1)
+    if (!playAdjacentNow(1)) return
     nextTrack()
   }
 
@@ -430,17 +447,24 @@ function PlayerInner() {
     // Момент старта прогрева выбран по полосе, а не по времени: канал бывает
     // узкий (~140 КБ/с через туннель), и качать два потока разом значит отобрать
     // байты у играющего трека — он начнёт запинаться. Поэтому греем, только
-    // когда текущий трек за сеть уже не борется (докачан целиком) либо когда
-    // до конца осталось меньше PRELOAD_LEAD_SEC — там прогрев важнее
-    // возможной запинки в последние секунды.
+    // когда играющему треку сеть уже почти не нужна (докачан целиком либо есть
+    // запас PRELOAD_MIN_BUFFER_SEC вперёд) либо когда до конца осталось меньше
+    // PRELOAD_LEAD_SEC — там прогрев важнее возможной запинки в последние
+    // секунды: без него фоновый переход просто не состоится.
     const maybePreloadNext = (el) => {
-      if (!usePlayerStore.getState().isPlaying) return
+      const state = usePlayerStore.getState()
+      if (!state.isPlaying) return
+      // На повторе одного трека переход никуда не ведёт — качать следующий
+      // значит зря отнимать полосу у того, что играет по кругу.
+      if (state.isRepeatOne) return
       const url = nextTrackUrl(1)
       if (!url || engine.hasPrimedSrc(url)) return
-      const trackDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
+      const trackDuration = resolveTrackDuration(el, state.currentTrack)
       const nearEnd =
         trackDuration > 0 && trackDuration - el.currentTime <= PRELOAD_LEAD_SEC
-      if (!nearEnd && !engine.isFullyBuffered(el)) return
+      const comfortable =
+        engine.isFullyBuffered(el) || engine.bufferedAhead(el) >= PRELOAD_MIN_BUFFER_SEC
+      if (!nearEnd && !comfortable) return
       engine.preload(url)
     }
     // Зависший старт: play() уже принят (paused === false), а currentTime
@@ -501,6 +525,15 @@ function PlayerInner() {
     const handleVisibility = () => {
       if (!isLive()) return
       if (!document.hidden) {
+        // Вернулись на видимый экран с отложенным переходом (трек кончился в
+        // фоне, буфера не было). Здесь старт с нуля уже безопасен — доигрываем.
+        if (pendingAdvanceRef.current) {
+          diag('deferred:foreground', {})
+          if (playAdjacentNow(1)) {
+            nextTrack()
+            return
+          }
+        }
         setCurrentTime(audio.currentTime)
         const { isPlaying: playing } = usePlayerStore.getState()
         if (playing && audio.paused && !audio.ended) {
@@ -638,8 +671,24 @@ function PlayerInner() {
         // nextTrack() → рендер → эффект → play() теряет жестовый контекст
         // (NotAllowedError). Store обновляем следом — эффект src увидит тот
         // же URL и не перезапустит воспроизведение.
-        playAdjacentNow(1)
-        nextTrack()
+        //
+        // Очередь двигаем ТОЛЬКО если старт реально состоялся. В фоне без
+        // загруженного буфера playAdjacentNow отказывает (см. его комментарий):
+        // тогда остаёмся на текущем треке, элемент по ended сам встаёт на паузу
+        // (виджет показывает рабочую ▶), а переход доигрывается автоматически,
+        // как только прогрев догрузится.
+        //
+        // Конец очереди — не отказ, а штатное завершение: играть дальше нечего,
+        // и nextTrack() сам переведёт store в паузу. Откладывать тут нечего,
+        // иначе плеер навсегда остался бы в состоянии «играю» без звука.
+        if (!usePlayerStore.getState().getNextTrack(1)) {
+          nextTrack()
+        } else if (playAdjacentNow(1)) {
+          nextTrack()
+        } else {
+          pendingAdvanceRef.current = true
+          diag('ended:deferred', {})
+        }
       }
     }
 
@@ -858,30 +907,60 @@ function PlayerInner() {
   // заблокированном экране нам больше не нужно ни load(), ни успешная загрузка
   // нового потока — только play() на уже тёплом элементе.
   //
-  // Медленный путь (буфера нет — прогрев не успел, очередь только что
-  // изменилась, прогрев отвалился) — ровно прежнее поведение: src + load +
-  // play на активном элементе. В фоне он по-прежнему ненадёжен, но это не
-  // регресс, а та же вероятность, что была до движка.
+  // Медленный путь (буфера нет) РАЗРЕШЁН ТОЛЬКО НА ВИДИМОМ ЭКРАНЕ. В фоне он
+  // даёт ровно тот отказ, ради которого всё это писалось: iOS принимает play()
+  // и рапортует системе «играем», но поток не начинает грузиться — на экране
+  // блокировки идёт время (ОС экстраполирует его из setPositionState), а звука
+  // нет. Молчаливое «играет» хуже, чем не переключиться вовсе: очередь уезжает
+  // вперёд, трек считается прослушанным, и вернуть звук можно только руками.
+  // Поэтому в фоне вместо старта с нуля запускаем прогрев и честно отвечаем
+  // «не смог» — вызывающая сторона не двигает очередь.
+  //
+  // Возвращает true, если воспроизведение действительно начато.
   const playAdjacentNow = (offset) => {
     const next = usePlayerStore.getState().getNextTrack(offset)
-    if (!next) return
+    if (!next) return false
     const url = resolveRawUrl(next, EXTERNAL_SOURCES.includes(next.source))
-    if (!url) return
+    if (!url) return false
 
     const primed = engine.swapTo(url)
     if (primed) {
+      pendingAdvanceRef.current = false
       primed.volume = usePlayerStore.getState().volume
       diag('swap:primed', { offset, ...snapshotAudio(primed) })
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
-      return
+      return true
+    }
+
+    if (document.hidden) {
+      diag('swap:refused:bg', { offset })
+      // Отказ не должен быть тупиком: заряжаем элемент прямо сейчас, чтобы
+      // следующая попытка (авто по onIdleReady либо повторное нажатие) прошла
+      // уже быстрым путём. Отметку отложенного перехода при отказе НЕ снимаем —
+      // иначе доигрывать по готовности буфера было бы некому.
+      engine.preload(url)
+      return false
     }
 
     const audio = audioRef.current
-    if (!audio) return
+    if (!audio) return false
+    pendingAdvanceRef.current = false
     diag('swap:start', { offset, ...snapshotAudio(audio) })
     audio.src = url
     audio.load()
     playWithDiag(audio, `swap:${offset > 0 ? 'next' : 'prev'}`)
+    return true
+  }
+
+  // Отложенный переход: трек доиграл в фоне, а следующий ещё не загрузился.
+  // Очередь при этом НЕ двигаем — иначе виджет показал бы следующий трек, под
+  // который нечего играть (ровно симптом «время идёт, звука нет»). Элемент по
+  // событию ended сам встаёт на паузу, виджет показывает рабочую ▶, а переход
+  // доигрывается автоматически, как только движок догрузит буфер.
+  resumeDeferredRef.current = () => {
+    if (!pendingAdvanceRef.current) return
+    diag('deferred:resume', {})
+    if (playAdjacentNow(1)) nextTrack()
   }
 
   // Reload audio when track changes
@@ -893,6 +972,9 @@ function PlayerInner() {
     // повтор от предыдущего трека.
     retryCountRef.current = 0
     stallKickCountRef.current = 0
+    // Трек сменился — отложенный переход (если он был) больше не актуален:
+    // он относился к предыдущей позиции в очереди.
+    pendingAdvanceRef.current = false
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current)
       retryTimeoutRef.current = null
@@ -1164,6 +1246,22 @@ function PlayerInner() {
       play: async () => {
         const audio = audioRef.current
         if (!audio) return
+        // Отложенный переход (трек кончился в фоне, следующий не был загружен):
+        // нажатие ▶ — самый явный запрос «продолжай». Играем следующий, если
+        // его буфер уже доехал. Если ещё нет — не стартуем с нуля (в фоне это
+        // и даёт «время идёт, звука нет»), а доводим прогрев: доигрывание
+        // случится автоматически по onIdleReady.
+        if (pendingAdvanceRef.current) {
+          diag('widget:play:deferred', {})
+          if (playAdjacentNow(1)) {
+            usePlayerStore.getState().nextTrack()
+            if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+            return
+          }
+          const url = nextTrackUrl(1)
+          if (url) engine.preload(url)
+          return
+        }
         try {
           // Зависший старт (play() принят, время замерло на нуле): повторный
           // play() вернёт тот же висящий промис. С данными в буфере лечит
@@ -1205,7 +1303,10 @@ function PlayerInner() {
       // «переключался», но не играл.
       previoustrack: () => {
         diag('widget:previoustrack', snapshotAudio(audioRef.current))
-        playAdjacentNow(-1)
+        // Очередь двигаем только вслед за реально начавшимся звуком: в фоне без
+        // загруженного буфера playAdjacentNow откажет и запустит прогрев, а
+        // текущий трек продолжит играть. Повторное нажатие пройдёт быстро.
+        if (!playAdjacentNow(-1)) return
         usePlayerStore.getState().previousTrack()
       },
       nexttrack: () => {
@@ -1230,7 +1331,9 @@ function PlayerInner() {
           if (url) engine.preload(url)
           return
         }
-        playAdjacentNow(1)
+        // Фоновое правило («стартуем только на загруженном буфере») живёт внутри
+        // playAdjacentNow — там же, где выбирается подмена или загрузка с нуля.
+        if (!playAdjacentNow(1)) return
         usePlayerStore.getState().nextTrack()
       },
       seekto: (details) => {
