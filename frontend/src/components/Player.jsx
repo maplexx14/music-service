@@ -1028,6 +1028,7 @@ function PlayerInner() {
         // а с ней и мёртвая шкала перемотки: iOS рисует её только под активное
         // воспроизведение и только по свежему setPositionState.
         if ('mediaSession' in navigator && !el.paused) {
+          diag('swap:reassert', snapshotAudio(el))
           navigator.mediaSession.playbackState = 'playing'
           const mediaDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
           if (navigator.mediaSession.setPositionState && mediaDuration > 0) {
@@ -1083,11 +1084,10 @@ function PlayerInner() {
     setIsBuffering(false)
 
     // Очередь могла перестроиться (пользователь выбрал другой список/трек), и
-    // заряженный в движке трек больше не соседний. Такой прогрев не только
+    // заряженный в движке трек больше не следующий. Такой прогрев не только
     // бесполезен — он продолжает качать байты и отбирает полосу у того, что
-    // сейчас играет. Актуальные соседи (следующий и предыдущий) остаются:
-    // предыдущий делает мгновенной кнопку ◀ сразу после перехода.
-    engine.clearStalePreload([nextTrackUrl(1), nextTrackUrl(-1)])
+    // сейчас играет.
+    engine.clearStalePreload(nextTrackUrl(1))
 
     // Сам load() тут не нужен: смена src (через audioSrc, см. эффект выше)
     // уже запускает алгоритм загрузки ресурса сама по себе — явный load()
