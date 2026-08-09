@@ -33,9 +33,43 @@
 
 import { diag, snapshotAudio } from '../utils/playerDiag'
 
-// Пустой (нулевой длины) WAV для «разблокировки» элемента жестом — см. unlock().
-const SILENT_WAV =
-  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA='
+// Короткий зацикливаемый WAV с тишиной. Собираем байтами, а не base64-строкой:
+// строка была бы непрозрачным блобом, в котором не видно ни частоты, ни того,
+// что тишина в 8-битном PCM кодируется значением 128, а не нулём (нули дали бы
+// постоянное смещение — щелчок на старте и стопе).
+//
+// Две роли:
+//   • разблокировка элемента жестом (см. unlock);
+//   • «мост» аудиосессии на время, пока играть нечего (см. holdSession).
+// Для обеих нужна ненулевая длительность: нулевой WAV кончается в тот же тик,
+// и с ним элемент не успевает ни получить разрешение, ни удержать сессию.
+function makeSilenceUrl() {
+  if (typeof Blob === 'undefined' || typeof URL === 'undefined') return null
+  const sampleRate = 8000
+  const samples = sampleRate / 4 // 0.25 с
+  const bytes = new Uint8Array(44 + samples)
+  const view = new DataView(bytes.buffer)
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) bytes[offset + i] = text.charCodeAt(i)
+  }
+  ascii(0, 'RIFF')
+  view.setUint32(4, 36 + samples, true)
+  ascii(8, 'WAVE')
+  ascii(12, 'fmt ')
+  view.setUint32(16, 16, true) // размер fmt-блока
+  view.setUint16(20, 1, true) // PCM
+  view.setUint16(22, 1, true) // моно
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate, true) // байт/с = rate * channels * bytes
+  view.setUint16(32, 1, true) // выравнивание блока
+  view.setUint16(34, 8, true) // бит на сэмпл
+  ascii(36, 'data')
+  view.setUint32(40, samples, true)
+  bytes.fill(128, 44) // 8-bit PCM: тишина — это 128
+  return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }))
+}
+
+const SILENCE_URL = makeSilenceUrl()
 
 const isIOS =
   typeof navigator !== 'undefined' &&
@@ -61,6 +95,28 @@ function createSlot(label) {
 }
 
 const slots = [createSlot('a'), createSlot('b')]
+
+// «Мост» аудиосессии. Отдельный элемент, который крутит тишину в те моменты,
+// когда играть по-настоящему нечего, но отдавать сессию нельзя.
+//
+// Зачем. iOS держит аудиосессию, пока хоть один элемент реально воспроизводит.
+// Как только всё замолкает, система через доли секунды сессию закрывает — и с
+// этого момента play() без жеста уже не разрешён. Это ровно тот провал, в
+// который попадает отложенный переход: трек кончился, следующий ещё грузится,
+// и к моменту готовности буфера включать его уже некому. Тишина в этом окне
+// удерживает сессию открытой, и запуск настоящего трека по готовности проходит.
+//
+// Громкость не трогаем и muted не ставим: беззвучный по громкости элемент часть
+// версий WebKit за «воспроизведение» не считает и сессию по нему не держит.
+// Поэтому тишина честная — нулевая по сигналу, а не приглушённая.
+const bridge = createSlot('bridge')
+if (bridge) {
+  bridge.loop = true
+  bridge.preload = 'auto'
+}
+let bridgeHeld = false
+
+const slotsAndBridge = () => [...slots, bridge].filter(Boolean)
 
 let activeIndex = 0
 let sharedVolume = 1
@@ -101,72 +157,136 @@ export function getIdle() {
 export function mount() {
   if (mounted || typeof document === 'undefined') return
   mounted = true
-  for (const el of slots) {
-    if (el && !el.isConnected) document.body.appendChild(el)
+  for (const el of slotsAndBridge()) {
+    if (!el.isConnected) document.body.appendChild(el)
   }
 }
 
-// Разблокировка второго элемента жестом. На iOS право играть выдаётся КАЖДОМУ
-// media-элементу отдельно и только в контексте пользовательского жеста. Активный
-// элемент получает его сам — первым настоящим play() по нажатию ▶. А вот тот, на
-// который мы потом переключимся в фоне, к этому моменту не играл ни разу, и его
-// play() из обработчика ended был бы первым — то есть отвергнутым.
-//
-// Лечится проигрыванием нулевой длины WAV внутри жеста: элемент «засчитывает»
-// разрешение, звука при этом нет.
-//
-// Возвращает true, если попытка состоялась и её больше повторять не нужно.
-// Отказ (промис play() отверг) НЕ считается финальным: право могли не выдать
-// потому, что жест был «не тем» (скролл, тап по неинтерактивному месту), и
-// следующий жест стоит попробовать снова — иначе одна неудачная попытка навсегда
-// оставила бы второй элемент немым, а с ним и весь фоновый переход.
-export function unlock() {
-  if (unlocked) return true
-  const idle = getIdle()
-  if (!idle) return true
-  // Занятый реальным треком элемент не трогаем — подмена src сорвала бы прогрев.
-  // Это не отказ: элемент уже живёт своей жизнью, ждём следующего жеста.
-  if (idle.src) return false
-
-  const reset = () => {
-    // Пока промис висел, элемент могли зарядить настоящим треком (preload).
-    // Сбрасываем src ТОЛЬКО если он всё ещё наш тихий заглушечный.
-    if (!idle.src || !idle.src.endsWith(SILENT_WAV.slice(-32))) return
-    try {
-      idle.pause()
-      idle.removeAttribute('src')
-      idle.load()
-    } catch {
-      /* noop */
-    }
-  }
-
+// Включить/выключить мост аудиосессии (см. комментарий у bridge).
+// Держим его ровно столько, сколько длится окно «играть нечем»: лишняя тишина
+// поверх настоящего трека iOS не нравится — она конкурирует за сессию.
+export function holdSession() {
+  if (!bridge || !SILENCE_URL || bridgeHeld) return
+  bridgeHeld = true
   try {
-    idle.src = SILENT_WAV
-    const promise = idle.play()
+    if (bridge.src !== SILENCE_URL) bridge.src = SILENCE_URL
+    bridge.currentTime = 0
+    const promise = bridge.play()
     if (promise?.then) {
       promise.then(
-        () => {
-          unlocked = true
-          diag('engine:unlock:ok', {})
-          reset()
-        },
+        () => diag('bridge:hold', {}),
         (error) => {
-          diag('engine:unlock:fail', { name: error?.name })
-          reset()
+          diag('bridge:fail', { name: error?.name })
+          bridgeHeld = false
         },
       )
-      // Промис ещё висит — исход узнаем позже. Слушатель жестов снимаем только
-      // по факту успеха (см. ниже), поэтому здесь честно говорим «не готово».
-      return false
+    } else {
+      diag('bridge:hold', {})
     }
-    unlocked = true
-    reset()
-    return true
   } catch {
-    /* элемент не в том состоянии — фолбэк на одноэлементный путь */
+    bridgeHeld = false
+  }
+}
+
+export function releaseSession() {
+  if (!bridge || !bridgeHeld) return
+  bridgeHeld = false
+  try {
+    bridge.pause()
+    diag('bridge:release', {})
+  } catch {
+    /* noop */
+  }
+}
+
+// Разблокировка жестом. На iOS право играть выдаётся КАЖДОМУ media-элементу
+// отдельно и только в контексте пользовательского жеста. Активный элемент
+// получает его сам — первым настоящим play() по нажатию ▶. А вот тот, на который
+// мы потом переключимся в фоне, и мост аудиосессии к этому моменту не играли ни
+// разу: их первый play() пришёлся бы уже на фон — то есть был бы отвергнут.
+//
+// Лечится проигрыванием короткой тишины внутри жеста: элемент «засчитывает»
+// разрешение, слышно при этом ничего.
+//
+// Возвращает true, если разблокировка больше не нужна. Отказ НЕ считается
+// финальным: право могли не выдать потому, что жест был «не тем» (скролл, тап по
+// неинтерактивному месту), и следующий жест стоит попробовать снова — иначе одна
+// неудачная попытка навсегда оставила бы фоновый переход без звука.
+export function unlock() {
+  if (unlocked) return true
+  if (!SILENCE_URL) return true
+  // Активный слот блессится сам, первым настоящим play(). Разблокировать нужно
+  // тех, кто иначе впервые заговорит уже в фоне.
+  const targets = [getIdle(), bridge].filter(Boolean)
+  if (targets.length === 0) return true
+  // Занятый реальным треком элемент не трогаем — подмена src сорвала бы прогрев.
+  // Это не отказ: ждём следующего жеста.
+  if (targets.some((el) => el.src && el.src !== SILENCE_URL)) return false
+
+  let pending = 0
+  let failed = false
+
+  for (const el of targets) {
+    const reset = () => {
+      // Мосту src оставляем — он ему и нужен, а лишний load() сорвал бы
+      // будущий holdSession. Но играть после разблокировки он не должен:
+      // loop висит, и без явной паузы тишина крутилась бы вечно, вхолостую
+      // удерживая сессию и мешая releaseSession (bridgeHeld про неё не знает).
+      if (el === bridge) {
+        try {
+          el.pause()
+          el.currentTime = 0
+        } catch {
+          /* noop */
+        }
+        return
+      }
+      // Пока промис висел, элемент могли зарядить настоящим треком (preload).
+      // Сбрасываем src ТОЛЬКО если он всё ещё наш тихий.
+      if (el.src !== SILENCE_URL) return
+      try {
+        el.pause()
+        el.removeAttribute('src')
+        el.load()
+      } catch {
+        /* noop */
+      }
+    }
+    try {
+      el.src = SILENCE_URL
+      const promise = el.play()
+      if (promise?.then) {
+        pending += 1
+        promise.then(
+          () => {
+            pending -= 1
+            reset()
+            if (pending === 0 && !failed) {
+              unlocked = true
+              diag('engine:unlock:ok', {})
+            }
+          },
+          (error) => {
+            pending -= 1
+            failed = true
+            diag('engine:unlock:fail', { name: error?.name })
+            reset()
+          },
+        )
+      } else {
+        reset()
+      }
+    } catch {
+      failed = true
+    }
+  }
+
+  if (pending > 0 || failed) {
+    // Исход ещё не известен либо был отказ — слушатель жестов снимать рано.
     return false
   }
+  unlocked = true
+  return true
 }
 
 // Разблокировку вешаем на жесты страницы в фазе захвата: так она случается ДО

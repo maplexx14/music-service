@@ -687,6 +687,10 @@ function PlayerInner() {
           nextTrack()
         } else {
           pendingAdvanceRef.current = true
+          // Пока ждём буфер, держим аудиосессию тишиной: если отдать её сейчас,
+          // то к моменту готовности следующего трека включать его будет уже
+          // некому — play() без жеста iOS не разрешит (см. holdSession).
+          engine.holdSession()
           diag('ended:deferred', {})
         }
       }
@@ -812,6 +816,16 @@ function PlayerInner() {
       syncSystemPlaybackState('playing')
       setIsBuffering(false)
     }
+    // Детектор зависания начинает отсчёт заново. Обычно это делает handleEmptied
+    // по смене источника, но при подмене элемента (swapTo) ни emptied, ни
+    // loadstart не стреляют: src на этом элементе выставили раньше, во время
+    // прогрева. Без сброса свежий элемент судили бы по активности ПРЕДЫДУЩЕГО:
+    // у докачанного трека progress перестаёт приходить задолго до конца, и через
+    // NO_PROGRESS_STALL_MS isStalledStart() начинал бы давать true сразу после
+    // подмены (currentTime у нового элемента как раз ноль) — вотчдог принял бы
+    // нормальный старт за стойл и дёрнул kickStalled на живом треке.
+    noteProgress()
+    stallKickCountRef.current = 0
     updateDuration()
     syncPositionState()
 
@@ -926,6 +940,9 @@ function PlayerInner() {
     const primed = engine.swapTo(url)
     if (primed) {
       pendingAdvanceRef.current = false
+      // Мост больше не нужен: сессию дальше держит настоящий трек. Отпускаем
+      // ДО play(), чтобы тишина не конкурировала с ним за аудиосессию.
+      engine.releaseSession()
       primed.volume = usePlayerStore.getState().volume
       diag('swap:primed', { offset, ...snapshotAudio(primed) })
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
@@ -945,6 +962,7 @@ function PlayerInner() {
     const audio = audioRef.current
     if (!audio) return false
     pendingAdvanceRef.current = false
+    engine.releaseSession()
     diag('swap:start', { offset, ...snapshotAudio(audio) })
     audio.src = url
     audio.load()
@@ -973,8 +991,10 @@ function PlayerInner() {
     retryCountRef.current = 0
     stallKickCountRef.current = 0
     // Трек сменился — отложенный переход (если он был) больше не актуален:
-    // он относился к предыдущей позиции в очереди.
+    // он относился к предыдущей позиции в очереди. Вместе с ним отпускаем и
+    // мост аудиосессии, иначе тишина осталась бы играть вечно.
     pendingAdvanceRef.current = false
+    engine.releaseSession()
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current)
       retryTimeoutRef.current = null
@@ -1295,6 +1315,11 @@ function PlayerInner() {
       pause: () => {
         diag('widget:pause', snapshotAudio(audioRef.current))
         audioRef.current?.pause()
+        // Пауза по кнопке — явный отказ от воспроизведения: отложенный переход
+        // отменяем и сессию отпускаем, иначе тишина продолжила бы играть, а
+        // догрузившийся буфер сам запустил бы трек поверх паузы.
+        pendingAdvanceRef.current = false
+        engine.releaseSession()
         if (usePlayerStore.getState().isPlaying) togglePlayPause()
       },
       // Как и в handleEnded: src+play() синхронно в контексте media-key
@@ -1355,6 +1380,8 @@ function PlayerInner() {
       stop: () => {
         diag('widget:stop', snapshotAudio(audioRef.current))
         audioRef.current?.pause()
+        pendingAdvanceRef.current = false
+        engine.releaseSession()
         if (usePlayerStore.getState().isPlaying) togglePlayPause()
       },
     }
