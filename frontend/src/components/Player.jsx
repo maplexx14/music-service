@@ -41,6 +41,11 @@ const PRELOAD_MIN_BUFFER_SEC = 30
 // на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
 // успел наврать.
 const SWAP_VERIFY_MS = 2500
+// Потолок ожидания события 'playing' от подменённого элемента, после которого
+// предыдущий отпускается принудительно. Перекрытие беззвучное (у старого
+// громкость уже в нуле), так что запас можно взять с большим гандикапом:
+// на устройстве задержка была ~170 мс, но в фоне бывает и хуже.
+const SWAP_RELEASE_MAX_MS = 3000
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -337,6 +342,9 @@ function PlayerInner() {
   const stallKickCountRef = useRef(0)
   // Таймер проверки «подменённый элемент реально поехал» (см. verifySwapStarted).
   const swapVerifyTimerRef = useRef(null)
+  // Страховочный таймер отпускания предыдущего элемента, если 'playing' на
+  // новом так и не придёт (см. playAdjacentNow).
+  const swapReleaseTimerRef = useRef(null)
   // Всегда актуальная ссылка на handleAudioError. Слушатель 'error' вешается
   // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
   // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
@@ -961,20 +969,33 @@ function PlayerInner() {
       pendingAdvanceRef.current = false
       primed.volume = usePlayerStore.getState().volume
       diag('swap:primed', { offset, ...snapshotAudio(primed) })
-      // Порядок здесь и есть исправление. Раньше замолкание шло первым: swapTo
-      // глушил предыдущий элемент, а releaseSession — мост, и лишь потом
-      // стартовал новый. В фоне аудиосессия успевала остаться без владельца, а
-      // вернуть её iOS не даёт: новый элемент получает play:ok, playing,
-      // paused=false, rs=4 — но конвейер стоит, currentTime не уходит с нуля,
-      // звука нет (видно в логе с устройства: ct=0 десять секунд подряд).
+      // Старый элемент отпускаем не здесь, а по факту того, что новый реально
+      // запел. Это вторая итерация исправления, и первая была неверной: я
+      // считал, что достаточно вызвать play() нового ДО pause() старого в одном
+      // тике — «намерение играть регистрируется синхронно». Лог с устройства
+      // это опроверг: play:call 55.484 → swap:finish 55.492 → playing 55.651,
+      // то есть между вызовом и реальным стартом ~170 мс, и всё это окно не
+      // играл никто. WebKit за него терял Now Playing — звук шёл из нового
+      // элемента, а виджет показывал состояние брошенного: ▶ поверх играющего
+      // трека и мёртвая шкала перемотки.
       //
-      // Теперь play() нового идёт ПЕРВЫМ. Намерение играть регистрируется
-      // синхронно, поэтому и pause() старого, и остановка моста сразу за ним
-      // сессию уже не обнуляют. Ждать события 'playing' нельзя — это до секунды
-      // двух треков одновременно; достаточно того, что всё в одном тике.
+      // Перекрытие на iOS слышно (volume у media-элемента там только для
+      // чтения, см. swapTo) — доли секунды двух треков сразу. Размен
+      // сознательный: muted вместо volume вернул бы поломку, потому что
+      // приглушённый элемент iOS владельцем сессии не считает.
+      //
+      // Таймер — страховка: если 'playing' не придёт вовсе, старый элемент
+      // нельзя оставлять играть вечно.
+      const releasePrevious = () => {
+        primed.removeEventListener('playing', releasePrevious)
+        clearTimeout(swapReleaseTimerRef.current)
+        engine.finishSwap()
+        engine.releaseSession()
+      }
+      primed.addEventListener('playing', releasePrevious)
+      clearTimeout(swapReleaseTimerRef.current)
+      swapReleaseTimerRef.current = setTimeout(releasePrevious, SWAP_RELEASE_MAX_MS)
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
-      engine.finishSwap()
-      engine.releaseSession()
       verifySwapStarted(primed)
       return true
     }
@@ -1114,6 +1135,7 @@ function PlayerInner() {
         clearTimeout(retryTimeoutRef.current)
       }
       clearTimeout(swapVerifyTimerRef.current)
+      clearTimeout(swapReleaseTimerRef.current)
     }
   }, [])
 
@@ -1293,12 +1315,18 @@ function PlayerInner() {
     // setPositionState при смене трека: длительность берём из БД (точная),
     // позиция = 0 (трек только что начался). iOS/Android используют это для
     // шкалы времени на экране блокировки — без него виджет может не появиться.
-    const mediaDuration = Number(currentTrack.duration)
+    //
+    // Фолбэк на длительность самого элемента обязателен: у внешних треков
+    // (ytmusic/soundcloud) в БД её может не быть вовсе, и прежний код тогда
+    // не звал setPositionState совсем — а без позиции iOS шкалу не рисует и
+    // перематывать не даёт. resolveTrackDuration знает оба источника и
+    // предпочитает точный.
+    const mediaDuration = resolveTrackDuration(audioRef.current, currentTrack)
     if (Number.isFinite(mediaDuration) && mediaDuration > 0) {
       try {
         navigator.mediaSession.setPositionState({
           duration: mediaDuration,
-          position: 0,
+          position: Math.min(Math.max(audioRef.current?.currentTime || 0, 0), mediaDuration),
           playbackRate: 1,
         })
       } catch {
