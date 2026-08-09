@@ -36,6 +36,11 @@ const PRELOAD_LEAD_SEC = 45
 // медленнее», а «переход не состоялся». Полминуты запаса — компромисс: текущий
 // трек уже вне опасности, а у следующего есть время догрузиться.
 const PRELOAD_MIN_BUFFER_SEC = 30
+// Через сколько после подмены проверить, что элемент реально поехал. Должно
+// пережить паузу между play() и первыми кадрами (на устройстве — до ~0.8 с даже
+// на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
+// успел наврать.
+const SWAP_VERIFY_MS = 2500
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -330,6 +335,8 @@ function PlayerInner() {
   // kick качает трек с нуля — на честно медленной сети бесконечные рестарты
   // сделали бы только хуже. Сбрасывается на 'playing' и на смене трека.
   const stallKickCountRef = useRef(0)
+  // Таймер проверки «подменённый элемент реально поехал» (см. verifySwapStarted).
+  const swapVerifyTimerRef = useRef(null)
   // Всегда актуальная ссылка на handleAudioError. Слушатель 'error' вешается
   // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
   // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
@@ -497,6 +504,18 @@ function PlayerInner() {
       audio.currentTime === 0 &&
       Date.now() - lastProgressAt > NO_PROGRESS_STALL_MS
     const kickStalled = () => {
+      // Микро-seek лечит замерший конвейер в Chromium, но в WebKit он его
+      // ЛОМАЕТ — ровно как описано в handlePlaying ниже: перемотка по свежему
+      // потоку (Opus/WebM от yt-dlp, без индекса перемотки) заставляет
+      // перезапросить диапазон, и элемент залипает в seeking. На устройстве это
+      // видно прямо в логе: `kickStalled:seek ... seeking=true` на молчащем
+      // треке, после чего он молчит и дальше. В фоне на iOS не делаем ничего:
+      // честно показываем паузу, и рабочая ▶ на виджете чинит всё жестом.
+      if (isIOS && document.hidden) {
+        diag('kickStalled:skip:ios', snapshotAudio(audio))
+        syncSystemPlaybackState('paused')
+        return
+      }
       if (audio.readyState >= audio.HAVE_CURRENT_DATA) {
         try {
           audio.currentTime = 0.01
@@ -940,12 +959,23 @@ function PlayerInner() {
     const primed = engine.swapTo(url)
     if (primed) {
       pendingAdvanceRef.current = false
-      // Мост больше не нужен: сессию дальше держит настоящий трек. Отпускаем
-      // ДО play(), чтобы тишина не конкурировала с ним за аудиосессию.
-      engine.releaseSession()
       primed.volume = usePlayerStore.getState().volume
       diag('swap:primed', { offset, ...snapshotAudio(primed) })
+      // Порядок здесь и есть исправление. Раньше замолкание шло первым: swapTo
+      // глушил предыдущий элемент, а releaseSession — мост, и лишь потом
+      // стартовал новый. В фоне аудиосессия успевала остаться без владельца, а
+      // вернуть её iOS не даёт: новый элемент получает play:ok, playing,
+      // paused=false, rs=4 — но конвейер стоит, currentTime не уходит с нуля,
+      // звука нет (видно в логе с устройства: ct=0 десять секунд подряд).
+      //
+      // Теперь play() нового идёт ПЕРВЫМ. Намерение играть регистрируется
+      // синхронно, поэтому и pause() старого, и остановка моста сразу за ним
+      // сессию уже не обнуляют. Ждать события 'playing' нельзя — это до секунды
+      // двух треков одновременно; достаточно того, что всё в одном тике.
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
+      engine.finishSwap()
+      engine.releaseSession()
+      verifySwapStarted(primed)
       return true
     }
 
@@ -962,12 +992,39 @@ function PlayerInner() {
     const audio = audioRef.current
     if (!audio) return false
     pendingAdvanceRef.current = false
-    engine.releaseSession()
     diag('swap:start', { offset, ...snapshotAudio(audio) })
     audio.src = url
     audio.load()
     playWithDiag(audio, `swap:${offset > 0 ? 'next' : 'prev'}`)
+    // Мост держал сессию, пока элемент перезагружался с нуля, и отпускаем мы его
+    // только теперь — по той же причине, что и выше: любой промежуток без
+    // играющего элемента iOS считает концом воспроизведения.
+    engine.releaseSession()
     return true
+  }
+
+  // Проверка, что подменённый элемент реально поехал. Событие 'playing' тут не
+  // доказательство: на устройстве оно приходило вместе с play:ok на элементе,
+  // у которого currentTime потом десять секунд стоял на нуле. Media Session при
+  // этом показывала «играю», ОС крутила часы, экстраполируя позицию, — и именно
+  // так выглядит жалоба «время идёт, звука нет».
+  //
+  // Молчащий плеер сам по себе мы отсюда починить не можем (в фоне на iOS
+  // легальных ходов не осталось), но врать системе перестаём: честный 'paused'
+  // возвращает на экране блокировки рабочую ▶, а её нажатие — уже жест, в
+  // котором разрешено всё.
+  const verifySwapStarted = (el) => {
+    const startedAt = el.currentTime
+    clearTimeout(swapVerifyTimerRef.current)
+    swapVerifyTimerRef.current = setTimeout(() => {
+      if (engine.getActive() !== el) return
+      if (!usePlayerStore.getState().isPlaying) return
+      if (el.currentTime > startedAt) return // поехал, всё в порядке
+      diag('swap:deadPipeline', snapshotAudio(el))
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused'
+      }
+    }, SWAP_VERIFY_MS)
   }
 
   // Отложенный переход: трек доиграл в фоне, а следующий ещё не загрузился.
@@ -1032,6 +1089,7 @@ function PlayerInner() {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current)
       }
+      clearTimeout(swapVerifyTimerRef.current)
     }
   }, [])
 

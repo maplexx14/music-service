@@ -123,6 +123,9 @@ let sharedVolume = 1
 let mounted = false
 let unlocked = false
 let detachPreloadWatch = null
+// Элемент, с которого только что ушли: ждёт finishSwap, чтобы аудиосессия
+// не оставалась без владельца ни на один тик.
+let pendingRelease = null
 
 const swapListeners = new Set()
 const idleReadyListeners = new Set()
@@ -435,18 +438,13 @@ export function swapTo(url) {
   activeIndex = 1 - activeIndex
   detachPreloadWatch?.()
 
-  if (previous) {
-    try {
-      previous.pause()
-    } catch {
-      /* noop */
-    }
-    // Недокачанный элемент продолжал бы тянуть байты и отбирать канал у только
-    // что стартовавшего трека — на узком туннеле это слышно как запинки.
-    // Докачанный оставляем: сеть он больше не занимает, зато остаётся заряженным
-    // на «предыдущий трек» — кнопка ◀ виджета тоже сработает без загрузки.
-    if (!isFullyBuffered(previous)) release(previous)
-  }
+  // Старый элемент НЕ глушим здесь. iOS не отдаёт аудиосессию другому элементу,
+  // пока приложение в фоне: если замолчать до старта нового, сессия схлопнется,
+  // и новый элемент получит play:ok, playing и paused=false — но конвейер не
+  // поедет, currentTime останется на нуле, звука не будет (проверено на
+  // устройстве: rs=4, ct=0 десять секунд подряд). Поэтому перекрываем — сначала
+  // поёт новый, и только после этого отпускаем старый (см. finishSwap).
+  pendingRelease = previous
 
   idle.preload = ACTIVE_PRELOAD
   idle.volume = sharedVolume
@@ -473,6 +471,26 @@ export function swapTo(url) {
     }
   })
   return idle
+}
+
+// Завершение подмены: глушим элемент, с которого ушли. Зовётся ПОСЛЕ того, как
+// новый элемент действительно запел, — на этом и держится непрерывность сессии.
+// Идемпотентно: лишний вызов ничего не делает.
+export function finishSwap() {
+  const previous = pendingRelease
+  pendingRelease = null
+  if (!previous) return
+  try {
+    previous.pause()
+  } catch {
+    /* noop */
+  }
+  // Недокачанный элемент продолжал бы тянуть байты и отбирать канал у только
+  // что стартовавшего трека — на узком туннеле это слышно как запинки.
+  // Докачанный оставляем: сеть он больше не занимает, зато остаётся заряженным
+  // на «предыдущий трек» — кнопка ◀ виджета тоже сработает без загрузки.
+  if (!isFullyBuffered(previous)) release(previous)
+  diag('swap:finish', { ...snapshotAudio(previous) })
 }
 
 // Подписка на подмену активного элемента: Player по ней перевешивает
