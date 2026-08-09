@@ -1019,7 +1019,31 @@ function PlayerInner() {
     swapVerifyTimerRef.current = setTimeout(() => {
       if (engine.getActive() !== el) return
       if (!usePlayerStore.getState().isPlaying) return
-      if (el.currentTime > startedAt) return // поехал, всё в порядке
+      if (el.currentTime > startedAt) {
+        // Трек поехал. Заодно перепроверяем, что виджет это отражает: событие
+        // 'playing' могло прийти на элемент раньше, чем эффект успел навесить на
+        // него слушатели (после подмены между play() и ре-рендером бывает
+        // несколько десятков миллисекунд), и тогда 'playing' некому было
+        // поймать — на экране блокировки осталась бы ▶ поверх звучащего трека,
+        // а с ней и мёртвая шкала перемотки: iOS рисует её только под активное
+        // воспроизведение и только по свежему setPositionState.
+        if ('mediaSession' in navigator && !el.paused) {
+          navigator.mediaSession.playbackState = 'playing'
+          const mediaDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
+          if (navigator.mediaSession.setPositionState && mediaDuration > 0) {
+            try {
+              navigator.mediaSession.setPositionState({
+                duration: mediaDuration,
+                position: Math.min(Math.max(el.currentTime, 0), mediaDuration),
+                playbackRate: el.playbackRate || 1,
+              })
+            } catch {
+              /* значения вне диапазона — пропускаем */
+            }
+          }
+        }
+        return
+      }
       diag('swap:deadPipeline', snapshotAudio(el))
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused'
