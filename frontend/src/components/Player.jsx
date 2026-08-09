@@ -345,6 +345,10 @@ function PlayerInner() {
   // Страховочный таймер отпускания предыдущего элемента, если 'playing' на
   // новом так и не придёт (см. playAdjacentNow).
   const swapReleaseTimerRef = useRef(null)
+  // Досрочное отпускание предыдущего элемента, минуя ожидание 'playing'. Нужно
+  // проверке мёртвого конвейера: она наступает раньше страховочного таймера, и
+  // без отмены тот выстрелил бы позже и переобъявил «играю» поверх честной паузы.
+  const swapReleaseNowRef = useRef(null)
   // Всегда актуальная ссылка на handleAudioError. Слушатель 'error' вешается
   // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
   // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
@@ -936,6 +940,46 @@ function PlayerInner() {
     // нужный источник, тогда как проверял состояние предыдущего.
   }, [audioSrc, swapVersion])
 
+  // Пере-объявление системе «сейчас играет вот этот элемент».
+  //
+  // Зачем. Кнопка на виджете iOS питается НЕ нашим mediaSession.playbackState —
+  // WebKit публикует Now Playing по собственным переходам media-элементов
+  // (начал играть / встал на паузу), а playbackState для него в лучшем случае
+  // подсказка. Отсюда и остаточная поломка после разведения подмены во времени:
+  // новый элемент запел в t, а в t+~170 мс мы глушим прежний (finishSwap) и мост
+  // (releaseSession) — и ПОСЛЕДНИМ переходом, который увидела система, оказался
+  // pause чужого элемента. Звук идёт, шкала едет (её двигает наш setPositionState
+  // на каждом timeupdate, он работает и в фоне), а кнопка застревает на ▶.
+  // Прежний код на это отвечал только `playbackState = 'playing'` — и, как видно
+  // на устройстве, безрезультатно.
+  //
+  // Лечится повторным play() на уже играющем элементе. По спеке это почти no-op:
+  // при paused === false play() лишь резолвит промис, ни событий, ни перезапуска
+  // загрузки, ни сброса позиции. Но WebKit проходит через ту же точку, где
+  // обновляет Now Playing, и публикует уже НАШ элемент со ставкой «играет».
+  // Звать строго ПОСЛЕ глушения соседей: иначе последним переходом снова
+  // окажется их pause.
+  const reassertNowPlaying = (el, where) => {
+    // Молчащий элемент пере-объявлять нечего: если он на паузе, честное 'paused'
+    // на виджете — правда, а play() тут запустил бы звук, которого не просили.
+    if (!el || el.paused) return
+    if (!usePlayerStore.getState().isPlaying) return
+    playWithDiag(el, where)
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = 'playing'
+    const mediaDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
+    if (!navigator.mediaSession.setPositionState || !(mediaDuration > 0)) return
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: mediaDuration,
+        position: Math.min(Math.max(el.currentTime, 0), mediaDuration),
+        playbackRate: el.playbackRate || 1,
+      })
+    } catch {
+      /* значения вне диапазона — пропускаем */
+    }
+  }
+
   // Синхронный (в контексте текущего жеста/события) старт соседнего трека
   // очереди прямо на <audio>-элементе — общий путь для естественного конца
   // трека (ended) и кнопок next/prev системного виджета. Store после этого
@@ -986,15 +1030,31 @@ function PlayerInner() {
       //
       // Таймер — страховка: если 'playing' не придёт вовсе, старый элемент
       // нельзя оставлять играть вечно.
-      const releasePrevious = () => {
+      //
+      // Отпускание разделено надвое. releaseNow — только освобождение (глушим
+      // прежний элемент и мост). releasePrevious — то же плюс пере-объявление
+      // «играю» на новом: оно уместно ровно там, где новый элемент реально
+      // запел. Проверка мёртвого конвейера зовёт releaseNow напрямую — ей
+      // переобъявлять нечего, там как раз пауза правдива.
+      const releaseNow = () => {
         primed.removeEventListener('playing', releasePrevious)
         clearTimeout(swapReleaseTimerRef.current)
+        swapReleaseNowRef.current = null
         engine.finishSwap()
         engine.releaseSession()
+      }
+      const releasePrevious = () => {
+        releaseNow()
+        // finishSwap и releaseSession — это pause() на ЧУЖИХ элементах, и для
+        // системы они выглядят как «воспроизведение остановилось»: виджет уходит
+        // в ▶ поверх честно звучащего трека (шкала при этом живая — её кормит
+        // наш setPositionState). Возвращаем правду последним переходом.
+        reassertNowPlaying(primed, 'swap:reassertPlay')
       }
       primed.addEventListener('playing', releasePrevious)
       clearTimeout(swapReleaseTimerRef.current)
       swapReleaseTimerRef.current = setTimeout(releasePrevious, SWAP_RELEASE_MAX_MS)
+      swapReleaseNowRef.current = releaseNow
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
       verifySwapStarted(primed)
       return true
@@ -1048,25 +1108,21 @@ function PlayerInner() {
         // поймать — на экране блокировки осталась бы ▶ поверх звучащего трека,
         // а с ней и мёртвая шкала перемотки: iOS рисует её только под активное
         // воспроизведение и только по свежему setPositionState.
-        if ('mediaSession' in navigator && !el.paused) {
-          diag('swap:reassert', snapshotAudio(el))
-          navigator.mediaSession.playbackState = 'playing'
-          const mediaDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
-          if (navigator.mediaSession.setPositionState && mediaDuration > 0) {
-            try {
-              navigator.mediaSession.setPositionState({
-                duration: mediaDuration,
-                position: Math.min(Math.max(el.currentTime, 0), mediaDuration),
-                playbackRate: el.playbackRate || 1,
-              })
-            } catch {
-              /* значения вне диапазона — пропускаем */
-            }
-          }
-        }
+        //
+        // Пере-объявляем через reassertNowPlaying, а не одним playbackState:
+        // на iOS кнопку виджета двигают переходы самого элемента, и голый
+        // playbackState её не переубеждает (см. комментарий у хелпера). Это
+        // вторая линия обороны на случай, если 'playing' не пришло вовсе и
+        // reassert из releasePrevious не отработал.
+        diag('swap:reassert', snapshotAudio(el))
+        reassertNowPlaying(el, 'swap:verify:reassertPlay')
         return
       }
       diag('swap:deadPipeline', snapshotAudio(el))
+      // Подмена не поехала — отпускаем предыдущий элемент прямо сейчас и снимаем
+      // страховочный таймер: он выстрелил бы позже этой проверки и переобъявил
+      // «играю» поверх паузы, которую мы ставим ниже.
+      swapReleaseNowRef.current?.()
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'paused'
       }
