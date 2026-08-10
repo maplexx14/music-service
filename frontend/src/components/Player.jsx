@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
 import ArtistLink from './ArtistLink'
@@ -397,7 +397,22 @@ function PlayerInner() {
   // Пользовательский скип вперёд (кнопка/свайп): выполняем только если
   // следующий трек готов. Готовность читаем из store в момент вызова —
   // защита от устаревшего замыкания в обработчиках свайпа.
-  const handleSkipForward = () => {
+  const handleSkipForward = async () => {
+    // Следующего трека нет, но плейлист загружен не весь (см. queuePager):
+    // дотягиваем хвост и уходим вперёд по нему. Проактивная догрузка обычно
+    // успевает раньше, так что сюда попадаем, только если запрос ещё летит
+    // или упал. Экран здесь видимый — асинхронность безопасна, жестовый
+    // контекст нужен лишь для фонового старта.
+    if (!usePlayerStore.getState().getNextTrack(1)) {
+      if (!usePlayerStore.getState().queuePager) return
+      // Тот же хвост может ждать отложенный переход после ended: оба вызова
+      // получают ОДИН промис догрузки и просыпаются вместе. Если за это время
+      // трек сменился — переход уже состоялся без нас, и второй сдвиг очереди
+      // промотал бы лишний трек.
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      if (!(await usePlayerStore.getState().extendQueueIfNeeded(true))) return
+      if (usePlayerStore.getState().currentTrack?.id !== fromId) return
+    }
     if (!usePlayerStore.getState().isNextTrackReady() && !engine.isReady(nextTrackUrl())) return
     if (!playAdjacentNow(1)) return
     nextTrack()
@@ -709,11 +724,25 @@ function PlayerInner() {
         // (виджет показывает рабочую ▶), а переход доигрывается автоматически,
         // как только прогрев догрузится.
         //
-        // Конец очереди — не отказ, а штатное завершение: играть дальше нечего,
-        // и nextTrack() сам переведёт store в паузу. Откладывать тут нечего,
-        // иначе плеер навсегда остался бы в состоянии «играю» без звука.
+        // Конец очереди — не всегда конец плейлиста: страница грузит треки
+        // постранично, и хвост может быть ещё не загружен (см. queuePager в
+        // playerStore). Тогда дотягиваем его и доигрываем переход по приезде —
+        // тем же отложенным путём, что и при неготовом буфере.
+        //
+        // Штатное завершение (тянуть неоткуда) остаётся как было: nextTrack()
+        // сам переведёт store в паузу, иначе плеер навсегда остался бы в
+        // состоянии «играю» без звука.
         if (!usePlayerStore.getState().getNextTrack(1)) {
-          nextTrack()
+          if (usePlayerStore.getState().queuePager) {
+            pendingAdvanceRef.current = true
+            // Сессию держим тишиной, пока летит запрос: отдать её сейчас значит
+            // остаться без права на play() к моменту, когда хвост приедет.
+            engine.holdSession()
+            diag('ended:queueExtend', {})
+            resumeAfterQueueExtend()
+          } else {
+            nextTrack()
+          }
         } else if (playAdjacentNow(1)) {
           nextTrack()
         } else {
@@ -1140,6 +1169,56 @@ function PlayerInner() {
     if (playAdjacentNow(1)) nextTrack()
   }
 
+  // Очередь кончилась, но плейлист — нет: страница успела загрузить только
+  // первые страницы треков (ленивая подгрузка по прокрутке). Дотягиваем хвост
+  // и доигрываем переход.
+  //
+  // Быстрый путь (буфер следующего уже заряжен) здесь невозможен по построению:
+  // трека в очереди не было, а значит и греть было нечего. Поэтому после
+  // приезда хвоста играем обычным путём — на видимом экране он и стартует
+  // загрузку. В фоне playAdjacentNow откажет и запустит прогрев, а доигрывание
+  // случится по onIdleReady, как и при любом другом отложенном переходе.
+  const resumeAfterQueueExtend = async () => {
+    // Трек, с которого уходим. Запрос асинхронный, и за время его полёта
+    // очередь могла уехать сама: тот же хвост ждёт кнопка «вперёд» (оба вызова
+    // получают ОДИН промис догрузки и проснутся вместе). Без этой отметки оба
+    // двинули бы очередь, и переход промотал бы два трека вместо одного.
+    const fromId = usePlayerStore.getState().currentTrack?.id
+    const grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+    // Пока летел запрос, пользователь мог нажать паузу или включить другой
+    // трек — тогда доигрывать этот переход уже нельзя.
+    if (!pendingAdvanceRef.current) return
+    if (usePlayerStore.getState().currentTrack?.id !== fromId) {
+      // Очередь уже уехала без нас: переход состоялся другим путём. Снимаем
+      // отметку и мост — держать сессию тишиной больше незачем.
+      diag('queueExtend:superseded', {})
+      pendingAdvanceRef.current = false
+      engine.releaseSession()
+      return
+    }
+    if (!grew) {
+      // Хвоста нет — плейлист правда кончился. Отпускаем сессию и честно
+      // встаём на паузу, иначе тишина моста играла бы вечно.
+      diag('queueExtend:empty', {})
+      pendingAdvanceRef.current = false
+      engine.releaseSession()
+      nextTrack()
+      return
+    }
+    diag('queueExtend:resume', {})
+    if (playAdjacentNow(1)) {
+      nextTrack()
+      return
+    }
+    // Старт отказал (фон без буфера) — переход остаётся отложенным и доиграется
+    // по onIdleReady. Чтобы этому событию было откуда взяться, заряжаем движок:
+    // playAdjacentNow делает это сам только на фоновой ветке, а здесь отказ мог
+    // прийти и по другой причине.
+    prefetchNext()
+    const url = nextTrackUrl(1)
+    if (url) engine.preload(url)
+  }
+
   // Reload audio when track changes
   useEffect(() => {
     const audio = audioRef.current
@@ -1287,6 +1366,12 @@ function PlayerInner() {
     if (!currentTrack) return
     prefetchNext()
     usePlayerStore.getState().extendFlowIfNeeded()
+    // То же для плейлиста, загруженного постранично: хвост очереди дотягиваем
+    // заранее, за несколько треков до конца загруженного (см. queuePager).
+    // Именно этот вызов и убирает паузу на границе страницы — к моменту
+    // перехода следующий трек уже в очереди и прогрет, а аварийный путь в
+    // handleEnded остаётся только на случай упавшего запроса.
+    usePlayerStore.getState().extendQueueIfNeeded()
   }, [currentTrack?.id, prefetchNext])
 
   // Запись play — не на старте, а по достижении порога реального прослушивания
@@ -1502,6 +1587,26 @@ function PlayerInner() {
       },
       nexttrack: () => {
         diag('widget:nexttrack', snapshotAudio(audioRef.current))
+        // Очередь кончилась, но плейлист загружен не весь (см. queuePager):
+        // дотягиваем хвост. Синхронно тут ничего не сделать — запрос
+        // асинхронный, а жестовый контекст до его конца не доживёт.
+        //
+        // Мост тишины и pendingAdvance тут НЕ ставим, в отличие от ended:
+        // текущий трек сейчас играет, сессия жива и в подпорке не нуждается, а
+        // тишина поверх звучащего трека конкурирует с ним за сессию (см.
+        // holdSession). Ведём себя как гейт ниже: молча готовим переход, и
+        // повторное нажатие пройдёт уже быстрым путём.
+        if (!usePlayerStore.getState().getNextTrack(1)) {
+          if (!usePlayerStore.getState().queuePager) return
+          diag('widget:queueExtend', {})
+          usePlayerStore.getState().extendQueueIfNeeded(true).then((grew) => {
+            if (!grew) return
+            const nextUrl = nextTrackUrl(1)
+            usePlayerStore.getState().prefetchNext()
+            if (nextUrl) engine.preload(nextUrl)
+          })
+          return
+        }
         // Тот же гейт, что и на кнопке: не прыгаем на ещё не подгруженный трек.
         // Гейт действует и в фоне — там он даже важнее: прыжок на трек, резолв
         // которого на бэке ещё не готов, означает секунды тишины. Отказ же

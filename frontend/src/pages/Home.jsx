@@ -7,7 +7,7 @@ import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import api from '../services/api'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
@@ -85,28 +85,36 @@ function Home() {
 
   useEffect(() => {
     fetchData()
-    // Предзагружаем поток рекомендаций сразу при открытии главной:
-    // к клику по «потоку» список уже получен, а резолв первых треков
-    // прогрет на бэке — старт воспроизведения почти мгновенный.
-    usePlayerStore.getState().preloadFlow()
+    // Предзагружаем поток рекомендаций при открытии главной: к клику по
+    // «потоку» список уже получен, а резолв первых треков прогрет на бэке —
+    // старт воспроизведения почти мгновенный.
+    // Через idle, а не сразу: этот запрос ничего не рисует, и в момент
+    // монтирования он отбирал полосу у /recommendations и /tracks, от которых
+    // зависит первый экран.
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const handle = idle(() => usePlayerStore.getState().preloadFlow())
+    return () => cancel(handle)
   }, [])
 
-  const fetchData = async () => {
-    try {
-      const [recResponse, tracksResponse] = await Promise.all([
-        // Локальный час клиента — для контекста времени суток в рекомендациях
-        // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
-        // «утреннему» вкусу, вечерняя — к вечернему.
-        api.get('/recommendations', { params: { hour: new Date().getHours() } }),
-        api.get('/tracks?limit=20'),
-      ])
-      setRecommendations(recResponse.data)
-      setTrending(tracksResponse.data)
-    } catch (error) {
-      console.error('Error fetching data:', error)
-    } finally {
-      setLoading(false)
-    }
+  // Два независимых запроса — и рисуем каждый по мере готовности, а не
+  // Promise.all. Раньше вся страница (включая шапку и hero) ждала медленный
+  // из двух: /recommendations считает персонализацию, /tracks — простая
+  // выборка, и тренды простаивали готовыми за спиной у спиннера.
+  const fetchData = () => {
+    api
+      // Локальный час клиента — для контекста времени суток в рекомендациях
+      // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
+      // «утреннему» вкусу, вечерняя — к вечернему.
+      .get('/recommendations', { params: { hour: new Date().getHours() } })
+      .then((res) => setRecommendations(res.data))
+      .catch((error) => console.error('Error fetching recommendations:', error))
+
+    api
+      .get('/tracks?limit=20')
+      .then((res) => setTrending(res.data))
+      .catch((error) => console.error('Error fetching tracks:', error))
+      .finally(() => setLoading(false))
   }
 
   const fetchHistory = async () => {
@@ -184,7 +192,7 @@ function Home() {
       <div className="mobile-header">
         
         <span href = "">
-          <img src="/logoBolt1.PNG" alt="BoltMusic" className="mobile-logo-img" />
+          <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
         </span>
         <div className="mobile-profile">
           <button

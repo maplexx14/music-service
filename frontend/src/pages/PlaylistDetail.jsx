@@ -7,7 +7,7 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 
@@ -89,14 +89,20 @@ function PlaylistDetail() {
     enabled: hasMoreTracks && !loadingMore && !loadError,
   })
 
+  // Очередь плеера — это то, что успела загрузить страница, а грузит она
+  // постранично. Без пейджера воспроизведение вставало на последнем
+  // загруженном треке: для плеера это выглядело как конец плейлиста. Пейджер
+  // говорит плееру, откуда дотянуть хвост самому, не дожидаясь прокрутки.
+  const queuePager = () => ({ url: `/playlists/${id}`, total: totalTracks })
+
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
-      playPlaylist(playlist.tracks, 0)
+      playPlaylist(playlist.tracks, 0, null, queuePager())
     }
   }
 
   const handlePlayTrack = (track, index) => {
-    playPlaylist(playlist.tracks, index)
+    playPlaylist(playlist.tracks, index, null, queuePager())
   }
 
   const handleToggleLike = async (track, e) => {

@@ -7,7 +7,7 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 

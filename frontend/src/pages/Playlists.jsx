@@ -5,7 +5,7 @@ import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import { useLazyBatch } from '../hooks/useLazyBatch'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
 

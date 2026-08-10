@@ -1,12 +1,19 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart, Upload, ArrowLeft } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import Sidebar from './Sidebar'
 import Player from './Player'
-import FullScreenPlayer from './FullScreenPlayer'
 import ToastContainer from './Toast'
 import './Layout.css'
+
+// Полноэкранный плеер вместе с панелью текстов — отдельный чанк. Он и так
+// рисуется только по isFullScreen, но статический импорт тянул его (плюс
+// LyricsPanel и их CSS) в главный бандл, который блокирует первую отрисовку.
+// Открывают его жестом уже после загрузки — к этому моменту чанк успевает
+// приехать.
+const importFullScreenPlayer = () => import('./FullScreenPlayer')
+const FullScreenPlayer = lazy(importFullScreenPlayer)
 
 function Layout({ children }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -50,6 +57,18 @@ function Layout({ children }) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  // Прогреваем чанк полноэкранного плеера в простое, после первой отрисовки.
+  // Открывается он жестом, и ждать загрузки в этот момент — заметная задержка;
+  // requestIdleCallback же не отбирает полосу у критических ресурсов.
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 2000))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const handle = idle(() => {
+      importFullScreenPlayer().catch(() => {})
+    })
+    return () => cancel(handle)
+  }, [])
+
   const showMobileBack = isMobile && location.pathname !== '/'
 
   return (
@@ -79,7 +98,13 @@ function Layout({ children }) {
       </main>
       <Player />
       <ToastContainer />
-      {isFullScreen && <FullScreenPlayer />}
+      {/* fallback пустой: полноэкранный плеер открывается поверх уже
+          отрисованного мини-плеера, спиннер здесь мигал бы зря. */}
+      {isFullScreen && (
+        <Suspense fallback={null}>
+          <FullScreenPlayer />
+        </Suspense>
+      )}
       {isMobile && (
         <nav className="mobile-nav-global" aria-label="Нижняя навигация">
           {[

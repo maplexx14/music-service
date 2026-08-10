@@ -13,7 +13,18 @@ export default defineConfig(({ mode }) => {
       target: 'es2020',
       cssCodeSplit: true,
       sourcemap: false,
-
+      rollupOptions: {
+        output: {
+          // Каркас (react, react-dom, react-router, zustand) — отдельным
+          // чанком от кода приложения. Он меняется только при апгрейде
+          // зависимостей, а прикладной код — каждый деплой: с общим бандлом
+          // любая правка инвалидировала весь мегабайт, теперь возвращающийся
+          // пользователь дотягивает только изменившуюся часть.
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom', 'react-router-dom', 'zustand'],
+          },
+        },
+      },
     },
     resolve: {
       alias: {

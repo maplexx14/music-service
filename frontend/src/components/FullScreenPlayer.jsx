@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
@@ -68,6 +68,7 @@ function FullScreenPlayer() {
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle)
   const queue = usePlayerStore((s) => s.queue)
   const currentIndex = usePlayerStore((s) => s.currentIndex)
+  const queuePager = usePlayerStore((s) => s.queuePager)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
@@ -144,7 +145,17 @@ function FullScreenPlayer() {
   const canInteract = dbTrackId !== null || Boolean(currentTrack?.source)
 
   const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
-  const handleSkipForward = () => {
+  const handleSkipForward = async () => {
+    // Очередь может быть короче плейлиста: страница грузит треки постранично
+    // (см. queuePager в playerStore). Дотягиваем хвост, иначе на его границе
+    // кнопка молча ничего не делала бы. Тот же хвост может ждать отложенный
+    // переход в Player — просыпаемся вместе, поэтому сверяем, что трек за
+    // время запроса не сменился: иначе промотали бы лишний.
+    if (!usePlayerStore.getState().getNextTrack(1) && usePlayerStore.getState().queuePager) {
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      if (!(await usePlayerStore.getState().extendQueueIfNeeded(true))) return
+      if (usePlayerStore.getState().currentTrack?.id !== fromId) return
+    }
     if (!usePlayerStore.getState().isNextTrackReady()) return
     nextTrack()
   }
@@ -205,7 +216,11 @@ function FullScreenPlayer() {
 
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
-  const queueLabel = queue.length > 1 ? `${currentIndex + 1} из ${queue.length}` : 'Трек'
+  // Знаменатель — размер всего плейлиста, а не загруженной части очереди:
+  // хвост догружается на ходу (см. queuePager), и «20 из 20» на середине
+  // плейлиста из сотни треков читалось бы как «дальше ничего нет».
+  const queueTotal = Math.max(queue.length, queuePager?.total || 0)
+  const queueLabel = queueTotal > 1 ? `${currentIndex + 1} из ${queueTotal}` : 'Трек'
 
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)
 

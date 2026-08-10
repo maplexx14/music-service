@@ -51,6 +51,25 @@ const resolvedPrefetchKeys = new Set()
 let flowPreloadPromise = null
 const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
 
+// --- Постраничная очередь (см. queuePager / extendQueueIfNeeded) ---
+// Страница плейлиста рисует треки не все сразу, а страницами по мере прокрутки,
+// и в очередь плеера попадало ровно то, что она успела загрузить. Поэтому
+// воспроизведение вставало на последнем загруженном треке: для плеера это был
+// конец очереди, хотя в плейлисте оставались треки. Ленивую загрузку это не
+// отменяет — просто хвост очереди плеер дотягивает сам, независимо от того,
+// докуда доскроллил пользователь.
+//
+// Страницу берём крупнее, чем у списка на экране (20): очередь ничего не
+// рисует и обложек не тянет, так что дешевле сходить реже и с большим запасом.
+const QUEUE_PAGE_SIZE = 50
+// За сколько треков до конца очереди идём за следующей страницей. Запас нужен
+// не для одного перехода, а на случай серии быстрых скипов подряд.
+const QUEUE_EXTEND_LEAD = 5
+// Дедуп летящей догрузки. Промис отдаётся наружу: тому, кто упёрся в конец
+// очереди прямо сейчас (см. handleEnded в Player.jsx), важно дождаться
+// реального прибытия хвоста — в том числе когда запрос стартовал до его вызова.
+let queueExtendPromise = null
+
 // Запись скипа — негативный сигнал для рекомендаций, поэтому важно не терять
 // его молча на сетевой ошибке (как было раньше с голым .catch(() => {})).
 // Несколько попыток с небольшой задержкой; skipErrorToast, чтобы фоновая
@@ -414,6 +433,9 @@ const usePlayerStore = create((set, get) => ({
       isPlaying: true,
       source,
       flowActive: source === 'flow',
+      // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
+      // а пейджер прежнего плейлиста дописал бы в неё чужие треки.
+      queuePager: null,
     })
     // Кликнутый трек прогреваем немедленно — не дожидаясь, пока до него
     // дойдёт очередь через prefetchNext(). Дедуп на бэке (single-flight в
@@ -545,7 +567,81 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  playPlaylist: (tracks, startIndex = 0, source = null) => {
+  // --- Постраничная очередь ---
+  // Откуда дотягивать хвост очереди: { url, params, total }. Ставится
+  // playPlaylist со страницы, которая грузит треки постранично; null означает
+  // «очередь полная, тянуть неоткуда» (поиск, волна, внешний плейлист).
+  queuePager: null,
+
+  // Дотягивает следующую страницу очереди, когда до её конца осталось меньше
+  // QUEUE_EXTEND_LEAD треков. Возвращает промис, который резолвится в true,
+  // если очередь реально выросла — вызывающему (handleEnded) это нужно, чтобы
+  // понять, появился ли следующий трек, или плейлист правда кончился.
+  //
+  // Ленивую отрисовку списка на странице это не трогает: очередь живёт в store
+  // и ничего не рисует, поэтому её хвост можно тянуть независимо от того,
+  // докуда доскроллил пользователь.
+  extendQueueIfNeeded: async (force = false) => {
+    const { queuePager, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
+    if (!queuePager) return false
+    if (queue.length >= queuePager.total) return false
+    const pos = isShuffle ? currentShuffleIndex : currentIndex
+    if (!force && pos < queue.length - 1 - QUEUE_EXTEND_LEAD) return false
+    // Запрос уже летит — ждём его, а не запускаем второй за той же страницей.
+    if (queueExtendPromise) return queueExtendPromise
+
+    const skip = queue.length
+    queueExtendPromise = (async () => {
+      try {
+        const response = await api.get(queuePager.url, {
+          params: { ...queuePager.params, skip, limit: QUEUE_PAGE_SIZE },
+          skipErrorToast: true,
+        })
+        const total = Number(response.headers['x-total-count']) || queuePager.total
+        // Гонка с самим собой: пока запрос летел, очередь могли сменить
+        // (playPlaylist с другого экрана) — тогда дописывать хвост некуда,
+        // он от прежнего плейлиста.
+        const state = get()
+        if (state.queuePager?.url !== queuePager.url || state.queue.length !== skip) return false
+
+        // Дедуп по id: пагинация идёт по смещению, и если плейлист правили
+        // прямо во время прослушивания, смещения съезжают и страница может
+        // вернуть уже знакомый трек. Одинаковых треков внутри плейлиста бэк
+        // не допускает (POST даёт 400), так что совпадение id — всегда съезд.
+        const known = new Set(state.queue.map((t) => t.id))
+        const fresh = (response.data?.tracks || []).filter((t) => !known.has(t.id))
+        if (fresh.length === 0) {
+          // Тянуть больше нечего: плейлист кончился или укоротился, пока его
+          // слушали. Пейджер закрываем, иначе на каждом переходе ходили бы за
+          // страницей, которой нет.
+          set({ queuePager: null })
+          return false
+        }
+
+        set({
+          queue: [...state.queue, ...fresh],
+          // При шаффле новые индексы дописываем в конец порядка вперемешку —
+          // так же, как это делает extendFlowIfNeeded.
+          shuffledOrder: state.isShuffle
+            ? [...state.shuffledOrder, ...shuffleArray(fresh.map((_, i) => skip + i))]
+            : [...state.shuffledOrder, ...fresh.map((_, i) => skip + i)],
+          queuePager: skip + fresh.length < total ? { ...queuePager, total } : null,
+        })
+        // Хвост приехал — греем резолв ближайших, иначе первый же переход в
+        // догруженную часть ждал бы холодный yt-dlp.
+        get().prefetchTracks(fresh, 2)
+        return true
+      } catch (error) {
+        console.error('Queue extend error:', error)
+        return false
+      } finally {
+        queueExtendPromise = null
+      }
+    })()
+    return queueExtendPromise
+  },
+
+  playPlaylist: (tracks, startIndex = 0, source = null, pager = null) => {
     if (tracks.length === 0) return
     const { isShuffle } = get()
     const order = isShuffle ? shuffleArray(tracks.map((_, i) => i)) : tracks.map((_, i) => i)
@@ -560,6 +656,10 @@ const usePlayerStore = create((set, get) => ({
       isPlaying: true,
       source,
       flowActive: source === 'flow',
+      // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
+      // Прошлый — всегда сбрасываем: он относился к прежнему списку, и дотянуть
+      // по нему хвост к новой очереди значит склеить два разных плейлиста.
+      queuePager: pager && pager.total > tracks.length ? { ...pager } : null,
     })
     get().prefetchTracks(
       [tracks[actualIndex], get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean),
@@ -733,6 +833,7 @@ const usePlayerStore = create((set, get) => ({
       currentTime: 0,
       source: null,
       isFullScreen: false,
+      queuePager: null,
     })
   },
 }))

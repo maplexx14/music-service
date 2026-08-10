@@ -1,5 +1,5 @@
 import { SERVER_URL } from '../config'
-import defaultCover from '../assets/default-cover.png'
+import defaultCover from '../assets/default-cover.webp'
 
 // Просит у CDN Google обложку большего разрешения. Обложки YouTube Music
 // приходят крошечными (120×120), но размер зашит в URL и CDN ресайзит по
