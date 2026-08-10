@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import api, { setApiAuthToken } from '../services/api'
+import { useSearchStore } from './searchStore'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -98,6 +99,9 @@ const useAuthStore = create((set, get) => ({
           isAuthenticated: false,
         })
         setStoredAuth(null)
+        // Выдача поиска переживает размонтирование страницы, поэтому её надо
+        // гасить явно — иначе следующий вход открывает чужой запрос.
+        useSearchStore.getState().resetSearch()
       },
       
       checkAuth: async () => {

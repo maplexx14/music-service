@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
+import { useSearchStore } from '../store/searchStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
@@ -16,19 +17,26 @@ const SEARCH_DEBOUNCE_MS = 600
 
 function Search() {
   const navigate = useNavigate()
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState({ tracks: [], playlists: [], users: [] })
+  // Всё, что должно пережить уход на другую вкладку, — в сторе: роутер
+  // размонтирует страницу, и локальный useState обнулял запрос вместе с выдачей.
+  const query = useSearchStore((state) => state.query)
+  const setQuery = useSearchStore((state) => state.setQuery)
+  const results = useSearchStore((state) => state.results)
   // Внешние источники держим раздельно: выдача показывает их отдельными
   // секциями в фиксированном порядке (см. рендер ниже).
-  const [externalTracks, setExternalTracks] = useState({ ytmusic: [], soundcloud: [] })
-  const [externalPlaylists, setExternalPlaylists] = useState([])
-  const [artists, setArtists] = useState([])
+  const externalTracks = useSearchStore((state) => state.externalTracks)
+  const externalPlaylists = useSearchStore((state) => state.externalPlaylists)
+  const artists = useSearchStore((state) => state.artists)
+  const searchError = useSearchStore((state) => state.searchError)
   const [loading, setLoading] = useState(false)
-  const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     const searchQuery = query.trim()
     if (searchQuery.length > 0) {
+      // Возврат на страницу с той же строкой: выдача уже в сторе целиком,
+      // повторять четыре запроса незачем.
+      if (useSearchStore.getState().cachedQuery === searchQuery) return
+
       const controller = new AbortController()
       const timeoutId = window.setTimeout(() => {
         performSearch(searchQuery, controller.signal)
@@ -39,25 +47,29 @@ function Search() {
       }
     }
 
-    setResults({ tracks: [], playlists: [], users: [] })
-    setExternalTracks({ ytmusic: [], soundcloud: [] })
-    setExternalPlaylists([])
-    setArtists([])
+    useSearchStore.getState().clearSearch()
     setLoading(false)
   }, [query])
 
   const performSearch = async (searchQuery, signal) => {
+    const {
+      beginSearch,
+      setResults,
+      setExternalTracks,
+      setExternalPlaylists,
+      setArtists,
+      setSearchError,
+      finishSearch,
+    } = useSearchStore.getState()
+
     setLoading(true)
-    setSearchError('')
     // Старые внешние результаты чистим сразу: они дорисуются позже и не
     // должны миксоваться с новым запросом.
-    setExternalTracks({ ytmusic: [], soundcloud: [] })
-    setExternalPlaylists([])
-    setArtists([])
+    beginSearch()
 
     // Исполнители — отдельным лёгким запросом: секция только ведёт на
     // страницу артиста и не должна ждать медленную выдачу треков.
-    api
+    const artistsRequest = api
       .get('/artists/search', {
         params: { q: searchQuery, limit: 6 },
         skipErrorToast: true,
@@ -72,7 +84,7 @@ function Search() {
 
     // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
     // его секции дорисовываются по мере прихода ответов.
-    api
+    const externalRequest = api
       .get('/search/external/grouped', {
         // Слоты делятся между источниками (каталог артиста / YouTube Music /
         // SoundCloud), поэтому на каждый приходится примерно треть лимита.
@@ -97,7 +109,7 @@ function Search() {
       .catch((error) => {
         if (!signal.aborted) console.error('External search error:', error)
       })
-    api
+    const externalPlaylistsRequest = api
       .get('/search/external/playlists', {
         params: { q: searchQuery, limit: 10 },
         skipErrorToast: true,
@@ -110,6 +122,7 @@ function Search() {
         if (!signal.aborted) console.error('External playlist search error:', error)
       })
 
+    let localSucceeded = false
     try {
       const response = await api.get('/search', {
         // 50, а не 20: при поиске по имени артиста выдача — это его треки,
@@ -119,6 +132,7 @@ function Search() {
       })
       if (signal.aborted) return
       setResults(response.data)
+      localSucceeded = true
     } catch (error) {
       if (signal.aborted) return
       console.error('Local search error:', error)
@@ -127,6 +141,12 @@ function Search() {
     } finally {
       if (!signal.aborted) setLoading(false)
     }
+
+    // Закешированным запрос считается только когда дособраны все секции.
+    // Выдачу, оборванную уходом на другую вкладку, возврат должен догрузить,
+    // а не принять за готовую — иначе внешние секции пропадут насовсем.
+    await Promise.allSettled([artistsRequest, externalRequest, externalPlaylistsRequest])
+    if (!signal.aborted && localSucceeded) finishSearch(searchQuery)
   }
 
   const handlePlayTrack = (track) => {
