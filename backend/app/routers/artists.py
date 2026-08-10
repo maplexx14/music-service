@@ -14,10 +14,15 @@ import logging
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import case, func, insert, or_
+from sqlalchemy import case, false, func, insert, or_
 from sqlalchemy.orm import Session
 
-from app.artist_utils import artist_key, query_names_artist, split_artists
+from app.artist_utils import (
+    query_names_artist,
+    same_artist,
+    split_artists,
+    translit_key,
+)
 from app.database import get_db
 from app.dependencies import get_current_active_user, get_current_user_optional
 from app.models import Playlist, Track, User, playlist_tracks
@@ -50,18 +55,54 @@ def _like_pattern(token: str) -> str:
     return f"%{escaped}%"
 
 
+def _library_spellings(db: Session, name: str) -> Tuple[List[str], List[str]]:
+    """Написания этого артиста в Track.artist: (сольные, в коллаборациях).
+
+    Один артист лежит в БД под разными именами: «Zemfira» приехала из
+    SoundCloud, «Земфира» — из YouTube Music. Сопоставить их в SQL нечем,
+    транслитерация живёт в Python, поэтому берём список исполнителей (DISTINCT
+    по одной колонке, а не выгрузка таблицы) и сверяем ключи здесь.
+
+    Разделение на две группы нужно порядку выдачи: сольный трек стоит выше
+    совместного, как и было при точном сравнении имён.
+    """
+    key = translit_key(name)
+    if not key:
+        return [], []
+
+    solo: List[str] = []
+    collab: List[str] = []
+    for (value,) in db.query(Track.artist).distinct():
+        parts = split_artists(value or "")
+        if not any(translit_key(p) == key for p in parts):
+            continue
+        (solo if len(parts) == 1 else collab).append(value)
+    return solo, collab
+
+
 def _local_tracks(db: Session, name: str, limit: int) -> List[Track]:
     """Треки исполнителя из библиотеки.
 
-    Точное совпадение имени — вперёд, но берём и вхождение подстрокой: в БД
-    исполнитель совместного трека записан склеенной строкой («A, B», «A feat.
-    B»), и на странице B такой трек тоже должен быть.
+    Сольные треки — вперёд, но берём и совместные: у коллаборации исполнитель
+    записан склеенной строкой («A, B», «A feat. B»), и на странице B такой трек
+    тоже должен быть.
+
+    Три условия отбора, а не одно: первые два — известные написания имени (см.
+    _library_spellings), третье — вхождение подстрокой, которое ловит то, что
+    разделителями не разбирается («Земфира и друзья»).
     """
-    key = artist_key(name)
-    exact = func.lower(func.trim(Track.artist)) == key
+    solo, collab = _library_spellings(db, name)
+
+    exact = Track.artist.in_(solo) if solo else false()
     return (
         db.query(Track)
-        .filter(or_(exact, Track.artist.ilike(_like_pattern(name), escape="\\")))
+        .filter(
+            or_(
+                exact,
+                Track.artist.in_(collab) if collab else false(),
+                Track.artist.ilike(_like_pattern(name), escape="\\"),
+            )
+        )
         .order_by(
             case((exact, 0), else_=1),
             Track.play_count.desc(),
@@ -123,22 +164,33 @@ async def _collect_tracks(
 
 
 def _saved_playlist(db: Session, user: User, name: str) -> Optional[Playlist]:
-    """Плейлист этого исполнителя в медиатеке пользователя (если сохранён)."""
-    return (
-        db.query(Playlist)
-        .filter(
-            Playlist.owner_id == user.id,
-            func.lower(func.trim(Playlist.name)) == artist_key(name),
-        )
-        .first()
+    """Плейлист этого исполнителя в медиатеке пользователя (если сохранён).
+
+    Имя сверяется через same_artist, а не равенством: подборка могла быть
+    сохранена под «Zemfira», а страница теперь зовётся «Земфира» — по точному
+    совпадению повторное сохранение завело бы второй плейлист на того же
+    артиста. Плейлистов у пользователя десятки, так что сверка в Python
+    дешевле, чем попытка выразить транслитерацию в SQL.
+    """
+    return next(
+        (
+            p
+            for p in db.query(Playlist).filter(Playlist.owner_id == user.id)
+            if same_artist(p.name, name)
+        ),
+        None,
     )
 
 
 def _is_liked(user: Optional[User], name: str) -> bool:
+    """Артист в избранном — под любым из своих написаний.
+
+    Лайк ставился со страницы «Земфира», а открыта «Zemfira» — сердце должно
+    гореть на обеих: страница одна и та же, разошлось только написание имени.
+    """
     if user is None:
         return False
-    key = artist_key(name)
-    return any(artist_key(a) == key for a in (user.preferred_artists or []))
+    return any(same_artist(a, name) for a in (user.preferred_artists or []))
 
 
 @router.get("", response_model=ArtistPageResponse)
@@ -193,43 +245,64 @@ async def search_artists(
     слушаемого трека: отдельной картинки артиста в БД нет.
     """
     term = q.strip()
-    pattern = _like_pattern(term)
 
     # Берём верхушку по прослушиваниям и группируем в Python: нужен не только
     # список имён, но и обложка, а тянуть её отдельным запросом на каждого
     # артиста — лишние round-trip'ы на каждое нажатие клавиши в поиске.
+    #
+    # Кроме вхождения подстрокой берём и написания из другого алфавита: на
+    # запрос «Земфира» пометка «в медиатеке» должна появиться и тогда, когда
+    # треки лежат под именем «Zemfira». Для куска слова («зем») список
+    # написаний пуст — там работает один ilike.
+    solo, collab = _library_spellings(db, term)
+    spellings = solo + collab
     rows = (
         db.query(Track)
-        .filter(Track.artist.ilike(pattern, escape="\\"))
+        .filter(
+            or_(
+                Track.artist.ilike(_like_pattern(term), escape="\\"),
+                Track.artist.in_(spellings) if spellings else false(),
+            )
+        )
         .order_by(Track.play_count.desc(), Track.created_at.desc())
         .limit(60)
         .all()
     )
 
     out: List[ArtistSummary] = []
-    seen: set = set()
+    # Ключ карточки — translit_key, а не имя: «Земфира» из медиатеки и
+    # «Zemfira» из YouTube Music это один артист, и двумя карточками на один
+    # и тот же каталог выдача выглядит сломанной.
+    by_key: dict = {}
     for track in rows:
         for part in split_artists(track.artist):
             # Часть склеенной строки, не совпавшая с запросом, — чужой артист
             # из коллаборации: в выдаче по «Nirvana» ему не место.
             if not query_names_artist(term, part) and term.lower() not in part.lower():
                 continue
-            key = artist_key(part)
-            if key in seen:
+            key = translit_key(part)
+            if key in by_key:
                 continue
-            seen.add(key)
-            out.append(
-                ArtistSummary(name=part, cover_url=track.cover_url, in_library=True)
-            )
+            card = ArtistSummary(name=part, cover_url=track.cover_url, in_library=True)
+            by_key[key] = card
+            out.append(card)
             if len(out) >= limit:
                 return out
 
     for card in await ytdlp.search_ytmusic_artist_cards(term, limit=limit):
-        key = artist_key(card["name"])
-        if key in seen:
+        key = translit_key(card["name"])
+        known = by_key.get(key)
+        if known is not None:
+            # Тот же артист под другим написанием. Имя берём отсюда: у
+            # YouTube Music оно каноническое, а в медиатеке лежит то, как
+            # артиста назвал источник импорта. Пометку «в медиатеке» и уже
+            # найденную обложку сохраняем — карточка та же, сменилась подпись.
+            known.name = card["name"]
+            known.cover_url = known.cover_url or card.get("cover_url")
             continue
-        seen.add(key)
-        out.append(ArtistSummary(name=card["name"], cover_url=card.get("cover_url")))
+        summary = ArtistSummary(name=card["name"], cover_url=card.get("cover_url"))
+        by_key[key] = summary
+        out.append(summary)
         if len(out) >= limit:
             break
 
@@ -253,8 +326,7 @@ def toggle_artist_like(
         raise HTTPException(status_code=400, detail="Имя исполнителя не может быть пустым")
 
     current = list(current_user.preferred_artists or [])
-    key = artist_key(name)
-    kept = [a for a in current if artist_key(a) != key]
+    kept = [a for a in current if not same_artist(a, name)]
     liked = len(kept) == len(current)  # ничего не выкинули → артиста не было
     if liked:
         kept.append(name)

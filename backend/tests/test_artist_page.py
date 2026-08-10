@@ -7,10 +7,13 @@
    артистов, у каждого должна быть своя страница, а не одна общая на строку.
 3. Выдача поиска склеивала источники round-robin, из-за чего порядок
    «плейлисты → медиатека → ytmusic → soundcloud» выразить было нельзя.
+4. Один артист приходил из источников в двух алфавитах («Zemfira» из
+   SoundCloud, «Земфира» из YouTube Music) — поиск показывал две карточки, и
+   каталог артиста делился между двумя страницами.
 """
 import pytest
 
-from app.artist_utils import split_artists
+from app.artist_utils import query_names_artist, same_artist, split_artists
 from app.routers.aggregate import dedup_sequential
 from app.routers.artists import _by_this_artist
 from app.schemas import ExternalTrackResponse
@@ -26,6 +29,43 @@ def ext(title: str, artist: str, source: str = "ytmusic") -> ExternalTrackRespon
         duration=100,
         stream_url="http://x/stream",
     )
+
+
+class TestSameArtist:
+    """Одно имя в двух алфавитах — один артист."""
+
+    def test_matches_across_scripts(self):
+        assert same_artist("Земфира", "Zemfira")
+        assert same_artist("Кино", "Kino")
+        assert same_artist("Ленинград", "Leningrad")
+
+    def test_matches_across_romanization_schemes(self):
+        # Транскрибируют кто во что горазд: й/ы → y или i, я → ya или ia,
+        # удвоение по вкусу. Для сравнения имён эта разница ничего не значит.
+        assert same_artist("Каспийский Груз", "Kaspiyskiy Gruz")
+        assert same_artist("Мумий Тролль", "Mumiy Troll")
+        assert same_artist("Пошлая Молли", "Poshlaya Molly")
+        assert same_artist("Пошлая Молли", "Poshlaia Molli")
+        assert same_artist("Юлия", "Julia")
+        assert same_artist("Макс Корж", "Max Korzh")
+
+    def test_keeps_different_artists_apart(self):
+        # Огрубление одностороннее: не схлопнуть два написания не страшно,
+        # схлопнуть двух разных артистов — страшно.
+        assert not same_artist("Жанна", "Анна")
+        assert not same_artist("Mia", "Ma")
+        assert not same_artist("Кино", "Кипелов")
+        assert not same_artist("Cara", "Kara")
+        assert not same_artist("", "Zemfira")
+
+
+class TestQueryNamesArtist:
+    def test_query_matches_artist_in_other_script(self):
+        # Иначе страница «Zemfira» не получила бы каталог YouTube Music:
+        # ytdlp сверяет с запросом каноническое имя, а оно кириллицей.
+        assert query_names_artist("Zemfira", "Земфира")
+        assert query_names_artist("Земфира", "Zemfira")
+        assert not query_names_artist("Zemfira", "Земляне")
 
 
 class TestSplitArtists:
@@ -177,3 +217,78 @@ class TestArtistEndpoint:
         data = client.get("/api/artists", params={"name": "Jay-Z"}).json()
         # Трек записан склеенной строкой — на странице Jay-Z он тоже должен быть.
         assert [t["title"] for t in data["tracks"]] == ["Numb/Encore"]
+
+
+class TestCrossScriptArtist:
+    """Один артист в двух алфавитах — одна карточка и один каталог.
+
+    Источники пишут имя каждый по-своему: в медиатеку трек приехал из
+    SoundCloud как «Zemfira», YouTube Music зовёт её «Земфира».
+    """
+
+    @pytest.fixture
+    def yt_cards(self, monkeypatch):
+        """Подменяет карточки артистов из YouTube Music; возвращает сеттер."""
+        from app.routers import artists as artists_router
+
+        def setup(cards):
+            async def fake_cards(q, limit=6):
+                return cards
+
+            monkeypatch.setattr(
+                artists_router.ytdlp, "search_ytmusic_artist_cards", fake_cards
+            )
+
+        return setup
+
+    def test_search_returns_one_card_with_ytmusic_name(self, client, db, yt_cards):
+        from app.models import Track
+
+        db.add(Track(title="Искала", artist="Zemfira", duration=200, source="local"))
+        db.commit()
+        yt_cards([{"name": "Земфира", "cover_url": "http://img/z.jpg"}])
+
+        cards = client.get("/api/artists/search", params={"q": "Zemfira"}).json()
+
+        assert len(cards) == 1
+        # Имя — каноническое из YouTube Music, а не как назвал источник импорта.
+        assert cards[0]["name"] == "Земфира"
+        # Схлопнули в карточку из медиатеки — пометка обязана уцелеть.
+        assert cards[0]["in_library"] is True
+
+    def test_search_finds_library_artist_typed_in_other_script(self, client, db, yt_cards):
+        from app.models import Track
+
+        db.add(Track(title="Искала", artist="Zemfira", duration=200, source="local"))
+        db.commit()
+        yt_cards([])
+
+        cards = client.get("/api/artists/search", params={"q": "Земфира"}).json()
+
+        # ilike по «Земфира» латинскую строку не находит — артист опознан по
+        # транслитерации, иначе «в медиатеке» зависело бы от раскладки.
+        assert [(c["name"], c["in_library"]) for c in cards] == [("Zemfira", True)]
+
+    def test_page_collects_library_tracks_under_both_spellings(
+        self, client, db, monkeypatch, yt_cards
+    ):
+        from app.models import Track
+        from app.routers import artists as artists_router
+
+        async def fake_profile(request, name, limit=60):
+            return {"name": "Земфира", "cover_url": None, "tracks": []}
+
+        async def fake_sc(request, q, limit=20):
+            return []
+
+        monkeypatch.setattr(artists_router.ytdlp, "ytmusic_artist_profile", fake_profile)
+        monkeypatch.setattr(artists_router.soundcloud, "search_soundcloud", fake_sc)
+
+        db.add(Track(title="Искала", artist="Zemfira", duration=200, source="local"))
+        db.add(Track(title="Ромашки", artist="Земфира", duration=210, source="local"))
+        db.commit()
+
+        data = client.get("/api/artists", params={"name": "Земфира"}).json()
+
+        # Каталог артиста не должен делиться между двумя написаниями.
+        assert sorted(t["title"] for t in data["tracks"]) == ["Искала", "Ромашки"]

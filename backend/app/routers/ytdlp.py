@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app import storage
-from app.artist_utils import norm_artist_name, query_names_artist
+from app.artist_utils import norm_artist_name, query_names_artist, translit_key
 from app.cache import get_cache_async, set_cache_async
 from app.schemas import ExternalTrackResponse
 
@@ -249,7 +249,10 @@ async def search_ytmusic_artist_cards(q: str, limit: int = 6) -> List[dict]:
     seen: set = set()
     for item in raw or []:
         name = (item.get("artist") or item.get("title") or item.get("name") or "").strip()
-        key = norm_artist_name(name)
+        # Ключ транслитерированный: на «Земфира» YouTube Music отдаёт и
+        # кириллический канал, и латинский — это один артист, и вторая
+        # карточка съела бы слот в выдаче.
+        key = translit_key(name)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -364,7 +367,9 @@ async def ytmusic_artist_catalog(
 
     # Кэш по имени: три round-trip'а к YouTube (search → get_artist →
     # get_playlist) на каждое нажатие клавиши в поиске — заметная задержка.
-    cache_key = f"ytmusic:artist_catalog:{_norm_artist_name(q)}:{limit}"
+    # Ключ транслитерированный: «Земфира» и «Zemfira» — один артист и один
+    # каталог, греть провайдер дважды незачем.
+    cache_key = f"ytmusic:artist_catalog:{translit_key(q)}:{limit}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
         tracks = [ExternalTrackResponse(**t) for t in cached]
@@ -416,8 +421,9 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
         return {"name": display, "cover_url": None, "tracks": []}
 
     # Кэш тот же по смыслу, что у каталога: search → get_artist → get_playlist
-    # это три round-trip'а к YouTube на каждое открытие страницы.
-    cache_key = f"ytmusic:artist_profile:{_norm_artist_name(display)}:{limit}"
+    # это три round-trip'а к YouTube на каждое открытие страницы. Ключ
+    # транслитерированный — обе страницы артиста делят один профиль.
+    cache_key = f"ytmusic:artist_profile:{translit_key(display)}:{limit}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
         profile = {
