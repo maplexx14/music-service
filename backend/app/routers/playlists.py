@@ -25,14 +25,25 @@ def _paginated_playlist_response(
     Не трогает playlist.tracks (ORM-relationship) напрямую — присвоение ему
     пометило бы объект dirty и при случайном commit() где-то ещё в запросе
     могло бы разъехаться с реальным составом плейлиста. Вместо этого треки
-    запрашиваются отдельным запросом с order_by(position)/offset/limit, а
-    метаданные плейлиста берутся из самого ORM-объекта.
+    запрашиваются отдельным запросом с order_by/offset/limit, а метаданные
+    плейлиста берутся из самого ORM-объекта.
+
+    Порядок — по числу прослушиваний (Track.play_count) по убыванию: самое
+    заигранное сверху. Дальше position и id как тай-брейкеры: без полностью
+    детерминированного ORDER BY постраничная подгрузка (skip/limit тем же
+    запросом, см. фронтовый пейджер и очередь плеера) могла бы отдать один
+    трек дважды, а другой пропустить — у треков с равным play_count порядок
+    между страницами не гарантирован.
     """
     tracks_query = (
         db.query(Track)
         .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
         .filter(playlist_tracks.c.playlist_id == playlist.id)
-        .order_by(playlist_tracks.c.position)
+        .order_by(
+            Track.play_count.desc(),
+            playlist_tracks.c.position,
+            Track.id,
+        )
     )
     total = tracks_query.count()
     response.headers["X-Total-Count"] = str(total)
