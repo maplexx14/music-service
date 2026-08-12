@@ -150,6 +150,25 @@ services:
       # Конкретный origin вместо "*": включает allow_credentials=True
       # (main.py:31) и ограничивает, кто может обращаться к API из браузера.
       CORS_ORIGINS: ${CORS_ORIGINS:-https://${DOMAIN}}
+      # ─── Почта (подтверждение адреса, коды входа) ───
+      # Без SMTP_HOST письма не уходят: регистрация упирается в экран
+      # «проверьте почту», а ссылка остаётся только в логе контейнера.
+      # На проде это фактически нерабочая регистрация — заполнять обязательно.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@${DOMAIN}}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+      # Ссылка подтверждения строится от этого адреса — только публичный домен.
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN}}
+      # ─── Каптча на регистрации (Cloudflare Turnstile) ───
+      # Пустые ключи = проверки нет: регистрация открыта скриптам, а каждый
+      # созданный аккаунт тянет письмо подтверждения с нашего домена. Нужны
+      # ОБА ключа (см. captcha.py), на проде — заполнять.
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
       # Soulseek/slskd в прод-конфигурации отключён: сервиса нет, а пустой
       # SOULSEEK_USERNAME заставляет роутер отдавать пустую выдачу вместо

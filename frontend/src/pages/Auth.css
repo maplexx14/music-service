@@ -107,6 +107,74 @@
   cursor: not-allowed;
 }
 
+/* Повторная отправка письма рядом с основным действием формы:
+   контурная, чтобы не спорить за внимание с «Войти». */
+.auth-button.secondary {
+  background-color: transparent;
+  border: 1px solid #535353;
+  color: #ffffff;
+}
+
+.auth-button.secondary:hover:not(:disabled) {
+  background-color: #2a2a2a;
+  border-color: #b3b3b3;
+}
+
+.success-message {
+  padding: 12px;
+  background-color: #1ed760;
+  color: #121212;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: center;
+}
+
+/* Заметное, но не тревожное сообщение: вход с нового устройства — нормальная
+   ситуация, а не ошибка, поэтому не красный .error-message. */
+.auth-notice {
+  padding: 12px;
+  background-color: rgba(162, 89, 255, 0.12);
+  border: 1px solid rgba(162, 89, 255, 0.4);
+  border-radius: 8px;
+  color: #e6d9ff;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Пояснение на шаге подтверждения 2FA */
+.auth-hint {
+  font-size: 13px;
+  color: #b3b3b3;
+  line-height: 1.5;
+  margin: -4px 0 0;
+}
+
+/* Второстепенное действие в форме («войти под другим аккаунтом») —
+   ссылка по виду, кнопка по семантике: это не навигация, а сброс шага. */
+.auth-link-button {
+  background: none;
+  border: none;
+  padding: 4px;
+  color: #b3b3b3;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.auth-link-button:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* Виджет каптчи на регистрации. Размер задаёт сам Cloudflare (iframe
+   300×65 в managed-режиме), нам нужно только центрирование и отступ, чтобы
+   он не липнул к кнопке отправки. */
+.captcha-widget {
+  display: flex;
+  justify-content: center;
+  min-height: 65px;
+}
+
 .auth-footer {
   margin-top: 24px;
   text-align: center;

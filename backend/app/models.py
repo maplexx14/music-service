@@ -87,6 +87,25 @@ track_cooccurrence = Table(
 )
 
 
+# Устройства, с которых юзер уже проходил вход со вторым фактором.
+# Вход с НЕЗНАКОМОГО устройства требует подтверждения кодом даже у тех, кто
+# 2FA не включал (см. routers/auth.py login): украденного пароля одного мало.
+# Храним хэш токена, а не сам токен: дамп БД не должен давать готовый ключ,
+# которым чужое устройство притворится знакомым.
+user_trusted_devices = Table(
+    'user_trusted_devices',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('token_hash', String, nullable=False, unique=True, index=True),
+    # Человекочитаемая подпись для списка устройств в настройках: из User-Agent.
+    Column('label', String, nullable=True),
+    Column('created_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+    # Обновляется при каждом входе с этого устройства: по нему видно заброшенные.
+    Column('last_seen_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -97,7 +116,23 @@ class User(Base):
     full_name = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
+    # Почта подтверждена переходом по ссылке из письма. До подтверждения вход
+    # запрещён (см. routers/auth.py login), поэтому у СУЩЕСТВУЮЩИХ юзеров
+    # миграция 0011 проставляет true — иначе релиз запер бы всех снаружи.
+    email_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     is_admin = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Двухфакторка (TOTP). totp_secret живёт и до подтверждения: между
+    # /2fa/setup и /2fa/enable юзер сканирует QR, поэтому секрет надо сохранить,
+    # но фактором он становится только когда totp_enabled=True.
+    totp_secret = Column(String, nullable=True)
+    totp_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Резервные коды одноразового входа — bcrypt-хэши, как и пароль: утечка БД
+    # не должна давать вход. Использованный код удаляется из списка.
+    totp_recovery_codes = Column(JSON, nullable=False, default=list, server_default="[]")
+    # Двухфакторка по почте: 6-значный код письмом. Второй независимый способ,
+    # включается отдельно от TOTP; когда включены оба, юзер выбирает на входе.
+    # Сам код в БД не хранится — он расходник и живёт в Redis (см. email_2fa.py).
+    email_2fa_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
     # Явные музыкальные предпочтения, выбранные при онбординге/в настройках.
     # Списки строк: ключи жанров (из GENRE_KEYWORDS) и имена артистов.
     preferred_genres = Column(JSON, nullable=False, default=list, server_default="[]")

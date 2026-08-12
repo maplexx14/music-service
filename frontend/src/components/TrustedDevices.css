@@ -1,0 +1,86 @@
+/* Список доверенных устройств. Опирается на общие классы Settings.css
+   (.settings-card, .settings-save-btn, .settings-hint) — здесь только то,
+   чего там нет: строка устройства, метка «это устройство», кнопка отзыва. */
+
+.devices-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.devices-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.devices-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.devices-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.devices-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background-color: rgba(30, 215, 96, 0.15);
+  color: #1ed760;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.devices-meta {
+  color: #b3b3b3;
+  font-size: 13px;
+}
+
+/* Отзыв — деструктивное действие, но не главное на карточке: красный текст
+   на прозрачном фоне заметен и не перетягивает внимание с самого списка. */
+.devices-revoke {
+  flex-shrink: 0;
+  background-color: transparent;
+  border: 1px solid rgba(226, 33, 52, 0.6);
+  color: #ff6b7a;
+}
+
+.devices-revoke:hover:not(:disabled) {
+  background-color: rgba(226, 33, 52, 0.15);
+  border-color: #ff4757;
+  color: #ffffff;
+}
+
+.devices-revoke-all {
+  background-color: #e22134;
+}
+
+.devices-revoke-all:hover:not(:disabled) {
+  background-color: #ff4757;
+}
+
+@media (max-width: 600px) {
+  /* На узком экране кнопка рядом с длинной подписью устройства сжимает её
+     до нечитаемого — переносим её под текст. */
+  .devices-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

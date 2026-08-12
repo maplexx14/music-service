@@ -13,6 +13,9 @@ if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY environment variable must be set (or set DEBUG=true for local development)")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43800"))
+# Промежуточный токен между «пароль верный» и «код 2FA верный». Живёт минуты:
+# он не даёт доступа к API, но им нельзя разбрасываться — это половина входа.
+MFA_TOKEN_EXPIRE_MINUTES = int(os.getenv("MFA_TOKEN_EXPIRE_MINUTES", "5"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -71,12 +74,34 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-def verify_token(token: str) -> Optional[str]:
+def decode_token(token: str) -> Optional[dict]:
+    """Полный payload или None. Нужен там, где важны claim'ы, а не только sub."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            return None
-        return username
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
+
+
+def verify_token(token: str) -> Optional[str]:
+    """Username из ПОЛНОЦЕННОГО access-токена.
+
+    Токены с mfa=True отклоняются: это промежуточный токен шага 2FA (выдан
+    после пароля, до кода). Пропусти его здесь — и второй фактор обходится
+    простой подстановкой mfa_token в заголовок Authorization.
+    """
+    payload = decode_token(token)
+    if payload is None or payload.get("mfa"):
+        return None
+    username: str = payload.get("sub")
+    if username is None:
+        return None
+    return username
+
+
+def verify_mfa_token(token: str) -> Optional[str]:
+    """Username из промежуточного токена шага 2FA. Обратная сторона:
+    полноценный access_token тут тоже не принимается — шаги не смешиваем."""
+    payload = decode_token(token)
+    if payload is None or not payload.get("mfa"):
+        return None
+    return payload.get("sub")

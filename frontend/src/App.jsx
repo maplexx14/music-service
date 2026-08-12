@@ -6,6 +6,7 @@ import Spinner from './components/Spinner'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
+const VerifyEmail = lazy(() => import('./pages/VerifyEmail'))
 const PreferencesOnboarding = lazy(() => import('./pages/PreferencesOnboarding'))
 const Home = lazy(() => import('./pages/Home'))
 const Search = lazy(() => import('./pages/Search'))
@@ -46,6 +47,15 @@ function App() {
             ) : (
               <Navigate to="/" />
             )
+          }
+        />
+        {/* Доступен и залогиненным, и нет: юзер приходит по ссылке из письма. */}
+        <Route
+          path="/verify-email"
+          element={
+            <Suspense fallback={<Spinner />}>
+              <VerifyEmail />
+            </Suspense>
           }
         />
         <Route

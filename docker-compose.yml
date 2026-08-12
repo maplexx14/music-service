@@ -91,6 +91,27 @@ services:
       MINIO_BUCKET_COVERS: ${MINIO_BUCKET_COVERS:-covers}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # ─── Почта (подтверждение адреса, коды входа) ───
+      # Пустой SMTP_HOST = почта не отправляется, содержимое письма уходит в лог
+      # (см. mailer.py) — штатный путь локальной разработки.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@localhost}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+      # Базовый адрес фронта для ссылки подтверждения в письме.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost}
+      # ─── Каптча на регистрации (Cloudflare Turnstile) ───
+      # Нужны ОБА ключа, иначе проверка полностью выключается и регистрация
+      # открыта скриптам (см. captcha.py). Тестовые ключи «всегда пройдено»:
+      #   TURNSTILE_SITE_KEY=1x00000000000000000000AA
+      #   TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # DEBUG=1 пишет коды 2FA в лог, когда SMTP не настроен. Только для разработки.
+      DEBUG: ${DEBUG:-}
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
       SLSKD_URL: ${SLSKD_URL:-http://slskd:5030}
       SLSKD_API_KEY: ${SLSKD_API_KEY:-}
@@ -199,15 +220,15 @@ services:
   #
   # URL печатается в лог:
   #   docker compose logs tuna
-  tuna:
-    image: yuccastream/tuna:latest
-    container_name: music_tuna
-    restart: unless-stopped
-    environment:
-      TUNA_TOKEN: ${TUNA_TOKEN:?Set TUNA_TOKEN in .env}
-    command: http nginx:80
-    depends_on:
-      - nginx
+  # tuna:
+  #   image: yuccastream/tuna:latest
+  #   container_name: music_tuna
+  #   restart: unless-stopped
+  #   environment:
+  #     TUNA_TOKEN: ${TUNA_TOKEN:?Set TUNA_TOKEN in .env}
+  #   command: http nginx:80
+  #   depends_on:
+  #     - nginx
 
 volumes:
   postgres_data:

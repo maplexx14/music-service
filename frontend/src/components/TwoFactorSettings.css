@@ -1,0 +1,135 @@
+/* Двухфакторка в настройках. Опирается на общие классы Settings.css
+   (.settings-card, .settings-save-btn, .settings-hint) — здесь только то,
+   чего там нет: QR, список кодов, поля подтверждения. */
+
+.twofa-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.twofa-status {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background-color: #2a2a2a;
+  color: #b3b3b3;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.twofa-status-on {
+  background-color: rgba(30, 215, 96, 0.15);
+  color: #1ed760;
+  margin-bottom: 0;
+}
+
+.twofa-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: #b3b3b3;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Белый фон обязателен: QR на тёмной карточке не читается сканерами —
+   они ждут тёмные модули на светлом. */
+.twofa-qr {
+  align-self: center;
+  width: 200px;
+  height: 200px;
+  padding: 12px;
+  background-color: #ffffff;
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+
+.twofa-secret {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.twofa-secret code {
+  padding: 10px 12px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.twofa-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.twofa-field span {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.twofa-field input {
+  padding: 12px 16px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 14px;
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.twofa-field input:focus {
+  outline: none;
+  border-color: #a259ff;
+  background-color: #222;
+}
+
+.twofa-danger {
+  background-color: #e22134;
+}
+
+.twofa-danger:hover:not(:disabled) {
+  background-color: #ff4757;
+}
+
+/* Коды моноширинные и крупные: их переписывают руками на бумагу,
+   поэтому 0/O и 1/I должны различаться. */
+.twofa-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  list-style: none;
+  margin: 16px 0;
+  padding: 0;
+}
+
+.twofa-codes li {
+  padding: 10px 12px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  letter-spacing: 1px;
+  text-align: center;
+  user-select: all;
+}
+
+@media (max-width: 600px) {
+  .twofa-qr {
+    width: 170px;
+    height: 170px;
+  }
+}

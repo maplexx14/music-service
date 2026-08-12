@@ -8,6 +8,10 @@ pydantic==2.5.3
 pydantic-settings==2.1.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# TOTP-двухфакторка (RFC 6238) + QR провижининга для приложений-аутентификаторов.
+# qrcode рисует PNG через Pillow, который уже в зависимостях (обложки).
+pyotp==2.9.0
+qrcode==7.4.2
 python-multipart==0.0.6
 redis==5.0.1
 aiofiles==23.2.1

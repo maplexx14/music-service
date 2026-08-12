@@ -20,7 +20,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # IDEs
-.repowise/
+
 .vscode/
 .idea/
 *.swp
@@ -34,6 +34,10 @@ yarn-error.log*
 # Прод-секреты: генерируются на сервере (см. DEPLOY.md), в репозиторий не
 # попадают. .env.prod.example — шаблон, он отслеживается.
 .env.prod
+
+#repowise
+.mcp.json
+.repowise/
 
 # OS
 .DS_Store

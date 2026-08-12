@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import Turnstile from '../components/Turnstile'
 import { useAuthStore } from '../store/authStore'
-import { useNavigate } from 'react-router-dom'
 import './Auth.css'
 
 function Register() {
@@ -9,12 +9,43 @@ function Register() {
     username: '',
     email: '',
     password: '',
-    fullName: '',
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const { register } = useAuthStore()
-  const navigate = useNavigate()
+  const [sent, setSent] = useState(false)
+  const [resendState, setResendState] = useState('')
+  // Каптча: настройки приходят с бэка, пока их нет — виджет не рисуем.
+  const [captcha, setCaptcha] = useState({ loaded: false, required: false, siteKey: '' })
+  const [captchaToken, setCaptchaToken] = useState('')
+  // Смена nonce перерисовывает виджет: токен одноразовый, и после любой
+  // неудачной отправки старый уже негоден.
+  const [captchaNonce, setCaptchaNonce] = useState(0)
+  const { register, resendVerification, fetchCaptchaConfig } = useAuthStore()
+
+  useEffect(() => {
+    let cancelled = false
+    fetchCaptchaConfig().then((config) => {
+      if (cancelled) return
+      setCaptcha({
+        loaded: config.success,
+        required: config.required,
+        siteKey: config.siteKey,
+      })
+      if (!config.success) {
+        setError('Не удалось загрузить проверку «я не робот». Обновите страницу.')
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchCaptchaConfig])
+
+  const showCaptcha = captcha.required && Boolean(captcha.siteKey)
+
+  const resetCaptcha = () => {
+    setCaptchaToken('')
+    setCaptchaNonce((n) => n + 1)
+  }
 
   const handleChange = (e) => {
     setFormData({
@@ -26,22 +57,79 @@ function Register() {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
-    setLoading(true)
 
+    if (showCaptcha && !captchaToken) {
+      setError('Подтвердите, что вы не робот')
+      return
+    }
+
+    setLoading(true)
     const result = await register(
       formData.username,
       formData.email,
       formData.password,
-      formData.fullName
+      captchaToken
     )
     setLoading(false)
 
     if (result.success) {
-      // После регистрации — необязательный выбор любимых жанров/артистов.
-      navigate('/onboarding')
+      setSent(true)
     } else {
       setError(result.error)
+      // Бэк гасит токен при проверке — даже если отказ пришёл из-за занятого
+      // username, второй раз тот же токен не пройдёт.
+      if (showCaptcha) resetCaptcha()
     }
+  }
+
+  const handleResend = async () => {
+    setResendState('sending')
+    const result = await resendVerification(formData.username, formData.password)
+    setResendState(result.success ? 'sent' : result.error)
+  }
+
+  if (sent) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <div className="auth-header">
+            <h1>Проверьте почту</h1>
+            <p>
+              Отправили ссылку для подтверждения на <strong>{formData.email}</strong>.
+              Ссылка действует 24 часа.
+            </p>
+          </div>
+
+          <div className="auth-form">
+            <p className="auth-hint">
+              Не пришло письмо? Проверьте папку со спамом или отправьте ещё раз.
+            </p>
+
+            {resendState === 'sent' && (
+              <div className="success-message">Письмо отправлено ещё раз</div>
+            )}
+            {resendState && !['sending', 'sent'].includes(resendState) && (
+              <div className="error-message">{resendState}</div>
+            )}
+
+            <button
+              type="button"
+              className="auth-button secondary"
+              onClick={handleResend}
+              disabled={resendState === 'sending'}
+            >
+              {resendState === 'sending' ? 'Отправка...' : 'Отправить письмо ещё раз'}
+            </button>
+          </div>
+
+          <div className="auth-footer">
+            <p>
+              Уже подтвердили? <Link to="/login">Войти</Link>
+            </p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -82,18 +170,6 @@ function Register() {
           </div>
 
           <div className="form-group">
-            <label htmlFor="fullName">Полное имя</label>
-            <input
-              id="fullName"
-              name="fullName"
-              type="text"
-              value={formData.fullName}
-              onChange={handleChange}
-              autoComplete="name"
-            />
-          </div>
-
-          <div className="form-group">
             <label htmlFor="password">Пароль</label>
             <input
               id="password"
@@ -105,6 +181,15 @@ function Register() {
               autoComplete="new-password"
             />
           </div>
+
+          {showCaptcha && (
+            <Turnstile
+              key={captchaNonce}
+              siteKey={captcha.siteKey}
+              onToken={setCaptchaToken}
+              onError={() => setError('Проверка «я не робот» не сработала — попробуйте ещё раз')}
+            />
+          )}
 
           <button type="submit" className="auth-button" disabled={loading}>
             {loading ? 'Регистрация...' : 'Зарегистрироваться'}

@@ -11,8 +11,31 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
 
 
-class UserCreate(UserBase):
+class UserCreate(BaseModel):
+    """Регистрация.
+
+    full_name НЕ спрашиваем: поле осталось в профиле (сайдбар показывает его
+    вместо username, поиск ищет и по нему), но заполнять его на входе незачем —
+    лишний шаг в форме ради необязательных данных.
+
+    captcha_token — одноразовый токен виджета Turnstile. None допустим ровно
+    тогда, когда каптча на сервере не настроена (см. app.captcha).
+    """
+    username: str
+    email: EmailStr
     password: str
+    captcha_token: Optional[str] = None
+
+
+class CaptchaConfig(BaseModel):
+    """Что фронту рисовать на форме регистрации.
+
+    required=false — каптча на сервере не настроена: виджета нет, регистрация
+    принимается без токена.
+    """
+    required: bool = False
+    provider: str = "turnstile"
+    site_key: Optional[str] = None
 
 
 class UserResponse(UserBase):
@@ -20,6 +43,9 @@ class UserResponse(UserBase):
     avatar_url: Optional[str] = None
     is_active: bool
     is_admin: bool = False
+    email_verified: bool = False
+    totp_enabled: bool = False
+    email_2fa_enabled: bool = False
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     created_at: datetime
@@ -43,6 +69,142 @@ class GenreOption(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    # Токен доверенного устройства — приходит после успешного второго фактора.
+    # Клиент кладёт его в localStorage и присылает заголовком X-Device-Token,
+    # чтобы следующий вход с этого устройства не требовал код заново.
+    device_token: Optional[str] = None
+
+
+class LoginResult(BaseModel):
+    """Ответ /auth/login.
+
+    access_token/token_type приходят, когда второй фактор не нужен (2FA
+    выключена И устройство знакомое). mfa_token — промежуточный: пароль
+    верный, теперь нужен код. Ровно одно из этих полей заполнено.
+    """
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
+    mfa_token: Optional[str] = None
+    mfa_required: bool = False
+    # Какие факторы у юзера включены: "totp", "email" или оба. Фронт по этому
+    # списку решает, показать поле кода сразу или дать выбор способа.
+    mfa_methods: List[str] = []
+    # Код на почту уже отправлен этим ответом — фронту не надо звать /send.
+    email_code_sent: bool = False
+    # Код требуется не потому, что юзер включил 2FA, а потому что устройство
+    # незнакомое. Фронт по этому флагу объясняет причину: иначе человек, не
+    # включавший 2FA, не понимает, откуда взялся запрос кода.
+    new_device: bool = False
+    # Куда ушёл код (маскированный адрес) — для текста на экране ввода.
+    email_masked: Optional[str] = None
+
+
+class TrustedDeviceResponse(BaseModel):
+    """Устройство в списке настроек."""
+    id: int
+    label: str
+    created_at: datetime
+    last_seen_at: datetime
+    # Запрос пришёл именно с этого устройства — фронт помечает его и не
+    # предлагает отзыв «под собой».
+    current: bool = False
+
+
+class RevokeAllDevicesResponse(BaseModel):
+    revoked: int
+
+
+class MfaLoginRequest(BaseModel):
+    """Второй шаг входа: TOTP-код, код из письма или резервный код.
+
+    method задаёт, какой фактор проверять ("totp" / "email"). Без него
+    проверяются все включённые по очереди — так работает вход, когда способ
+    один и выбирать нечего.
+    """
+    mfa_token: str
+    code: str
+    method: Optional[str] = None
+
+
+class MfaEmailCodeRequest(BaseModel):
+    """Выслать (или переслать) код на почту на втором шаге входа. Пароль здесь
+    не нужен: mfa_token сам по себе доказывает, что пароль уже проверен."""
+    mfa_token: str
+
+
+class MfaEmailCodeResponse(BaseModel):
+    """sent=false бывает и в норме: SMTP не настроен либо код уже выслан и
+    действует cooldown. cooldown_seconds — сколько ждать до следующего письма."""
+    sent: bool
+    email_masked: str
+    cooldown_seconds: int = 0
+
+
+class TwoFactorStatus(BaseModel):
+    """Статус 2FA в профиле. totp_secret и otpauth_url заполнены только во
+    время незавершённого включения (между setup и enable) — они нужны фронту,
+    чтобы показать QR, и не должны светиться после."""
+    totp_enabled: bool
+    totp_secret: Optional[str] = None
+    otpauth_url: Optional[str] = None
+    email_2fa_enabled: bool = False
+    # Адрес в маскированном виде: на экране настроек надо показать, КУДА
+    # уйдёт код, но полный адрес там уже и так виден в профиле.
+    email_masked: Optional[str] = None
+
+
+class EmailTwoFactorSetupResponse(BaseModel):
+    """Первый шаг включения почтовой 2FA: код ушёл на подтверждённый адрес."""
+    sent: bool
+    email_masked: str
+    cooldown_seconds: int = 0
+
+
+class EmailTwoFactorEnableRequest(BaseModel):
+    """Подтверждение включения: код из письма + пароль (переподтверждение
+    опасной операции, как и у TOTP)."""
+    code: str
+    password: str
+
+
+class TwoFactorSetupResponse(BaseModel):
+    totp_secret: str
+    otpauth_url: str
+    qr_png: Optional[str] = None  # data:image/png;base64 — для десктопов без нативного QR
+
+
+class TwoFactorEnableRequest(BaseModel):
+    """Подтверждение включения: код с приложения-аутентификатора + пароль
+    (переподтверждение опасной операции)."""
+    code: str
+    password: str
+
+
+class TwoFactorEnableResponse(BaseModel):
+    """Коды показываются ровно один раз, поэтому приходят в открытом виде —
+    дальше в БД только их bcrypt-хэши."""
+    recovery_codes: List[str] = []
+
+
+class TwoFactorDisableRequest(BaseModel):
+    password: str
+
+
+class EmailVerifyRequest(BaseModel):
+    """Переход по ссылке из письма: /verify-email?token=…"""
+    token: str
+
+
+class EmailVerifyResponse(BaseModel):
+    email_verified: bool = True
+
+
+class EmailResendRequest(BaseModel):
+    """Повторная отправка письма. Пароль обязателен: без него любой перебором
+    username засыпал бы чужой ящик письмами. На экране «проверьте почту»
+    пароль уже введён, так что на UX это не влияет."""
+    username: str
+    password: str
 
 
 class TokenData(BaseModel):

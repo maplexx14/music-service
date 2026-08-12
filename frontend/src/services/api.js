@@ -12,6 +12,32 @@ try {
   authToken = null
 }
 
+// Токен доверенного устройства. Живёт отдельно от auth-storage и НЕ чистится
+// при logout: он помнит устройство, а не сессию — иначе каждый выход требовал
+// бы заново подтверждать код на входе.
+const DEVICE_TOKEN_KEY = 'device-token'
+
+export const getDeviceToken = () => {
+  try {
+    return localStorage.getItem(DEVICE_TOKEN_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+export const setDeviceToken = (token) => {
+  try {
+    if (token) {
+      localStorage.setItem(DEVICE_TOKEN_KEY, token)
+    } else {
+      localStorage.removeItem(DEVICE_TOKEN_KEY)
+    }
+  } catch {
+    // Приватный режим блокирует запись — тогда каждый вход просит код.
+    // Хуже по UX, но безопасно, поэтому просто игнорируем.
+  }
+}
+
 const api = axios.create({
   baseURL: API_URL,
   timeout: 60000,
@@ -30,6 +56,12 @@ api.interceptors.request.use(
     if (authToken) {
       config.headers.Authorization = `Bearer ${authToken}`
     }
+    // Заголовок ставим всегда: по нему бэк узнаёт знакомое устройство на
+    // логине и помечает «это устройство» в списке настроек.
+    const deviceToken = getDeviceToken()
+    if (deviceToken) {
+      config.headers['X-Device-Token'] = deviceToken
+    }
     return config
   },
   (error) => {
@@ -42,7 +74,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
-    if (status === 401) {
+    // skipAuthRedirect — для запросов, где 401 означает «неверные данные в
+    // форме», а не «сессия умерла»: шаг 2FA при входе, подтверждение пароля.
+    // Без флага опечатка в TOTP-коде выкидывала бы на экран входа.
+    if (status === 401 && error.config?.skipAuthRedirect !== true) {
       // Не делаем полный reload: он уничтожает <audio>, очередь и Media Session.
       // Store обработает событие и React Router покажет экран входа без перезагрузки.
       localStorage.removeItem('auth-storage')

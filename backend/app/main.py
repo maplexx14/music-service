@@ -71,6 +71,57 @@ if os.path.exists(cover_dir):
 
 
 @app.on_event("startup")
+async def _warn_if_mail_cannot_be_delivered() -> None:
+    # Вход с нового устройства ОБЯЗАТЕЛЬНО требует код на почту (см.
+    # routers/auth.py login), поэтому ненастроенный SMTP не «портит письма»,
+    # а закрывает вход всем, чьё устройство ещё не подтверждено. Молча узнать
+    # об этом от юзеров — худший вариант, поэтому предупреждаем на старте.
+    import logging
+
+    from app.email_2fa import LOG_CODE_WITHOUT_SMTP
+    from app.mailer import smtp_configured
+
+    if smtp_configured():
+        return
+    logger = logging.getLogger("mailer")
+    if LOG_CODE_WITHOUT_SMTP:
+        logger.warning(
+            "SMTP is not configured; DEBUG is on, so 2FA login codes go to this log"
+        )
+    else:
+        logger.error(
+            "SMTP is not configured and DEBUG is off: login from a new device asks for "
+            "an email code that cannot be delivered. Set SMTP_HOST (or DEBUG=true for "
+            "local development)"
+        )
+
+
+@app.on_event("startup")
+async def _warn_if_captcha_is_off() -> None:
+    # Регистрация без каптчи открыта скриптам: rate-limit режет темп с одного
+    # адреса, но не ботнет, а каждый созданный аккаунт тянет за собой письмо
+    # подтверждения с нашего домена (репутация отправителя). Молчать об этом
+    # нельзя — но и падать нельзя: локальная разработка идёт без ключей.
+    import logging
+
+    from app.captcha import captcha_configured, half_configured
+
+    logger = logging.getLogger("captcha")
+    if captcha_configured():
+        return
+    if half_configured():
+        logger.error(
+            "Turnstile is half-configured: set BOTH TURNSTILE_SITE_KEY and "
+            "TURNSTILE_SECRET_KEY, otherwise the captcha is skipped entirely"
+        )
+    else:
+        logger.warning(
+            "Turnstile keys are not set: registration accepts requests without a "
+            "captcha. Set TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY in production"
+        )
+
+
+@app.on_event("startup")
 async def _configure_threadpool() -> None:
     # Синхронные (def) эндпоинты БД/API (auth, search, playlists, ...) выполняются
     # в anyio threadpool — короткие запросы, тредов под них нужно немного.
