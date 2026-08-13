@@ -31,14 +31,15 @@ if not DATABASE_URL:
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
 DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=DB_POOL_SIZE,
-    max_overflow=DB_MAX_OVERFLOW,
-    pool_recycle=1800,  # пересоздаём соединения раз в 30 мин (защита от разрывов)
-    pool_timeout=30,
-)
+engine_options = {"pool_pre_ping": True}
+if not DATABASE_URL.startswith("sqlite"):
+    engine_options.update(
+        pool_size=DB_POOL_SIZE,
+        max_overflow=DB_MAX_OVERFLOW,
+        pool_recycle=1800,  # пересоздаём соединения раз в 30 мин (защита от разрывов)
+        pool_timeout=30,
+    )
+engine = create_engine(DATABASE_URL, **engine_options)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

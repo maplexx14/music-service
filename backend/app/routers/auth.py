@@ -133,7 +133,10 @@ def _send_login_code(user: User) -> bool:
     except EmailCodeUnavailable:
         logger.warning("email 2FA code storage unavailable for user %s", user.id)
         return False
-    return send_email_code(user.email, user.username, code, PURPOSE_LOGIN)
+    sent = send_email_code(user.email, user.username, code, PURPOSE_LOGIN)
+    if not sent:
+        clear_email_code(user.id, PURPOSE_LOGIN)
+    return sent
 
 
 def _send_verification(user: User) -> None:
@@ -416,6 +419,7 @@ def send_mfa_email_code(
         # и юзер ждал бы письма, которого не будет, — на входе с нового
         # устройства это тупик. Говорим прямо.
         logger.error("could not deliver login code to user %s", user.id)
+        clear_email_code(user.id, PURPOSE_LOGIN)
         raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
     return MfaEmailCodeResponse(
         sent=sent,
@@ -634,6 +638,7 @@ def setup_email_two_factor(
         # Как и на входе: «отправили» без письма — обещание, которое некому
         # выполнить. Фактор, код к которому не доставляется, включать нельзя.
         logger.error("could not deliver enable code to user %s", current_user.id)
+        clear_email_code(current_user.id, PURPOSE_ENABLE)
         raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
     return EmailTwoFactorSetupResponse(
         sent=sent,

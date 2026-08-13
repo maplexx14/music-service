@@ -158,9 +158,17 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-Music Streaming}
       SMTP_FROM: ${SMTP_FROM:-noreply@${DOMAIN}}
+      SMTP_REPLY_TO: ${SMTP_REPLY_TO:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+      SMTP_REQUIRED: ${SMTP_REQUIRED:-true}
+      EMAIL_2FA_CODE_TTL_SEC: ${EMAIL_2FA_CODE_TTL_SEC:-600}
+      EMAIL_2FA_MAX_ATTEMPTS: ${EMAIL_2FA_MAX_ATTEMPTS:-5}
+      EMAIL_2FA_RESEND_COOLDOWN_SEC: ${EMAIL_2FA_RESEND_COOLDOWN_SEC:-60}
+      EMAIL_VERIFY_TOKEN_TTL_SEC: ${EMAIL_VERIFY_TOKEN_TTL_SEC:-86400}
       # Ссылка подтверждения строится от этого адреса — только публичный домен.
       PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN}}
       # ─── Каптча на регистрации (Cloudflare Turnstile) ───

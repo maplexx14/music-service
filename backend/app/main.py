@@ -79,20 +79,24 @@ async def _warn_if_mail_cannot_be_delivered() -> None:
     import logging
 
     from app.email_2fa import LOG_CODE_WITHOUT_SMTP
-    from app.mailer import smtp_configured
+    from app.mailer import SMTP_REQUIRED, smtp_configuration_errors, smtp_configured
 
     if smtp_configured():
         return
     logger = logging.getLogger("mailer")
+    errors = "; ".join(smtp_configuration_errors())
+    if SMTP_REQUIRED:
+        raise RuntimeError(f"SMTP configuration is required but invalid: {errors}")
     if LOG_CODE_WITHOUT_SMTP:
         logger.warning(
             "SMTP is not configured; DEBUG is on, so 2FA login codes go to this log"
         )
     else:
         logger.error(
-            "SMTP is not configured and DEBUG is off: login from a new device asks for "
+            "SMTP is not configured correctly (%s) and DEBUG is off: login from a new device asks for "
             "an email code that cannot be delivered. Set SMTP_HOST (or DEBUG=true for "
-            "local development)"
+            "local development)",
+            errors,
         )
 
 

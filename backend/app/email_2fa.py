@@ -12,6 +12,7 @@
 import logging
 import os
 import secrets
+from html import escape
 
 from app.auth import get_password_hash, verify_password
 from app.cache import redis_client
@@ -203,6 +204,7 @@ def send_email_code(to_email: str, username: str, code: str, purpose: str = PURP
     else:
         subject = "Код для входа — Music Streaming"
         intro = "Код для входа в аккаунт:"
+    safe_username = escape(username)
     sent = send_mail(
         to_email,
         subject,
@@ -210,6 +212,16 @@ def send_email_code(to_email: str, username: str, code: str, purpose: str = PURP
         f"{intro}\n\n    {code}\n\n"
         f"Код действует {minutes} минут и работает один раз.\n"
         f"Если вы не запрашивали код, смените пароль — кто-то знает его.\n",
+        html=(
+            "<!doctype html><html><body style=\"margin:0;background:#f4f4f5;"
+            "font-family:Arial,sans-serif;color:#18181b\"><div style=\"max-width:560px;"
+            "margin:32px auto;background:#fff;border:1px solid #e4e4e7;padding:32px\">"
+            f"<p>Здравствуйте, {safe_username}!</p><p>{escape(intro)}</p>"
+            f"<p style=\"font-size:32px;font-weight:700;letter-spacing:6px\">{code}</p>"
+            f"<p>Код действует {minutes} минут и работает один раз.</p>"
+            "<p style=\"color:#52525b\">Если вы не запрашивали код, смените пароль: "
+            "возможно, он известен другому человеку.</p></div></body></html>"
+        ),
         log_fallback=(
             f"2FA code for {to_email} ({purpose}): {code}" if LOG_CODE_WITHOUT_SMTP else ""
         ),
