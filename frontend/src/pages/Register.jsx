@@ -63,7 +63,15 @@ function Register() {
       return
     }
 
-    if (showCaptcha && !captchaToken) {
+    // Turnstile writes the token to a hidden cf-turnstile-response field as
+    // well as invoking the callback. Read it here to cover delayed callback
+    // delivery in React/concurrent rendering.
+    const domCaptchaToken = showCaptcha
+      ? document.querySelector('[name="cf-turnstile-response"]')?.value || ''
+      : ''
+    const token = captchaToken || domCaptchaToken
+
+    if (showCaptcha && !token) {
       setError('Подтвердите, что вы не робот')
       return
     }
@@ -73,7 +81,7 @@ function Register() {
       formData.username,
       formData.email,
       formData.password,
-      captchaToken
+      token
     )
     setLoading(false)
 
