@@ -58,6 +58,11 @@ function Register() {
     e.preventDefault()
     setError('')
 
+    if (!captcha.loaded) {
+      setError('Проверка «я не робот» ещё загружается — попробуйте ещё раз')
+      return
+    }
+
     if (showCaptcha && !captchaToken) {
       setError('Подтвердите, что вы не робот')
       return
@@ -191,8 +196,12 @@ function Register() {
             />
           )}
 
-          <button type="submit" className="auth-button" disabled={loading}>
-            {loading ? 'Регистрация...' : 'Зарегистрироваться'}
+          <button type="submit" className="auth-button" disabled={loading || !captcha.loaded}>
+            {loading
+              ? 'Регистрация...'
+              : !captcha.loaded
+                ? 'Загрузка проверки...'
+                : 'Зарегистрироваться'}
           </button>
         </form>
 

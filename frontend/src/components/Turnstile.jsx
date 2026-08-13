@@ -70,6 +70,7 @@ function Turnstile({ siteKey, onToken, onError }) {
         widgetIdRef.current = turnstile.render(containerRef.current, {
           sitekey: siteKey,
           theme: 'dark',
+          action: 'register',
           callback: (token) => onTokenRef.current?.(token),
           // Токен истёк, не дождавшись отправки формы: снимаем его, чтобы
           // форма не ушла с мёртвым токеном. Виджет запросит проверку заново.
@@ -106,7 +107,13 @@ function Turnstile({ siteKey, onToken, onError }) {
     )
   }
 
-  return <div className="captcha-widget" ref={containerRef} />
+  return (
+    <div
+      className="captcha-widget"
+      data-action="turnstile-spin-v1"
+      ref={containerRef}
+    />
+  )
 }
 
 export default Turnstile

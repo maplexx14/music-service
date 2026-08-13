@@ -34,6 +34,7 @@ VERIFY_URL = os.getenv(
 # siteverify — быстрый запрос. Зависший Cloudflare не должен занимать поток из
 # threadpool дольше, чем нужно (тот же повод, что у таймаутов в cache.py).
 VERIFY_TIMEOUT = float(os.getenv("TURNSTILE_TIMEOUT", "5"))
+EXPECTED_ACTION = os.getenv("TURNSTILE_EXPECTED_ACTION", "register")
 
 # Коды Cloudflare, которые означают проблему НА НАШЕЙ стороне, а не неудачу
 # юзера: с ними каптчу не пройдёт никто, и лечится это только правкой конфига.
@@ -90,6 +91,14 @@ def verify_captcha(token: str, remote_ip: str | None = None) -> bool:
         raise CaptchaUnavailable(str(exc)) from exc
 
     if data.get("success"):
+        action = data.get("action")
+        if EXPECTED_ACTION and action != EXPECTED_ACTION:
+            logger.warning(
+                "Turnstile action mismatch: expected=%r actual=%r",
+                EXPECTED_ACTION,
+                action,
+            )
+            return False
         return True
 
     codes = list(data.get("error-codes") or [])

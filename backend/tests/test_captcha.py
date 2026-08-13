@@ -30,6 +30,7 @@ def turnstile_keys(monkeypatch):
     """Каптча настроена — в тестовом окружении ключей нет, ставим свои."""
     monkeypatch.setattr(captcha, "TURNSTILE_SITE_KEY", "site-key")
     monkeypatch.setattr(captcha, "TURNSTILE_SECRET_KEY", "secret-key")
+    monkeypatch.setattr(captcha, "EXPECTED_ACTION", "register")
     yield
 
 
@@ -61,7 +62,7 @@ def test_configured_requires_both_keys(monkeypatch):
 
 def test_verify_passes(monkeypatch, turnstile_keys):
     seen = []
-    _fake_post(monkeypatch, payload={"success": True}, seen=seen)
+    _fake_post(monkeypatch, payload={"success": True, "action": "register"}, seen=seen)
 
     assert captcha.verify_captcha("token-from-widget", "203.0.113.7") is True
     assert seen[0]["data"] == {
@@ -69,6 +70,12 @@ def test_verify_passes(monkeypatch, turnstile_keys):
         "response": "token-from-widget",
         "remoteip": "203.0.113.7",
     }
+
+
+def test_verify_rejects_token_for_another_action(monkeypatch, turnstile_keys):
+    _fake_post(monkeypatch, payload={"success": True, "action": "login"})
+
+    assert captcha.verify_captcha("token-for-login") is False
 
 
 def test_verify_rejects_bad_token(monkeypatch, turnstile_keys):
