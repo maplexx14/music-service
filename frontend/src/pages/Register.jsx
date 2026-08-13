@@ -47,6 +47,19 @@ function Register() {
     setCaptchaNonce((n) => n + 1)
   }
 
+  const handleCaptchaToken = (token) => {
+    setCaptchaToken(token)
+    if (token) {
+      // Убираем оставшуюся после преждевременного submit подсказку сразу,
+      // как только Turnstile подтвердил пользователя.
+      setError((current) =>
+        current.toLowerCase().includes('не робот') || current.toLowerCase().includes('проверка')
+          ? ''
+          : current
+      )
+    }
+  }
+
   const handleChange = (e) => {
     setFormData({
       ...formData,
@@ -199,7 +212,7 @@ function Register() {
             <Turnstile
               key={captchaNonce}
               siteKey={captcha.siteKey}
-              onToken={setCaptchaToken}
+              onToken={handleCaptchaToken}
               onError={() => setError('Проверка «я не робот» не сработала — попробуйте ещё раз')}
             />
           )}
