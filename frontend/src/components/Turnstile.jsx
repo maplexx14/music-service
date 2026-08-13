@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 
 // Виджет Cloudflare Turnstile (каптча на регистрации).
 //
@@ -42,7 +42,7 @@ function loadTurnstile() {
   return scriptPromise
 }
 
-function Turnstile({ siteKey, onToken, onError }) {
+const Turnstile = forwardRef(function Turnstile({ siteKey, onToken, onError }, ref) {
   const containerRef = useRef(null)
   const widgetIdRef = useRef(null)
   // Колбэки держим в ref: иначе новая функция на каждый рендер формы
@@ -56,6 +56,16 @@ function Turnstile({ siteKey, onToken, onError }) {
     onTokenRef.current = onToken
     onErrorRef.current = onError
   }, [onToken, onError])
+
+  // Submit читает ответ прямо у конкретного экземпляра Turnstile. Это не
+  // зависит от того, успел ли React применить setState из callback, и не
+  // может случайно взять hidden input другого виджета на странице.
+  useImperativeHandle(ref, () => ({
+    getResponse() {
+      if (widgetIdRef.current === null || !window.turnstile) return ''
+      return window.turnstile.getResponse(widgetIdRef.current) || ''
+    },
+  }), [])
 
   useEffect(() => {
     if (!siteKey) return undefined
@@ -114,6 +124,6 @@ function Turnstile({ siteKey, onToken, onError }) {
       ref={containerRef}
     />
   )
-}
+})
 
 export default Turnstile

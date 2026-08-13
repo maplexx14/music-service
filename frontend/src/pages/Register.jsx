@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Turnstile from '../components/Turnstile'
 import { useAuthStore } from '../store/authStore'
@@ -17,6 +17,8 @@ function Register() {
   // Каптча: настройки приходят с бэка, пока их нет — виджет не рисуем.
   const [captcha, setCaptcha] = useState({ loaded: false, required: false, siteKey: '' })
   const [captchaToken, setCaptchaToken] = useState('')
+  const captchaTokenRef = useRef('')
+  const turnstileRef = useRef(null)
   // Смена nonce перерисовывает виджет: токен одноразовый, и после любой
   // неудачной отправки старый уже негоден.
   const [captchaNonce, setCaptchaNonce] = useState(0)
@@ -43,11 +45,15 @@ function Register() {
   const showCaptcha = captcha.required && Boolean(captcha.siteKey)
 
   const resetCaptcha = () => {
+    captchaTokenRef.current = ''
     setCaptchaToken('')
     setCaptchaNonce((n) => n + 1)
   }
 
   const handleCaptchaToken = (token) => {
+    // ref обновляется синхронно внутри callback. setState может попасть в
+    // следующий render, если пользователь сразу нажал submit после галочки.
+    captchaTokenRef.current = token
     setCaptchaToken(token)
     if (token) {
       // Убираем оставшуюся после преждевременного submit подсказку сразу,
@@ -76,13 +82,11 @@ function Register() {
       return
     }
 
-    // Turnstile writes the token to a hidden cf-turnstile-response field as
-    // well as invoking the callback. Read it here to cover delayed callback
-    // delivery in React/concurrent rendering.
-    const domCaptchaToken = showCaptcha
-      ? document.querySelector('[name="cf-turnstile-response"]')?.value || ''
+    // Источник истины — API именно нашего виджета. Синхронный ref служит
+    // запасным путём для короткого окна между callback и обновлением React.
+    const token = showCaptcha
+      ? turnstileRef.current?.getResponse() || captchaTokenRef.current || captchaToken
       : ''
-    const token = captchaToken || domCaptchaToken
 
     if (showCaptcha && !token) {
       setError('Подтвердите, что вы не робот')
@@ -211,6 +215,7 @@ function Register() {
           {showCaptcha && (
             <Turnstile
               key={captchaNonce}
+              ref={turnstileRef}
               siteKey={captcha.siteKey}
               onToken={handleCaptchaToken}
               onError={() => setError('Проверка «я не робот» не сработала — попробуйте ещё раз')}
