@@ -321,7 +321,7 @@ function PlayerInner() {
   }, [])
 
   const lastRecordedTrackIdRef = useRef(null)
-  // Токен актуальности резолва audioSrc (см. эффект ниже) — защита от того,
+  // Токен актуальности источника (см. эффект ниже) — защита от того,
   // что устаревший (для уже пропущенного трека) fetch применит свой результат
   // позже, чем актуальный.
   const resolveTokenRef = useRef({})
@@ -357,7 +357,11 @@ function PlayerInner() {
   // движок по факту догрузки буфера.
   const pendingAdvanceRef = useRef(false)
   const resumeDeferredRef = useRef(null)
-  const [audioSrc, setAudioSrc] = useState(null)
+  // URL вместе с владельцем-треком. При swapTo активный <audio> меняется
+  // синхронно, а React ещё может держать в состоянии URL предыдущего трека.
+  // Без trackId эффект ниже успевал записать старый URL в новый слот и отменял
+  // ручной skip.
+  const [audioSource, setAudioSource] = useState(null)
   // Спиннер на время резолва/загрузки потока внешнего трека — иначе долгий
   // (но живой) резолв YouTube Music выглядит как зависший плеер.
   const [isBuffering, setIsBuffering] = useState(false)
@@ -930,7 +934,10 @@ function PlayerInner() {
   // отключает системную шкалу времени и часть remote-команд.
   useEffect(() => {
     resolveTokenRef.current = {}
-    setAudioSrc(resolveRawUrl(currentTrack, isExternalTrack))
+    setAudioSource({
+      trackId: currentTrack?.id ?? null,
+      url: resolveRawUrl(currentTrack, isExternalTrack),
+    })
   }, [currentTrack, isExternalTrack])
 
   // src на <audio> ставим императивно и ТОЛЬКО при реальном изменении, а не
@@ -945,14 +952,19 @@ function PlayerInner() {
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    if (!audioSrc) {
+    // После swapVersion audioRef уже указывает на новый слот, но audioSource
+    // может ещё принадлежать предыдущему треку до следующего React-рендера.
+    // В этот промежуточный момент ничего не трогаем: swapTo уже выставил
+    // правильный URL и начал play() в исходном событии skip/ended.
+    if (!audioSource || audioSource.trackId !== (currentTrack?.id ?? null)) return
+    if (!audioSource.url) {
       if (audio.src) {
         audio.removeAttribute('src')
         audio.load()
       }
       return
     }
-    const abs = new URL(audioSrc, window.location.href).href
+    const abs = new URL(audioSource.url, window.location.href).href
     const srcChanged = audio.src !== abs
     if (srcChanged) audio.src = abs
     // iOS Safari: explicit load() is required to start downloading.
@@ -963,10 +975,10 @@ function PlayerInner() {
     if (usePlayerStore.getState().isPlaying && audio.paused) {
       playWithDiag(audio, 'effect:srcChanged')
     }
-    // swapVersion: после подмены активного элемента эффект обязан переспросить
-    // src уже у НОВОГО элемента — иначе он остался бы уверен, что выставил
-    // нужный источник, тогда как проверял состояние предыдущего.
-  }, [audioSrc, swapVersion])
+    // После swapTo новый слот уже получил правильный URL из preload(). Не
+    // запускаем этот эффект повторно только из-за swapVersion: состояние React
+    // в этот момент ещё может содержать URL предыдущего трека.
+  }, [audioSource, currentTrack?.id])
 
   // Пере-объявление системе «сейчас играет вот этот элемент».
   //
@@ -1263,7 +1275,7 @@ function PlayerInner() {
     // сейчас играет.
     engine.clearStalePreload(nextTrackUrl(1))
 
-    // Сам load() тут не нужен: смена src (через audioSrc, см. эффект выше)
+    // Сам load() тут не нужен: смена src (через audioSource, см. эффект выше)
     // уже запускает алгоритм загрузки ресурса сама по себе — явный load()
     // здесь означал повторную полную загрузку того же потока (раньше element
     // ещё и пересоздавался целиком из-за key={currentTrack?.id}, отсюда и
@@ -1431,15 +1443,21 @@ function PlayerInner() {
   }, [volume])
 
   // Перемотка, инициированная из полноэкранного плеера (у него нет доступа к
-  // <audio>). Применяем к элементу и сбрасываем запрос.
+  // <audio>). Запрос привязан к треку: если пользователь успел нажать skip,
+  // старую перемотку нельзя применять прямо перед загрузкой нового src — у
+  // потоковых источников это оставляет media element в состоянии seeking.
   useEffect(() => {
     if (!seekRequest) return
     const audio = audioRef.current
-    if (audio && !isNaN(seekRequest.time)) {
+    if (
+      seekRequest.trackId === currentTrack?.id &&
+      audio &&
+      !isNaN(seekRequest.time)
+    ) {
       audio.currentTime = seekRequest.time
     }
-    clearSeekRequest()
-  }, [seekRequest, clearSeekRequest])
+    clearSeekRequest(seekRequest.id)
+  }, [seekRequest, currentTrack?.id, clearSeekRequest])
 
   // Media Session API — инфо о треке в системном виджете проигрывания (экран
   // блокировки, шторка, медиаклавиши). Метаданные обновляем при смене трека.
@@ -1890,7 +1908,7 @@ function PlayerInner() {
         if (rawRetryUrl) {
           const retryUrl = new URL(rawRetryUrl, window.location.href)
           retryUrl.searchParams.set('_media_retry', String(Date.now()))
-          setAudioSrc(retryUrl.href)
+          setAudioSource({ trackId: trackAtError?.id ?? null, url: retryUrl.href })
         } else {
           el.load()
         }

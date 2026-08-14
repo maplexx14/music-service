@@ -71,6 +71,10 @@ const QUEUE_EXTEND_LEAD = 5
 // реального прибытия хвоста — в том числе когда запрос стартовал до его вызова.
 let queueExtendPromise = null
 
+// Монотонный id позволяет обработчику перемотки сбросить именно тот запрос,
+// который он применил, не затерев более свежий seek из следующего рендера.
+let seekRequestSequence = 0
+
 // Запись скипа — негативный сигнал для рекомендаций, поэтому важно не терять
 // его молча на сетевой ошибке (как было раньше с голым .catch(() => {})).
 // Несколько попыток с небольшой задержкой; skipErrorToast, чтобы фоновая
@@ -127,7 +131,7 @@ const usePlayerStore = create((set, get) => ({
   dislikedTracksLoading: false,
 
   setCurrentTrack: (track) => {
-    set({ currentTrack: track, currentTime: 0 })
+    set({ currentTrack: track, currentTime: 0, seekRequest: null })
   },
 
   // Материализует произвольный внешний трек в БД (для лайков/плейлистов).
@@ -434,6 +438,7 @@ const usePlayerStore = create((set, get) => ({
       isPlaying: true,
       source,
       flowActive: source === 'flow',
+      seekRequest: null,
       // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
       // а пейджер прежнего плейлиста дописал бы в неё чужие треки.
       queuePager: null,
@@ -663,6 +668,7 @@ const usePlayerStore = create((set, get) => ({
       isPlaying: true,
       source,
       flowActive: source === 'flow',
+      seekRequest: null,
       // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
       // Прошлый — всегда сбрасываем: он относился к прежнему списку, и дотянуть
       // по нему хвост к новой очереди значит склеить два разных плейлиста.
@@ -758,9 +764,10 @@ const usePlayerStore = create((set, get) => ({
           isPlaying: true,
           source,
           currentTime: 0,
+          seekRequest: null,
         })
       } else {
-        set({ isPlaying: false })
+        set({ isPlaying: false, seekRequest: null })
       }
       return
     }
@@ -772,9 +779,10 @@ const usePlayerStore = create((set, get) => ({
         isPlaying: true,
         source,
         currentTime: 0,
+        seekRequest: null,
       })
     } else {
-      set({ isPlaying: false })
+      set({ isPlaying: false, seekRequest: null })
     }
   },
 
@@ -792,6 +800,7 @@ const usePlayerStore = create((set, get) => ({
           isPlaying: true,
           source,
           currentTime: 0,
+          seekRequest: null,
         })
       }
       return
@@ -804,6 +813,7 @@ const usePlayerStore = create((set, get) => ({
         isPlaying: true,
         source,
         currentTime: 0,
+        seekRequest: null,
       })
     }
   },
@@ -821,9 +831,19 @@ const usePlayerStore = create((set, get) => ({
   seekRequest: null,
   seekTo: (time) => {
     if (time == null || isNaN(time)) return
-    set({ currentTime: time, seekRequest: { time } })
+    set({
+      currentTime: time,
+      seekRequest: {
+        id: ++seekRequestSequence,
+        time,
+        trackId: get().currentTrack?.id ?? null,
+      },
+    })
   },
-  clearSeekRequest: () => set({ seekRequest: null }),
+  clearSeekRequest: (requestId = null) => set((state) => {
+    if (requestId !== null && state.seekRequest?.id !== requestId) return state
+    return { seekRequest: null }
+  }),
 
   setDuration: (duration) => {
     set({ duration })
@@ -838,6 +858,7 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: -1,
       isPlaying: false,
       currentTime: 0,
+      seekRequest: null,
       source: null,
       isFullScreen: false,
       queuePager: null,
