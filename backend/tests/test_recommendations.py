@@ -77,6 +77,62 @@ def test_recommendations_cold_start_shows_popular(client, db):
     assert hit.id in ids
 
 
+def test_recommendations_cold_start_respects_preferred_genre(
+    client, db, monkeypatch
+):
+    """Жанр из онбординга сам по себе персонализирует первую выдачу."""
+    from app.routers import recommendations as recommendations_router
+
+    # SQLite не поддерживает Postgres-оператор ~*. Здесь проверяем основной
+    # контракт через явное поле Track.genre, поэтому текстовые фильтры не нужны.
+    monkeypatch.setattr(
+        recommendations_router, "build_keyword_filters", lambda *_args, **_kwargs: []
+    )
+
+    user = create_user(db, username="genre-user")
+    user.preferred_genres = ["rock"]
+    db.commit()
+
+    wanted = _track(db, "wanted-rock", "RockArtist", play_count=1, genre="Rock")
+    unwanted = _track(db, "unwanted-pop", "PopArtist", play_count=1000, genre="pop")
+
+    resp = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="genre-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    ids = {t["id"] for t in resp.json()["tracks"]}
+
+    assert wanted.id in ids
+    assert unwanted.id not in ids
+
+
+def test_updating_preferences_invalidates_cached_recommendations(client, db):
+    """После онбординга главная не должна пять минут отдавать старый cold start."""
+    create_user(db, username="pref-user")
+    wanted = _track(db, "chosen-track", "ChosenArtist", play_count=1)
+    unwanted = _track(db, "global-hit", "OtherArtist", play_count=1000)
+    headers = auth_headers(client, username="pref-user")
+
+    first = client.get("/api/recommendations/", headers=headers)
+    assert first.status_code == 200, first.text
+    assert unwanted.id in {t["id"] for t in first.json()["tracks"]}
+
+    saved = client.put(
+        "/api/users/me/preferences",
+        headers=headers,
+        json={"preferred_genres": [], "preferred_artists": ["ChosenArtist"]},
+    )
+    assert saved.status_code == 200, saved.text
+
+    second = client.get("/api/recommendations/", headers=headers)
+    assert second.status_code == 200, second.text
+    ids = {t["id"] for t in second.json()["tracks"]}
+
+    assert wanted.id in ids
+    assert unwanted.id not in ids
+
+
 def test_recommendations_ignore_other_users_library(client, db):
     """Библиотека другого юзера не подмешивается в рекомендации.
 

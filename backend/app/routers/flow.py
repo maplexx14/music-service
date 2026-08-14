@@ -526,7 +526,15 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # разводило по разным "артистам".
         filters.append(func.lower(Track.artist).in_(profile["artist_keys"]))
     if profile["genres"]:
-        filters.append(Track.genre.in_(profile["genres"]))
+        filters.append(
+            func.lower(Track.genre).in_(
+                {
+                    str(genre).strip().lower()
+                    for genre in profile["genres"]
+                    if genre
+                }
+            )
+        )
         # Ключевые слова из фиксированного жанрового словаря — ловит внешние
         # треки без genre в метаданных, но с явным жанром прямо в заголовке.
         kw_conditions = build_keyword_filters(Track.title, profile.get("genre_counts", {}))

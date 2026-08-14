@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import PreferencePicker from '../components/PreferencePicker'
+import { toast } from '../store/toastStore'
 import './PreferencesOnboarding.css'
 
 /**
@@ -18,9 +19,13 @@ function PreferencesOnboarding() {
 
   const handleSave = async () => {
     setSaving(true)
-    await updatePreferences(value.genres, value.artists)
+    const result = await updatePreferences(value.genres, value.artists)
     setSaving(false)
-    navigate('/')
+    if (result.success) {
+      navigate('/')
+    } else {
+      toast.error(result.error)
+    }
   }
 
   const handleSkip = () => navigate('/')

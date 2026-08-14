@@ -140,4 +140,13 @@ def genre_is_compatible(explicit_genre, title: str, artist: str, user_genres: se
     genre = explicit_genre or infer_genre_from_text(title, artist)
     if genre is None:
         return True
-    return genre in user_genres
+    normalized_user_genres = {
+        str(value).strip().lower() for value in user_genres if value
+    }
+    normalized_genre = str(genre).strip().lower()
+    if normalized_genre in normalized_user_genres:
+        return True
+    # Провайдеры часто присылают свободную строку вроде "Rock & Roll" вместо
+    # внутреннего ключа "rock". Прогоняем метаданные через тот же словарь.
+    inferred = infer_genre_from_text(normalized_genre)
+    return inferred in normalized_user_genres if inferred else False

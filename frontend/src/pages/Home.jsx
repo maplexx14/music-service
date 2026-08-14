@@ -431,7 +431,7 @@ function Home() {
             </div>
           )}
 
-          {recommendations.playlists.length > 0 && (
+          {/* {recommendations.playlists.length > 0 && (
             <div className="content-section">
               <h2 className="section-title">Добавленные в сервис</h2>
               <Carousel
@@ -461,7 +461,7 @@ function Home() {
                 )}
               />
             </div>
-          )}
+          )} */}
         </>
       ) : (
         <div className="content-section">
