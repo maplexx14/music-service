@@ -1112,12 +1112,29 @@ async def get_flow(
     random.shuffle(profile_seeds)
     seeds = profile_seeds[:_PROFILE_SEEDS]
 
-    # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
-    # profile["artists"] взвешенно случайный (weighted_order), поэтому это
-    # ротация, а не фиксированный топ.
-    similar_artists = _rotate_artists(
-        profile["artists"], _SIMILAR_SEED_ARTISTS
+    # Любимые (лайки, плейлисты, явный выбор) всегда выше артистов, чей сигнал
+    # состоит только из прослушивания. История вращает имена ВНУТРИ уровня.
+    loved_artist_keys = {
+        primary_artist_key(name) for name in profile["playlist_artists"]
+    }
+    loved_artists = _rotate_artists(
+        profile["playlist_artists"], _FAVORITE_EXPLORE_ARTISTS
     )
+    familiar_artists = _rotate_artists(
+        (
+            name
+            for name in profile["artists"]
+            if primary_artist_key(name) not in loved_artist_keys
+        ),
+        _FAVORITE_EXPLORE_ARTISTS,
+    )
+    favorite_artists = (
+        loved_artists
+        + familiar_artists[:_FAVORITE_EXPLORE_ARTISTS - len(loved_artists)]
+    )
+    similar_artists = (
+        loved_artists + familiar_artists
+    )[:_SIMILAR_SEED_ARTISTS]
 
     # Своих ytmusic-сидов может не быть вовсе — вся коллекция в SoundCloud.
     # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
@@ -1139,10 +1156,6 @@ async def get_flow(
     # Точные каталоги любимых артистов — основа внешней части волны. Получаем
     # их параллельно с радио и похожими артистами, но разбираем первыми, чтобы
     # cross-source дедуп оставлял трек в приоритетном знакомом пуле.
-    favorite_artists = _rotate_artists(
-        profile["playlist_artists"] + profile["artists"],
-        _FAVORITE_EXPLORE_ARTISTS,
-    )
     favorite_jobs = [
         pool
         for artist in favorite_artists
@@ -1197,9 +1210,24 @@ async def get_flow(
     # Провайдеры возвращают результаты пачками по артисту; простой shuffle мог
     # оставить миноритарного артиста за пределами ранней части пула, которую
     # забирает take_capped, и финальный interleave уже не мог его вернуть.
-    random.shuffle(favorite_explore)
+    loved_external = [
+        track
+        for track in favorite_explore
+        if primary_artist_key(track.artist) in loved_artist_keys
+    ]
+    familiar_external = [
+        track
+        for track in favorite_explore
+        if primary_artist_key(track.artist) not in loved_artist_keys
+    ]
+    for pool in (loved_external, familiar_external):
+        random.shuffle(pool)
     favorite_explore = interleave_artists(
-        favorite_explore,
+        loved_external,
+        artist_getter=lambda item: item.artist,
+        min_gap=_MIN_ARTIST_GAP,
+    ) + interleave_artists(
+        familiar_external,
         artist_getter=lambda item: item.artist,
         min_gap=_MIN_ARTIST_GAP,
     )
@@ -1233,6 +1261,9 @@ async def get_flow(
     genre_quota = min(limit, 14 if limit == 15 else max(0, limit - 1))
 
     random.shuffle(exploit)
+    exploit.sort(
+        key=lambda track: primary_artist_key(track.artist) not in loved_artist_keys
+    )
 
     # ОДИН бюджет мест на артиста — на локальных и внешних кандидатов сразу и с
     # переносом на несколько подгрузок вперёд (history["artists"]). Раньше кап

@@ -227,6 +227,47 @@ def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
     assert artists.count("LovedArtist") >= 5, artists
 
 
+def test_flow_prioritizes_loved_artist_over_merely_played(client, db, monkeypatch):
+    """Явный любимый артист идёт раньше сигнала от одного прослушивания."""
+    user = create_user(db)
+    user.preferred_artists = ["LovedArtist"]
+    played = Track(
+        title="один раз прослушан",
+        artist="MerelyPlayed",
+        duration=100,
+        source="local",
+        file_path="minio://music/merely-played.mp3",
+    )
+    db.add(played)
+    db.commit()
+    db.execute(
+        user_track_plays.insert().values(
+            user_id=user.id,
+            track_id=played.id,
+            play_count=1,
+            last_played=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+    async def _favorite(request, artist):
+        prefix = "loved" if artist == "LovedArtist" else "played"
+        return [
+            _external(artist, f"новый {artist} {i}", f"{prefix}{i}")
+            for i in range(5)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr(
+        "app.routers.flow.weighted_order", lambda keys, weights: list(keys)
+    )
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+    artists = [track["artist"] for track in resp.json()]
+    assert artists.count("LovedArtist") >= 4, artists
+
+
 def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
     """Следующая порция начинает с любимых артистов, недавно не звучавших."""
     user = create_user(db)
