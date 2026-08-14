@@ -317,6 +317,12 @@
   min-width: 0;
 }
 
+.carousel-track .track-card,
+.carousel-track .playlist-card {
+  display: flex;
+  flex-direction: column;
+}
+
 .track-card:hover {
   background-color: #282828;
 }
@@ -381,6 +387,13 @@
   transition: background-color var(--duration-base) var(--ease-out),
               transform var(--duration-base) var(--ease-out);
   min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.playlist-card:focus-visible {
+  outline: 2px solid #a259ff;
+  outline-offset: 2px;
 }
 
 .playlist-card:hover {

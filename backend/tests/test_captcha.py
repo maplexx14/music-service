@@ -138,6 +138,7 @@ def test_register_without_captcha_when_not_configured(client, db):
         "password": "secret123",
     })
     assert resp.status_code == 201
+    assert db.query(User).filter(User.username == "bob").first() is None
 
 
 def test_register_requires_token_when_captcha_on(client, db, monkeypatch):
@@ -192,7 +193,7 @@ def test_register_accepts_passed_captcha(client, db, monkeypatch):
     })
     assert resp.status_code == 201
     assert seen == ["good-token"]
-    assert db.query(User).filter(User.username == "bob").first() is not None
+    assert db.query(User).filter(User.username == "bob").first() is None
 
 
 def test_register_503_when_captcha_unavailable(client, db, monkeypatch):
@@ -242,4 +243,4 @@ def test_register_ignores_full_name(client, db):
     })
     assert resp.status_code == 201
     assert resp.json()["full_name"] is None
-    assert db.query(User).filter(User.username == "bob").first().full_name is None
+    assert db.query(User).filter(User.username == "bob").first() is None

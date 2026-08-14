@@ -54,6 +54,11 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class PendingRegistrationResponse(UserBase):
+    """Заявка принята, но строки в users до подтверждения ещё нет."""
+    email_verified: bool = False
+
+
 class UserPreferencesUpdate(BaseModel):
     """Обновление явных музыкальных предпочтений (онбординг/настройки)."""
     preferred_genres: List[str] = []

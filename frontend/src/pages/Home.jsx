@@ -5,17 +5,39 @@ import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useAuthStore } from '../store/authStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
-import { useLazyBatch } from '../hooks/useLazyBatch'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { splitArtists } from '../utils/artists'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import Carousel from '../components/Carousel'
 import { toast } from '../store/toastStore'
 import './Home.css'
 
 // Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
 const Grainient = lazy(() => import('../components/Grainient'))
+const SOUNDCLOUD_PLAYLIST_LIMIT = 12
+const SOUNDCLOUD_SEED_LIMIT = 3
+
+function getSoundCloudPlaylistSeeds(user, tracks) {
+  const candidates = [
+    ...(user?.preferred_artists || []),
+    ...tracks.slice(0, 8).flatMap((track) => splitArtists(track.artist)),
+    ...(user?.preferred_genres || []),
+  ]
+  const seen = new Set()
+
+  return candidates
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      const key = value.toLocaleLowerCase()
+      if (!value || key === 'unknown artist' || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, SOUNDCLOUD_SEED_LIMIT)
+}
 
 // Не зависит от состояния компонента — вынесено на уровень модуля, чтобы
 // ссылка была стабильной и не ломала мемоизацию TrackCard.
@@ -52,7 +74,7 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
 
 function Home() {
   const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
-  const [trending, setTrending] = useState([])
+  const [soundCloudPlaylists, setSoundCloudPlaylists] = useState([])
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -60,18 +82,12 @@ function Home() {
   // Атомарные селекторы: подписка на весь store перерисовывала всю главную
   // (со всеми списками карточек) на каждом тике currentTime — 4 раза/сек
   // всё время воспроизведения.
-  const playPlaylist = usePlayerStore((s) => s.playPlaylist)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const source = usePlayerStore((s) => s.source)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
-  // Подборок с бэка может прийти много, а обложка у каждой своя — рисуем их
-  // партиями по мере прокрутки.
-  const { visibleItems: visiblePlaylists, sentinelRef: playlistsSentinelRef } = useLazyBatch(
-    recommendations.playlists,
-  )
   // Профиль в верхней шапке — единственное место выхода из аккаунта
   // на мобильных (сайдбар скрыт, в нижней навигации профиля нет).
   const user = useAuthStore((s) => s.user)
@@ -97,24 +113,52 @@ function Home() {
     return () => cancel(handle)
   }, [])
 
-  // Два независимых запроса — и рисуем каждый по мере готовности, а не
-  // Promise.all. Раньше вся страница (включая шапку и hero) ждала медленный
-  // из двух: /recommendations считает персонализацию, /tracks — простая
-  // выборка, и тренды простаивали готовыми за спиной у спиннера.
   const fetchData = () => {
     api
       // Локальный час клиента — для контекста времени суток в рекомендациях
       // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
       // «утреннему» вкусу, вечерняя — к вечернему.
       .get('/recommendations', { params: { hour: new Date().getHours() } })
-      .then((res) => setRecommendations(res.data))
+      .then((res) => {
+        const data = {
+          tracks: res.data?.tracks || [],
+          playlists: res.data?.playlists || [],
+        }
+        setRecommendations(data)
+        fetchSoundCloudPlaylists(data.tracks)
+      })
       .catch((error) => console.error('Error fetching recommendations:', error))
-
-    api
-      .get('/tracks?limit=20')
-      .then((res) => setTrending(res.data))
-      .catch((error) => console.error('Error fetching tracks:', error))
       .finally(() => setLoading(false))
+  }
+
+  const fetchSoundCloudPlaylists = async (tracks) => {
+    const seeds = getSoundCloudPlaylistSeeds(user, tracks)
+    if (seeds.length === 0) return
+
+    const results = await Promise.allSettled(
+      seeds.map((seed) =>
+        api.get('/search/external/playlists', {
+          params: { q: seed, limit: 6 },
+          skipErrorToast: true,
+        }),
+      ),
+    )
+    const seen = new Set()
+    const playlists = []
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue
+      for (const playlist of result.value.data || []) {
+        const key = playlist.external_id || playlist.id
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        playlists.push(playlist)
+        if (playlists.length >= SOUNDCLOUD_PLAYLIST_LIMIT) break
+      }
+      if (playlists.length >= SOUNDCLOUD_PLAYLIST_LIMIT) break
+    }
+
+    setSoundCloudPlaylists(playlists)
   }
 
   const fetchHistory = async () => {
@@ -126,12 +170,6 @@ function Home() {
       console.error('Error fetching history:', error)
     } finally {
       setHistoryLoading(false)
-    }
-  }
-
-  const handlePlayPlaylist = (playlist) => {
-    if (playlist.tracks && playlist.tracks.length > 0) {
-      playPlaylist(playlist.tracks, 0, 'wave')
     }
   }
 
@@ -346,23 +384,64 @@ function Home() {
       {activeTab === 'home' ? (
         <>
           <div className="content-section">
-            <h2 className="section-title">Тренды</h2>
-            <div className="tracks-grid">
-              {trending.slice(0, 12).map((track) => (
-                <TrackCard key={track.id} track={track} queue={trending} />
-              ))}
-            </div>
+            <h2 className="section-title">Рекомендуемые треки</h2>
+            <Carousel
+              items={recommendations.tracks}
+              label="Рекомендуемые треки"
+              renderItem={(track) => (
+                <TrackCard
+                  key={track.id}
+                  track={track}
+                  queue={recommendations.tracks}
+                />
+              )}
+            />
           </div>
+
+          {soundCloudPlaylists.length > 0 && (
+            <div className="content-section">
+              <h2 className="section-title">Плейлисты SoundCloud для вас</h2>
+              <Carousel
+                items={soundCloudPlaylists}
+                label="Рекомендуемые плейлисты SoundCloud"
+                renderItem={(playlist) => (
+                  <Link
+                    key={playlist.id}
+                    className="playlist-card"
+                    to={`/external/soundcloud/playlists/${playlist.external_id}`}
+                  >
+                    <img
+                      src={playlist.cover_url || defaultCover}
+                      alt={playlist.title}
+                      className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name">{playlist.title}</div>
+                      <div className="playlist-description">
+                        {playlist.owner ? `${playlist.owner} · ` : ''}
+                        {playlist.track_count} треков · SoundCloud
+                      </div>
+                    </div>
+                  </Link>
+                )}
+              />
+            </div>
+          )}
 
           {recommendations.playlists.length > 0 && (
             <div className="content-section">
-              <h2 className="section-title">Рекомендуемые плейлисты</h2>
-              <div className="playlists-grid">
-                {visiblePlaylists.map((playlist) => (
-                  <div
+              <h2 className="section-title">Добавленные в сервис</h2>
+              <Carousel
+                items={recommendations.playlists}
+                label="Добавленные в сервис плейлисты"
+                renderItem={(playlist) => (
+                  <Link
                     key={playlist.id}
                     className="playlist-card"
-                    onClick={() => handlePlayPlaylist(playlist)}
+                    to={`/playlists/${playlist.id}`}
                   >
                     <img
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
@@ -378,12 +457,9 @@ function Home() {
                         <div className="playlist-description">{playlist.description}</div>
                       )}
                     </div>
-                  </div>
-                ))}
-              </div>
-              {/* Маячок догрузки — соседом, а не ячейкой сетки: внутри
-                  .playlists-grid он занял бы колонку и порвал ряд. */}
-              <div ref={playlistsSentinelRef} aria-hidden="true" />
+                  </Link>
+                )}
+              />
             </div>
           )}
         </>

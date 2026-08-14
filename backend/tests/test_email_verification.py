@@ -1,7 +1,12 @@
 """Подтверждение почты: блокировка входа, одноразовость ссылки, повторная отправка."""
 import pytest
 
-from app.email_verification import consume_token, issue_token
+from app.email_verification import (
+    consume_token,
+    get_pending_registration,
+    issue_token,
+    reissue_pending_token,
+)
 from app.models import User
 from app.trusted_devices import DEVICE_TOKEN_HEADER
 from tests.conftest import create_user, trust_device
@@ -18,27 +23,27 @@ def _register(client, username="bob", email=None, password="password123"):
     )
 
 
-def _token_for(user_id):
-    """Токен из Redis тем же путём, каким его выписывает register."""
-    return issue_token(user_id)
+def _token_for(username):
+    """Свежая ссылка для временной заявки, ещё не попавшей в users."""
+    pending = get_pending_registration(username)
+    assert pending is not None
+    return reissue_pending_token(pending)
 
 
-def test_register_leaves_email_unverified(client, db):
+def test_register_does_not_create_user_before_confirmation(client, db):
     resp = _register(client)
     assert resp.status_code == 201, resp.text
     assert resp.json()["email_verified"] is False
-
-    user = db.query(User).filter(User.username == "bob").first()
-    assert user.email_verified is False
+    assert db.query(User).filter(User.username == "bob").first() is None
 
 
-def test_login_blocked_until_verified(client, db):
+def test_login_fails_until_user_is_created_by_confirmation(client, db):
     _register(client)
     resp = client.post(
         "/api/auth/login", data={"username": "bob", "password": "password123"}
     )
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "Email not verified"
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Incorrect username or password"
 
 
 def test_wrong_password_on_unverified_user_says_password(client, db):
@@ -52,12 +57,15 @@ def test_wrong_password_on_unverified_user_says_password(client, db):
 
 def test_verify_email_unlocks_login(client, db):
     _register(client)
-    user = db.query(User).filter(User.username == "bob").first()
-    token = _token_for(user.id)
+    token = _token_for("bob")
 
     resp = client.post("/api/auth/verify-email", json={"token": token})
     assert resp.status_code == 200, resp.text
     assert resp.json()["email_verified"] is True
+
+    user = db.query(User).filter(User.username == "bob").first()
+    assert user is not None
+    assert user.email_verified is True
 
     login = client.post(
         "/api/auth/login",
@@ -72,8 +80,7 @@ def test_verify_email_unlocks_login(client, db):
 
 def test_token_is_single_use(client, db):
     _register(client)
-    user = db.query(User).filter(User.username == "bob").first()
-    token = _token_for(user.id)
+    token = _token_for("bob")
 
     assert client.post("/api/auth/verify-email", json={"token": token}).status_code == 200
     second = client.post("/api/auth/verify-email", json={"token": token})
@@ -89,12 +96,22 @@ def test_garbage_token_rejected(client, db):
 def test_resend_invalidates_previous_token(client, db):
     """Утёкшая первая ссылка не должна переживать повторную отправку."""
     _register(client)
-    user = db.query(User).filter(User.username == "bob").first()
-    first = _token_for(user.id)
-    second = _token_for(user.id)
+    first = _token_for("bob")
+    second = _token_for("bob")
 
     assert client.post("/api/auth/verify-email", json={"token": first}).status_code == 400
     assert client.post("/api/auth/verify-email", json={"token": second}).status_code == 200
+
+
+def test_pending_username_and_email_are_reserved(client, db):
+    assert _register(client, username="bob", email="bob@example.com").status_code == 201
+
+    same_username = _register(client, username="bob", email="other@example.com")
+    same_email = _register(client, username="other", email="bob@example.com")
+
+    assert same_username.status_code == 400
+    assert same_email.status_code == 400
+    assert db.query(User).count() == 0
 
 
 def test_resend_requires_correct_password(client, db):

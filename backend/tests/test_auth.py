@@ -1,4 +1,4 @@
-from app.email_verification import issue_token
+from app.email_verification import get_pending_registration, reissue_pending_token
 from app.models import User
 from app.trusted_devices import DEVICE_TOKEN_HEADER
 from tests.conftest import create_user, trust_device
@@ -13,14 +13,18 @@ def test_register_and_login(client, db):
     assert resp.status_code == 201
     body = resp.json()
     assert body["username"] == "bob"
-    assert body["is_admin"] is False
-    assert "hashed_password" not in body
+    assert body["email_verified"] is False
 
     # Регистрация больше не даёт вход — сначала подтверждение почты.
     # Отдельно это покрыто в tests/test_email_verification.py.
-    user = db.query(User).filter(User.username == "bob").first()
-    token = issue_token(user.id)
+    assert db.query(User).filter(User.username == "bob").first() is None
+    pending = get_pending_registration("bob")
+    assert pending is not None
+    token = reissue_pending_token(pending)
     assert client.post("/api/auth/verify-email", json={"token": token}).status_code == 200
+
+    user = db.query(User).filter(User.username == "bob").first()
+    assert user is not None
 
     resp = client.post(
         "/api/auth/login",

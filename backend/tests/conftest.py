@@ -42,14 +42,14 @@ def _reset_totp_replay_cache():
 
 @pytest.fixture(autouse=True)
 def _reset_email_verification_tokens():
-    """Токены подтверждения живут 24 ч в общем Redis. id юзеров в sqlite
-    начинаются с 1 в каждом тесте, поэтому чужой токен от прошлого прогона
-    подошёл бы к другому юзеру."""
+    """Токены и незавершённые регистрации живут 24 ч в общем Redis."""
     from app.cache import clear_pattern
 
     clear_pattern("email:verify:*")
+    clear_pattern("email:registration:*")
     yield
     clear_pattern("email:verify:*")
+    clear_pattern("email:registration:*")
 
 
 @pytest.fixture(autouse=True)

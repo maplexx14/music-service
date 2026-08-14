@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from app.rate_limit import limiter
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
@@ -20,6 +21,7 @@ from app.schemas import (
     MfaEmailCodeRequest,
     MfaEmailCodeResponse,
     MfaLoginRequest,
+    PendingRegistrationResponse,
     RevokeAllDevicesResponse,
     Token,
     TrustedDeviceResponse,
@@ -46,9 +48,17 @@ from app.captcha import (
 )
 from app.dependencies import get_current_active_user
 from app.email_verification import (
+    RegistrationAlreadyPending,
+    RegistrationNotPending,
     VerificationUnavailable,
+    consume_pending_token,
     consume_token,
+    create_pending_registration,
+    delete_pending_registration,
+    get_pending_registration,
     issue_token,
+    reissue_pending_token,
+    restore_pending_token,
     send_verification_email,
 )
 from app.email_2fa import (
@@ -150,6 +160,15 @@ def _send_verification(user: User) -> None:
     send_verification_email(user.email, user.username, token)
 
 
+def _pending_response(username: str, email: str) -> PendingRegistrationResponse:
+    return PendingRegistrationResponse(
+        username=username,
+        email=email,
+        full_name=None,
+        email_verified=False,
+    )
+
+
 def _issue_access_token(user: User, device_token: str | None = None) -> dict:
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -198,7 +217,11 @@ def get_captcha_config():
     )
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=PendingRegistrationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 @limiter.limit("5/minute")
 def register(request: Request, user_data: UserCreate, db: Session = Depends(get_db)):
     # Каптча — ПЕРВЫМ делом, до обращения к БД: иначе эндпоинт отвечает
@@ -216,20 +239,25 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
             detail="Username or email already registered"
         )
 
-    # Create new user
+    # До подтверждения в SQL ничего не пишем: данные и резервирование
+    # username/email живут в Redis ровно столько же, сколько ссылка.
     hashed_password = get_password_hash(user_data.password)
-    db_user = User(
-        username=user_data.username,
-        email=user_data.email,
-        hashed_password=hashed_password,
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    try:
+        pending, token = create_pending_registration(
+            user_data.username, user_data.email, hashed_password
+        )
+    except RegistrationAlreadyPending:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username or email already registered",
+        )
+    except VerificationUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Email verification temporarily unavailable"
+        )
 
-    # Письмо после коммита: до него у юзера нет id, а токен привязан к нему.
-    _send_verification(db_user)
-    return db_user
+    send_verification_email(pending.email, pending.username, token)
+    return _pending_response(pending.username, pending.email)
 
 
 @router.post("/login", response_model=LoginResult)
@@ -308,6 +336,49 @@ def verify_email(
     переборщику, существует ли аккаунт.
     """
     try:
+        pending = consume_pending_token(payload.token)
+    except VerificationUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Email verification temporarily unavailable"
+        )
+
+    if pending is not None:
+        existing = db.query(User).filter(
+            (User.username == pending.username) | (User.email == pending.email)
+        ).first()
+        if existing:
+            delete_pending_registration(pending)
+            raise HTTPException(
+                status_code=400, detail="Username or email already registered"
+            )
+
+        user = User(
+            username=pending.username,
+            email=pending.email,
+            hashed_password=pending.hashed_password,
+            email_verified=True,
+        )
+        db.add(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            delete_pending_registration(pending)
+            raise HTTPException(
+                status_code=400, detail="Username or email already registered"
+            )
+        except Exception:
+            db.rollback()
+            try:
+                restore_pending_token(pending, payload.token)
+            except VerificationUnavailable:
+                logger.exception("could not restore registration token %s", pending.id)
+            raise
+        delete_pending_registration(pending)
+        return EmailVerifyResponse(email_verified=True)
+
+    # Совместимость со ссылками, выписанными старой версией приложения.
+    try:
         user_id = consume_token(payload.token)
     except VerificationUnavailable:
         raise HTTPException(
@@ -326,7 +397,7 @@ def verify_email(
     return EmailVerifyResponse(email_verified=True)
 
 
-@router.post("/resend-verification", response_model=UserResponse)
+@router.post("/resend-verification", response_model=PendingRegistrationResponse)
 @limiter.limit("5/minute")
 def resend_verification(
     payload: EmailResendRequest,
@@ -340,15 +411,36 @@ def resend_verification(
     утёкшая первая ссылка не переживает повторную отправку.
     """
     user = db.query(User).filter(User.username == payload.username).first()
-    if not user or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
-    if user.email_verified:
-        raise HTTPException(status_code=400, detail="Email already verified")
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+    if user:
+        if not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Incorrect username or password")
+        if user.email_verified:
+            raise HTTPException(status_code=400, detail="Email already verified")
+        if not user.is_active:
+            raise HTTPException(status_code=400, detail="Inactive user")
 
-    _send_verification(user)
-    return user
+        # Старые неподтверждённые аккаунты продолжают поддерживаться.
+        _send_verification(user)
+        return _pending_response(user.username, user.email)
+
+    try:
+        pending = get_pending_registration(payload.username)
+    except VerificationUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Email verification temporarily unavailable"
+        )
+    if not pending or not verify_password(payload.password, pending.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    try:
+        token = reissue_pending_token(pending)
+    except RegistrationNotPending:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    except VerificationUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Email verification temporarily unavailable"
+        )
+    send_verification_email(pending.email, pending.username, token)
+    return _pending_response(pending.username, pending.email)
 
 
 def _resolve_mfa_user(mfa_token: str, db: Session) -> User:
