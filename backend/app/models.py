@@ -137,6 +137,9 @@ class User(Base):
     # Списки строк: ключи жанров (из GENRE_KEYWORDS) и имена артистов.
     preferred_genres = Column(JSON, nullable=False, default=list, server_default="[]")
     preferred_artists = Column(JSON, nullable=False, default=list, server_default="[]")
+    # Артисты, которых пользователь убрал из автоматически определённых
+    # предпочтений. Это отдельный список: явные лайки и история не меняются.
+    excluded_artists = Column(JSON, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

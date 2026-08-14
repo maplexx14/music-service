@@ -636,3 +636,64 @@ def test_flow_discovery_never_overflows_artist_cap(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
     artists = [track["artist"] for track in resp.json()]
     assert artists.count("Solo") <= 4, artists
+
+
+def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):
+    """Артист, убранный из автоопределения, не возвращается из истории."""
+    user = create_user(db, username="excluded-detected-user")
+    user.excluded_artists = ["DetectedArtist"]
+    track = Track(
+        title="detected track",
+        artist="DetectedArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/detected.mp3",
+    )
+    db.add(track)
+    db.commit()
+    db.execute(
+        user_track_plays.insert().values(
+            user_id=user.id,
+            track_id=track.id,
+            play_count=3,
+            last_played=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/users/me/taste",
+        headers=auth_headers(client, username="excluded-detected-user"),
+    )
+    assert response.status_code == 200, response.text
+    assert "DetectedArtist" not in response.json()["artists"]
+
+
+def test_preferences_persist_detected_artist_exclusion_and_explicit_override(client, db):
+    user = create_user(db, username="excluded-preferences-user")
+    headers = auth_headers(client, username="excluded-preferences-user")
+
+    saved = client.put(
+        "/api/users/me/preferences",
+        headers=headers,
+        json={
+            "preferred_genres": [],
+            "preferred_artists": [],
+            "excluded_artists": ["AutoArtist", "AutoArtist"],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["excluded_artists"] == ["AutoArtist"]
+
+    explicit = client.put(
+        "/api/users/me/preferences",
+        headers=headers,
+        json={
+            "preferred_genres": [],
+            "preferred_artists": ["AutoArtist"],
+            "excluded_artists": ["AutoArtist"],
+        },
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["preferred_artists"] == ["AutoArtist"]
+    assert explicit.json()["excluded_artists"] == []

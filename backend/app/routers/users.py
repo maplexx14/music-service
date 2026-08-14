@@ -113,6 +113,16 @@ def update_preferences(
             artists.append(name)
     current_user.preferred_genres = valid_genres[:20]
     current_user.preferred_artists = artists[:50]
+    explicit_keys = {artist_key(name) for name in artists}
+    excluded: List[str] = []
+    seen_excluded = set()
+    for raw in prefs.excluded_artists:
+        name = (raw or "").strip()
+        key = artist_key(name)
+        if name and key and key not in explicit_keys and key not in seen_excluded:
+            seen_excluded.add(key)
+            excluded.append(name)
+    current_user.excluded_artists = excluded[:50]
     db.commit()
     db.refresh(current_user)
     # Следующий запрос должен сразу учитывать новый выбор, а не отдавать

@@ -12,14 +12,18 @@ import './PreferencesOnboarding.css'
 function PreferencesOnboarding() {
   const navigate = useNavigate()
   const { updatePreferences } = useAuthStore()
-  const [value, setValue] = useState({ genres: [], artists: [] })
+  const [value, setValue] = useState({ genres: [], artists: [], excludedArtists: [] })
   const [saving, setSaving] = useState(false)
 
   const total = value.genres.length + value.artists.length
 
   const handleSave = async () => {
     setSaving(true)
-    const result = await updatePreferences(value.genres, value.artists)
+    const result = await updatePreferences(
+      value.genres,
+      value.artists,
+      value.excludedArtists,
+    )
     setSaving(false)
     if (result.success) {
       navigate('/')

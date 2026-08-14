@@ -11,6 +11,7 @@ import './PreferencePicker.css'
 function PreferencePicker({ value, onChange }) {
   const selectedGenres = value?.genres || []
   const selectedArtists = value?.artists || []
+  const excludedArtists = value?.excludedArtists || []
 
   const [genreOptions, setGenreOptions] = useState([])
   const [artistQuery, setArtistQuery] = useState('')
@@ -78,15 +79,18 @@ function PreferencePicker({ value, onChange }) {
   const unusedDetectedArtists = useMemo(
     () =>
       detected.artists.filter(
-        (d) => !selectedArtists.some((a) => a.toLowerCase() === d.toLowerCase())
+        (d) =>
+          !selectedArtists.some((a) => a.toLowerCase() === d.toLowerCase()) &&
+          !excludedArtists.some((a) => a.toLowerCase() === d.toLowerCase())
       ),
-    [detected.artists, selectedArtists]
+    [detected.artists, selectedArtists, excludedArtists]
   )
 
   const applyDetected = () => {
     onChange({
       genres: [...selectedGenres, ...unusedDetected],
       artists: selectedArtists,
+      excludedArtists,
     })
   }
 
@@ -94,6 +98,12 @@ function PreferencePicker({ value, onChange }) {
     onChange({
       genres: selectedGenres,
       artists: [...selectedArtists, ...unusedDetectedArtists],
+      excludedArtists: excludedArtists.filter(
+        (excluded) =>
+          !unusedDetectedArtists.some(
+            (artist) => artist.toLowerCase() === excluded.toLowerCase()
+          )
+      ),
     })
   }
 
@@ -102,7 +112,7 @@ function PreferencePicker({ value, onChange }) {
     const next = has
       ? selectedGenres.filter((g) => g !== key)
       : [...selectedGenres, key]
-    onChange({ genres: next, artists: selectedArtists })
+    onChange({ genres: next, artists: selectedArtists, excludedArtists })
   }
 
   const addArtist = (name) => {
@@ -110,7 +120,13 @@ function PreferencePicker({ value, onChange }) {
     if (!clean) return
     const dup = selectedArtists.some((a) => a.toLowerCase() === clean.toLowerCase())
     if (!dup) {
-      onChange({ genres: selectedGenres, artists: [...selectedArtists, clean] })
+      onChange({
+        genres: selectedGenres,
+        artists: [...selectedArtists, clean],
+        excludedArtists: excludedArtists.filter(
+          (excluded) => excluded.toLowerCase() !== clean.toLowerCase()
+        ),
+      })
     }
     setArtistQuery('')
   }
@@ -119,6 +135,15 @@ function PreferencePicker({ value, onChange }) {
     onChange({
       genres: selectedGenres,
       artists: selectedArtists.filter((a) => a !== name),
+      excludedArtists,
+    })
+  }
+
+  const excludeDetectedArtist = (name) => {
+    onChange({
+      genres: selectedGenres,
+      artists: selectedArtists,
+      excludedArtists: [...excludedArtists, name],
     })
   }
 
@@ -209,14 +234,24 @@ function PreferencePicker({ value, onChange }) {
             </div>
             <div className="pref-suggestions">
               {unusedDetectedArtists.map((a) => (
-                <button
-                  type="button"
-                  key={a}
-                  className="pref-suggestion detected"
-                  onClick={() => addArtist(a)}
-                >
-                  <Plus size={14} /> {a}
-                </button>
+                <div className="pref-detected-artist" key={a}>
+                  <button
+                    type="button"
+                    className="pref-suggestion detected"
+                    onClick={() => addArtist(a)}
+                  >
+                    <Plus size={14} /> {a}
+                  </button>
+                  <button
+                    type="button"
+                    className="pref-dismiss-detected"
+                    onClick={() => excludeDetectedArtist(a)}
+                    aria-label={`Убрать ${a} из определённых артистов`}
+                    title="Не учитывать этого артиста"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               ))}
             </div>
             <button

@@ -48,6 +48,7 @@ class UserResponse(UserBase):
     email_2fa_enabled: bool = False
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
+    excluded_artists: List[str] = []
     created_at: datetime
 
     class Config:
@@ -60,9 +61,10 @@ class PendingRegistrationResponse(UserBase):
 
 
 class UserPreferencesUpdate(BaseModel):
-    """Обновление явных музыкальных предпочтений (онбординг/настройки)."""
+    """Обновление явных предпочтений и исключений авто-профиля."""
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
+    excluded_artists: List[str] = []
 
 
 class GenreOption(BaseModel):

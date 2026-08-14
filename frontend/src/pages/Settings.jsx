@@ -20,6 +20,7 @@ function Settings() {
   const [prefs, setPrefs] = useState({
     genres: user?.preferred_genres || [],
     artists: user?.preferred_artists || [],
+    excludedArtists: user?.excluded_artists || [],
   })
   const [savingPrefs, setSavingPrefs] = useState(false)
 
@@ -30,13 +31,18 @@ function Settings() {
       setPrefs({
         genres: user.preferred_genres || [],
         artists: user.preferred_artists || [],
+        excludedArtists: user.excluded_artists || [],
       })
     }
   }, [user])
 
   const handleSavePrefs = async () => {
     setSavingPrefs(true)
-    const result = await updatePreferences(prefs.genres, prefs.artists)
+    const result = await updatePreferences(
+      prefs.genres,
+      prefs.artists,
+      prefs.excludedArtists,
+    )
     setSavingPrefs(false)
     if (result.success) {
       toast.success('Предпочтения сохранены')

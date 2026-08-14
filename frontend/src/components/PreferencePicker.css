@@ -196,6 +196,30 @@
   background: var(--brand-accent-hover);
 }
 
+.pref-detected-artist {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pref-dismiss-detected {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 1px solid rgba(162, 89, 255, 0.45);
+  border-radius: 999px;
+  background: transparent;
+  color: #cfa6ff;
+  cursor: pointer;
+}
+
+.pref-dismiss-detected:hover {
+  background: rgba(162, 89, 255, 0.14);
+  color: #ffffff;
+}
+
 .pref-suggestions {
   display: flex;
   flex-wrap: wrap;

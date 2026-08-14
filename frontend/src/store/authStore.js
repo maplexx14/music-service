@@ -405,11 +405,12 @@ const useAuthStore = create((set, get) => ({
         }
       },
 
-      updatePreferences: async (preferredGenres, preferredArtists) => {
+      updatePreferences: async (preferredGenres, preferredArtists, excludedArtists) => {
         try {
           const response = await api.put('/users/me/preferences', {
             preferred_genres: preferredGenres || [],
             preferred_artists: preferredArtists || [],
+            excluded_artists: excludedArtists || [],
           })
           const newUser = response.data
           set({ user: newUser })
