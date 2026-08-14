@@ -87,7 +87,6 @@ function ExternalPlaylist() {
     setImporting(true)
     try {
       const { data } = await api.post('/import', { url: playlist.permalink_url })
-      usePlayerStore.getState().invalidateFlowPreload()
       toast.success(`Плейлист «${data.playlist.name}» добавлен в медиатеку`)
       navigate(`/playlists/${data.playlist.id}`)
     } catch (error) {

@@ -49,7 +49,6 @@ const resolvedPrefetchKeys = new Set()
 // Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
 // дедуп летящего запроса + TTL свежести предзагруженного списка.
 let flowPreloadPromise = null
-let flowPreloadGeneration = 0
 const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
 
 // --- Постраничная очередь (см. queuePager / extendQueueIfNeeded) ---
@@ -459,11 +458,6 @@ const usePlayerStore = create((set, get) => ({
   // (монтирование главной / hover по кнопке), потребляется startFlow().
   flowPreload: null,
 
-  invalidateFlowPreload: () => {
-    flowPreloadGeneration += 1
-    set({ flowPreload: null })
-  },
-
   // Фоновая предзагрузка потока. Без неё клик по «потоку» ждал ДВЕ
   // последовательные операции: расчёт рекомендаций на бэке
   // (GET /recommendations/flow), а ЗАТЕМ холодный резолв первого трека
@@ -476,11 +470,10 @@ const usePlayerStore = create((set, get) => ({
     if (flowActive) return
     if (flowPreload && Date.now() - flowPreload.ts < FLOW_PRELOAD_TTL_MS) return
     if (flowPreloadPromise) return
-    const generation = flowPreloadGeneration
     flowPreloadPromise = api
       .get('/recommendations/flow', { params: { limit: 15 }, skipErrorToast: true })
       .then(({ data }) => {
-        if (generation === flowPreloadGeneration && data && data.length > 0) {
+        if (data && data.length > 0) {
           set({ flowPreload: { tracks: data, ts: Date.now() } })
           // Греем резолв первых двух треков заранее — к клику Redis уже тёплый.
           get().prefetchTracks(data.slice(0, 2), 2)
