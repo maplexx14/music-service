@@ -227,6 +227,38 @@ def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
     assert artists.count("LovedArtist") >= 5, artists
 
 
+def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
+    """Следующая порция начинает с любимых артистов, недавно не звучавших."""
+    user = create_user(db)
+    user.preferred_artists = [f"Loved{i}" for i in range(8)]
+    db.commit()
+
+    async def _favorite(request, artist):
+        suffix = artist.removeprefix("Loved")
+        return [
+            _external(artist, f"трек {artist}-{i}", f"loved{suffix}_{i}")
+            for i in range(3)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr(
+        "app.routers.flow.weighted_order", lambda keys, weights: list(keys)
+    )
+
+    headers = auth_headers(client)
+    first = client.get("/api/recommendations/flow?limit=6", headers=headers)
+    second = client.get("/api/recommendations/flow?limit=6", headers=headers)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    first_artists = {track["artist"] for track in first.json()}
+    second_artists = {track["artist"] for track in second.json()}
+    assert {"Loved6", "Loved7"} <= second_artists, (
+        first_artists,
+        second_artists,
+    )
+
+
 def test_flow_spreads_dominant_artist(client, db, monkeypatch):
     """Артист, у которого треков больше всех, не идёт в выдаче блоком.
 

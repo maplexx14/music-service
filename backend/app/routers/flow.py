@@ -90,11 +90,6 @@ _SC_EXPLORE_TTL = 1800
 # Точный каталог любимого артиста — основной внешний источник новых треков.
 _FAVORITE_EXPLORE_ARTISTS = 6
 _FAVORITE_EXPLORE_LIMIT = 15
-# Сколько из SC-разведочных слотов ГАРАНТИРОВАННО отдаём артистам из
-# импортированных плейлистов — независимо от их весового ранга. Плейлистные
-# треки имеют strongest weight (+4.0), но эта квота сохраняется для SC-разведки,
-# чтобы импорт из SoundCloud точно влиял на волну (SC-треки не сеют YT-радио).
-_SC_PLAYLIST_ARTISTS = 3
 # Разведка по пользовательским тегам (title_tags) — поиск НОВЫХ треков (не
 # обязательно от уже знакомых артистов) прямо у провайдеров по словам, которые
 # пользователь сам "выбрал" своей историей прослушивания.
@@ -967,6 +962,30 @@ async def get_flow(
         tuple(key) for key in (history.get("keys") or [])
         if isinstance(key, list) and len(key) == 2
     }
+    recent_artist_counts = Counter(
+        artist
+        for artist in (history.get("artists") or [])
+        if isinstance(artist, str) and artist
+    )
+
+    def _rotate_artists(names, limit: int) -> List[str]:
+        """Сначала артисты, реже звучавшие в последних порциях flow."""
+        unique: List[str] = []
+        seen = set()
+        for name in names:
+            key = primary_artist_key(name)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(name)
+        position = {name: index for index, name in enumerate(unique)}
+        unique.sort(
+            key=lambda name: (
+                recent_artist_counts.get(primary_artist_key(name), 0),
+                position[name],
+            )
+        )
+        return unique[:limit]
 
     profile = await asyncio.to_thread(_taste_profile, db, current_user.id)
     # Дальше идут секунды сетевых ожиданий (radio YT Music + поиск SoundCloud),
@@ -1096,7 +1115,9 @@ async def get_flow(
     # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
     # profile["artists"] взвешенно случайный (weighted_order), поэтому это
     # ротация, а не фиксированный топ.
-    similar_artists = list(profile["artists"])[:_SIMILAR_SEED_ARTISTS]
+    similar_artists = _rotate_artists(
+        profile["artists"], _SIMILAR_SEED_ARTISTS
+    )
 
     # Своих ytmusic-сидов может не быть вовсе — вся коллекция в SoundCloud.
     # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
@@ -1118,11 +1139,10 @@ async def get_flow(
     # Точные каталоги любимых артистов — основа внешней части волны. Получаем
     # их параллельно с радио и похожими артистами, но разбираем первыми, чтобы
     # cross-source дедуп оставлял трек в приоритетном знакомом пуле.
-    favorite_artists = list(
-        dict.fromkeys(
-            profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"]
-        )
-    )[:_FAVORITE_EXPLORE_ARTISTS]
+    favorite_artists = _rotate_artists(
+        profile["playlist_artists"] + profile["artists"],
+        _FAVORITE_EXPLORE_ARTISTS,
+    )
     favorite_jobs = [
         pool
         for artist in favorite_artists
