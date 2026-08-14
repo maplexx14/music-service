@@ -123,9 +123,11 @@ let sharedVolume = 1
 let mounted = false
 let unlocked = false
 let detachPreloadWatch = null
-// Элемент, с которого только что ушли: ждёт finishSwap, чтобы аудиосессия
-// не оставалась без владельца ни на один тик.
+// Незавершённая подмена: старый элемент продолжает держать аудиосессию, пока
+// новый не начнёт реально воспроизводиться. Храним и новый элемент, чтобы
+// запоздалый callback от предыдущей подмены не освободил уже другой переход.
 let pendingRelease = null
+let detachSwapHandoffWatch = null
 
 const swapListeners = new Set()
 const idleReadyListeners = new Set()
@@ -367,6 +369,9 @@ export function preload(url) {
   const abs = absolutize(url)
   const idle = getIdle()
   if (!abs || !idle) return false
+  // Во время handoff «idle» — это ещё звучащий предыдущий слот. Подмена его
+  // src остановила бы трек до старта нового и снова порвала аудиосессию.
+  if (pendingRelease?.previous === idle) return false
   if (idle.src === abs) return true
   idle.preload = 'auto'
   idle.volume = sharedVolume
@@ -401,12 +406,40 @@ export function isReady(url) {
   return idle.readyState >= idle.HAVE_FUTURE_DATA
 }
 
+// WebKit в фоне иногда не присылает `playing`, хотя элемент уже звучит и его
+// currentTime движется. Таймеры страницы при этом могут быть заморожены на
+// десятки секунд. Движок поэтому сам завершает handoff по первому надёжному
+// сигналу: `playing` либо фактическому продвижению позиции.
+function watchSwapHandoff(active) {
+  detachSwapHandoffWatch?.()
+  const startedAt = active.currentTime
+  const finish = () => finishSwap(active)
+  const finishOnProgress = () => {
+    if (active.currentTime > startedAt) finish()
+  }
+  const stop = () => {
+    active.removeEventListener('playing', finish)
+    active.removeEventListener('timeupdate', finishOnProgress)
+    if (detachSwapHandoffWatch === stop) detachSwapHandoffWatch = null
+  }
+  detachSwapHandoffWatch = stop
+  active.addEventListener('playing', finish)
+  active.addEventListener('timeupdate', finishOnProgress)
+}
+
 // Подмена активного элемента на заряженный. Возвращает элемент, который зовущей
 // стороне остаётся только play() — СИНХРОННО, в том же жесте (ended / кнопка
 // виджета). Возвращает null, если заряженного буфера нет: тогда вызывающий код
 // идёт старым путём (src + load + play на активном элементе).
 export function swapTo(url) {
   const abs = absolutize(url)
+  // Два одновременных handoff используют те же два элемента и не могут быть
+  // корректно представлены одним pendingRelease. Окно обычно короче одного
+  // timeupdate; повторная команда безопасно пройдёт сразу после завершения.
+  if (pendingRelease) {
+    diag('engine:swap:busy', { url: shortUrl(abs) })
+    return null
+  }
   const idle = getIdle()
   if (!abs || !idle || idle.src !== abs) return null
   // Тот же порог, что в isReady: HAVE_CURRENT_DATA означает лишь «первый кадр
@@ -431,14 +464,12 @@ export function swapTo(url) {
   // сознательный размен: muted вместо volume не годится совсем, потому что
   // приглушённый элемент iOS владельцем аудиосессии не считает, и мы вернулись
   // бы ровно к сломанному виджету. Окно держим минимальным — finishSwap зовётся
-  // по первому же событию playing.
+  // по playing либо первому продвижению позиции.
   try {
     previous.volume = 0
   } catch {
     /* noop */
   }
-  pendingRelease = previous
-
   idle.preload = ACTIVE_PRELOAD
   idle.volume = sharedVolume
   // Свежепрогретый элемент и так стоит на нуле, а трогать позицию без нужды
@@ -453,6 +484,8 @@ export function swapTo(url) {
       /* элемент в несовместимом состоянии — стартуем как есть */
     }
   }
+  pendingRelease = { previous, active: idle }
+  watchSwapHandoff(idle)
   diag('engine:swap', { url: shortUrl(abs), ...snapshotAudio(idle) })
   swapListeners.forEach((cb) => {
     try {
@@ -466,11 +499,15 @@ export function swapTo(url) {
 
 // Завершение подмены: освобождаем элемент, с которого ушли. Зовётся ПОСЛЕ того,
 // как новый элемент запел, — на этом и держится непрерывность сессии.
-// Идемпотентно: лишний вызов ничего не делает.
-export function finishSwap() {
-  const previous = pendingRelease
+// Идемпотентно: лишний или запоздалый вызов ничего не делает. expectedActive
+// связывает callback с той подменой, которая его создала.
+export function finishSwap(expectedActive = null) {
+  const pending = pendingRelease
+  if (expectedActive && pending?.active !== expectedActive) return false
   pendingRelease = null
-  if (!previous) return
+  detachSwapHandoffWatch?.()
+  if (!pending) return false
+  const { previous } = pending
   try {
     previous.pause()
     // Громкость вернуть обязательно: элемент переиспользуется под следующий
@@ -492,6 +529,7 @@ export function finishSwap() {
   // а кнопка ◀ — изредка.
   release(previous)
   diag('swap:finish', { ...snapshotAudio(previous) })
+  return true
 }
 
 // Подписка на подмену активного элемента: Player по ней перевешивает
@@ -524,6 +562,9 @@ export function setVolume(value) {
 export function clearStalePreload(keepUrl) {
   const idle = getIdle()
   if (!idle?.src) return
+  // После смены currentTrack React вызывает этот cleanup почти сразу, но до
+  // завершения handoff предыдущий слот ещё не preload, а владелец аудиосессии.
+  if (pendingRelease?.previous === idle) return
   const keep = absolutize(keepUrl)
   if (keep && idle.src === keep) return
   diag('preload:drop', { url: shortUrl(idle.src) })

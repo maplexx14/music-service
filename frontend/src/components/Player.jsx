@@ -40,12 +40,11 @@ const PRELOAD_MIN_BUFFER_SEC = 30
 // пережить паузу между play() и первыми кадрами (на устройстве — до ~0.8 с даже
 // на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
 // успел наврать.
-const SWAP_VERIFY_MS = 2500
-// Потолок ожидания события 'playing' от подменённого элемента, после которого
-// предыдущий отпускается принудительно. Перекрытие беззвучное (у старого
-// громкость уже в нуле), так что запас можно взять с большим гандикапом:
-// на устройстве задержка была ~170 мс, но в фоне бывает и хуже.
-const SWAP_RELEASE_MAX_MS = 3000
+const SWAP_VERIFY_MS = 1500
+// Последний аварийный потолок handoff. Нормально предыдущий элемент отпускается
+// по `playing` или продвижению currentTime; один таймер здесь ненадёжен, потому
+// что скрытую страницу iOS может заморозить надолго.
+const SWAP_RELEASE_MAX_MS = 2500
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -1057,23 +1056,40 @@ function PlayerInner() {
       // сознательный: muted вместо volume вернул бы поломку, потому что
       // приглушённый элемент iOS владельцем сессии не считает.
       //
-      // Таймер — страховка: если 'playing' не придёт вовсе, старый элемент
-      // нельзя оставлять играть вечно.
+      // `playing` в фоне WebKit иногда теряется, а setTimeout скрытой страницы
+      // троттлится вплоть до десятков секунд. Поэтому отпускаем предыдущий по
+      // любому доказательству старта: playing либо продвижению currentTime.
+      // Таймер остаётся последней страховкой.
       //
       // Отпускание разделено надвое. releaseNow — только освобождение (глушим
       // прежний элемент и мост). releasePrevious — то же плюс пере-объявление
       // «играю» на новом: оно уместно ровно там, где новый элемент реально
       // запел. Проверка мёртвого конвейера зовёт releaseNow напрямую — ей
       // переобъявлять нечего, там как раз пауза правдива.
+      const startedAt = primed.currentTime
+      let released = false
+      let releaseTimer = null
+      const releaseOnProgress = () => {
+        if (primed.currentTime > startedAt) releasePrevious()
+      }
       const releaseNow = () => {
+        if (released) return false
+        released = true
         primed.removeEventListener('playing', releasePrevious)
-        clearTimeout(swapReleaseTimerRef.current)
-        swapReleaseNowRef.current = null
-        engine.finishSwap()
+        primed.removeEventListener('timeupdate', releaseOnProgress)
+        clearTimeout(releaseTimer)
+        if (swapReleaseTimerRef.current === releaseTimer) {
+          swapReleaseTimerRef.current = null
+        }
+        if (swapReleaseNowRef.current === releaseNow) {
+          swapReleaseNowRef.current = null
+        }
+        engine.finishSwap(primed)
         engine.releaseSession()
+        return true
       }
       const releasePrevious = () => {
-        releaseNow()
+        if (!releaseNow()) return
         // finishSwap и releaseSession — это pause() на ЧУЖИХ элементах, и для
         // системы они выглядят как «воспроизведение остановилось»: виджет уходит
         // в ▶ поверх честно звучащего трека (шкала при этом живая — её кормит
@@ -1081,8 +1097,10 @@ function PlayerInner() {
         reassertNowPlaying(primed, 'swap:reassertPlay')
       }
       primed.addEventListener('playing', releasePrevious)
+      primed.addEventListener('timeupdate', releaseOnProgress)
       clearTimeout(swapReleaseTimerRef.current)
-      swapReleaseTimerRef.current = setTimeout(releasePrevious, SWAP_RELEASE_MAX_MS)
+      releaseTimer = setTimeout(releasePrevious, SWAP_RELEASE_MAX_MS)
+      swapReleaseTimerRef.current = releaseTimer
       swapReleaseNowRef.current = releaseNow
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)
       verifySwapStarted(primed)
@@ -2105,5 +2123,3 @@ function PlayerInner() {
 const Player = React.memo(PlayerInner)
 
 export default Player
-
-
