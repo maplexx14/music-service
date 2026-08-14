@@ -230,7 +230,7 @@ def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
 def test_flow_prioritizes_loved_artist_over_merely_played(client, db, monkeypatch):
     """Явный любимый артист идёт раньше сигнала от одного прослушивания."""
     user = create_user(db)
-    user.preferred_artists = ["LovedArtist"]
+    _liked(db, user, artist="LovedArtist")
     played = Track(
         title="один раз прослушан",
         artist="MerelyPlayed",

@@ -260,6 +260,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
+        if key and key not in seen_pl_artist:
+            playlist_artist_keys.append(key)
+            seen_pl_artist.add(key)
         # Genre почти всегда пуст у внешних треков — как дополнительный сигнал
         # разбираем ключевые слова прямо в названии ("... Phonk Remix" и т.п.).
         genre = track.genre or infer_genre_from_text(track.title, track.artist)
@@ -269,6 +272,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
+        if track.source == "ytmusic" and track.external_id:
+            playlist_seeds.append(track.external_id)
 
     # Плейлистные треки — сильнейший сигнал вкуса (вес выше лайков):
     # пользователь осознанно подбирал композиции в плейлист, что является
