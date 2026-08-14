@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
+import { usePlayerStore } from '../store/playerStore'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import { useLazyBatch } from '../hooks/useLazyBatch'
@@ -105,6 +106,7 @@ function Playlists() {
     setImporting(true)
     try {
       const { data } = await api.post('/import', { url: importUrl.trim() })
+      usePlayerStore.getState().invalidateFlowPreload()
       const parts = [`Импортировано треков: ${data.imported}`]
       if (data.matched) parts.push(`подобрано: ${data.matched}`)
       if (data.skipped) parts.push(`пропущено: ${data.skipped}`)

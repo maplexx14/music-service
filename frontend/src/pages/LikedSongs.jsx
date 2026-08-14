@@ -192,12 +192,6 @@ function LikedSongs() {
               <Play size={24} fill="currentColor" />
               Воспроизвести
             </button>
-            <button className="action-button">
-              <Heart size={20} fill="currentColor" />
-            </button>
-            <button className="action-button">
-              <MoreVertical size={20} />
-            </button>
           </div>
         </div>
       </div>

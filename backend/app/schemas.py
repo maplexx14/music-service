@@ -202,6 +202,10 @@ class EmailVerifyRequest(BaseModel):
 
 class EmailVerifyResponse(BaseModel):
     email_verified: bool = True
+    # New registrations can continue directly into onboarding after the
+    # verification link has authenticated the email owner.
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
 
 
 class EmailResendRequest(BaseModel):

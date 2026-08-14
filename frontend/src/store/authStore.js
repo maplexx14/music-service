@@ -88,11 +88,19 @@ const useAuthStore = create((set, get) => ({
 
       verifyEmail: async (token) => {
         try {
-          await api.post('/auth/verify-email', { token }, {
+          const response = await api.post('/auth/verify-email', { token }, {
             skipErrorToast: true,
             skipAuthRedirect: true,
           })
-          return { success: true }
+          if (response.data?.access_token) {
+            const loginResult = await useAuthStore.getState().finalizeLogin(
+              response.data.access_token,
+            )
+            if (!loginResult.success) {
+              return { success: true, authenticated: false }
+            }
+          }
+          return { success: true, authenticated: Boolean(response.data?.access_token) }
         } catch (error) {
           return {
             success: false,

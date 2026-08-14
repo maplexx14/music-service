@@ -30,9 +30,7 @@ function VerifyEmail() {
       if (cancelled) return
       if (result.success) {
         setStatus('done')
-        // verified=1 уводит после входа на онбординг: своего флага
-        // "онбординг пройден" у пользователя нет.
-        setTimeout(() => navigate('/login?verified=1'), 1500)
+        setTimeout(() => navigate(result.authenticated ? '/onboarding' : '/login?verified=1'), 600)
       } else {
         setStatus('error')
         setError(result.error)
@@ -56,7 +54,7 @@ function VerifyEmail() {
 
           {status === 'done' && (
             <div className="success-message">
-              Почта подтверждена. Перенаправляем на вход...
+              Почта подтверждена. Перенаправляем...
             </div>
           )}
 

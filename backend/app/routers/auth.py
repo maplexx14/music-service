@@ -375,7 +375,12 @@ def verify_email(
                 logger.exception("could not restore registration token %s", pending.id)
             raise
         delete_pending_registration(pending)
-        return EmailVerifyResponse(email_verified=True)
+        access = _issue_access_token(user)
+        return EmailVerifyResponse(
+            email_verified=True,
+            access_token=access["access_token"],
+            token_type=access["token_type"],
+        )
 
     # Совместимость со ссылками, выписанными старой версией приложения.
     try:

@@ -62,6 +62,14 @@ def test_verify_email_unlocks_login(client, db):
     resp = client.post("/api/auth/verify-email", json={"token": token})
     assert resp.status_code == 200, resp.text
     assert resp.json()["email_verified"] is True
+    assert resp.json()["access_token"]
+
+    me = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {resp.json()['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["username"] == "bob"
 
     user = db.query(User).filter(User.username == "bob").first()
     assert user is not None
@@ -86,6 +94,17 @@ def test_token_is_single_use(client, db):
     second = client.post("/api/auth/verify-email", json={"token": token})
     assert second.status_code == 400
     assert second.json()["detail"] == "Invalid or expired verification link"
+
+
+def test_legacy_verification_link_does_not_bypass_login(client, db):
+    user = create_user(db, username="legacy", email_verified=False)
+    token = issue_token(user.id)
+
+    resp = client.post("/api/auth/verify-email", json={"token": token})
+
+    assert resp.status_code == 200
+    assert resp.json()["email_verified"] is True
+    assert resp.json()["access_token"] is None
 
 
 def test_garbage_token_rejected(client, db):

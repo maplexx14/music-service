@@ -131,53 +131,7 @@ function Settings() {
           </label>
         </div>
 
-        <div className="settings-row">
-          <div className="settings-label">Палитра потока</div>
-          <div className="settings-control">
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              aria-label="Цвет волны"
-            />
-            <input
-              type="text"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="settings-color-text"
-              maxLength={7}
-            />
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              aria-label="Цвет волны"
-            />
-             <input
-              type="text"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="settings-color-text"
-              maxLength={7}
-            />
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              aria-label="Цвет волны"
-            />
-             <input
-              type="text"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="settings-color-text"
-              maxLength={7}
-            />
-          </div>
-        </div>
-
-      
-
+    
         <div className="settings-row">
           <div className="settings-label">GIF вместо текста</div>
           <div className="settings-gif">
