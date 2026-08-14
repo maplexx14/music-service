@@ -29,4 +29,4 @@ EXPOSE 8000
 
 # Run the application (docker-compose.yml overrides this with its own command,
 # GUNICORN_WORKERS below only applies when the image is run standalone)
-CMD gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips=*
+CMD gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --forwarded-allow-ips=*

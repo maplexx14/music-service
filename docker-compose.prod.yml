@@ -16,7 +16,10 @@
 #   * restart: unless-stopped и ротация логов у всех сервисов;
 #   * ресурсы рассчитаны на VDS с 8 ГБ RAM (см. комментарии у postgres/backend).
 
-name: music-prod
+# Не задаём отдельное имя Compose-проекта: при запуске из этой директории
+# production использует то же имя проекта, что и docker-compose.yml. Поэтому
+# именованные тома postgres_data, minio_data и music_files общие для dev/prod,
+# а переключение режима не создаёт пустую БД пользователей и библиотеку треков.
 
 # Ротация логов: без неё json-file драйвер пишет безлимитно и рано или поздно
 # забивает диск VDS. Якорь переиспользуется всеми сервисами.
@@ -229,7 +232,7 @@ services:
       -k uvicorn.workers.UvicornWorker
       -w ${GUNICORN_WORKERS:-4}
       -b 0.0.0.0:8000
-      --proxy-headers --forwarded-allow-ips='*'
+      --forwarded-allow-ips='*'
       --access-logfile - --error-logfile -"
 
   frontend:

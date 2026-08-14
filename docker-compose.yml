@@ -170,10 +170,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    # --proxy-headers + --forwarded-allow-ips='*': доверяем X-Forwarded-Proto от nginx,
+    # UvicornWorker обрабатывает proxy-заголовки по умолчанию, а gunicorn-флаг
+    # --forwarded-allow-ips='*' разрешает доверять X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
     # (mixed active content).
-    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --proxy-headers --forwarded-allow-ips='*'"
+    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --forwarded-allow-ips='*'"
 
   slskd:
     image: slskd/slskd:latest
