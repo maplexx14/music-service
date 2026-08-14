@@ -212,7 +212,7 @@ def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
 
     async def _similar(artist):
         return [
-            _external("RandomNeighbour", f"чужой {i}", f"random{i}")
+            _external(f"RandomNeighbour{i}", f"чужой {i}", f"random{i}")
             for i in range(8)
         ]
 
@@ -258,6 +258,13 @@ def test_flow_spreads_dominant_artist(client, db, monkeypatch):
         longest = longest + 1 if order[i] == order[i - 1] else 1
         best = max(best, longest)
     assert best < 3, f"артист идёт блоком: {order}"
+    alternating = any(
+        order[i] == order[i + 2]
+        and order[i + 1] == order[i + 3]
+        and order[i] != order[i + 1]
+        for i in range(len(order) - 3)
+    )
+    assert not alternating, f"два артиста чередуются A-B-A-B: {order}"
     # Миноритарные артисты не должны быть вытеснены доминирующим целиком.
     assert len(set(order)) >= 3, f"выдача выродилась в одного-двух артистов: {order}"
 

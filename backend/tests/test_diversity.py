@@ -32,6 +32,19 @@ def test_no_ababa_alternation():
         assert a not in order[i + 1 : i + 3], f"{a} повторяется слишком рано: {order}"
 
 
+def test_scarce_artist_breaks_alternating_tail():
+    items = _items("A", "A", "A", "B", "B", "B", "C", "C")
+    order = _artists(
+        interleave_artists(items, lambda i: i["artist"], min_gap=4)
+    )
+    assert not any(
+        order[i] == order[i + 2]
+        and order[i + 1] == order[i + 3]
+        and order[i] != order[i + 1]
+        for i in range(len(order) - 3)
+    ), order
+
+
 def test_continues_across_batches():
     items = _items("A", "B")
     order = _artists(

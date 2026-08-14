@@ -8,6 +8,7 @@
 """
 import random
 import re
+from collections import Counter
 from typing import Callable, Iterable, List, Optional, Tuple, TypeVar
 
 from app.artist_utils import artist_key
@@ -80,18 +81,53 @@ def interleave_artists(
         last_pos[artist] = offset - len(prev)
 
     while remaining:
-        fallback = None  # (gap, index) — самый «давний» артист, если все близко
-        index = 0
-        for i, item in enumerate(remaining):
-            artist = primary_artist_key(artist_getter(item))
-            gap = len(ordered) - last_pos.get(artist, -min_gap)
-            if gap >= min_gap:
-                index = i
-                break
-            if fallback is None or gap > fallback[0]:
-                fallback = (gap, i)
+        counts = Counter(
+            primary_artist_key(artist_getter(item)) for item in remaining
+        )
+        gaps = {
+            i: len(ordered)
+            - last_pos.get(primary_artist_key(artist_getter(item)), -min_gap)
+            for i, item in enumerate(remaining)
+        }
+        eligible = [i for i, gap in gaps.items() if gap >= min_gap]
+        if eligible:
+            # Берём более представленного артиста раньше: редкие группы
+            # сохраняются для разрывов в хвосте, где иначе возникает A-B-A-B.
+            candidates = eligible
+            if len(ordered) >= 2:
+                second_last = primary_artist_key(artist_getter(ordered[-2]))
+                non_alternating = [
+                    i
+                    for i in candidates
+                    if primary_artist_key(artist_getter(remaining[i])) != second_last
+                ]
+                if non_alternating:
+                    candidates = non_alternating
+            index = max(
+                candidates,
+                key=lambda i: (counts[primary_artist_key(artist_getter(remaining[i]))], -i),
+            )
         else:
-            index = fallback[1]
+            # Когда строгий cooldown физически невыполним, всё равно избегаем
+            # соседнего и двухшагового повтора, пока есть другой вариант.
+            recent = {
+                primary_artist_key(artist_getter(item))
+                for item in ordered[-2:]
+            }
+            relaxed = [
+                i
+                for i in range(len(remaining))
+                if primary_artist_key(artist_getter(remaining[i])) not in recent
+            ]
+            candidates = relaxed or list(range(len(remaining)))
+            index = max(
+                candidates,
+                key=lambda i: (
+                    gaps[i],
+                    counts[primary_artist_key(artist_getter(remaining[i]))],
+                    -i,
+                ),
+            )
 
         item = remaining.pop(index)
         ordered.append(item)

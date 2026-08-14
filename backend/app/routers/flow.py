@@ -85,7 +85,6 @@ _SIMILAR_TTL = 6 * 60 * 60
 _ARTIST_SEED_LIMIT = 3
 # У SoundCloud нет радио-эндпоинта в yt-dlp, поэтому «разведку» по нему делаем
 # поиском по любимым артистам. Сколько артистов зондируем и глубина кэша.
-_SC_EXPLORE_ARTISTS = 6
 _SC_EXPLORE_LIMIT = 15
 _SC_EXPLORE_TTL = 1800
 # Точный каталог любимого артиста — основной внешний источник новых треков.
@@ -102,9 +101,10 @@ _SC_PLAYLIST_ARTISTS = 3
 _TAG_EXPLORE_TAGS = 3
 _TAG_EXPLORE_LIMIT = 15
 _TAG_EXPLORE_TTL = 1800
-# Максимум треков одного артиста в "эксплуатации" — иначе сортировка по
-# play_count раз за разом выдаёт одних и тех же самых заигранных артистов.
-_MAX_PER_ARTIST = 6
+# Максимум треков одного артиста в одной порции. Четырёх достаточно, чтобы
+# любимые артисты составляли большинство, но один автор не превращал волну в
+# чередование A-B-A-B.
+_MAX_PER_ARTIST = 4
 # Доля порции, ГАРАНТИРОВАННО отдаваемая разведке. Именно доля, а не остаток
 # после локальных кандидатов: локальный пул почти всегда богаче (один запрос в
 # БД против сети и кэшей у разведки), поэтому на добор разведке не оставалось
@@ -1224,6 +1224,14 @@ async def get_flow(
     def _artist_of(t) -> str:
         return t.artist
 
+    # Сохраняем большинство знакомых артистов даже у профиля с одним-двумя
+    # именами, но не разрешаем одному автору бесконтрольно заполнить порцию.
+    favorite_artist_count = max(1, len({artist_key(a) for a in favorite_artists}))
+    favorite_cap = max(
+        _MAX_PER_ARTIST,
+        math.ceil((limit // 2 + 1) / favorite_artist_count),
+    )
+
     # Не больше четверти порции отдаём новым артистам. Остальные места сначала
     # занимают непрослушанные треки знакомых артистов: внешний точный каталог,
     # затем локальная библиотека пользователя.
@@ -1232,14 +1240,14 @@ async def get_flow(
     relevant_favorite, favorite_rest = take_capped(
         favorite_explore,
         trusted_quota,
-        _MAX_PER_ARTIST,
+        favorite_cap,
         _artist_of,
         artist_budget,
     )
     relevant_local, exploit_rest = take_capped(
         exploit,
         trusted_quota - len(relevant_favorite),
-        _MAX_PER_ARTIST,
+        favorite_cap,
         _artist_of,
         artist_budget,
     )
@@ -1261,7 +1269,7 @@ async def get_flow(
         extra_favorite, favorite_rest = take_capped(
             favorite_rest,
             trusted_quota - len(mix),
-            _MAX_PER_ARTIST,
+            favorite_cap,
             _artist_of,
             artist_budget,
         )
@@ -1271,7 +1279,7 @@ async def get_flow(
         extra_local, exploit_rest = take_capped(
             exploit_rest,
             trusted_quota - len(mix),
-            _MAX_PER_ARTIST,
+            favorite_cap,
             _artist_of,
             artist_budget,
         )
@@ -1292,8 +1300,15 @@ async def get_flow(
     used_external += len(discovery)
     remaining = limit - len(mix)
 
-    # На бедном профиле допускаем превысить артистический кап, но всё равно
-    # сначала добираем знакомых артистов и лишь затем расширяем разведку.
+    # Если основной пул бедный, сначала добираем другие источники разведки,
+    # чтобы не возвращаться к повторяющемуся A-B-A-B из знакомых артистов.
+    if remaining:
+        overflow_external = take_overflow(
+            explore_rest, remaining, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in overflow_external)
+        used_external += len(overflow_external)
+        remaining = limit - len(mix)
     if remaining:
         overflow_favorite = take_overflow(
             favorite_rest, remaining, _artist_of, artist_budget
@@ -1306,13 +1321,6 @@ async def get_flow(
             TrackResponse.model_validate(t).model_dump(mode="json")
             for t in take_overflow(exploit_rest, remaining, _artist_of, artist_budget)
         )
-        remaining = limit - len(mix)
-    if remaining:
-        overflow_external = take_overflow(
-            explore_rest, remaining, _artist_of, artist_budget
-        )
-        mix.extend(t.model_dump() for t in overflow_external)
-        used_external += len(overflow_external)
 
     n_explore = used_external
     n_exploit = len(mix) - n_explore
