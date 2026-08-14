@@ -453,14 +453,14 @@
 .player-controls {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .control-btn {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   background: transparent;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.56);
   cursor: pointer;
@@ -468,18 +468,24 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.control-btn svg {
+  width: 24px;
+  height: 24px;
 }
 
 .control-btn:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.07);
 }
 
 .control-btn.active {
   color: #a259ff;
-  background: rgba(162, 89, 255, 0.1);
-  border-color: rgba(162, 89, 255, 0.16);
+}
+
+.control-btn:active {
+  transform: scale(0.96);
 }
 
 /* Кнопка «следующий» заблокирована, пока следующий трек не подгрузился. */
@@ -490,30 +496,35 @@
 
 .control-btn:disabled:hover {
   color: rgba(255, 255, 255, 0.56);
-  background: transparent;
 }
 
 .play-pause-btn {
-  background: #a259ff;
+  background: transparent;
   border: none;
-  color: #000000;
+  color: #ffffff;
   cursor: pointer;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: none;
-  transition: filter 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .play-pause-btn svg {
+  width: 30px;
+  height: 30px;
   fill: currentColor;
 }
 
 .play-pause-btn:hover {
-  filter: brightness(1.08);
+  color: #a259ff;
+}
+
+.play-pause-btn:active {
+  transform: scale(0.96);
 }
 
 .player-right {

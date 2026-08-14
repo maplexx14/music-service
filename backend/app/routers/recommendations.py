@@ -28,6 +28,7 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
+from app.recommendation_cache import recommendation_cache_key
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, weighted_order
 from app.artist_utils import artist_key
 
@@ -247,7 +248,7 @@ def get_recommendations(
     # Кэш сегментируем по временному интервалу: утренняя и вечерняя выдачи
     # различаются и не должны перетирать друг друга.
     bucket = _hour_bucket(hour)
-    cache_key = f"recs:v3-library:{current_user.id}:{limit}:{bucket or 'any'}"
+    cache_key = recommendation_cache_key(current_user.id, limit, bucket)
     cached = get_cache(cache_key)
     if cached is not None:
         return RecommendationResponse(**cached)

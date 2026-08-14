@@ -367,33 +367,61 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: clamp(14px, 5vw, 28px);
+  gap: clamp(10px, 4vw, 24px);
   margin-top: 30px;
 }
 
+.fullscreen-controls .fullscreen-icon {
+  width: 52px;
+  height: 52px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.fullscreen-controls .fullscreen-icon:hover {
+  background: transparent;
+  color: #ffffff;
+}
+
+.fullscreen-controls .fullscreen-icon.active {
+  border-color: transparent;
+  color: #a259ff;
+}
+
+.fullscreen-controls .fullscreen-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
 .fullscreen-play {
-  width: 72px;
-  height: 72px;
+  width: 76px;
+  height: 76px;
   border-radius: 999px;
-  background: #a259ff;
-  color: #0b0b0e;
+  background: transparent;
+  color: #ffffff;
   border: none;
   display: grid;
   place-items: center;
   cursor: pointer;
-  box-shadow: 0 14px 34px rgba(162, 89, 255, 0.24);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: none;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
   flex: 0 0 auto;
 }
 
-.fullscreen-play:hover {
-  box-shadow: 0 16px 38px rgba(162, 89, 255, 0.3);
+.fullscreen-play svg {
+  width: 38px;
+  height: 38px;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .fullscreen-play:hover {
-    transform: scale(1.04);
+    color: #a259ff;
   }
+}
+
+.fullscreen-play:active {
+  transform: scale(0.96);
 }
 
 /* --- Mobile: compact padding, controls spread --- */
@@ -450,7 +478,12 @@
 
   .fullscreen-controls {
     justify-content: space-between;
-    gap: 8px;
+    gap: 6px;
+  }
+
+  .fullscreen-controls .fullscreen-icon {
+    width: 48px;
+    height: 48px;
   }
 
   .fullscreen-play {
@@ -486,6 +519,7 @@
   }
 
   .fullscreen-controls {
+    gap: 4px;
     margin-top: 20px;
   }
 }
