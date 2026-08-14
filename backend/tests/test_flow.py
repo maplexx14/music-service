@@ -269,7 +269,7 @@ def test_flow_prioritizes_loved_artist_over_merely_played(client, db, monkeypatc
 
 
 def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
-    """Следующая порция начинает с любимых артистов, недавно не звучавших."""
+    """Следующая порция не повторяет треки и ротирует любимых артистов."""
     user = create_user(db)
     user.preferred_artists = [f"Loved{i}" for i in range(8)]
     db.commit()
@@ -294,6 +294,9 @@ def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
 
     first_artists = {track["artist"] for track in first.json()}
     second_artists = {track["artist"] for track in second.json()}
+    first_ids = {track["external_id"] for track in first.json()}
+    second_ids = {track["external_id"] for track in second.json()}
+    assert first_ids.isdisjoint(second_ids), (first_ids, second_ids)
     assert {"Loved6", "Loved7"} <= second_artists, (
         first_artists,
         second_artists,
@@ -443,23 +446,15 @@ def test_flow_response_is_not_cacheable(client, db):
     assert resp.headers.get("cache-control") == "no-store"
 
 
-def test_flow_keeps_exploration_when_local_pool_is_rich(client, db, monkeypatch):
-    """Разведка (новые артисты) обязана попадать в волну, даже когда локальных
-    кандидатов вдоволь.
+def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
+    client, db, monkeypatch
+):
+    """Новые артисты не вытесняют точные рекомендации при богатом пуле.
 
-    Боевая регрессия после ограничения локального пула артистами юзера. Раньше
-    страховочный добор брал глобальный топ по play_count и почти весь отсеивался
-    по require_signal, поэтому локальных кандидатов не хватало и разведка
-    занимала оставшиеся места сама. Стоило ограничить добор артистами самого
-    юзера — и почти каждый кандидат стал «доверенным» (make_relevance_check
-    возвращает True для курированного артиста ДО проверки require_signal),
-    локальных кандидатов стало вдоволь, и они забирали все жанровые места.
-    Волна вырождалась в каталог тех артистов, которых юзер и так слушает, —
-    то есть в список бывшего раздела «Рекомендуем для вас».
-
-    Богатый пул — это МНОГО артистов, а не много треков: _MAX_PER_ARTIST режет
-    одного артиста до двух треков. Поэтому здесь 10 курированных артистов, как
-    в боевом импортированном плейлисте.
+    Повторы теперь исключаются историей прослушиваний и выданных порций, поэтому
+    для их устранения не нужна обязательная доля разведки. У каждого из десяти
+    курированных артистов есть непрослушанные треки, которых достаточно на всю
+    порцию.
     """
     user = create_user(db)
     _liked(db, user)
@@ -467,6 +462,18 @@ def test_flow_keeps_exploration_when_local_pool_is_rich(client, db, monkeypatch)
 
     pos = 10
     for a in range(10):
+        seed = Track(
+            title=f"свой сид {a}",
+            artist=f"OwnArtist{a}",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/seed{a}.mp3",
+        )
+        db.add(seed)
+        db.commit()
+        db.execute(playlist_tracks.insert().values(
+            playlist_id=liked_pl.id, track_id=seed.id, position=pos))
+        pos += 1
         for i in range(2):
             t = Track(
                 title=f"свой трек {a}-{i}",
@@ -477,9 +484,6 @@ def test_flow_keeps_exploration_when_local_pool_is_rich(client, db, monkeypatch)
             )
             db.add(t)
             db.commit()
-            db.execute(playlist_tracks.insert().values(
-                playlist_id=liked_pl.id, track_id=t.id, position=pos))
-            pos += 1
     db.commit()
 
     # Разведка живая: граф артистов даёт треки НОВЫХ артистов. Берём
@@ -498,17 +502,7 @@ def test_flow_keeps_exploration_when_local_pool_is_rich(client, db, monkeypatch)
 
     mix = resp.json()
     artists = [t["artist"] for t in mix]
-    external = [a for a in artists if a.startswith("NeighbourArtist")]
-    # Проверяем ДОЛЮ, а не факт попадания: одно-единственное разведочное место
-    # (15-е) существовало и до фикса, но 14 из 15 своих треков — это и есть
-    # «вместо волны играет мой же каталог». Порог заведомо ниже _EXPLORE_SHARE,
-    # чтобы тест не ломался от точной настройки доли.
-    assert len(external) >= 3, (
-        f"разведку вытеснил локальный пул, в волне лишь {len(external)} новых из "
-        f"{len(artists)}: {artists}"
-    )
-    # Локальная часть при этом никуда не делась: доля разведки — это доля,
-    # а не подмена волны разведкой целиком.
-    assert any(a.startswith("OwnArtist") for a in artists), (
-        f"своя библиотека пропала из волны: {artists}"
+    assert len(artists) == 15, artists
+    assert all(a.startswith("OwnArtist") for a in artists), (
+        f"разведка вытеснила точные рекомендации знакомых артистов: {artists}"
     )
