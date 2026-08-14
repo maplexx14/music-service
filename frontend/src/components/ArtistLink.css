@@ -23,7 +23,7 @@
 }
 
 .artist-link:focus-visible {
-  outline: 2px solid var(--accent, #1db954);
+  outline: 2px solid var(--brand-accent, #a259ff);
   outline-offset: 2px;
 }
 

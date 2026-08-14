@@ -16,7 +16,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 999px;
@@ -28,13 +28,18 @@
 }
 
 .create-playlist-btn:hover {
-  background-color: #1ed760;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .create-playlist-btn:hover {
     transform: scale(1.05);
   }
+}
+
+.create-playlist-btn:active {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .create-playlist-form {
@@ -82,7 +87,7 @@
 }
 .create-playlist-form input:focus {
   outline: none;
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
   background-color: #222;
 }
 
@@ -93,7 +98,7 @@
 
 .submit-btn {
   padding: 10px 24px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -103,8 +108,13 @@
   transition: background-color var(--duration-base) var(--ease-out);
 }
 
-.submit-btn:hover {
-  background-color: #1ed760;
+.submit-btn:hover:not(:disabled) {
+  background-color: var(--brand-accent-hover);
+}
+
+.submit-btn:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .cancel-btn {
@@ -258,7 +268,7 @@
   padding: 12px 24px;
   background-color: transparent;
   color: #ffffff;
-  border: 1px solid #a259ff;
+  border: 1px solid var(--brand-accent);
   border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
@@ -268,13 +278,18 @@
 }
 
 .import-playlist-btn:hover {
-  background-color: #a259ff;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .import-playlist-btn:hover {
     transform: scale(1.05);
   }
+}
+
+.import-playlist-btn:active {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .import-playlist-form {
@@ -312,7 +327,7 @@
 }
 
 .import-example-label {
-  color: #a259ff;
+  color: var(--brand-accent);
   font-weight: 600;
   min-width: 80px;
 }
@@ -346,8 +361,8 @@
 }
 
 .cookies-ok {
-  background-color: rgba(30, 215, 96, 0.1);
-  color: #1ed760;
+  background-color: var(--status-success-soft);
+  color: var(--status-success);
 }
 
 .cookies-missing {
@@ -363,7 +378,7 @@
 }
 
 .cookies-hint a {
-  color: #a259ff;
+  color: var(--brand-accent);
   text-decoration: none;
 }
 
@@ -420,7 +435,7 @@
 
 .import-input-row input:focus {
   outline: none;
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
   background-color: #222;
 }
 

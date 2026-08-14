@@ -9,11 +9,11 @@
 /* Лайк исполнителя: у .action-button из PlaylistDetail.css нет активного
    состояния (там кнопка декоративная), а здесь она несёт статус. */
 .playlist-actions .action-button.liked {
-  color: #a259ff;
+  color: var(--brand-accent);
 }
 
 .playlist-actions .action-button.liked:hover {
-  color: #b981ff;
+  color: var(--brand-accent-hover);
 }
 
 .playlist-actions .action-button:disabled {

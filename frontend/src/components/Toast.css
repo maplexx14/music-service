@@ -40,7 +40,7 @@
 }
 
 .toast-success .toast-icon {
-  color: #4ade80;
+  color: var(--status-success);
 }
 
 .toast-error .toast-icon {

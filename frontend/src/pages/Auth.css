@@ -64,7 +64,7 @@
 
 .form-group input:focus {
   outline: none;
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
   background-color: #222;
 }
 
@@ -79,7 +79,7 @@
 
 .auth-button {
   padding: 14px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -93,13 +93,18 @@
 }
 
 .auth-button:hover:not(:disabled) {
-  background-color: #1ed760;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .auth-button:hover:not(:disabled) {
     transform: scale(1.02);
   }
+}
+
+.auth-button:not(.secondary):active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .auth-button:disabled {
@@ -122,8 +127,9 @@
 
 .success-message {
   padding: 12px;
-  background-color: #1ed760;
-  color: #121212;
+  background-color: var(--status-success-soft);
+  border: 1px solid var(--status-success-border);
+  color: var(--status-success);
   border-radius: 8px;
   font-size: 14px;
   text-align: center;
@@ -186,7 +192,7 @@
 }
 
 .auth-footer a {
-  color: #a259ff;
+  color: var(--brand-accent);
   text-decoration: none;
   font-weight: 600;
 }

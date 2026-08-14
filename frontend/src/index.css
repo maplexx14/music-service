@@ -61,6 +61,15 @@
   --icon-lg: 20px;
   --icon-xl: 24px;
   --icon-2xl: 48px;
+  /* Service palette: purple is interactive; green is reserved for success. */
+  --brand-accent: #a259ff;
+  --brand-accent-hover: #b578ff;
+  --brand-accent-active: #8f46e8;
+  --brand-accent-soft: rgba(162, 89, 255, 0.14);
+  --brand-accent-soft-strong: rgba(162, 89, 255, 0.22);
+  --status-success: #4ade80;
+  --status-success-soft: rgba(74, 222, 128, 0.14);
+  --status-success-border: rgba(74, 222, 128, 0.3);
   /* Motion tokens */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);

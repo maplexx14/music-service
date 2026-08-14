@@ -29,8 +29,9 @@
 
 .success-message {
   padding: 16px;
-  background-color: #a259ff;
-  color: #ffffff;
+  background-color: var(--status-success-soft);
+  border: 1px solid var(--status-success-border);
+  color: var(--status-success);
   border-radius: 8px;
   margin-bottom: 24px;
   font-size: 14px;
@@ -70,13 +71,13 @@
 }
 
 .file-upload-box:hover {
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
   background-color: #1a1a1a;
 }
 
 .file-upload-box svg {
   margin-bottom: 16px;
-  color: #a259ff;
+  color: var(--brand-accent);
 }
 
 .upload-text {
@@ -183,7 +184,7 @@
 
 .form-group input:focus {
   outline: none;
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
   background-color: #222;
 }
 
@@ -225,7 +226,7 @@
 
 .submit-btn {
   padding: 12px 32px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 8px;
@@ -238,13 +239,18 @@
 }
 
 .submit-btn:hover:not(:disabled) {
-  background-color: #1ed760;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .submit-btn:hover:not(:disabled) {
     transform: scale(1.02);
   }
+}
+
+.submit-btn:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .submit-btn:disabled {

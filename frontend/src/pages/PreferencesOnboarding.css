@@ -76,7 +76,7 @@
 }
 
 .onboarding-save:hover:not(:disabled) {
-  background: #b578ff;
+  background: var(--brand-accent-hover);
 }
 
 .onboarding-save:active:not(:disabled) {

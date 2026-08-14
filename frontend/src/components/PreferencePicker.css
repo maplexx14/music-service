@@ -193,7 +193,7 @@
 }
 
 .pref-add-btn:hover {
-  background: #b578ff;
+  background: var(--brand-accent-hover);
 }
 
 .pref-suggestions {

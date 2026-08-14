@@ -61,7 +61,7 @@
   align-items: center;
   gap: 12px;
   padding: 14px 32px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 999px;
@@ -73,13 +73,18 @@
 }
 
 .play-button-large:hover {
-  background-color: #1ed760;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .play-button-large:hover {
     transform: scale(1.05);
   }
+}
+
+.play-button-large:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .liked-tracks {
@@ -125,23 +130,23 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: #a259ff;
+  color: var(--brand-accent);
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s, transform 0.1s;
 }
 
 .track-remove-btn:hover {
-  background-color: rgba(162, 89, 255, 0.15);
+  background-color: var(--brand-accent-soft);
   color: #ff5a6a;
 }
 
 .track-remove-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.96);
 }
 
 .track-remove-btn:disabled {

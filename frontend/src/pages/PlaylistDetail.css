@@ -72,7 +72,7 @@
   align-items: center;
   gap: 12px;
   padding: 14px 32px;
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
   color: #ffffff;
   border: none;
   border-radius: 999px;
@@ -84,13 +84,18 @@
 }
 
 .play-button-large:hover {
-  background-color: #1ed760;
+  background-color: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .play-button-large:hover {
     transform: scale(1.05);
   }
+}
+
+.play-button-large:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .action-button {
@@ -141,7 +146,7 @@
 }
 
 .tracks-table th:last-child {
-  width: 80px;
+  width: 112px;
   text-align: right;
 }
 
@@ -226,7 +231,7 @@
 /* --- Индикация играющего трека и действия над треком --- */
 
 .track-row.playing .track-name {
-  color: #1ed760;
+  color: var(--brand-accent);
 }
 
 /* Эквалайзер-анимация в колонке номера у играющего трека. */
@@ -241,7 +246,7 @@
   display: block;
   width: 3px;
   height: 100%;
-  background-color: #1ed760;
+  background-color: var(--brand-accent);
   transform-origin: bottom;
   animation: nowPlayingBar 0.9s ease-in-out infinite;
 }
@@ -268,32 +273,63 @@
 .track-actions-cell {
   text-align: right;
   white-space: nowrap;
+  min-width: 104px;
 }
 
 .track-action-btn {
-  background: none;
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
   border: none;
-  color: #b3b3b3;
+  color: rgba(255, 255, 255, 0.68);
   cursor: pointer;
-  padding: 6px;
+  padding: 0;
   border-radius: 50%;
   vertical-align: middle;
-  transition: color 0.2s, background-color 0.2s;
+  touch-action: manipulation;
+  transition: color 160ms var(--ease-out),
+              background-color 160ms var(--ease-out),
+              transform 160ms var(--ease-out);
 }
 
-.track-action-btn:hover {
-  color: #fff;
-  background-color: rgba(255, 255, 255, 0.1);
+.track-action-btn svg {
+  width: 22px;
+  height: 22px;
 }
 
 .track-action-btn.liked {
-  color: #1ed760;
+  color: var(--brand-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .track-action-btn:hover {
+    color: #ffffff;
+    background-color: var(--brand-accent-soft);
+  }
+
+  .track-action-btn.liked:hover {
+    color: var(--brand-accent-hover);
+  }
+}
+
+.track-action-btn:active {
+  color: var(--brand-accent);
+  background-color: var(--brand-accent-soft-strong);
+  transform: scale(0.96);
+}
+
+.track-action-btn:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
 }
 
 /* Контейнер кнопки «в плейлист» — якорь для выпадающего меню. */
 .add-to-playlist {
   position: relative;
   display: inline-block;
+  vertical-align: middle;
 }
 
 .add-to-playlist-menu {
@@ -311,8 +347,10 @@
 }
 
 .add-to-playlist-option {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
+  min-height: 44px;
   text-align: left;
   background: none;
   border: none;
@@ -327,7 +365,11 @@
 }
 
 .add-to-playlist-option:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: var(--brand-accent-soft);
+}
+
+.add-to-playlist-option:active {
+  background-color: var(--brand-accent-soft-strong);
 }
 
 .add-to-playlist-empty {

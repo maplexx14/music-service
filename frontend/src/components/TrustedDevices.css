@@ -41,8 +41,8 @@
 .devices-badge {
   padding: 2px 8px;
   border-radius: 999px;
-  background-color: rgba(30, 215, 96, 0.15);
-  color: #1ed760;
+  background-color: var(--status-success-soft);
+  color: var(--status-success);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
