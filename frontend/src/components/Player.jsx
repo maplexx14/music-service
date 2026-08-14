@@ -1966,54 +1966,58 @@ function PlayerInner() {
             )}
           </div>
         </div>
-        {canInteract && (
-          <>
-            <button
-              className={`like-btn ${isLiked ? 'liked' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                handleLike()
-              }}
-              disabled={loadingLike}
-              title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-            >
-              <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
-            </button>
-            <button
-              className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                handleDislike()
-              }}
-              disabled={loadingDislike}
-              title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
-              aria-pressed={isDisliked}
-            >
-              <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
-            </button>
-            <button
-              className="add-btn"
-              onClick={(event) => {
-                event.stopPropagation()
-                handleOpenAddToPlaylist()
-              }}
-              title="Добавить в плейлист"
-            >
-              <ListPlus size={18} />
-            </button>
-          </>
-        )}
-        {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-          <a
-            className="add-btn"
-            href={currentTrack.download_url}
-            target="_blank"
-            rel="noreferrer"
-            title="Скачать"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Download size={18} />
-          </a>
+        {(canInteract || (isExternalTrack && currentTrack.download_allowed && currentTrack.download_url)) && (
+          <div className="player-track-actions">
+            {canInteract && (
+              <>
+                <button
+                  className={`like-btn ${isLiked ? 'liked' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleLike()
+                  }}
+                  disabled={loadingLike}
+                  title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+                >
+                  <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleDislike()
+                  }}
+                  disabled={loadingDislike}
+                  title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
+                  aria-pressed={isDisliked}
+                >
+                  <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  className="add-btn"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    handleOpenAddToPlaylist()
+                  }}
+                  title="Добавить в плейлист"
+                >
+                  <ListPlus size={18} />
+                </button>
+              </>
+            )}
+            {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+              <a
+                className="add-btn"
+                href={currentTrack.download_url}
+                target="_blank"
+                rel="noreferrer"
+                title="Скачать"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Download size={18} />
+              </a>
+            )}
+          </div>
         )}
       </div>
 

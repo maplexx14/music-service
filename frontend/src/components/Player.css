@@ -122,7 +122,8 @@
 }
 
 .player-left {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   flex: 1;
@@ -191,13 +192,14 @@
 }
 
 .player-info {
-  flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .player-track-title {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 600;
+  line-height: 1.2;
   color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
@@ -206,7 +208,8 @@
 }
 
 .player-track-artist {
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: 1.25;
   color: rgba(255, 255, 255, 0.58);
   white-space: nowrap;
   overflow: hidden;
@@ -218,6 +221,12 @@
 .player-artist-names {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.player-track-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 /* Secondary player actions use color, not a button surface, for state. */
@@ -555,9 +564,7 @@
   }
 
   .player-right,
-  .like-btn,
-  .dislike-btn,
-  .add-btn {
+  .player-track-actions {
     display: none;
   }
 

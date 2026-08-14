@@ -188,21 +188,23 @@
 }
 
 .fullscreen-info {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 16px;
+  width: 100%;
   min-width: 0;
 }
 
 .fullscreen-info > div:first-child {
   min-width: 0;
+  overflow: hidden;
 }
 
 .fullscreen-track-name {
-  font-size: clamp(22px, 5vw, 34px);
+  font-size: clamp(18px, 3vw, 28px);
   font-weight: 700;
-  line-height: 1.08;
+  line-height: 1.15;
   overflow: hidden;
   /* Название без пробелов (одно длинное слово) иначе обрезалось бы посередине
      без многоточия — переносим в любом месте. */
@@ -214,8 +216,9 @@
 
 .fullscreen-artist {
   color: rgba(255, 255, 255, 0.68);
-  font-size: var(--text-lg);
-  margin-top: 6px;
+  font-size: var(--text-base);
+  line-height: 1.3;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -225,6 +228,7 @@
   display: flex;
   gap: 8px;
   flex: 0 0 auto;
+  align-self: start;
 }
 
 /* --- Lyrics: desktop side-by-side --- */
@@ -468,11 +472,9 @@
   }
 
   .fullscreen-track {
-    font-size: var(--text-md);
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    display: block;
+    font-size: var(--text-sm);
+    white-space: nowrap;
   }
 
   .fullscreen-art {
@@ -485,11 +487,11 @@
   }
 
   .fullscreen-track-name {
-    font-size: clamp(24px, 8vw, 34px);
+    font-size: clamp(18px, 5.5vw, 22px);
   }
 
   .fullscreen-artist {
-    font-size: var(--text-lg);
+    font-size: var(--text-sm);
   }
 
   .fullscreen-controls {
@@ -518,11 +520,11 @@
   }
 
   .fullscreen-track-name {
-    font-size: 24px;
+    font-size: 18px;
   }
 
   .fullscreen-artist {
-    font-size: var(--text-base);
+    font-size: var(--text-xs);
   }
 
   .fullscreen-progress {
