@@ -40,6 +40,7 @@ def _no_network(monkeypatch):
     monkeypatch.setattr("app.routers.flow._similar_pool", _empty)
     monkeypatch.setattr("app.routers.flow._artist_seed_videos", _empty)
     monkeypatch.setattr("app.routers.flow._soundcloud_pool", _empty)
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _empty)
     monkeypatch.setattr("app.routers.flow._tag_pool", _empty)
 
 
@@ -196,6 +197,34 @@ def test_flow_includes_similar_artists(client, db, monkeypatch):
     assert artists & {"UnknownNeighbour", "AnotherNeighbour"}, (
         f"похожие артисты не дошли до выдачи: {artists}"
     )
+
+
+def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
+    """Похожие артисты не вытесняют непрослушанные треки любимого автора."""
+    user = create_user(db)
+    _liked(db, user, artist="LovedArtist")
+
+    async def _favorite(request, artist):
+        return [
+            _external("LovedArtist", f"новый любимый {i}", f"loved{i}")
+            for i in range(8)
+        ]
+
+    async def _similar(artist):
+        return [
+            _external("RandomNeighbour", f"чужой {i}", f"random{i}")
+            for i in range(8)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=10", headers=auth_headers(client)
+    )
+    assert resp.status_code == 200, resp.text
+    artists = [t["artist"] for t in resp.json()]
+    assert artists.count("LovedArtist") >= 5, artists
 
 
 def test_flow_spreads_dominant_artist(client, db, monkeypatch):

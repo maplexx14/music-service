@@ -88,6 +88,9 @@ _ARTIST_SEED_LIMIT = 3
 _SC_EXPLORE_ARTISTS = 6
 _SC_EXPLORE_LIMIT = 15
 _SC_EXPLORE_TTL = 1800
+# Точный каталог любимого артиста — основной внешний источник новых треков.
+_FAVORITE_EXPLORE_ARTISTS = 6
+_FAVORITE_EXPLORE_LIMIT = 15
 # Сколько из SC-разведочных слотов ГАРАНТИРОВАННО отдаём артистам из
 # импортированных плейлистов — независимо от их весового ранга. Плейлистные
 # треки имеют strongest weight (+4.0), но эта квота сохраняется для SC-разведки,
@@ -823,6 +826,19 @@ async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
     return videos
 
 
+async def _favorite_artist_pool(
+    request: Request, artist: str
+) -> List[ExternalTrackResponse]:
+    """Непрослушанные кандидаты из точного каталога знакомого артиста."""
+    try:
+        return await ytdlp.ytmusic_artist_catalog(
+            request, artist, limit=_FAVORITE_EXPLORE_LIMIT
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("flow favorite artist catalog failed for %s", artist)
+        return []
+
+
 async def _soundcloud_pool(
     request: Request, artist: str
 ) -> List[ExternalTrackResponse]:
@@ -980,10 +996,15 @@ async def get_flow(
     # --- разведка: радио YT Music от сидов + поиск SoundCloud по любимым артистам ---
     # Не у каждого videoId есть радио, поэтому перебираем сиды волнами по 2,
     # пока не наберём достаточно СВЕЖИХ (после исключений) кандидатов.
+    # Точные треки знакомых артистов не смешиваем с похожими/теговыми:
+    # разведка не должна случайно вытеснять основной источник волны.
+    favorite_explore: List[ExternalTrackResponse] = []
     explore: List[ExternalTrackResponse] = []
     banned = profile["banned_artists"]
 
-    def _add_explore(tracks) -> None:
+    def _add_explore(
+        tracks, target: List[ExternalTrackResponse]
+    ) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
         # ещё волна радио» должно приниматься по числу свежих кандидатов.
         # Раньше волны останавливались на первом непустом СЫРОМ пуле, а
@@ -1014,7 +1035,7 @@ async def get_flow(
             # уже проставлен search-ом с токеном — не перетираем.
             if t.source == "ytmusic":
                 t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
-            explore.append(t)
+            target.append(t)
 
     # YT Music радио — это чужой алгоритм "похожести" от YouTube, никак не
     # завязанный на наши жанр/тег-фильтры. Когда у пользователя уже есть
@@ -1094,40 +1115,42 @@ async def get_flow(
         len(similar_artists),
         len(history_ids),
     )
-    # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
-    # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
-    # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
-    discovery = [_similar_pool(a) for a in similar_artists]
-    # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
-    # волнами по два: при большом exclude каждая пустая волна добавляла полный
-    # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
-    discovery += [_radio_pool(seed) for seed in seeds]
-    if discovery:
-        pools = await asyncio.gather(*discovery)
-        _add_explore(t for pool in pools for t in pool if _matches_related(t))
-
-    # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
-    # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.
-    # Уже целевой источник (сам артист — часть вкуса), доп. фильтр по теме не
-    # нужен — иначе выкинули бы легитимные треки любимого артиста без тега в
-    # заголовке.
-    # Гарантированная доля плейлистным артистам + добор весовым топом. Плейлист
-    # (особенно SoundCloud, чьи треки не сеют YT-радио) получает strongest
-    # weight (+4.0), но эта квота сохраняется для гарантированного SC-оверлея.
-    sc_artists = list(
+    # Точные каталоги любимых артистов — основа внешней части волны. Получаем
+    # их параллельно с радио и похожими артистами, но разбираем первыми, чтобы
+    # cross-source дедуп оставлял трек в приоритетном знакомом пуле.
+    favorite_artists = list(
         dict.fromkeys(
             profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"]
         )
-    )[:_SC_EXPLORE_ARTISTS]
-    # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT
-    # уже дал полную порцию свежих кандидатов.
-    if sc_artists and len(explore) < limit:
-        sc_pools = await asyncio.gather(
-            *(_soundcloud_pool(request, a) for a in sc_artists)
+    )[:_FAVORITE_EXPLORE_ARTISTS]
+    favorite_jobs = [
+        pool
+        for artist in favorite_artists
+        for pool in (
+            _favorite_artist_pool(request, artist),
+            _soundcloud_pool(request, artist),
         )
-        _add_explore(
-            t for pool in sc_pools for t in pool if _matches_related(t)
-        )
+    ]
+    discovery_jobs = (
+        [_similar_pool(a) for a in similar_artists]
+        + [_radio_pool(seed) for seed in seeds]
+    )
+    pools = await asyncio.gather(*favorite_jobs, *discovery_jobs)
+    favorite_pools = pools[:len(favorite_jobs)]
+    discovery_pools = pools[len(favorite_jobs):]
+    _add_explore(
+        (t for pool in favorite_pools for t in pool),
+        favorite_explore,
+    )
+    _add_explore(
+        (
+            t
+            for pool in discovery_pools
+            for t in pool
+            if _matches_related(t)
+        ),
+        explore,
+    )
 
     # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
     # авторов). НЕ ищем по одиночному неоднозначному слову ("гей") — провайдеры
@@ -1140,21 +1163,26 @@ async def get_flow(
     if len(tag_words) >= 2 and len(explore) < limit:
         query = " ".join(tag_words[:2])
         _add_explore(
-            t
-            for t in await _tag_pool(request, query)
-            if _matches_taste(t)
+            (t for t in await _tag_pool(request, query) if _matches_taste(t)),
+            explore,
         )
 
     logger.debug(
         "flow explore user=%s fresh_candidates=%d excluded_external=%d",
         current_user.id,
-        len(explore),
+        len(favorite_explore) + len(explore),
         len(external_exclude) + len(excl_videos),
     )
     # Сначала перемешиваем, затем разносим артистов ещё ДО квотирования.
     # Провайдеры возвращают результаты пачками по артисту; простой shuffle мог
     # оставить миноритарного артиста за пределами ранней части пула, которую
     # забирает take_capped, и финальный interleave уже не мог его вернуть.
+    random.shuffle(favorite_explore)
+    favorite_explore = interleave_artists(
+        favorite_explore,
+        artist_getter=lambda item: item.artist,
+        min_gap=_MIN_ARTIST_GAP,
+    )
     random.shuffle(explore)
     explore = interleave_artists(
         explore,
@@ -1196,80 +1224,95 @@ async def get_flow(
     def _artist_of(t) -> str:
         return t.artist
 
-    # Разведка забирает свою долю ПЕРВОЙ. Раньше первыми шли локальные
-    # кандидаты на все genre_quota мест, а разведке доставался остаток —
-    # и когда локальный пул богат, остатка не было вовсе. Пока пул был тощим
-    # (страховочный добор брал глобальный топ и почти весь отсеивался по
-    # require_signal), это не проявлялось; после ограничения добора артистами
-    # самого юзера трекам стало легко проходить проверку — у курированного
-    # артиста make_relevance_check возвращает True сразу, — локальных
-    # кандидатов стало вдоволь, и они вытеснили разведку целиком.
+    # Не больше четверти порции отдаём новым артистам. Остальные места сначала
+    # занимают непрослушанные треки знакомых артистов: внешний точный каталог,
+    # затем локальная библиотека пользователя.
     explore_quota = min(len(explore), round(limit * _EXPLORE_SHARE))
+    trusted_quota = min(genre_quota, limit - explore_quota)
+    relevant_favorite, favorite_rest = take_capped(
+        favorite_explore,
+        trusted_quota,
+        _MAX_PER_ARTIST,
+        _artist_of,
+        artist_budget,
+    )
+    relevant_local, exploit_rest = take_capped(
+        exploit,
+        trusted_quota - len(relevant_favorite),
+        _MAX_PER_ARTIST,
+        _artist_of,
+        artist_budget,
+    )
     relevant_external, explore_rest = take_capped(
         explore, explore_quota, _MAX_PER_ARTIST, _artist_of, artist_budget
     )
-    used_external = len(relevant_external)
-
-    relevant_local, exploit_rest = take_capped(
-        exploit, genre_quota - used_external, _MAX_PER_ARTIST, _artist_of, artist_budget
-    )
+    used_external = len(relevant_favorite) + len(relevant_external)
 
     mix: List[dict] = [
         TrackResponse.model_validate(t).model_dump(mode="json")
         for t in relevant_local
     ]
+    mix.extend(t.model_dump() for t in relevant_favorite)
     mix.extend(t.model_dump() for t in relevant_external)
 
-    # Добираем обязательные 14 мест внешними кандидатами, которые уже прошли
-    # _matches_taste и пришли из radio подтверждённых плейлистных сидов. Раньше
-    # внешний добор был полностью запрещён, а локальный каталог часто содержал
-    # лишь один подходящий трек — поэтому поток заканчивался сразу и Home
-    # переходил к секции «Рекомендуем новинки».
-    #
-    # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
-    # исполнителя, поэтому внешние кандидаты идут через тот же бюджет.
-    if len(mix) < genre_quota:
-        extra_external, explore_rest = take_capped(
-            explore_rest, genre_quota - len(mix), _MAX_PER_ARTIST, _artist_of, artist_budget
+    # Если кап по артисту оставил основную часть короче целевой доли, сначала
+    # пробуем других знакомых артистов. Разведку сверх её квоты пока не берём.
+    if len(mix) < trusted_quota:
+        extra_favorite, favorite_rest = take_capped(
+            favorite_rest,
+            trusted_quota - len(mix),
+            _MAX_PER_ARTIST,
+            _artist_of,
+            artist_budget,
         )
-        mix.extend(t.model_dump() for t in extra_external)
-        used_external += len(extra_external)
-
-    # Пятнадцатое место — разведка. Оно также проходит базовый taste-фильтр, но
-    # не участвует в гарантированных 14 жанровых позициях.
-    remaining = limit - len(mix)
-    if remaining:
-        discovery, explore_rest = take_capped(
-            explore_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
-        )
-        mix.extend(t.model_dump() for t in discovery)
-        used_external += len(discovery)
-        remaining = limit - len(mix)
-    if remaining:
+        mix.extend(t.model_dump() for t in extra_favorite)
+        used_external += len(extra_favorite)
+    if len(mix) < trusted_quota:
         extra_local, exploit_rest = take_capped(
-            exploit_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
+            exploit_rest,
+            trusted_quota - len(mix),
+            _MAX_PER_ARTIST,
+            _artist_of,
+            artist_budget,
         )
         mix.extend(
             TrackResponse.model_validate(t).model_dump(mode="json")
             for t in extra_local
         )
-        remaining = limit - len(mix)
 
-    # Последний резерв — добор СВЕРХ лимита на артиста, начиная с наименее
-    # представленных. Короткая порция хуже повтора: на бедном каталоге волна
-    # иначе «замирает» на первых треках (см. историю фиксов выше).
+    remaining = limit - len(mix)
+    discovery, explore_rest = take_capped(
+        explore_rest,
+        min(remaining, explore_quota - len(relevant_external)),
+        _MAX_PER_ARTIST,
+        _artist_of,
+        artist_budget,
+    )
+    mix.extend(t.model_dump() for t in discovery)
+    used_external += len(discovery)
+    remaining = limit - len(mix)
+
+    # На бедном профиле допускаем превысить артистический кап, но всё равно
+    # сначала добираем знакомых артистов и лишь затем расширяем разведку.
     if remaining:
-        overflow_external = take_overflow(
-            explore_rest, remaining, _artist_of, artist_budget
+        overflow_favorite = take_overflow(
+            favorite_rest, remaining, _artist_of, artist_budget
         )
-        mix.extend(t.model_dump() for t in overflow_external)
-        used_external += len(overflow_external)
+        mix.extend(t.model_dump() for t in overflow_favorite)
+        used_external += len(overflow_favorite)
         remaining = limit - len(mix)
     if remaining:
         mix.extend(
             TrackResponse.model_validate(t).model_dump(mode="json")
             for t in take_overflow(exploit_rest, remaining, _artist_of, artist_budget)
         )
+        remaining = limit - len(mix)
+    if remaining:
+        overflow_external = take_overflow(
+            explore_rest, remaining, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in overflow_external)
+        used_external += len(overflow_external)
 
     n_explore = used_external
     n_exploit = len(mix) - n_explore
