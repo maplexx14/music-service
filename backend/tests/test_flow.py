@@ -8,10 +8,12 @@ _local_candidates и к current_user.id — если закрытие что-т�
 падает на пустой выдаче или на DetachedInstanceError.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.cache import clear_pattern
-from app.models import Track, Playlist, playlist_tracks
+from app.models import Track, Playlist, playlist_tracks, user_track_plays
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -111,6 +113,59 @@ def test_flow_returns_local_tracks_after_session_close(client, db):
     # означала бы, что переоткрытие сессии не сработало.
     assert mix, "flow вернул пустую выдачу — локальные кандидаты не прочитались"
     assert any(t["artist"] == "GoodArtist" for t in mix)
+
+
+def test_flow_excludes_played_tracks_but_keeps_new_tracks_by_same_artist(client, db):
+    """Старая история не повторяется, но знакомый артист остаётся источником."""
+    user = create_user(db, username="history-user")
+    played = [
+        Track(
+            title=f"played-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/played-{i}.mp3",
+        )
+        for i in range(101)
+    ]
+    fresh = Track(
+        title="fresh-from-known-artist",
+        artist="KnownArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/fresh.mp3",
+    )
+    db.add_all([*played, fresh])
+    db.commit()
+
+    now = datetime.now(timezone.utc)
+    db.execute(
+        user_track_plays.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": track.id,
+                "play_count": 1,
+                "last_played": now - timedelta(minutes=i),
+            }
+            for i, track in enumerate(played)
+        ],
+    )
+    db.commit()
+    fresh_id = fresh.id
+    played_ids = {track.id for track in played}
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="history-user"),
+    )
+    assert resp.status_code == 200, resp.text
+
+    ids = {t["id"] for t in resp.json() if isinstance(t["id"], int)}
+    assert fresh_id in ids, "новый трек знакомого артиста должен попасть в flow"
+    assert ids.isdisjoint(played_ids), (
+        "flow вернул уже прослушанный трек вместо другой композиции артиста"
+    )
 
 
 def test_flow_includes_similar_artists(client, db, monkeypatch):

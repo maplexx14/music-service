@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import desc, func, or_
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import storage
@@ -64,10 +64,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Сколько последних прослушиваний исключаем из потока (свежесть).
-# 100 треков хватает на ~5-6 часов активного прослушивания — поток не
-# повторяется даже при длительных сессиях.
-_RECENT_PLAYS_EXCLUDE = 100
 # Кэш радио-пула на сид: радио YT Music стабильно на коротком горизонте,
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
@@ -113,7 +109,7 @@ _MAX_PER_ARTIST = 6
 # слушает, — то есть в список бывшего раздела «Рекомендуем для вас».
 # Жанровая гарантия от этого не страдает: внешние кандидаты тоже проходят
 # _matches_related/_matches_taste, меняется только очерёдность на слоты.
-_EXPLORE_SHARE = 0.0
+_EXPLORE_SHARE = 0.25
 # Сколько артистов вкуса берём в работу за один запрос. Порядок взвешенно
 # случайный (см. diversity.weighted_order), поэтому это не «топ-N навсегда», а
 # ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
@@ -203,16 +199,13 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         .limit(_TASTE_QUERY_LIMIT)
         .all()
     )
-    # Часто играемые: только с реальным весом (>=2 проигрываний), иначе разовые
-    # клики (тест/случайный запуск) создают сигнал вкуса из шума — особенно
-    # заметно на SC-разведке, которая ищет по имени артиста напрямую.
+    # Прослушанный хотя бы один раз трек уже прошёл клиентский порог реального
+    # прослушивания, поэтому его артист может дать другие композиции в flow.
+    # Первое прослушивание имеет небольшой вес; повторы усиливают сигнал.
     played = (
         db.query(Track, user_track_plays.c.play_count, user_track_plays.c.last_played)
         .join(user_track_plays, user_track_plays.c.track_id == Track.id)
-        .filter(
-            user_track_plays.c.user_id == user_id,
-            user_track_plays.c.play_count >= 2,
-        )
+        .filter(user_track_plays.c.user_id == user_id)
         .order_by(desc(user_track_plays.c.last_played))
         .limit(_TASTE_QUERY_LIMIT)
         .all()
@@ -305,7 +298,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
 
     for track, play_count, last_played in played:
         lang_texts.append(f"{track.title} {track.artist}")
-        w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
+        plays = play_count or 1
+        w = (0.75 if plays == 1 else 1.0 + math.log1p(plays)) * _decay(last_played)
         key = artist_key(track.artist)
         artist_weight[key] = artist_weight.get(key, 0) + w
         artist_display.setdefault(key, track.artist)
@@ -398,28 +392,49 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Сиды от скипнутых треков не годятся — радио от них тянет то же самое.
     seeds = [s for s in seeds if s not in skipped_video_ids]
 
-    # Недавно игранное — исключаем из потока, чтобы волна не повторялась.
-    recent = (
-        db.query(Track)
+    # Конкретные уже прослушанные треки больше не возвращаем, но артистов не
+    # блокируем: их вес выше остаётся в профиле и открывает другие композиции.
+    # Для локального SQL используется anti-join в _local_candidates; здесь
+    # собираем identity внешних источников и cross-source ключи для дедупа.
+    played_identities = (
+        db.query(Track.source, Track.external_id, Track.artist, Track.title)
         .join(user_track_plays, user_track_plays.c.track_id == Track.id)
         .filter(user_track_plays.c.user_id == user_id)
-        .order_by(desc(user_track_plays.c.last_played))
-        .limit(_RECENT_PLAYS_EXCLUDE)
         .all()
     )
     # Плейлистные треки уже в коллекции — тоже исключаем из потока.
     pl_tracks = [t for t, _ in playlisted]
-    recent_ids = {t.id for t in recent} | skipped_ids | {t.id for t in pl_tracks}
+    recent_ids = skipped_ids | {t.id for t in pl_tracks}
     recent_keys = (
-        {_norm_key(t.artist, t.title) for t in recent}
+        {
+            _norm_key(artist, title)
+            for _source, _external_id, artist, title in played_identities
+        }
         | skipped_keys
         | {_norm_key(t.artist, t.title) for t in pl_tracks}
     )
     recent_video_ids = (
-        {t.external_id for t in recent if t.external_id}
+        {
+            external_id
+            for source, external_id, _artist, _title in played_identities
+            if source == "ytmusic" and external_id
+        }
         | skipped_video_ids
-        | {t.external_id for t in pl_tracks if t.external_id}
+        | {
+            t.external_id
+            for t in pl_tracks
+            if t.source == "ytmusic" and t.external_id
+        }
     )
+    played_external_ids = {
+        f"{source}:{external_id}"
+        for source, external_id, _artist, _title in played_identities
+        if source and external_id
+    } | {
+        f"{t.source}:{t.external_id}"
+        for t in pl_tracks
+        if t.source and t.external_id
+    }
 
     # Холодный старт: нет НИ сидов, НИ курированных артистов — берём популярные
     # ytmusic-треки сервиса. НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых
@@ -465,6 +480,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     playlist_seeds = [s for s in playlist_seeds if s not in skipped_video_ids]
 
     return {
+        "user_id": user_id,
         "seeds": seeds,
         "playlist_artists": playlist_artists,
         "playlist_seeds": playlist_seeds,
@@ -480,6 +496,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "recent_ids": recent_ids,
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
+        "played_external_ids": played_external_ids,
     }
 
 
@@ -510,6 +527,9 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
+    played_ids = select(user_track_plays.c.track_id).where(
+        user_track_plays.c.user_id == profile["user_id"]
+    )
     aw = profile.get("artist_weight") or {}
     # Артисты, по которым у ЭТОГО юзера есть собственный сигнал (плей, лайк,
     # плейлист, preferred_artists). Таблица tracks общая и владельца у трека
@@ -599,7 +619,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
 
     candidates: List[Track] = []
     if filters:
-        q = db.query(Track).filter(or_(*filters))
+        q = db.query(Track).filter(or_(*filters), ~Track.id.in_(played_ids))
         # Кандидат обязан быть от артиста, по которому у юзера есть свой сигнал.
         # Жанр/ключевое слово/тег сами по себе матчат и чужие треки: слово
         # "phonk" в названии есть и у артиста, которого в базу привёл совсем
@@ -634,7 +654,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             )
         )
         skip = {t.id for t in candidates} | exclude_ids
-        q = db.query(Track)
+        q = db.query(Track).filter(~Track.id.in_(played_ids))
         # Тот же скоуп, что и у основного пула: Track.play_count — счётчик
         # ОБЩИЙ на всех юзеров (инкрементится в tracks.py на любом прослушивании
         # любым юзером), поэтому глобальный топ по нему возглавляет тот, кто
@@ -943,6 +963,7 @@ async def get_flow(
     db.close()
     excl_ids |= profile["recent_ids"]
     excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
+    external_exclude |= set(profile.get("played_external_ids") or [])
     for item_id in history_ids:
         # Локальный каталог конечен: не блокируем его на 6 часов. Уже стоящие в
         # очереди id всё равно приходят в exclude, а recent_ids защищает от
@@ -1130,8 +1151,16 @@ async def get_flow(
         len(explore),
         len(external_exclude) + len(excl_videos),
     )
-    # Порядок внутри выдачи случайный, как и раньше (shuffle шёл по merged).
+    # Сначала перемешиваем, затем разносим артистов ещё ДО квотирования.
+    # Провайдеры возвращают результаты пачками по артисту; простой shuffle мог
+    # оставить миноритарного артиста за пределами ранней части пула, которую
+    # забирает take_capped, и финальный interleave уже не мог его вернуть.
     random.shuffle(explore)
+    explore = interleave_artists(
+        explore,
+        artist_getter=lambda item: item.artist,
+        min_gap=_MIN_ARTIST_GAP,
+    )
 
     # --- эксплуатация: локальная библиотека по вкусу ---
     local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
