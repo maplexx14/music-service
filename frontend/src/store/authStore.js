@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import api, { setApiAuthToken, setDeviceToken } from '../services/api'
 import { useSearchStore } from './searchStore'
+import { invalidateFlowPreload } from './playerStore'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -414,6 +415,7 @@ const useAuthStore = create((set, get) => ({
           set({ user: newUser })
           const token = get().token
           setStoredAuth({ token, user: newUser })
+          invalidateFlowPreload()
           return { success: true }
         } catch (error) {
           return {

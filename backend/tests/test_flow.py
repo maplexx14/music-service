@@ -506,3 +506,133 @@ def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
     assert all(a.startswith("OwnArtist") for a in artists), (
         f"разведка вытеснила точные рекомендации знакомых артистов: {artists}"
     )
+
+
+def test_flow_does_not_open_artist_catalog_after_one_play(client, db, monkeypatch):
+    """Одно случайное прослушивание не превращает артиста в любимого."""
+    user = create_user(db, username="single-play-user")
+    played = Track(
+        title="случайный трек",
+        artist="AccidentalArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/accidental.mp3",
+    )
+    db.add(played)
+    db.commit()
+    db.execute(
+        user_track_plays.insert().values(
+            user_id=user.id,
+            track_id=played.id,
+            play_count=1,
+            last_played=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+    requested_artists = []
+
+    async def _favorite(request, artist):
+        requested_artists.append(artist)
+        return [_external(artist, "ещё один трек", "accidental-new")]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="single-play-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert requested_artists == [], requested_artists
+
+
+def test_flow_does_not_treat_imported_playlist_as_favorite_artists(
+    client, db, monkeypatch
+):
+    """Импорт каталога не открывает внешний каталог каждого импортированного имени."""
+    user = create_user(db, username="imported-playlist-user")
+    playlist = Playlist(
+        name="Imported",
+        description="Импортировано из SoundCloud",
+        is_public=False,
+        owner_id=user.id,
+    )
+    track = Track(
+        title="imported song",
+        artist="ImportedArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/imported.mp3",
+    )
+    db.add_all([playlist, track])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=playlist.id,
+            track_id=track.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    requested_artists = []
+
+    async def _favorite(request, artist):
+        requested_artists.append(artist)
+        return []
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="imported-playlist-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert requested_artists == [], requested_artists
+
+
+def test_flow_searches_explicit_genres(client, db, monkeypatch):
+    """Выбранный жанр создаёт внешний пул, а не остаётся слабым фильтром."""
+    user = create_user(db, username="genre-user")
+    user.preferred_genres = ["phonk"]
+    db.commit()
+
+    queries = []
+
+    async def _genre_search(request, query):
+        queries.append(query)
+        return [
+            _external(f"PhonkArtist{i}", f"phonk track {i}", f"phonk{i}")
+            for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._tag_pool", _genre_search)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="genre-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert any("phonk" in query for query in queries), queries
+    mix = resp.json()
+    assert len(mix) == 5, mix
+    assert all("phonk" in track["title"].lower() for track in mix), mix
+
+
+def test_flow_discovery_never_overflows_artist_cap(client, db, monkeypatch):
+    """Бедный discovery-пул не заполняет порцию одним незнакомым артистом."""
+    user = create_user(db, username="discovery-cap-user")
+    _liked(db, user)
+
+    async def _similar(artist):
+        return [_external("Solo", f"track {i}", f"solo-cap-{i}") for i in range(10)]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="discovery-cap-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    artists = [track["artist"] for track in resp.json()]
+    assert artists.count("Solo") <= 4, artists

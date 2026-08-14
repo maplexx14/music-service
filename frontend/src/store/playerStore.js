@@ -49,7 +49,13 @@ const resolvedPrefetchKeys = new Set()
 // Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
 // дедуп летящего запроса + TTL свежести предзагруженного списка.
 let flowPreloadPromise = null
+let flowPreloadGeneration = 0
 const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
+
+function invalidateFlowPreload() {
+  flowPreloadGeneration += 1
+  usePlayerStore.setState({ flowPreload: null })
+}
 
 // --- Постраничная очередь (см. queuePager / extendQueueIfNeeded) ---
 // Страница плейлиста рисует треки не все сразу, а страницами по мере прокрутки,
@@ -470,10 +476,11 @@ const usePlayerStore = create((set, get) => ({
     if (flowActive) return
     if (flowPreload && Date.now() - flowPreload.ts < FLOW_PRELOAD_TTL_MS) return
     if (flowPreloadPromise) return
+    const generation = flowPreloadGeneration
     flowPreloadPromise = api
       .get('/recommendations/flow', { params: { limit: 15 }, skipErrorToast: true })
       .then(({ data }) => {
-        if (data && data.length > 0) {
+        if (generation === flowPreloadGeneration && data && data.length > 0) {
           set({ flowPreload: { tracks: data, ts: Date.now() } })
           // Греем резолв первых двух треков заранее — к клику Redis уже тёплый.
           get().prefetchTracks(data.slice(0, 2), 2)
@@ -898,4 +905,4 @@ function trackIntentHandlers(track) {
   }
 }
 
-export { usePlayerStore, prefetchOnIntent, trackIntentHandlers }
+export { usePlayerStore, prefetchOnIntent, trackIntentHandlers, invalidateFlowPreload }
