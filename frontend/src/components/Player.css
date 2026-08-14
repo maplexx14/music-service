@@ -220,14 +220,12 @@
   text-overflow: ellipsis;
 }
 
-/* Фон кнопок непрозрачный (эквивалент rgba(255,255,255,0.04) поверх #1e1e1e):
-   иначе прогресс-заливка плеера просвечивает сквозь них и выглядит так,
-   будто идёт поверх кнопок. */
+/* Secondary player actions use color, not a button surface, for state. */
 .like-btn {
-  width: 36px;
-  height: 36px;
-  background: #272727;
-  border: 1px solid transparent;
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
@@ -235,19 +233,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .like-btn:hover {
   color: #ffffff;
-  background: #303030;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .like-btn.liked {
   color: #a259ff;
-  background: #2e2539;
-  border-color: rgba(162, 89, 255, 0.24);
   /* Поп при лайке: редкий «момент радости», разрешаем чуть заметный отскок. */
   animation: likePop 0.3s var(--ease-out);
 }
@@ -259,10 +253,10 @@
 }
 
 .dislike-btn {
-  width: 36px;
-  height: 36px;
-  background: #272727;
-  border: 1px solid transparent;
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
@@ -270,26 +264,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .dislike-btn:hover {
   color: #ffffff;
-  background: #303030;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .dislike-btn.disliked {
   color: #ff6b6b;
-  background: #3a2727;
-  border-color: rgba(255, 107, 107, 0.24);
 }
 
 .add-btn {
-  width: 36px;
-  height: 36px;
-  background: #272727;
-  border: 1px solid transparent;
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
@@ -298,13 +288,11 @@
   align-items: center;
   justify-content: center;
   text-decoration: none;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .add-btn:hover {
   color: #ffffff;
-  background: #303030;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .add-btn:visited {
@@ -312,10 +300,10 @@
 }
 
 .lyrics-btn {
-  width: 36px;
-  height: 36px;
-  background: #272727;
-  border: 1px solid transparent;
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.62);
   cursor: pointer;
@@ -323,13 +311,26 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
 .lyrics-btn:hover {
   color: #ffffff;
-  background: #303030;
-  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.like-btn svg,
+.dislike-btn svg,
+.add-btn svg,
+.lyrics-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.like-btn:active,
+.dislike-btn:active,
+.add-btn:active,
+.lyrics-btn:active {
+  transform: scale(0.96);
 }
 
 .lyrics-btn.disabled {
@@ -339,18 +340,12 @@
 
 .lyrics-btn.disabled:hover {
   color: rgba(255, 255, 255, 0.62);
-  background: #272727;
-  border-color: transparent;
-}
-
-.lyrics-btn:focus-visible {
-  outline: 2px solid #a259ff;
-  outline-offset: 2px;
 }
 
 .like-btn:focus-visible,
 .dislike-btn:focus-visible,
 .add-btn:focus-visible,
+.lyrics-btn:focus-visible,
 .control-btn:focus-visible,
 .play-pause-btn:focus-visible {
   outline: 2px solid #a259ff;
@@ -453,14 +448,14 @@
 .player-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
 .control-btn {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.56);
   cursor: pointer;
@@ -468,24 +463,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
-}
-
-.control-btn svg {
-  width: 24px;
-  height: 24px;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 .control-btn:hover {
   color: #ffffff;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .control-btn.active {
   color: #a259ff;
-}
-
-.control-btn:active {
-  transform: scale(0.96);
+  background: rgba(162, 89, 255, 0.1);
+  border-color: rgba(162, 89, 255, 0.16);
 }
 
 /* Кнопка «следующий» заблокирована, пока следующий трек не подгрузился. */
@@ -496,35 +485,30 @@
 
 .control-btn:disabled:hover {
   color: rgba(255, 255, 255, 0.56);
+  background: transparent;
 }
 
 .play-pause-btn {
-  background: transparent;
+  background: #a259ff;
   border: none;
-  color: #ffffff;
+  color: #000000;
   cursor: pointer;
-  width: 52px;
-  height: 52px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: none;
-  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+  transition: filter 0.2s ease;
 }
 
 .play-pause-btn svg {
-  width: 30px;
-  height: 30px;
   fill: currentColor;
 }
 
 .play-pause-btn:hover {
-  color: #a259ff;
-}
-
-.play-pause-btn:active {
-  transform: scale(0.96);
+  filter: brightness(1.08);
 }
 
 .player-right {
