@@ -139,7 +139,7 @@ function Login() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>Music Streaming</h1>
+          <h1>bolt</h1>
           <p>{mfaToken ? 'Подтвердите вход' : 'Войдите в свой аккаунт'}</p>
         </div>
 

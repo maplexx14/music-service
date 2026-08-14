@@ -218,7 +218,7 @@ function Playlists() {
         <div className="import-playlist-form">
           <p className="import-hint">
             Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music
-            либо Spotify. Треки Yandex и Spotify подбираются из YouTube Music.
+            либо Spotify. Треки Yandex(отказано) и Spotify подбираются из YouTube Music.
           </p>
           <div className="import-examples">
             <div className="import-example">
@@ -227,12 +227,7 @@ function Playlists() {
               <span className="import-example-url">open.spotify.com/album/1DFixL...</span>
               <span className="import-example-url">open.spotify.com/track/4cOdK2...</span>
             </div>
-            <div className="import-example">
-              <span className="import-example-label">Yandex Music:</span>
-              <span className="import-example-url">music.yandex.ru/album/123456</span>
-              <span className="import-example-url">music.yandex.ru/users/123456/likes/tracks</span>
-              <span className="import-example-url">music.yandex.ru/artist/123456</span>
-            </div>
+           
             <div className="import-example">
               <span className="import-example-label">SoundCloud:</span>
               <span className="import-example-url">soundcloud.com/user/sets/playlist</span>
