@@ -64,6 +64,16 @@ def _reset_email_2fa_codes():
     clear_pattern("2fa:mail:*")
 
 
+@pytest.fixture(autouse=True)
+def _reset_password_tokens():
+    """Ссылки восстановления одноразовые, но живут между тестами до часа."""
+    from app.cache import clear_pattern
+
+    clear_pattern("password:reset:*")
+    yield
+    clear_pattern("password:reset:*")
+
+
 @pytest.fixture()
 def db():
     Base.metadata.create_all(bind=engine)

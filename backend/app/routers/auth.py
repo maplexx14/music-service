@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from app.rate_limit import limiter
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -21,6 +22,9 @@ from app.schemas import (
     MfaEmailCodeRequest,
     MfaEmailCodeResponse,
     MfaLoginRequest,
+    MessageResponse,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     PendingRegistrationResponse,
     RevokeAllDevicesResponse,
     Token,
@@ -72,6 +76,12 @@ from app.email_2fa import (
     mask_email,
     send_email_code,
     verify_email_code,
+)
+from app.password_reset import (
+    PasswordResetUnavailable,
+    consume_reset_token,
+    issue_reset_token,
+    send_password_reset_email,
 )
 from app.two_factor import (
     ReplayCacheUnavailable,
@@ -320,6 +330,49 @@ def login(
         }
 
     return _issue_access_token(user)
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+@limiter.limit("5/minute")
+def forgot_password(
+    payload: PasswordResetRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Отправляет ссылку, не раскрывая, зарегистрирован ли адрес."""
+    user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).first()
+    if user and user.is_active and user.email_verified:
+        try:
+            token = issue_reset_token(user.id)
+        except PasswordResetUnavailable:
+            raise HTTPException(status_code=503, detail="Password reset temporarily unavailable")
+        send_password_reset_email(user.email, user.username, token)
+    return MessageResponse(
+        message="Если аккаунт с такой почтой существует, ссылка уже отправлена"
+    )
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+@limiter.limit("10/minute")
+def reset_password(
+    payload: PasswordResetConfirm,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    try:
+        user_id = consume_reset_token(payload.token)
+    except PasswordResetUnavailable:
+        raise HTTPException(status_code=503, detail="Password reset temporarily unavailable")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired password reset link")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=400, detail="Invalid or expired password reset link")
+    user.hashed_password = get_password_hash(payload.new_password)
+    revoke_all_devices(db, user.id)
+    db.commit()
+    return MessageResponse(message="Пароль изменён")
 
 
 @router.post("/verify-email", response_model=EmailVerifyResponse)

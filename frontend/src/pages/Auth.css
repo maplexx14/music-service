@@ -51,6 +51,23 @@
   color: #ffffff;
 }
 
+.form-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.form-label-row a {
+  color: var(--brand-accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.form-label-row a:hover {
+  text-decoration: underline;
+}
+
 .form-group input {
   padding: 12px 16px;
   background-color: #1a1a1a;
@@ -78,6 +95,7 @@
 }
 
 .auth-button {
+  display: block;
   padding: 14px;
   background-color: var(--brand-accent);
   color: #ffffff;
@@ -90,6 +108,8 @@
               transform var(--duration-base) var(--ease-out),
               opacity var(--duration-base) var(--ease-out);
   margin-top: 8px;
+  text-align: center;
+  text-decoration: none;
 }
 
 .auth-button:hover:not(:disabled) {

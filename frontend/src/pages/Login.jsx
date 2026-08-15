@@ -244,7 +244,10 @@ function Login() {
             </div>
 
             <div className="form-group">
-              <label htmlFor="password">Пароль</label>
+              <div className="form-label-row">
+                <label htmlFor="password">Пароль</label>
+                <Link to="/forgot-password">Забыли пароль?</Link>
+              </div>
               <input
                 id="password"
                 type="password"

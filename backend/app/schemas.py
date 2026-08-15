@@ -218,6 +218,20 @@ class EmailResendRequest(BaseModel):
     password: str
 
 
+class PasswordResetRequest(BaseModel):
+    """Запрос всегда получает нейтральный ответ, чтобы не раскрывать email."""
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class TokenData(BaseModel):
     username: Optional[str] = None
 

@@ -87,6 +87,36 @@ const useAuthStore = create((set, get) => ({
         }
       },
 
+      requestPasswordReset: async (email) => {
+        try {
+          const response = await api.post('/auth/forgot-password', { email }, {
+            skipErrorToast: true,
+            skipAuthRedirect: true,
+          })
+          return { success: true, message: response.data?.message }
+        } catch (error) {
+          return {
+            success: false,
+            error: error.response?.data?.detail || 'Не удалось отправить ссылку',
+          }
+        }
+      },
+
+      resetPassword: async (token, newPassword) => {
+        try {
+          await api.post('/auth/reset-password', {
+            token,
+            new_password: newPassword,
+          }, { skipErrorToast: true, skipAuthRedirect: true })
+          return { success: true }
+        } catch (error) {
+          return {
+            success: false,
+            error: error.response?.data?.detail || 'Не удалось изменить пароль',
+          }
+        }
+      },
+
       verifyEmail: async (token) => {
         try {
           const response = await api.post('/auth/verify-email', { token }, {
