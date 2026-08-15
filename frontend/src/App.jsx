@@ -1,8 +1,9 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import Spinner from './components/Spinner'
+import api from './services/api'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
@@ -21,6 +22,14 @@ const Admin = lazy(() => import('./pages/Admin'))
 
 function App() {
   const { isAuthenticated, user } = useAuthStore()
+
+  useEffect(() => {
+    if (!isAuthenticated) return undefined
+    const heartbeat = () => api.get('/users/me', { skipErrorToast: true, dedupe: false }).catch(() => {})
+    heartbeat()
+    const interval = window.setInterval(heartbeat, 60000)
+    return () => window.clearInterval(interval)
+  }, [isAuthenticated])
 
   return (
     <Router>

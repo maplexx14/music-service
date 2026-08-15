@@ -3,7 +3,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
-from app.cache import get_cache, set_cache
+from app.cache import get_cache, set_cache, redis_client
 from app.models import User, Track
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
 from app.genre_keywords import GENRE_KEYWORDS, GENRE_LABELS
@@ -143,6 +143,41 @@ def get_user_count(
     result = {"total": total}
     set_cache("users:count", result, expire=300)
     return result
+
+
+@router.get("/admin/dashboard")
+def get_admin_dashboard(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Dashboard metrics and safe user profiles for administrators."""
+    online = 0
+    try:
+        online = sum(1 for _ in redis_client.scan_iter(match="users:online:*"))
+    except Exception:
+        online = 0
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    profiles = []
+    for user in users:
+        detected = _taste_profile(db, user.id) or {}
+        profiles.append({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "preferred_genres": user.preferred_genres or [],
+            "preferred_artists": user.preferred_artists or [],
+            "detected_genres": sorted((detected.get("genre_counts") or {}).keys())[:12],
+            "detected_artists": (detected.get("artists") or [])[:12],
+            "created_at": user.created_at,
+            "is_active": user.is_active,
+        })
+    return {
+        "users_count": len(users),
+        "online_users_count": online,
+        "tracks_count": db.query(Track).count(),
+        "artists_count": db.query(func.count(func.distinct(Track.artist))).scalar() or 0,
+        "users": profiles,
+    }
 
 
 @router.get("/{user_id}", response_model=UserResponse)

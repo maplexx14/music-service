@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
 from app.auth import verify_token
+from app.cache import set_cache
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
@@ -24,6 +25,9 @@ async def get_current_user(
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+    # Presence marker used by the admin dashboard. Short TTL means stale
+    # browser tabs disappear automatically without a logout request.
+    set_cache(f"users:online:{user.id}", True, expire=120)
     return user
 
 

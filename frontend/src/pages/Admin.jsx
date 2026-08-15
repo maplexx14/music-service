@@ -7,7 +7,8 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Admin.css'
 
 function Admin() {
-  const [userCount, setUserCount] = useState(0)
+  const [stats, setStats] = useState({ users_count: 0, online_users_count: 0, tracks_count: 0, artists_count: 0 })
+  const [users, setUsers] = useState([])
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState(null)
@@ -16,11 +17,12 @@ function Admin() {
   const fetchAdminData = async () => {
     setLoading(true)
     try {
-      const [countResponse, tracksResponse] = await Promise.all([
-        api.get('/users/stats/count'),
+      const [dashboardResponse, tracksResponse] = await Promise.all([
+        api.get('/users/admin/dashboard'),
         api.get('/tracks?limit=200'),
       ])
-      setUserCount(countResponse.data.total || 0)
+      setStats(dashboardResponse.data)
+      setUsers(dashboardResponse.data.users || [])
       setTracks(tracksResponse.data || [])
     } catch (error) {
       console.error('Error fetching admin data:', error)
@@ -72,11 +74,30 @@ function Admin() {
       <div className="admin-header">
         <div>
           <h1 className="admin-title">Админ панель</h1>
-          <div className="admin-subtitle">Пользователей: {userCount}</div>
+          <div className="admin-subtitle">Сводка по сервису</div>
         </div>
         <button type="button" className="admin-refresh" onClick={fetchAdminData}>
           Обновить
         </button>
+      </div>
+
+      <div className="admin-stats">
+        {[
+          ['Пользователи', stats.users_count],
+          ['Сейчас онлайн', stats.online_users_count],
+          ['Треки', stats.tracks_count],
+          ['Артисты', stats.artists_count],
+        ].map(([label, value]) => <div className="admin-stat" key={label}><strong>{value}</strong><span>{label}</span></div>)}
+      </div>
+
+      <div className="admin-section">
+        <div className="admin-section-title">Профили пользователей</div>
+        <div className="admin-users">
+          {users.map((user) => <div className="admin-user" key={user.id}>
+            <div className="admin-user-main"><strong>{user.username}</strong><span>{user.email}</span></div>
+            <div className="admin-user-preferences"><span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span><span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span><span className="admin-user-detected">Определены системой: {(user.detected_artists || []).join(', ') || 'нет данных'}</span></div>
+          </div>)}
+        </div>
       </div>
 
       <div className="admin-section">
