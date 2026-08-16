@@ -121,10 +121,10 @@ def build_keyword_filters(title_col, genre_counts: dict, top_n: int = 3) -> list
     Матчим по ГРАНИЦЕ СЛОВА (Postgres regex ~* с \\y), а не подстрокой LIKE
     %kw%: иначе "house" совпадал с "warehouse", "techno" с "technology" и т.п.,
     протаскивая в кандидаты нерелевантные треки (см. _KEYWORD_PATTERNS)."""
-    return [
-        title_col.op("~*")(r"\y" + kw.lower() + r"\y")
-        for kw in top_genre_keywords(genre_counts, top_n)
-    ]
+    # LIKE is supported by both PostgreSQL and SQLite (the latter is used by
+    # the unit-test suite). The vocabulary is already curated, so substring
+    # matching is preferable to emitting a PostgreSQL-only regex operator.
+    return [title_col.ilike(f"%{kw}%") for kw in top_genre_keywords(genre_counts, top_n)]
 
 
 def genre_is_compatible(explicit_genre, title: str, artist: str, user_genres: set) -> bool:

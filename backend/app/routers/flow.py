@@ -348,12 +348,16 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Явные артисты/жанры ведут себя как курированные (лайки/плейлисты):
     # попадают в гарантированную квоту локальных кандидатов и в SC-разведку.
     pref = (
-        db.query(User.preferred_genres, User.preferred_artists)
+        db.query(User.preferred_genres, User.preferred_artists, User.excluded_artists)
         .filter(User.id == user_id)
         .first()
     )
     pref_genres = list(pref[0] or []) if pref else []
     pref_artists = list(pref[1] or []) if pref else []
+    excluded_artists = {
+        artist_key(name) for name in (list(pref[2] or []) if pref else []) if artist_key(name)
+    }
+    excluded_artists -= {artist_key(name) for name in pref_artists if artist_key(name)}
 
     for name in pref_artists:
         key = artist_key(name)
@@ -455,6 +459,14 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     top_artists = [artist_display.get(a, a) for a in topartist_keys]
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
+    banned_artists |= excluded_artists
+    for key in excluded_artists:
+        artist_weight.pop(key, None)
+        artist_display.pop(key, None)
+        curated_artist_keys[:] = [a for a in curated_artist_keys if a != key]
+        playlist_artist_keys[:] = [a for a in playlist_artist_keys if a != key]
+    topartist_keys = [key for key in topartist_keys if key not in excluded_artists]
+    top_artists = [artist_display.get(key, key) for key in topartist_keys]
 
     # Плейлистные артисты для ГАРАНТИРОВАННОЙ SC-разведки: свежие первыми,
     # заскипанные в минус — исключаем (их пользователь явно не хочет).
@@ -1184,6 +1196,7 @@ async def get_flow(
     # из двух своих проходов) и обнулялся на каждой порции из 15 — поэтому один
     # артист исправно набирал по 2-4 трека в каждой подгрузке.
     artist_budget: dict = dict(Counter(history.get("artists") or []))
+    artist_cap = min(_MAX_PER_ARTIST, max(4, limit // 2))
 
     def _artist_of(t) -> str:
         return t.artist
@@ -1198,12 +1211,12 @@ async def get_flow(
     # кандидатов стало вдоволь, и они вытеснили разведку целиком.
     explore_quota = min(len(explore), round(limit * _EXPLORE_SHARE))
     relevant_external, explore_rest = take_capped(
-        explore, explore_quota, _MAX_PER_ARTIST, _artist_of, artist_budget
+        explore, explore_quota, artist_cap, _artist_of, artist_budget
     )
     used_external = len(relevant_external)
 
     relevant_local, exploit_rest = take_capped(
-        exploit, genre_quota - used_external, _MAX_PER_ARTIST, _artist_of, artist_budget
+        exploit, genre_quota - used_external, artist_cap, _artist_of, artist_budget
     )
 
     mix: List[dict] = [
@@ -1222,7 +1235,7 @@ async def get_flow(
     # исполнителя, поэтому внешние кандидаты идут через тот же бюджет.
     if len(mix) < genre_quota:
         extra_external, explore_rest = take_capped(
-            explore_rest, genre_quota - len(mix), _MAX_PER_ARTIST, _artist_of, artist_budget
+            explore_rest, genre_quota - len(mix), artist_cap, _artist_of, artist_budget
         )
         mix.extend(t.model_dump() for t in extra_external)
         used_external += len(extra_external)
@@ -1232,14 +1245,14 @@ async def get_flow(
     remaining = limit - len(mix)
     if remaining:
         discovery, explore_rest = take_capped(
-            explore_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
+            explore_rest, remaining, artist_cap, _artist_of, artist_budget
         )
         mix.extend(t.model_dump() for t in discovery)
         used_external += len(discovery)
         remaining = limit - len(mix)
     if remaining:
         extra_local, exploit_rest = take_capped(
-            exploit_rest, remaining, _MAX_PER_ARTIST, _artist_of, artist_budget
+            exploit_rest, remaining, artist_cap, _artist_of, artist_budget
         )
         mix.extend(
             TrackResponse.model_validate(t).model_dump(mode="json")
@@ -1250,13 +1263,7 @@ async def get_flow(
     # Последний резерв — добор СВЕРХ лимита на артиста, начиная с наименее
     # представленных. Короткая порция хуже повтора: на бедном каталоге волна
     # иначе «замирает» на первых треках (см. историю фиксов выше).
-    if remaining:
-        overflow_external = take_overflow(
-            explore_rest, remaining, _artist_of, artist_budget
-        )
-        mix.extend(t.model_dump() for t in overflow_external)
-        used_external += len(overflow_external)
-        remaining = limit - len(mix)
+    # Never bypass the per-artist cap for external discovery results.
     if remaining:
         mix.extend(
             TrackResponse.model_validate(t).model_dump(mode="json")
