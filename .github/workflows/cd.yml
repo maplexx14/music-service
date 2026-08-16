@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'stable')
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -34,7 +34,7 @@ jobs:
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
             git fetch --prune origin
-            git checkout stable
-            git merge --ff-only origin/stable
+            git checkout main
+            git merge --ff-only origin/main
             chmod +x deploy.sh
             ./deploy.sh
