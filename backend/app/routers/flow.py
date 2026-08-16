@@ -257,6 +257,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # поэтому нельзя выдавать «14 жанровых» только на основании Track.genre.
     curated_artist_keys: List[str] = []
     seen_curated_artist = set()
+    catalog_artist_keys: List[str] = []
+    seen_catalog_artist = set()
     playlist_seeds: List[str] = []  # ytmusic video_id из плейлистов, свежие первыми
 
     # Тексты (название + артист) всех положительных сигналов — по ним определяем
@@ -271,6 +273,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
+        if key and key not in seen_catalog_artist:
+            catalog_artist_keys.append(key)
+            seen_catalog_artist.add(key)
         # Genre почти всегда пуст у внешних треков — как дополнительный сигнал
         # разбираем ключевые слова прямо в названии ("... Phonk Remix" и т.п.).
         genre = track.genre or infer_genre_from_text(track.title, track.artist)
@@ -370,6 +375,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
+        if key not in seen_catalog_artist:
+            catalog_artist_keys.append(key)
+            seen_catalog_artist.add(key)
         if key not in seen_pl_artist:
             playlist_artist_keys.append(key)
             seen_pl_artist.add(key)
@@ -464,6 +472,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         artist_weight.pop(key, None)
         artist_display.pop(key, None)
         curated_artist_keys[:] = [a for a in curated_artist_keys if a != key]
+        catalog_artist_keys[:] = [a for a in catalog_artist_keys if a != key]
         playlist_artist_keys[:] = [a for a in playlist_artist_keys if a != key]
     topartist_keys = [key for key in topartist_keys if key not in excluded_artists]
     top_artists = [artist_display.get(key, key) for key in topartist_keys]
@@ -486,6 +495,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "artist_keys": topartist_keys,
         "artist_weight": {k: v for k, v in artist_weight.items() if v > 0},
         "curated_artist_keys": curated_artist_keys,
+        "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
@@ -585,7 +595,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # «жанром пользователя» нельзя. Проверка общая с recommendations.py (taste.py).
     _keep = track_check(
         make_relevance_check(
-            trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+            trusted_artist_keys=set(profile.get("artist_keys") or []),
             user_genres=set(profile.get("genres") or []),
             prefer_cyrillic=profile.get("prefer_cyrillic"),
         )
@@ -1098,9 +1108,16 @@ async def get_flow(
     # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
     # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
     # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
-    favorite_artists = list(
-        dict.fromkeys(profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"])
-    )[:_FAVORITE_EXPLORE_ARTISTS]
+    # Artist catalog lookup is reserved for explicit/liked taste artists. Imported
+    # playlists are useful local signals, but must not open a provider catalog for
+    # every imported name.
+    catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
+    artist_history = Counter(history.get("artists") or [])
+    favorite_artists = sorted(
+        enumerate(catalog_artists),
+        key=lambda item: (artist_history[artist_key(item[1])], item[0]),
+    )
+    favorite_artists = [artist for _, artist in favorite_artists][:_FAVORITE_EXPLORE_ARTISTS]
     favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
     discovery = [_similar_pool(a) for a in similar_artists]
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
@@ -1147,9 +1164,11 @@ async def get_flow(
     # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
     # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
     tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
+    if not tag_words:
+        tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
-    if len(tag_words) >= 2 and len(explore) < limit:
+    if tag_words and len(explore) < limit:
         query = " ".join(tag_words[:2])
         _add_explore(
             t
@@ -1244,13 +1263,6 @@ async def get_flow(
     # не участвует в гарантированных 14 жанровых позициях.
     remaining = limit - len(mix)
     if remaining:
-        discovery, explore_rest = take_capped(
-            explore_rest, remaining, artist_cap, _artist_of, artist_budget
-        )
-        mix.extend(t.model_dump() for t in discovery)
-        used_external += len(discovery)
-        remaining = limit - len(mix)
-    if remaining:
         extra_local, exploit_rest = take_capped(
             exploit_rest, remaining, artist_cap, _artist_of, artist_budget
         )
@@ -1258,6 +1270,13 @@ async def get_flow(
             TrackResponse.model_validate(t).model_dump(mode="json")
             for t in extra_local
         )
+        remaining = limit - len(mix)
+    if remaining:
+        discovery, explore_rest = take_capped(
+            explore_rest, remaining, artist_cap, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in discovery)
+        used_external += len(discovery)
         remaining = limit - len(mix)
 
     # Последний резерв — добор СВЕРХ лимита на артиста, начиная с наименее
