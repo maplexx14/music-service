@@ -113,7 +113,7 @@ _MAX_PER_ARTIST = 6
 # слушает, — то есть в список бывшего раздела «Рекомендуем для вас».
 # Жанровая гарантия от этого не страдает: внешние кандидаты тоже проходят
 # _matches_related/_matches_taste, меняется только очерёдность на слоты.
-_EXPLORE_SHARE = 0.0
+_EXPLORE_SHARE = 0.5
 # Сколько артистов вкуса берём в работу за один запрос. Порядок взвешенно
 # случайный (см. diversity.weighted_order), поэтому это не «топ-N навсегда», а
 # ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
@@ -629,7 +629,9 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # Случайная выборка окна, а не топ по play_count: иначе окно limit*8 —
         # это всегда самые заигранные треки нескольких артистов, и никакая
         # сортировка в Python уже не достанет остальных из библиотеки.
-        candidates = q.order_by(func.random()).limit(limit * 8).all()
+        # A large played catalog must not hide a single unseen track from the
+        # same trusted artist simply because the random window sampled old rows.
+        candidates = q.order_by(func.random()).limit(max(limit * 100, 500)).all()
         candidates = [t for t in candidates if _keep(t) and _media_available(t)]
         candidates.sort(key=_score)
         candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
