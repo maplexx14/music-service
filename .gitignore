@@ -38,7 +38,7 @@ yarn-error.log*
 #repowise
 .mcp.json
 .repowise/
-
+plans/
 # OS
 .DS_Store
 Thumbs.db
