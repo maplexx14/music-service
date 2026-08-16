@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-ENV_FILE="${ENV_FILE:-.env.prod}"
+ENV_FILE="${ENV_FILE:-.env}"
 # Потолок ожидания бэкенда. Больше, чем start_period healthcheck'а (90 с в
 # docker-compose.prod.yml): на холодной БД сначала прогоняются миграции.
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-240}"
