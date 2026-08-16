@@ -152,6 +152,8 @@ _FLOW_HISTORY_TTL = 6 * 60 * 60
 # обход графа YT Music. Больше сидов за запрос заметно увеличит внешние вызовы.
 _CONTINUATION_SEEDS = 6
 _PROFILE_SEEDS = 4
+_FAVORITE_ARTIST_LIMIT = 15
+_FAVORITE_EXPLORE_ARTISTS = 6
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -769,6 +771,22 @@ async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
     return [t for pool in pools for t in pool if artist_key(t.artist) != own]
 
 
+async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
+    key = f"flow:favorite:{artist_key(artist)}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+    try:
+        tracks = await ytdlp.search_ytmusic(request, artist, limit=_FAVORITE_ARTIST_LIMIT)
+    except Exception:  # noqa: BLE001
+        logger.warning("flow favorite artist search failed for %s", artist)
+        tracks = []
+    own = artist_key(artist)
+    tracks = [t for t in tracks if own and own in artist_key(t.artist)]
+    await set_cache_async(key, [t.model_dump() for t in tracks], expire=_SC_EXPLORE_TTL if tracks else 600)
+    return tracks
+
+
 async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
     """videoId треков артиста в YT Music — сиды радио для юзера, у которого
     своих ytmusic-треков нет. Поиск полнотекстовый, поэтому оставляем только то,
@@ -1068,14 +1086,25 @@ async def get_flow(
     # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
     # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
     # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
+    favorite_artists = list(
+        dict.fromkeys(profile["playlist_artists"][:_SC_PLAYLIST_ARTISTS] + profile["artists"])
+    )[:_FAVORITE_EXPLORE_ARTISTS]
+    favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
     discovery = [_similar_pool(a) for a in similar_artists]
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
     # волнами по два: при большом exclude каждая пустая волна добавляла полный
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
     discovery += [_radio_pool(seed) for seed in seeds]
     if discovery:
-        pools = await asyncio.gather(*discovery)
-        _add_explore(t for pool in pools for t in pool if _matches_related(t))
+        pools = await asyncio.gather(*favorite_jobs, *discovery)
+        favorite_count = len(favorite_jobs)
+        _add_explore(t for pool in pools[:favorite_count] for t in pool)
+        _add_explore(
+            t for pool in pools[favorite_count:] for t in pool if _matches_related(t)
+        )
+    elif favorite_jobs:
+        pools = await asyncio.gather(*favorite_jobs)
+        _add_explore(t for pool in pools for t in pool)
 
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
     # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.

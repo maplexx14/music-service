@@ -12,6 +12,7 @@
 import logging
 import os
 import secrets
+import inspect
 from html import escape
 
 from app.auth import get_password_hash, verify_password
@@ -205,14 +206,13 @@ def send_email_code(to_email: str, username: str, code: str, purpose: str = PURP
         subject = "Код для входа — Music Streaming"
         intro = "Код для входа в аккаунт:"
     safe_username = escape(username)
-    sent = send_mail(
-        to_email,
-        subject,
-        f"Здравствуйте, {username}!\n\n"
-        f"{intro}\n\n    {code}\n\n"
-        f"Код действует {minutes} минут и работает один раз.\n"
-        f"Если вы не запрашивали код, смените пароль — кто-то знает его.\n",
-        html=(
+    mail_kwargs = {
+        "log_fallback": (
+            f"2FA code for {to_email} ({purpose}): {code}" if LOG_CODE_WITHOUT_SMTP else ""
+        )
+    }
+    if "html" in inspect.signature(send_mail).parameters:
+        mail_kwargs["html"] = (
             "<!doctype html><html><body style=\"margin:0;background:#f4f4f5;"
             "font-family:Arial,sans-serif;color:#18181b\"><div style=\"max-width:560px;"
             "margin:32px auto;background:#fff;border:1px solid #e4e4e7;padding:32px\">"
@@ -221,9 +221,14 @@ def send_email_code(to_email: str, username: str, code: str, purpose: str = PURP
             f"<p>Код действует {minutes} минут и работает один раз.</p>"
             "<p style=\"color:#52525b\">Если вы не запрашивали код, смените пароль: "
             "возможно, он известен другому человеку.</p></div></body></html>"
-        ),
-        log_fallback=(
-            f"2FA code for {to_email} ({purpose}): {code}" if LOG_CODE_WITHOUT_SMTP else ""
-        ),
+        )
+    sent = send_mail(
+        to_email,
+        subject,
+        f"Здравствуйте, {username}!\n\n"
+        f"{intro}\n\n    {code}\n\n"
+        f"Код действует {minutes} минут и работает один раз.\n"
+        f"Если вы не запрашивали код, смените пароль — кто-то знает его.\n",
+        **mail_kwargs,
     )
     return sent or LOG_CODE_WITHOUT_SMTP
