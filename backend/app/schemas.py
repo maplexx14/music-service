@@ -394,6 +394,45 @@ class ExternalPlaylistDetail(BaseModel):
     tracks: List[ExternalTrackResponse] = []
 
 
+class ExternalAlbumResponse(BaseModel):
+    """Релиз исполнителя (альбом/сингл/EP) — карточка в карусели на его странице.
+
+    Отдельный тип, а не ExternalPlaylistResponse: у альбома нет владельца и
+    ссылки для импорта, зато есть год и тип релиза — по ним карусель делится на
+    «Альбомы» и «Синглы и EP».
+    """
+    id: str            # "ytmusic:MPREb_..." — стабильный key для фронта
+    source: str
+    external_id: str   # browseId альбома у провайдера
+    title: str
+    artist: Optional[str] = None
+    year: Optional[str] = None
+    cover_url: Optional[str] = None
+    track_count: int = 0
+    # "Album" | "Single" | "EP" — как отдаёт провайдер.
+    album_type: Optional[str] = None
+
+
+class ExternalAlbumDetail(BaseModel):
+    album: ExternalAlbumResponse
+    tracks: List[ExternalTrackResponse] = []
+
+
+class AlbumSaveRequest(BaseModel):
+    """Какой альбом положить в медиатеку (source + id релиза у провайдера)."""
+    source: str
+    external_id: str
+
+
+class AlbumSaveResponse(BaseModel):
+    """Итог сохранения альбома в медиатеку (поля те же, что у ArtistSaveResponse)."""
+    playlist_id: int
+    name: str
+    created: bool  # плейлист создан (False — дополнили существующий)
+    added: int     # сколько треков добавлено этим вызовом
+    total: int     # сколько всего треков в плейлисте
+
+
 class ExternalSearchGrouped(BaseModel):
     """Внешняя выдача, разложенная по источникам.
 
@@ -416,11 +455,16 @@ class ArtistPageResponse(BaseModel):
     оттуда же его берёт волна). playlist_id — плейлист этого артиста, если он
     уже сохранён в медиатеку; по нему кнопка показывает «Открыть», а не
     «Добавить» повторно.
+
+    albums — дискография с YouTube Music (карусель над списком треков). Пустой
+    список — обычное дело: у провайдера релизов может не быть, а сам он мог и
+    не ответить.
     """
     name: str
     cover_url: Optional[str] = None
     tracks: List[TrackResponse] = []
     external: List[ExternalTrackResponse] = []
+    albums: List[ExternalAlbumResponse] = []
     is_liked: bool = False
     playlist_id: Optional[int] = None
 

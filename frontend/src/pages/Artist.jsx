@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Play, Plus, Heart } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import Carousel from '../components/Carousel'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
@@ -21,6 +22,54 @@ const SOURCE_LABEL = {
   soulseek: 'FLAC',
 }
 
+// Тип релиза от провайдера — по-русски, для подписи под обложкой.
+const ALBUM_TYPE_LABEL = {
+  album: 'Альбом',
+  single: 'Сингл',
+  ep: 'EP',
+}
+
+const albumTypeLabel = (album) =>
+  ALBUM_TYPE_LABEL[(album.album_type || '').toLowerCase()] || album.album_type || null
+
+// Карусель релизов: карточка та же по смыслу, что у плейлистов на главной, но
+// со своими классами — на страницу артиста заходят по прямой ссылке, и CSS
+// главной в этот момент не загружен (страницы грузятся lazy).
+function AlbumsRow({ title, albums }) {
+  if (albums.length === 0) return null
+
+  return (
+    <div className="artist-albums">
+      <h2 className="artist-section-title">{title}</h2>
+      <Carousel
+        items={albums}
+        label={title}
+        renderItem={(album) => {
+          const meta = [album.year, albumTypeLabel(album)].filter(Boolean).join(' · ')
+          return (
+            <Link
+              key={album.id}
+              className="album-card"
+              to={`/albums/${album.source}/${album.external_id}`}
+            >
+              <img
+                src={resolveCoverUrl(album.cover_url) || defaultCover}
+                alt={album.title}
+                className="album-cover"
+                loading="lazy"
+                decoding="async"
+                onError={handleCoverError}
+              />
+              <div className="album-name">{album.title}</div>
+              {meta && <div className="album-meta">{meta}</div>}
+            </Link>
+          )
+        }}
+      />
+    </div>
+  )
+}
+
 // Страница исполнителя: его треки одним плейлистом. Сначала то, что уже в
 // библиотеке, затем каталог YouTube Music, затем SoundCloud — порядок задаёт
 // бэк (см. routers/artists.py), фронт только склеивает списки в одну очередь.
@@ -29,6 +78,7 @@ function Artist() {
   const navigate = useNavigate()
   const [artist, setArtist] = useState(null)
   const [tracks, setTracks] = useState([])
+  const [albums, setAlbums] = useState([])
   const [loading, setLoading] = useState(true)
   const [liking, setLiking] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -75,6 +125,7 @@ function Artist() {
       // «все треки исполнителя» и слушает их подряд, не думая об источнике.
       const all = [...(data.tracks || []), ...(data.external || [])]
       setTracks(all)
+      setAlbums(data.albums || [])
       // Прогреваем резолв верхушки — старт воспроизведения без паузы.
       usePlayerStore.getState().prefetchTracks(all, 6)
     } catch (error) {
@@ -206,6 +257,10 @@ function Artist() {
   if (!artist) return null
 
   const libraryCount = artist.tracks?.length || 0
+  // Альбомы и всё остальное (синглы, EP) — двумя каруселями: в одной ленте
+  // сингл выглядит таким же релизом, как двойной альбом.
+  const fullAlbums = albums.filter((a) => (a.album_type || '').toLowerCase() === 'album')
+  const shortReleases = albums.filter((a) => (a.album_type || '').toLowerCase() !== 'album')
 
   return (
     <div className="page-container">
@@ -273,7 +328,13 @@ function Artist() {
         </div>
       </div>
 
+      <AlbumsRow title="Альбомы" albums={fullAlbums} />
+      <AlbumsRow title="Синглы и EP" albums={shortReleases} />
+
       <div className="playlist-tracks">
+        {/* Заголовок нужен только когда выше есть карусели: иначе таблица и так
+            единственный блок страницы, и подписывать её нечем. */}
+        {albums.length > 0 && <h2 className="artist-section-title">Треки</h2>}
         {tracks.length > 0 ? (
           <table className="tracks-table">
             <thead>

@@ -16,6 +16,7 @@ const Search = lazy(() => import('./pages/Search'))
 const Playlists = lazy(() => import('./pages/Playlists'))
 const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'))
 const ExternalPlaylist = lazy(() => import('./pages/ExternalPlaylist'))
+const Album = lazy(() => import('./pages/Album'))
 const Artist = lazy(() => import('./pages/Artist'))
 const LikedSongs = lazy(() => import('./pages/LikedSongs'))
 const UploadTrack = lazy(() => import('./pages/UploadTrack'))
@@ -110,6 +111,7 @@ function App() {
                     <Route path="/playlists" element={<Playlists />} />
                     <Route path="/playlists/:id" element={<PlaylistDetail />} />
                     <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
+                    <Route path="/albums/:source/:id" element={<Album />} />
                     <Route path="/artists/:name" element={<Artist />} />
                     <Route path="/liked" element={<LikedSongs />} />
                     <Route path="/upload" element={<UploadTrack />} />

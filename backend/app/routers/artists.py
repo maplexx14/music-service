@@ -147,7 +147,7 @@ async def _collect_tracks(
 
     if isinstance(profile, Exception):
         logger.warning("ytmusic artist profile failed for %s: %s", name, profile)
-        profile = {"name": name, "cover_url": None, "tracks": []}
+        profile = {"name": name, "cover_url": None, "tracks": [], "albums": []}
     if isinstance(sc, Exception):
         logger.warning("soundcloud artist search failed for %s: %s", name, sc)
         sc = []
@@ -227,6 +227,10 @@ async def artist_page(
         cover_url=cover,
         tracks=tracks,
         external=external,
+        # Дискография с YouTube Music: карусель релизов над списком треков.
+        # Пустой список — норма (провайдер мог не ответить, у артиста может не
+        # быть релизов), поэтому на неё страница не завязана.
+        albums=profile.get("albums") or [],
         is_liked=_is_liked(current_user, canonical) or _is_liked(current_user, display),
         playlist_id=saved.id if saved else None,
     )

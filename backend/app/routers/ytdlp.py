@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
 from app.cache import get_cache_async, set_cache_async
-from app.schemas import ExternalTrackResponse
+from app.schemas import ExternalAlbumDetail, ExternalAlbumResponse, ExternalTrackResponse
 
 logger = logging.getLogger(__name__)
 
@@ -299,27 +299,23 @@ async def related_ytmusic_artists(artist: str, limit: int = 6) -> List[dict]:
     return out
 
 
-async def ytmusic_artist_songs(
-    browse_id: str, limit: int = 0
-) -> List[ExternalTrackResponse]:
-    """Треки артиста по его browseId (stream_url проставляет вызывающий).
+async def _artist_info(browse_id: str) -> dict:
+    """Страница артиста у провайдера (get_artist); {} при любом сбое.
 
-    По умолчанию — превью со страницы артиста (5-10 треков, этого хватает волне).
-    При limit > 0 идём в полный плейлист «Songs», на который ссылается секция:
-    для поиска по имени артиста превью слишком короткое, а ждут там всю выдачу.
-
-    Формат items совпадает с выдачей search(filter="songs"), поэтому нормализуем
-    тем же _normalize.
+    Вынесено из ytmusic_artist_songs: со страницы артиста нужны и треки, и
+    дискография, а round-trip к YouTube на каждую секцию — лишний.
     """
     if _ytmusic is None or not browse_id:
-        return []
-
+        return {}
     try:
-        info = await asyncio.to_thread(_ytmusic.get_artist, browse_id)
+        return await asyncio.to_thread(_ytmusic.get_artist, browse_id) or {}
     except Exception:  # noqa: BLE001
-        logger.warning("YouTube Music artist songs failed for %s", browse_id)
-        return []
+        logger.warning("YouTube Music artist page failed for %s", browse_id)
+        return {}
 
+
+async def _songs_from_info(info: dict, limit: int) -> List[ExternalTrackResponse]:
+    """Треки из уже полученной страницы артиста (см. ytmusic_artist_songs)."""
     section = ((info or {}).get("songs") or {})
     items = section.get("results") or []
 
@@ -336,6 +332,74 @@ async def ytmusic_artist_songs(
 
     tracks = [t for t in (_normalize(item) for item in items) if t]
     return tracks[:limit] if limit else tracks
+
+
+async def ytmusic_artist_songs(
+    browse_id: str, limit: int = 0
+) -> List[ExternalTrackResponse]:
+    """Треки артиста по его browseId (stream_url проставляет вызывающий).
+
+    По умолчанию — превью со страницы артиста (5-10 треков, этого хватает волне).
+    При limit > 0 идём в полный плейлист «Songs», на который ссылается секция:
+    для поиска по имени артиста превью слишком короткое, а ждут там всю выдачу.
+
+    Формат items совпадает с выдачей search(filter="songs"), поэтому нормализуем
+    тем же _normalize.
+    """
+    return await _songs_from_info(await _artist_info(browse_id), limit)
+
+
+def _normalize_album(
+    item: dict, artist: str, fallback_type: str
+) -> Optional[ExternalAlbumResponse]:
+    """Элемент секции albums/singles → карточка релиза.
+
+    fallback_type — тип релиза, когда провайдер его не прислал: в секции
+    «singles» лежат синглы и EP, в «albums» — альбомы.
+    """
+    browse_id = item.get("browseId")
+    title = (item.get("title") or "").strip()
+    if not browse_id or not title:
+        return None
+
+    year = item.get("year")
+    return ExternalAlbumResponse(
+        id=f"ytmusic:{browse_id}",
+        source="ytmusic",
+        external_id=browse_id,
+        title=title,
+        artist=artist or None,
+        year=str(year) if year else None,
+        cover_url=_thumb(item.get("thumbnails")),
+        album_type=item.get("type") or fallback_type,
+    )
+
+
+def _albums_from_info(info: dict, artist: str) -> List[ExternalAlbumResponse]:
+    """Дискография со страницы артиста: сначала альбомы, затем синглы и EP.
+
+    Это витрина со страницы артиста (у провайдера в каждой секции ~10 релизов),
+    а не полная дискография: за ней пришлось бы идти ещё одним запросом, а
+    карусели столько и не нужно.
+
+    Внутри группы — от новых к старым: порядок провайдера не обещан ничем, а
+    карусель читают слева направо.
+    """
+    out: List[ExternalAlbumResponse] = []
+    seen: set = set()
+    for section, fallback_type in (("albums", "Album"), ("singles", "Single")):
+        group: List[ExternalAlbumResponse] = []
+        for item in ((info or {}).get(section) or {}).get("results") or []:
+            album = _normalize_album(item, artist, fallback_type)
+            # Один и тот же релиз попадает и в «albums», и в «singles» — по
+            # browseId он один, и в карусели должен быть один.
+            if album is None or album.external_id in seen:
+                continue
+            seen.add(album.external_id)
+            group.append(album)
+        group.sort(key=lambda a: a.year or "", reverse=True)
+        out += group
+    return out
 
 
 def _norm_artist_name(name: str) -> str:
@@ -408,36 +472,44 @@ async def _fetch_artist_catalog(q: str, limit: int) -> List[ExternalTrackRespons
 
 
 async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -> dict:
-    """Профиль артиста для его страницы: имя, обложка и треки.
+    """Профиль артиста для его страницы: имя, обложка, треки и дискография.
 
     Отличие от ytmusic_artist_catalog: кроме треков отдаёт метаданные самого
-    артиста (канoническое написание имени и аватар) — странице артиста нужна
-    шапка, а не только список.
+    артиста (канoническое написание имени и аватар) и его релизы — странице
+    артиста нужна шапка и карусель альбомов, а не только список.
 
-    Возвращает {"name": str, "cover_url": str|None, "tracks": [...]}; при любом
-    сбое провайдера — тот же словарь с пустым списком, страница артиста должна
-    открываться и на одной локальной библиотеке.
+    Возвращает {"name": str, "cover_url": str|None, "tracks": [...],
+    "albums": [...]}; при любом сбое провайдера — тот же словарь с пустыми
+    списками, страница артиста должна открываться и на одной локальной
+    библиотеке.
     """
     display = (name or "").strip()
     if _ytmusic is None or not display:
-        return {"name": display, "cover_url": None, "tracks": []}
+        return {"name": display, "cover_url": None, "tracks": [], "albums": []}
 
     # Кэш тот же по смыслу, что у каталога: search → get_artist → get_playlist
     # это три round-trip'а к YouTube на каждое открытие страницы. Ключ
-    # транслитерированный — обе страницы артиста делят один профиль.
-    cache_key = f"ytmusic:artist_profile:{translit_key(display)}:{limit}"
+    # транслитерированный — обе страницы артиста делят один профиль. Версия в
+    # ключе: у записей прошлой версии нет альбомов, и без неё карусель ждала бы
+    # истечения кэша.
+    cache_key = f"ytmusic:artist_profile:v2:{translit_key(display)}:{limit}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
         profile = {
             "name": cached.get("name") or display,
             "cover_url": cached.get("cover_url"),
             "tracks": [ExternalTrackResponse(**t) for t in cached.get("tracks") or []],
+            "albums": [ExternalAlbumResponse(**a) for a in cached.get("albums") or []],
         }
     else:
         profile = await _fetch_artist_profile(display, limit)
         await set_cache_async(
             cache_key,
-            {**profile, "tracks": [t.model_dump() for t in profile["tracks"]]},
+            {
+                **profile,
+                "tracks": [t.model_dump() for t in profile["tracks"]],
+                "albums": [a.model_dump() for a in profile["albums"]],
+            },
             # Негативный кэш короткий: артиста могли не найти из-за разовой
             # ошибки провайдера, держать его пустым полдня незачем.
             expire=_ARTIST_CATALOG_TTL if profile["tracks"] else 600,
@@ -450,7 +522,7 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
 
 
 async def _fetch_artist_profile(name: str, limit: int) -> dict:
-    empty = {"name": name, "cover_url": None, "tracks": []}
+    empty = {"name": name, "cover_url": None, "tracks": [], "albums": []}
     try:
         found = await asyncio.to_thread(_ytmusic.search, name, filter="artists", limit=1)
     except Exception:  # noqa: BLE001 — провайдер, страница падать не должна
@@ -465,11 +537,92 @@ async def _fetch_artist_profile(name: str, limit: int) -> dict:
     if not browse_id or not _query_names_artist(name, canonical):
         return empty
 
+    # Один get_artist на треки и на релизы: обе секции лежат в одном ответе.
+    info = await _artist_info(browse_id)
+    display = canonical or name
     return {
-        "name": canonical or name,
+        "name": display,
         "cover_url": _thumb(top.get("thumbnails")),
-        "tracks": await ytmusic_artist_songs(browse_id, limit=limit),
+        "tracks": await _songs_from_info(info, limit),
+        "albums": _albums_from_info(info, display),
     }
+
+
+async def ytmusic_album(request: Request, browse_id: str) -> Optional[ExternalAlbumDetail]:
+    """Альбом по его browseId: метаданные релиза и его треки.
+
+    None — провайдер отключён или альбома нет. Страница альбома отвечает на это
+    404: пустой список треков выглядел бы как «альбом есть, но он пустой».
+    """
+    if _ytmusic is None or not browse_id:
+        return None
+
+    cache_key = f"ytmusic:album:v1:{browse_id}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        # Негативный ответ кэшируется пустым словарём: у ExternalAlbumDetail
+        # обязательное поле album, и None в кэш не положить.
+        detail = ExternalAlbumDetail(**cached) if cached else None
+    else:
+        detail = await _fetch_album(browse_id)
+        await set_cache_async(
+            cache_key,
+            detail.model_dump() if detail else {},
+            expire=_ARTIST_CATALOG_TTL if detail else 600,
+        )
+
+    if detail is None:
+        return None
+
+    base_url = str(request.base_url).rstrip("/")
+    for t in detail.tracks:
+        t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+    return detail
+
+
+async def _fetch_album(browse_id: str) -> Optional[ExternalAlbumDetail]:
+    try:
+        info = await asyncio.to_thread(_ytmusic.get_album, browse_id)
+    except Exception:  # noqa: BLE001 — провайдер, страница падать не должна
+        logger.warning("YouTube Music album failed for %s", browse_id)
+        return None
+    if not info:
+        return None
+
+    title = (info.get("title") or "Unknown").strip()
+    artists = info.get("artists") or []
+    artist = ", ".join(a.get("name", "") for a in artists if a.get("name")).strip()
+    cover = _thumb(info.get("thumbnails"))
+    year = info.get("year")
+
+    tracks: List[ExternalTrackResponse] = []
+    for item in info.get("tracks") or []:
+        track = _normalize(item)
+        if track is None:
+            continue
+        # Внутри альбома провайдер не повторяет у трека ни обложку, ни название
+        # релиза, а исполнителя иногда отдаёт пустым — подставляем данные
+        # альбома, иначе в очереди окажется пустой квадрат без артиста.
+        track.cover_url = track.cover_url or cover
+        track.album = track.album or title
+        if artist and track.artist == "Unknown Artist":
+            track.artist = artist
+        tracks.append(track)
+
+    return ExternalAlbumDetail(
+        album=ExternalAlbumResponse(
+            id=f"ytmusic:{browse_id}",
+            source="ytmusic",
+            external_id=browse_id,
+            title=title,
+            artist=artist or None,
+            year=str(year) if year else None,
+            cover_url=cover,
+            track_count=info.get("trackCount") or len(tracks),
+            album_type=info.get("type"),
+        ),
+        tracks=tracks,
+    )
 
 
 @router.get("/search", response_model=List[ExternalTrackResponse])
