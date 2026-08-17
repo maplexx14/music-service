@@ -209,6 +209,15 @@ services:
       - cover_files:/app/cover_files
       - ytdlp_cache:/app/ytdlp_cache
       - cookies_data:/app/cookies
+    # Invidious живёт отдельным compose-стеком (invidious/docker-compose.prod.yml)
+    # и публикует порт на хосте, поэтому INVIDIOUS_API_BASE указывает на
+    # host.docker.internal. На Docker Desktop это имя резолвится само, а на
+    # Linux-сервере — НЕТ: без строки ниже резолв через Invidious падал с
+    # «ConnectError: Name or service not known» на каждом треке, весь трафик
+    # уходил в yt-dlp, и при блокировке его IP отдавался bot-check
+    # (ytdlp.py:949-953) — при живом и работающем Invidious.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     expose:
       - "8000"
     depends_on:
