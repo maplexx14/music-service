@@ -329,7 +329,7 @@ function Artist() {
       </div>
 
       <AlbumsRow title="Альбомы" albums={fullAlbums} />
-      <AlbumsRow title="Синглы и EP" albums={shortReleases} />
+      <AlbumsRow title="Синглы и Альбомы" albums={shortReleases} />
 
       <div className="playlist-tracks">
         {/* Заголовок нужен только когда выше есть карусели: иначе таблица и так
