@@ -190,6 +190,15 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # Ссылки googlevideo привязаны к IP запросившего (подписанный параметр
+      # `ip` в sparams). Если Invidious-companion выходит через прокси
+      # (invidious/proxy-pool), то и качать аудио надо через тот же выход,
+      # иначе googlevideo отдаёт 403. Файл пишет rotate.sh при ротации, бэкенд
+      # перечитывает его по mtime — без перезапуска, чтобы не рвать стримы.
+      # Нет файла (обычный случай, прокси не нужен) — прямой выход.
+      STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
+      # Статическая альтернатива файлу: адрес прокси одной строкой.
+      STREAM_PROXY: ${STREAM_PROXY:-}
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
@@ -209,6 +218,9 @@ services:
       - cover_files:/app/cover_files
       - ytdlp_cache:/app/ytdlp_cache
       - cookies_data:/app/cookies
+      # Каталог, а не файл: rotate.sh подменяет active.url через mv (новый
+      # inode), и bind-mount самого файла продолжил бы показывать старый.
+      - ./invidious/proxy-pool/stream-proxy:/run/stream-proxy:ro
     # Invidious живёт отдельным compose-стеком (invidious/docker-compose.prod.yml)
     # и публикует порт на хосте, поэтому INVIDIOUS_API_BASE указывает на
     # host.docker.internal. На Docker Desktop это имя резолвится само, а на

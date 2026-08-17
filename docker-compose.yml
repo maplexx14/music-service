@@ -131,6 +131,11 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # Прокси для скачивания googlevideo: ссылка привязана к IP выхода,
+      # который её выдал, поэтому при проксированном companion аудио надо
+      # качать через тот же прокси. Файла нет — прямой выход.
+      STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
+      STREAM_PROXY: ${STREAM_PROXY:-}
       # ─── Yandex Music (нативная интеграция) ───
       # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
@@ -167,6 +172,10 @@ services:
       - music_files:/app/music_files
       - ytdlp_cache:/app/ytdlp_cache
       - cookies_data:/app/cookies
+      # Активный прокси для скачивания googlevideo (см. docker-compose.prod.yml
+      # и invidious/proxy-pool/README.md). Каталог, а не файл: rotate.sh
+      # подменяет active.url через mv, и mount файла показывал бы старый inode.
+      - ./invidious/proxy-pool/stream-proxy:/run/stream-proxy:ro
       - slskd_downloads:/app/slskd_downloads:ro
       - slskd_incomplete:/app/slskd_incomplete:ro
     depends_on:

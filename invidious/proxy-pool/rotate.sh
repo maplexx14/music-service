@@ -48,6 +48,14 @@ COMPOSE_DIR="${COMPOSE_DIR:-/opt/music-service/invidious}"
 # читается compose как env_file).
 LIST="${LIST:-$COMPOSE_DIR/proxy-pool/proxies.list}"
 ACTIVE="${ACTIVE:-$COMPOSE_DIR/proxy-pool/active.env}"
+# Тот же адрес для бэкенда: ссылки googlevideo привязаны к IP выхода, который
+# их выдал, поэтому аудио надо качать через тот же прокси (STREAM_PROXY_FILE в
+# docker-compose бэкенда, читается по mtime без перезапуска).
+STREAM_URL_FILE="${STREAM_URL_FILE:-$COMPOSE_DIR/proxy-pool/stream-proxy/active.url}"
+# Контейнер Redis музыкального сервиса: после смены выхода кэш резолва держит
+# ссылки, привязанные к ПРЕЖНЕМУ адресу, и до истечения TTL (_RESOLVE_TTL, 3ч)
+# каждая из них отдавала бы 403. Пусто — сброс не выполняется.
+REDIS_CONTAINER="${REDIS_CONTAINER:-music_redis}"
 # Тот же инстанс, что в INVIDIOUS_API_BASE музыкального сервиса, но с точки
 # зрения хоста (в .env бэкенда он через host.docker.internal).
 INVIDIOUS_URL="${INVIDIOUS_URL:-http://127.0.0.1:3050}"
@@ -183,6 +191,45 @@ write_active() {
   mv "$tmp" "$ACTIVE"
 }
 
+# Тот же адрес — бэкенду, для скачивания аудио с googlevideo. Отдельным файлом
+# в отдельном каталоге: в контейнер бэкенда монтируется только он, и туда не
+# должен попасть весь proxies.list с паролями остальных прокси.
+write_stream_url() {
+  local url="$1" label="$2" dir tmp
+  dir="$(dirname "$STREAM_URL_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    log "ВНИМАНИЕ: нет каталога ${dir} — бэкенд продолжит качать напрямую и получит 403"
+    return 0
+  fi
+  tmp="$(mktemp "${STREAM_URL_FILE}.XXXXXX")"
+  chmod 600 "$tmp"
+  {
+    printf '# Выход для скачивания googlevideo: %s, назначен %s\n' "$label" "$(date -Is)"
+    printf '# ГЕНЕРИРУЕТСЯ rotate.sh. Читается бэкендом (STREAM_PROXY_FILE).\n'
+    printf '%s\n' "$url"
+  } >"$tmp"
+  mv "$tmp" "$STREAM_URL_FILE"
+  log "выход для стриминга записан в $(basename "$STREAM_URL_FILE")"
+}
+
+# Кэш резолва хранит ссылки, привязанные к прежнему выходу: после смены адреса
+# каждая из них отдаст 403, пока не истечёт TTL. Сбрасываем сразу — иначе
+# «переключились, а музыка всё равно не играет» на несколько часов.
+flush_resolve_cache() {
+  [[ -n "$REDIS_CONTAINER" ]] || return 0
+  if ! docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
+    log "ВНИМАНИЕ: ${REDIS_CONTAINER} недоступен — кэш ссылок не сброшен (403 до 3ч)"
+    return 0
+  fi
+  local n
+  # $NF, а не $1: redis-cli печатает «7» при перенаправленном stdout и
+  # «(integer) 7» в TTY-режиме — суммируем последнее поле в обоих случаях.
+  n="$(docker exec "$REDIS_CONTAINER" sh -c \
+    'redis-cli --scan --pattern "ytdlp:resolve:v2:*" | xargs -r -n100 redis-cli del' \
+    2>/dev/null | awk '{s+=$NF} END {print s+0}')"
+  log "кэш резолва сброшен (ключей: ${n:-0})"
+}
+
 # Пересоздаёт companion со сносом кэша сессии, чтобы PO-token выпустился
 # заново — уже с текущего адреса. Контейнер удаляем целиком, а не restart: том
 # с кэшем youtube.js занят даже остановленным контейнером, и docker volume rm
@@ -239,9 +286,14 @@ pick_candidate() {
 switch_to() {
   local label="$1" url="$2"
   write_active "$url" "$label"
+  write_stream_url "$url" "$label"
   log "активный выход → ${label}"
   reissue_session
+  # После companion: до этого момента резолв всё равно не работал, а сброшенный
+  # раньше кэш успел бы наполниться ссылками прежнего выхода.
+  flush_resolve_cache
 }
+
 mkdir -p "$STATE_DIR"
 cd "$COMPOSE_DIR"
 
@@ -325,7 +377,11 @@ fi
 # адрес, менять выход незачем — виновата сессия, её и перевыпускаем.
 if verify_proxy "$cur_url"; then
   log "выход ${cur_label} у YouTube не в блоке — дело в сессии, меняю только её"
+  # Файл для бэкенда пишем и здесь: выход не сменился, но при первой установке
+  # (или если каталог появился позже) файла может ещё не быть.
+  write_stream_url "$cur_url" "$cur_label"
   reissue_session
+  flush_resolve_cache
   echo "$now" >"$STATE_DIR/last_rotate"
   echo 0 >"$STATE_DIR/fails"
   exit 0

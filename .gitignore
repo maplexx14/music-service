@@ -40,6 +40,9 @@ yarn-error.log*
 # invidious/proxy-pool/proxies.list.example, он отслеживается.
 invidious/proxy-pool/proxies.list
 invidious/proxy-pool/active.env
+# Активный выход для скачивания googlevideo: тот же URL с кредами, читается
+# бэкендом (STREAM_PROXY_FILE). Пишется rotate.sh.
+invidious/proxy-pool/stream-proxy/active.url
 
 #repowise
 .mcp.json

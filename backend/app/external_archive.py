@@ -60,6 +60,27 @@ MAX_AUDIO_BYTES = int(os.getenv("ARCHIVE_MAX_AUDIO_BYTES", str(60 * 1024 * 1024)
 # Таймаут на скачивание одного трека (соединение, чтение).
 _DL_TIMEOUT = httpx.Timeout(30.0, read=300.0)
 
+
+def _download_client(
+    url: str, shared: httpx.AsyncClient
+) -> tuple[httpx.AsyncClient, bool]:
+    """Клиент для скачивания аудио по ``url``: (клиент, надо_ли_закрыть).
+
+    googlevideo-ссылка привязана к IP выхода, который её выдал, поэтому при
+    проксированном Invidious качать её общим (прямым) клиентом нельзя — придёт
+    403. Для всего остального возвращаем общий клиент: обложки и аудио
+    SoundCloud к IP не привязаны, и платный трафик на них тратить незачем.
+    """
+    from app.routers.ytdlp import proxy_for_url
+
+    proxy = proxy_for_url(url)
+    if proxy is None:
+        return shared, False
+    return (
+        httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True, proxy=proxy),
+        True,
+    )
+
 # Ограничитель одновременных ленивых архиваций: несколько разных треков подряд
 # в плеере не должны запускать десяток параллельных скачиваний в процессе API.
 # 5 — баланс между скоростью архивации и нагрузкой на сеть/MinIO.
@@ -522,12 +543,16 @@ async def archive_track(
             return ArchiveResult.UNSUPPORTED, None
 
         key = f"external/{track.source}/{track.external_id}{ext}"
+        dl_client, dl_owned = _download_client(url, client)
         try:
-            tmp_path, _size = await _download_to_temp(url, ext, client, resume_path=resume_path)
+            tmp_path, _size = await _download_to_temp(url, ext, dl_client, resume_path=resume_path)
             saved_tmp = tmp_path
         except _TooLarge:
             logger.info("archive: трек %s превысил лимит размера, пропуск", track.id)
             return ArchiveResult.TOO_LARGE, None
+        finally:
+            if dl_owned:
+                await dl_client.aclose()
 
         # Transcode to AAC for smaller, faster-loading files
         aac_path = transcode_to_aac(tmp_path)
@@ -690,12 +715,16 @@ async def _archive_external_core(
 
         storage.ensure_buckets()
         key = f"external/{source}/{external_id}{ext}"
+        dl_client, dl_owned = _download_client(url, client)
         try:
-            tmp_path, _size = await _download_to_temp(url, ext, client, resume_path=resume_path)
+            tmp_path, _size = await _download_to_temp(url, ext, dl_client, resume_path=resume_path)
             saved_tmp = tmp_path
         except _TooLarge:
             logger.info("archive-ext: %s/%s превысил лимит размера, пропуск", source, external_id)
             return ArchiveResult.TOO_LARGE, None
+        finally:
+            if dl_owned:
+                await dl_client.aclose()
 
         # Transcode to AAC for smaller, faster-loading files
         aac_path = transcode_to_aac(tmp_path)

@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 import aiofiles
 import httpx
@@ -608,6 +609,93 @@ _INVIDIOUS_API_BASES = [
     b.strip().rstrip("/") for b in os.getenv("INVIDIOUS_API_BASE", "").split(",") if b.strip()
 ]
 _INVIDIOUS_TIMEOUT = float(os.getenv("INVIDIOUS_TIMEOUT", "10"))
+
+# ─────────────────── Прокси для скачивания с googlevideo ───────────────────
+# Ссылки googlevideo привязаны к IP того, кто их запросил: параметр `ip` входит
+# в подписанный `sparams`, и запрос с другого адреса получает 403. Если
+# Invidious-companion выходит в YouTube через прокси (invidious/proxy-pool —
+# нужен, когда с адреса сервера не выпускается PO-token), то выданная им ссылка
+# привязана к адресу ПРОКСИ, и качать её надо через тот же выход.
+#
+# Проксируется только скачивание аудио с googlevideo: резолв через Invidious
+# идёт внутрь стека, а обложки/метаданные другим хостам платного трафика не
+# стоят.
+#
+# Пусто (по умолчанию) — прямой выход, поведение не меняется.
+_STREAM_PROXY_STATIC = os.getenv("STREAM_PROXY", "").strip()
+# Файл важнее переменной: ротацию выхода пишет rotate.sh, а бэкенд перечитывает
+# файл по mtime — смена прокси не требует перезапуска контейнера, который
+# оборвал бы активные стримы.
+_STREAM_PROXY_FILE = os.getenv("STREAM_PROXY_FILE", "").strip()
+# (mtime, url) последнего прочтения файла; -1.0 — «ещё не читали».
+_stream_proxy_cache: tuple[float, Optional[str]] = (-1.0, None)
+
+
+def _mask_proxy(url: Optional[str]) -> str:
+    """Прокси для лога без пароля: креды в URL — секрет."""
+    if not url:
+        return "нет (прямой выход)"
+    return f"...@{url.rsplit('@', 1)[-1]}" if "@" in url else url
+
+
+def stream_proxy() -> Optional[str]:
+    """Прокси для запросов к googlevideo или None (прямой выход).
+
+    Читает файл ``STREAM_PROXY_FILE`` (первая непустая строка не с ``#``) и
+    перечитывает его только при смене mtime — вызывается на каждый стрим, так
+    что дешёвый stat вместо открытия файла здесь принципиален. Если файла нет
+    (оверлей прокси не подключён), используется статический ``STREAM_PROXY``.
+    """
+    global _stream_proxy_cache
+    if not _STREAM_PROXY_FILE:
+        return _STREAM_PROXY_STATIC or None
+    try:
+        mtime = os.path.getmtime(_STREAM_PROXY_FILE)
+    except OSError:
+        return _STREAM_PROXY_STATIC or None
+    cached_mtime, cached = _stream_proxy_cache
+    if mtime != cached_mtime:
+        cached = None
+        try:
+            with open(_STREAM_PROXY_FILE, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        cached = line
+                        break
+        except OSError as exc:
+            logger.warning("stream proxy file unreadable: %s", exc)
+        _stream_proxy_cache = (mtime, cached)
+        logger.info("stream proxy reloaded: %s", _mask_proxy(cached))
+    return cached or _STREAM_PROXY_STATIC or None
+
+
+def proxy_for_url(url: str) -> Optional[str]:
+    """Прокси для скачивания ``url`` или None (прямой выход).
+
+    Проксируем ТОЛЬКО googlevideo. stream_cached_audio общий с SoundCloud
+    (soundcloud.py:1019), а у cf-media привязки к IP нет — гнать его аудио и
+    обложки через платный прокси незачем.
+    """
+    proxy = stream_proxy()
+    if not proxy:
+        return None
+    host = (urlsplit(url).hostname or "").lower()
+    return proxy if host.endswith("googlevideo.com") else None
+
+
+def _stream_client(timeout: httpx.Timeout, url: str) -> httpx.AsyncClient:
+    """Клиент для скачивания аудио источника.
+
+    follow_redirects обязателен: googlevideo нередко отвечает 302 на другой
+    edge-узел. Прокси — тот же выход, через который ссылка была выдана
+    (см. proxy_for_url); клиент живёт весь стрим, поэтому ротация прокси
+    посреди стрима не рассинхронит его с уже выданной ссылкой.
+    """
+    return httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True, proxy=proxy_for_url(url)
+    )
+
 
 # Один клиент с keep-alive на все резолвы: инстанс Invidious всегда один и
 # тот же, так что переиспользование соединения убирает TCP/TLS-хендшейк из
@@ -1443,11 +1531,10 @@ async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
     fd, tmp_path = tempfile.mkstemp(dir=CACHE_DIR, suffix=".part")
     ok = False
     try:
-        # follow_redirects: googlevideo может ответить 302 на другой edge-узел;
-        # без него прогрев видел 302 вместо 206 и молча пропускался.
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, read=30.0), follow_redirects=True
-        ) as client:
+        # Клиент общий с основным стримом (_stream_client): и redirect'ы
+        # googlevideo, и прокси выданной ссылки нужны здесь ровно так же —
+        # прогретый с прямого выхода кусок был бы 403 при проксированной ссылке.
+        async with _stream_client(httpx.Timeout(15.0, read=30.0), url) as client:
             async with client.stream(
                 "GET", url, headers={"Range": f"bytes=0-{_WARM_BYTES - 1}"}
             ) as resp:
@@ -1679,9 +1766,9 @@ async def stream_cached_audio(
     # edge-узел (rr2---…). Без него probe возвращал 302 без размера, а каждый
     # сегмент — 302 с пустым телом → 3 ретрая → пере-резолв → по кругу. Снаружи
     # это выглядело как «трек грузится вечно», хотя ссылка живая.
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, read=60.0), follow_redirects=True
-    )
+    # Прокси (если настроен) обязателен по другой причине: ссылка привязана к IP
+    # выхода, с которого её выдали, — см. proxy_for_url.
+    client = _stream_client(httpx.Timeout(30.0, read=60.0), direct_url)
     # Размер нужен для корректного Range и дискового кэша. Авторитетный размер
     # — из content-range самого googlevideo (probe), а filesize из yt-dlp может
     # расходиться. Probe заодно валидирует
