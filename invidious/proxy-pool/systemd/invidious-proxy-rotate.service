@@ -1,0 +1,22 @@
+[Unit]
+Description=Ротация исходящего прокси invidious-companion при блоке BotGuard
+Documentation=file:/opt/music-service/invidious/proxy-pool/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Единственное, что обычно нужно поправить, — путь до стека, если DEPLOY_PATH
+# не /opt/music-service. Остальные ручки (COOLDOWN, MIN_INTERVAL,
+# FAIL_THRESHOLD, PROBE_IDS) описаны в шапке rotate.sh и переопределяются
+# такими же строками Environment=.
+Environment=COMPOSE_DIR=/opt/music-service/invidious
+ExecStart=/opt/music-service/invidious/proxy-pool/rotate.sh
+# root нужен: скрипт вызывает docker, пишет active.env (0600, с паролем) и
+# состояние в /var/lib. Сеть нужна к Invidious на loopback и к самим прокси —
+# проверка кандидата идёт через них, а не через контейнер.
+User=root
+# «Замены нет» и «состояние не получено» возвращают 1 намеренно: это сигнал,
+# а не сбой юнита, — иначе systemd копил бы failed-состояние на каждом цикле,
+# когда пул исчерпан.
+SuccessExitStatus=0 1

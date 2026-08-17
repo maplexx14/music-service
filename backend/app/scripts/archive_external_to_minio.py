@@ -87,7 +87,14 @@ async def _worker(
                 stats["missing"] += 1
                 return
             title = f"{track.artist} — {track.title}"
-            status, tmp_path = await archive_track(db, track, client=client)
+            # force_resolve: у массового прогона нет retry-цикла (в отличие от
+            # ленивой архивации), а треки здесь никто не слушает — ссылка в
+            # кэше резолва могла пролежать часы и уже не открываться. Резолвим
+            # заново; от bot-check'а YouTube это не защищает и не должно —
+            # глобальный бэкофф в ytdlp срабатывает раньше запроса.
+            status, tmp_path = await archive_track(
+                db, track, client=client, force_resolve=True
+            )
             if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)

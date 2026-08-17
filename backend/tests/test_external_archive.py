@@ -182,3 +182,51 @@ def test_oversized_download_is_rejected(monkeypatch):
 
     with pytest.raises(external_archive._TooLarge):
         _download(_client(handler))
+
+
+def test_bot_check_during_archive_is_blocked_not_retried(monkeypatch):
+    """Bot-check YouTube в архивации — терминальный статус, а НЕ transient.
+
+    Раньше он проваливался в TransientResolveError (BotCheckError — его
+    подкласс) и ретраился 4 раза по 2с из каждого стрима, то есть фоновая
+    архивация сама доливала запросов в уже сработавший rate-limit и продлевала
+    блокировку. Ретрай-циклы (schedule_archive*) повторяют только TRANSIENT и
+    FAILED, поэтому проверяем и то, что BLOCKED в этот набор не попал.
+    """
+    from app.routers import ytdlp
+
+    async def bot_check(_video_id, force=False):
+        raise ytdlp.BotCheckError(_video_id)
+
+    monkeypatch.setattr(ytdlp, "_resolve_cached", bot_check)
+
+    status, tmp_path = asyncio.run(
+        external_archive._archive_external_core(
+            db=None, source="ytmusic", external_id="vid", permalink=None, track=None
+        )
+    )
+
+    assert status == external_archive.ArchiveResult.BLOCKED
+    assert tmp_path is None
+    assert status not in (
+        external_archive.ArchiveResult.TRANSIENT,
+        external_archive.ArchiveResult.FAILED,
+    )
+
+
+def test_transient_resolve_during_archive_still_retries(monkeypatch):
+    """Обычный временный сбой резолва остаётся TRANSIENT — его ретраить надо."""
+    from app.routers import ytdlp
+
+    async def transient(_video_id, force=False):
+        raise ytdlp.TransientResolveError(_video_id)
+
+    monkeypatch.setattr(ytdlp, "_resolve_cached", transient)
+
+    status, _tmp = asyncio.run(
+        external_archive._archive_external_core(
+            db=None, source="ytmusic", external_id="vid", permalink=None, track=None
+        )
+    )
+
+    assert status == external_archive.ArchiveResult.TRANSIENT

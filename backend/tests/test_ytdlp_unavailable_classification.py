@@ -69,6 +69,30 @@ def test_bot_check_beats_unavailable(monkeypatch):
         _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, True))
 
 
+def test_bot_check_opens_global_backoff(monkeypatch):
+    """Bot-check закрывает доступ к yt-dlp для ВСЕХ роликов, а не только для
+    текущего: ограничение выдано нашему IP, и следующий трек в очереди получил
+    бы то же самое, попутно продлив блокировку."""
+    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+    assert not ytdlp.bot_check_active()
+
+    with pytest.raises(ytdlp.BotCheckError):
+        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, True))
+
+    assert ytdlp.bot_check_active()
+
+
+def test_transient_failure_does_not_open_global_backoff(monkeypatch):
+    """Обычный сбой (таймаут/сеть) лечится коротким ретраем — глобальную паузу
+    на все ролики он открывать не должен."""
+    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+
+    with pytest.raises(ytdlp.TransientResolveError):
+        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, False))
+
+    assert not ytdlp.bot_check_active()
+
+
 def test_unavailable_markers_classify_real_reasons():
     """Тексты, которые yt-dlp реально пишет для мёртвых роликов."""
     reason = "[youtube] Video unavailable | No video formats found!"

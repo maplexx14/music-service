@@ -35,6 +35,12 @@ yarn-error.log*
 # попадают. .env.prod.example — шаблон, он отслеживается.
 .env.prod
 
+# Прокси для invidious-companion: в списке пароли, в active.env — активный
+# выход с кредами (его генерирует rotate.sh). Шаблон —
+# invidious/proxy-pool/proxies.list.example, он отслеживается.
+invidious/proxy-pool/proxies.list
+invidious/proxy-pool/active.env
+
 #repowise
 .mcp.json
 .repowise/

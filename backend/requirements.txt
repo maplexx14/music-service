@@ -28,6 +28,16 @@ httpx==0.27.0
 # Пиновано (было floating latest): supply-chain-риск и внезапные поломки
 # экстракторов. Обновлять осознанно: поднять версию, прогнать поиск/стрим.
 yt-dlp==2026.7.4
+# JS-солвер challenge'ей YouTube (n-sig/signature) для JS-клиентов. Без него
+# web_safari — единственный рабочий фолбэк, когда android_vr получил bot-check —
+# отдаёт "Only images are available": проверено, 0 форматов с URL против 7
+# (включая progressive 18) с солвером. В самом yt-dlp вендорены только
+# bun/deno-либы, а в образе стоит nodejs, поэтому node-скрипт приходит именно
+# отсюда (альтернатива — качать его с GitHub в рантайме, чего мы не хотим).
+# Версия обязана совпадать по major.minor с ejs-скриптом, которого ждёт
+# закреплённый yt-dlp (yt_dlp...jsc._builtin.vendor.VERSION == 0.8.0):
+# при апгрейде yt-dlp проверять и её.
+yt-dlp-ejs==0.8.0
 ytmusicapi==1.8.2
 # Нативный API клиент для Yandex Music (обход CAPTCHA через OAuth)
 yandex-music==2.1.1

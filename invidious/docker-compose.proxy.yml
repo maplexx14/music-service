@@ -1,0 +1,33 @@
+# Оверлей к docker-compose.prod.yml: гонит исходящий трафик invidious-companion
+# через прокси, чтобы блок BotGuard по IP лечился сменой exit-адреса, а не
+# ожиданием. Без этого файла стек работает как раньше (прямой egress).
+#
+# Запуск:
+#   cd invidious
+#   cp proxy-pool/proxies.list.example proxy-pool/proxies.list   # вписать свои
+#   proxy-pool/rotate.sh --activate 1                            # создать active.env
+#   docker compose -f docker-compose.prod.yml -f docker-compose.proxy.yml up -d
+#
+# Порядок важен: без proxy-pool/active.env compose откажется стартовать
+# (env_file обязателен к существованию). Подробности — proxy-pool/README.md.
+services:
+  invidious-companion:
+    # Активный прокси лежит ЗДЕСЬ, отдельным файлом, а не в environment:
+    # rotate.sh перезаписывает его при ротации целиком, и подмена одного файла
+    # не может задеть остальные переменные сервиса. У каждого прокси свои
+    # логин и пароль, поэтому единой переменной на весь пул тут нет — файл
+    # всегда описывает РОВНО ОДИН активный выход.
+    env_file:
+      - ./proxy-pool/active.env
+    environment:
+      # SERVER_SECRET_KEY повторён намеренно: ключ должен совпадать с
+      # invidious_companion_key базового файла, а полагаться на слияние
+      # environment между compose-файлами тут не хочется — потеря ключа
+      # выглядит как «companion молча не отвечает».
+      - SERVER_SECRET_KEY=qXoabG0Gkpo4xTyS
+      # Внутренние адреса — мимо прокси: иначе обращения внутри стека ушли бы
+      # во внешний прокси и отвалились бы там по недоступному хосту.
+      # NO_PROXY держим здесь, а не в active.env: он от выбора прокси не
+      # зависит, и незачем дублировать его в генерируемом файле.
+      - NO_PROXY=localhost,127.0.0.1,invidious,invidious-db
+      - no_proxy=localhost,127.0.0.1,invidious,invidious-db

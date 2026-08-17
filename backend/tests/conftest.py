@@ -74,6 +74,19 @@ def _reset_password_tokens():
     clear_pattern("password:reset:*")
 
 
+@pytest.fixture(autouse=True)
+def _reset_ytdlp_bot_check_backoff():
+    """Глобальный бэкофф bot-check'а YouTube живёт в памяти процесса 3 минуты
+    и переживает конец теста. Без сброса тест, который его открыл, ломает все
+    последующие: резолв уходит в ветку «только Invidious» и не зовёт yt-dlp,
+    хотя тест ждёт именно его."""
+    from app.routers import ytdlp
+
+    ytdlp._bot_check_until = 0.0
+    yield
+    ytdlp._bot_check_until = 0.0
+
+
 @pytest.fixture()
 def db():
     Base.metadata.create_all(bind=engine)

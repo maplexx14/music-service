@@ -1,0 +1,15 @@
+[Unit]
+Description=Периодическая проверка блока BotGuard (см. invidious-proxy-rotate.service)
+
+[Timer]
+# 5 минут — компромисс: реже означает более долгую деградацию резолва (бэкенд
+# в это время платит _HEDGE_DELAY на каждом треке и уходит в yt-dlp), чаще —
+# лишние запросы к YouTube без пользы, потому что сам скрипт всё равно держит
+# MIN_INTERVAL между ротациями.
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=invidious-proxy-rotate.service
+
+[Install]
+WantedBy=timers.target

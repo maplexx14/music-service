@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from typing import List, Optional
 
 import aiofiles
@@ -484,22 +485,32 @@ def _pick_audio_format(info: dict) -> Optional[dict]:
 
     Надёжнее строки 'bestaudio' — не падает с 'Requested format is not
     available', когда набор форматов у ролика нестандартный.
+
+    Годятся ТОЛЬКО форматы с прямым http(s)-URL: стрим-прокси тянет источник
+    байтовыми range-запросами (см. stream_cached_audio), а m3u8_native — это
+    манифест, а не поток байт (soundcloud.py фильтрует по той же причине).
+    Фильтр важен именно для фолбэк-клиентов: у web_safari аудио-дорожки
+    приходят HLS-плейлистами (91-94) плюс один progressive mp4 (18) —
+    проверено. Без фильтра сортировка ниже честно вернула бы манифест, прокси
+    отдал бы его браузеру как .m4a/.mp4 и ещё и положил в дисковый кэш.
     """
-    formats = info.get("formats") or []
+    formats = [
+        f
+        for f in (info.get("formats") or [])
+        if f.get("url") and f.get("protocol") in ("http", "https")
+    ]
     audio_only = [
         f
         for f in formats
         if f.get("acodec") not in (None, "none")
         and f.get("vcodec") in (None, "none")
-        and f.get("url")
     ]
     if not audio_only:
-        # Фолбэк: любой формат с аудио-дорожкой и прямым URL.
-        audio_only = [
-            f
-            for f in formats
-            if f.get("acodec") not in (None, "none") and f.get("url")
-        ]
+        # Фолбэк: любой формат с аудио-дорожкой (progressive mp4 — там есть и
+        # видео, но <audio> тянет из него только звук). У JS-клиентов это
+        # единственное, что остаётся: их audio-only форматы SABR-only, прямых
+        # ссылок у них нет.
+        audio_only = [f for f in formats if f.get("acodec") not in (None, "none")]
     if not audio_only:
         return None
     # Больше abr (аудио-битрейт) → лучше; при равенстве предпочитаем m4a.
@@ -526,11 +537,21 @@ def _pick_audio_format(info: dict) -> Optional[dict]:
 # Наборов теперь два, а не четыре: каждый лишний набор — отдельный запрос к
 # YouTube на КАЖДЫЙ промах, а именно объём запросов с одного IP и вызывает
 # "Sign in to confirm you're not a bot" (см. _BOT_CHECK_MARKERS). web_safari
-# оставлен фолбэком: он требует JS-рантайм (в образе есть nodejs) и начнёт
-# отдавать форматы, как только появятся cookies/PO-token.
+# оставлен фолбэком: он требует JS-рантайм (в образе есть nodejs) и JS-солвер
+# challenge'ей (yt-dlp-ejs, см. requirements.txt) — с ними отдаёт progressive
+# mp4 (формат 18) с прямой ссылкой, и это единственный путь резолва, когда
+# android_vr получил bot-check. Без солвера этот набор мёртв: проверено на
+# yt-dlp 2026.7.4 — "Signature solving failed" / "n challenge solving failed"
+# и на выходе "Only images are available", т.е. 0 пригодных форматов.
+#
+# tv_simply из набора убран: его https-форматы ВСЕГДА требуют GVS PO Token
+# ("tv_simply client https formats require a GVS PO Token which was not
+# provided. They will be skipped"), которого у нас нет, — то есть он не может
+# отдать аудио ни при каких условиях и лишь добавляет запрос к YouTube на
+# каждый промах, ровно тогда, когда запросы надо сокращать.
 _CLIENT_CANDIDATES = (
     ["android_vr"],
-    ["web_safari", "tv_simply"],
+    ["web_safari"],
 )
 
 # JS-рантайм для расшифровки n-sig/cipher googlevideo-ссылок. По умолчанию
@@ -918,9 +939,32 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
     он зависает, yt-dlp стартует параллельно, а не после его 10-секундного
     таймаута. Это сокращает паузу между появлением карточки трека и первыми
     байтами аудио при проблемном Invidious.
+
+    Пока держится глобальный бэкофф по bot-check'у (см. _BOT_CHECK_GLOBAL_KEY),
+    yt-dlp не запускается вовсе: YouTube всё равно ответит тем же bot-check'ом,
+    а каждый такой запрос продлевает блокировку. Остаётся Invidious.
     """
+    blocked = bot_check_active()
+
     if not _INVIDIOUS_ENABLED:
+        if blocked:
+            # Обходного пути нет — не ходим к YouTube до истечения бэкоффа.
+            raise BotCheckError(video_id)
         return await _resolve_via_ytdlp(video_id)
+
+    if blocked:
+        try:
+            return await _resolve_via_invidious(video_id)
+        except TrackUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 — Invidious тоже не смог
+            # Именно BotCheckError, а не transient: 25-секундный TTL вернул бы
+            # быстрые повторы, которые здесь как раз и вредны.
+            logger.info(
+                "bot-check backoff active, invidious-only resolve failed for %s: %s",
+                video_id, exc,
+            )
+            raise BotCheckError(video_id) from exc
 
     invidious_task = asyncio.create_task(_resolve_via_invidious(video_id))
     try:
@@ -1050,6 +1094,10 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
         # _BOT_CHECK_TTL, а не на _TRANSIENT_TTL: быстрый ретрай только
         # добавляет запросов и продлевает блокировку.
         if saw_bot_check:
+            # Маркер ставим здесь, а не в _resolve_and_cache: сюда приходят и
+            # вызовы в обход кэша резолва (force=True из архивации), а бэкофф
+            # нужен всем путям сразу.
+            _note_bot_check()
             raise BotCheckError(video_id)
         # Age-gate важнее «временного»: если хоть один клиент показал needs_auth,
         # это перманентная недоступность (→404, чистый скип), а не 503 с ретраем.
@@ -1104,6 +1152,35 @@ _TRANSIENT_TTL = 25
 # продлевает бан. 3 минуты: достаточно, чтобы поток запросов утих, и не так
 # долго, чтобы трек «умер» на весь сеанс.
 _BOT_CHECK_TTL = 180
+
+# Bot-check прилетает не на конкретный ролик, а на НАШ egress-IP. Негативная
+# запись по video_id это не покрывает: в очереди (и особенно в волне-потоке)
+# каждый следующий трек — новый ключ, он честно шёл в yt-dlp, получал тот же
+# bot-check и добавлял запросов ровно тогда, когда их надо прекратить. Снаружи
+# это и выглядело как «блокировка не проходит, ошибка на каждом треке».
+# Глобальный бэкофф держит паузу сразу на все ролики: пока он жив, yt-dlp к
+# YouTube не ходит вовсе, а резолв идёт только через Invidious — у него свой
+# companion/PO-token и свой поток запросов, блокировка нашего yt-dlp его не
+# касается.
+#
+# Маркер живёт В ПАМЯТИ процесса, а не в Redis: чтение из Redis стоило бы
+# лишний round-trip на КАЖДОМ резолве, а польза нужна лишь в редкие минуты
+# блокировки. Цена — каждый gunicorn-воркер узнаёт о блокировке сам (до
+# GUNICORN_WORKERS «пробных» запросов вместо одного), но это на порядок меньше,
+# чем запрос на каждый трек, а межпроцессную часть добирает общая для воркеров
+# негативная запись по video_id в Redis.
+_bot_check_until = 0.0
+
+
+def _note_bot_check() -> None:
+    """Открывает глобальный бэкофф: YouTube ограничил наш IP."""
+    global _bot_check_until
+    _bot_check_until = time.monotonic() + _BOT_CHECK_TTL
+
+
+def bot_check_active() -> bool:
+    """True, пока держится глобальный бэкофф по bot-check'у YouTube."""
+    return time.monotonic() < _bot_check_until
 
 
 # Однополётность резолва: с прогревом (prefetch текущего/следующих треков во

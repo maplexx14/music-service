@@ -368,3 +368,97 @@ def test_client_candidates_are_valid_ytdlp_clients():
     for client_set in ytdlp._CLIENT_CANDIDATES:
         for client in client_set:
             assert client in INNERTUBE_CLIENTS, f"unknown yt-dlp client: {client}"
+
+
+def test_global_bot_check_backoff_skips_ytdlp_for_other_videos(monkeypatch):
+    """Bot-check — ограничение по нашему IP, а не по ролику. Пока бэкофф жив,
+    ДРУГОЙ трек тоже не должен ходить в yt-dlp: раньше каждый следующий трек в
+    очереди был новым ключом кэша, честно шёл к YouTube и продлевал блокировку.
+    Остаётся Invidious — у него свой companion/PO-token."""
+    ytdlp_calls = []
+
+    async def must_not_run(video_id):
+        ytdlp_calls.append(video_id)
+        raise AssertionError("yt-dlp must not be called during global backoff")
+
+    async def invidious_ok(_video_id):
+        return "https://inv.example/audio.m4a", ".m4a", 42
+
+    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
+    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_ok)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", must_not_run)
+    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+
+    ytdlp._note_bot_check()
+    assert ytdlp.bot_check_active()
+
+    assert asyncio.run(ytdlp._resolve_audio("другой-ролик")) == (
+        "https://inv.example/audio.m4a", ".m4a", 42
+    )
+    assert ytdlp_calls == []
+
+
+def test_global_bot_check_backoff_without_invidious_fails_fast(monkeypatch):
+    """Обходного пути нет — отдаём BotCheckError, но к YouTube всё равно не
+    идём: блокировка снимается тишиной, и лишний запрос её только продлевает."""
+
+    async def must_not_run(_video_id):
+        raise AssertionError("yt-dlp must not be called during global backoff")
+
+    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", False)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", must_not_run)
+    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+
+    ytdlp._note_bot_check()
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_audio("v"))
+
+
+def test_global_backoff_invidious_failure_keeps_long_backoff(monkeypatch):
+    """Под бэкоффом Invidious тоже не смог → BotCheckError, а не transient:
+    25-секундный TTL вернул бы быстрые повторы, которые здесь и вредны."""
+
+    async def invidious_down(_video_id):
+        raise ytdlp.TransientResolveError("v")
+
+    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
+    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_down)
+    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+
+    ytdlp._note_bot_check()
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_audio("v"))
+
+
+def test_pick_audio_format_rejects_hls_manifest():
+    """Стрим-прокси отдаёт байтовые range-запросы, m3u8-манифест ему отдавать
+    нельзя (он уехал бы клиенту как .mp4 и лёг в дисковый кэш). У web_safari
+    аудио-дорожки — как раз HLS (91-94) плюс один progressive mp4 (18)."""
+    web_safari = {
+        "formats": [
+            {"format_id": "91", "ext": "mp4", "acodec": "mp4a", "vcodec": "avc1",
+             "protocol": "m3u8_native", "url": "m91"},
+            {"format_id": "93", "ext": "mp4", "acodec": "mp4a", "vcodec": "avc1",
+             "protocol": "m3u8_native", "url": "m93"},
+            {"format_id": "18", "ext": "mp4", "acodec": "mp4a", "vcodec": "avc1",
+             "protocol": "https", "url": "u18"},
+        ]
+    }
+    assert ytdlp._pick_audio_format(web_safari)["format_id"] == "18"
+
+    # Один HLS и ничего больше — резолв обязан признать промах, а не отдать
+    # манифест: пусть лучше подключится следующий набор клиентов.
+    assert ytdlp._pick_audio_format({"formats": [web_safari["formats"][0]]}) is None
+
+    # Audio-only с прямой ссылкой по-прежнему приоритетнее progressive.
+    android_vr = {
+        "formats": [
+            {"format_id": "18", "ext": "mp4", "acodec": "mp4a", "vcodec": "avc1",
+             "protocol": "https", "url": "u18"},
+            {"format_id": "140", "ext": "m4a", "abr": 129.5, "acodec": "mp4a",
+             "vcodec": "none", "protocol": "https", "url": "u140"},
+        ]
+    }
+    assert ytdlp._pick_audio_format(android_vr)["format_id"] == "140"

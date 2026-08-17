@@ -4,6 +4,9 @@
 # без него YouTube не отдаёт рабочие stream-URL (PO-token/signature).
 #
 # Запуск:  docker compose -f docker-compose.prod.yml up -d
+#
+# Если YouTube начал блокировать выпуск PO-token по IP — есть оверлей с пулом
+# исходящих прокси и автоматической ротацией: proxy-pool/README.md.
 services:
   invidious:
     image: quay.io/invidious/invidious:master

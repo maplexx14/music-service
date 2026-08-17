@@ -98,6 +98,12 @@ class ArchiveResult:
     TOO_LARGE = "skipped:too-large"
     UNAVAILABLE = "unavailable"
     TRANSIENT = "transient-error"
+    # Источник ограничил наш IP (bot-check YouTube). Отдельно от TRANSIENT
+    # СПЕЦИАЛЬНО: ретрай-циклы повторяют только TRANSIENT/FAILED, а здесь
+    # повторять нельзя — блокировка снимается тишиной, и каждая повторная
+    # попытка её продлевает. Архивация ленивая, так что следующее
+    # прослушивание запустит её заново, когда бэкофф истечёт.
+    BLOCKED = "blocked:source-rate-limit"
     FAILED = "failed"
 
 
@@ -199,17 +205,28 @@ def _sc_permalink_from_track(track: Track) -> Optional[str]:
     return permalink
 
 
-async def _resolve_for_track(track: Track) -> tuple[str, str, Optional[int]]:
+async def _resolve_for_track(track: Track, force: bool = False) -> tuple[str, str, Optional[int]]:
     """Резолв прямого аудио-URL по источнику трека → (url, ext, total).
 
-    Бросает TrackUnavailable / TransientResolveError из ytdlp, а также
-    _NoPermalink для soundcloud без валидного permalink в stream_url.
+    Бросает TrackUnavailable / TransientResolveError (и BotCheckError как
+    подтип второго) из ytdlp, а также _NoPermalink для soundcloud без
+    валидного permalink в stream_url. ``force`` игнорирует кэш резолва —
+    нужен на повторных попытках, когда скачивание не пошло: закэшированная
+    ссылка CDN могла протухнуть, и повторять её бессмысленно.
     """
     if track.source == "ytmusic":
         # Ленивый импорт: у ytdlp тяжёлые импорты (yt_dlp) — тянем только когда нужно.
-        from app.routers.ytdlp import _resolve_audio
+        # Через _resolve_cached, а не _resolve_audio: архивация запускается
+        # fire-and-forget из стрим-эндпоинта, который секунду назад резолвил
+        # ЭТОТ же ролик, — кэш (и single-flight внутри него) отдаёт готовый URL
+        # вместо второго обращения к YouTube. Плюс в кэше живут негативные
+        # записи (bot-check/transient): архивация больше не долбит YouTube,
+        # когда он уже ответил «хватит», — а именно этот лишний поток запросов
+        # и продлевал временную блокировку.
+        from app.routers.ytdlp import _resolve_cached
 
-        return await _resolve_audio(track.external_id)
+        url, ext, total, _fresh = await _resolve_cached(track.external_id, force=force)
+        return url, ext, total
 
     if track.source == "soundcloud":
         from app.routers.soundcloud import _resolve_cached
@@ -217,7 +234,9 @@ async def _resolve_for_track(track: Track) -> tuple[str, str, Optional[int]]:
         permalink = _sc_permalink_from_track(track)
         if not permalink:
             raise _NoPermalink()
-        url, ext, total, _fresh = await _resolve_cached(track.external_id, permalink)
+        url, ext, total, _fresh = await _resolve_cached(
+            track.external_id, permalink, force=force
+        )
         return url, ext, total
 
     raise _Unsupported()
@@ -461,13 +480,15 @@ async def archive_track(
     track: Track,
     client: Optional[httpx.AsyncClient] = None,
     resume_path: Optional[str] = None,
+    force_resolve: bool = False,
 ) -> tuple[str, Optional[str]]:
     """Архивирует один внешний трек в MinIO и обновляет запись в БД.
 
     Возвращает (статус, tmp_path). tmp_path сохраняется для retry с resume.
     Идемпотентно: уже заархивированный трек (file_path вида minio://) не трогается.
+    ``force_resolve`` — резолвить ссылку заново, минуя кэш (см. _resolve_for_track).
     """
-    from app.routers.ytdlp import TrackUnavailable, TransientResolveError
+    from app.routers.ytdlp import BotCheckError, TrackUnavailable, TransientResolveError
 
     if track.source == "local":
         return ArchiveResult.LOCAL, None
@@ -485,9 +506,14 @@ async def archive_track(
     saved_tmp = None
     try:
         try:
-            url, ext, _total = await _resolve_for_track(track)
+            url, ext, _total = await _resolve_for_track(track, force=force_resolve)
         except TrackUnavailable:
             return ArchiveResult.UNAVAILABLE, None
+        except BotCheckError:
+            # Раньше проваливалось в TransientResolveError (BotCheckError — его
+            # подкласс) и ретраилось 4 раза по 2с, то есть архивация сама
+            # доливала запросов в уже сработавший rate-limit.
+            return ArchiveResult.BLOCKED, None
         except TransientResolveError:
             return ArchiveResult.TRANSIENT, None
         except _NoPermalink:
@@ -574,7 +600,12 @@ async def schedule_archive(track_id: int) -> None:
                     return
                 resume_tmp = None
                 for attempt in range(_MAX_RETRIES + 1):
-                    status, tmp_path = await archive_track(db, track, resume_path=resume_tmp)
+                    # Ссылку из кэша берём только на первой попытке: если
+                    # скачивание не пошло, самая вероятная причина — протухшая
+                    # ссылка CDN, и повторять её из кэша бессмысленно.
+                    status, tmp_path = await archive_track(
+                        db, track, resume_path=resume_tmp, force_resolve=attempt > 0
+                    )
                     if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
                         # Clean up any leftover temp file on success
                         if tmp_path and os.path.exists(tmp_path):
@@ -612,6 +643,7 @@ async def _archive_external_core(
     permalink: Optional[str],
     track: Optional[Track],
     resume_path: Optional[str] = None,
+    force_resolve: bool = False,
 ) -> tuple[str, Optional[str]]:
     """Резолвит → скачивает → кладёт внешний трек в MinIO по (source, external_id).
 
@@ -619,27 +651,40 @@ async def _archive_external_core(
     Не требует DB-записи: ключ объекта детерминирован (external/<source>/<id>).
     Если track передан — обновляет его file_path/cover_url, чтобы повторные
     прослушивания шли через /tracks/{id}/stream уже из MinIO.
+    ``force_resolve`` — резолвить ссылку заново, минуя кэш (см. _resolve_for_track).
     """
-    from app.routers.ytdlp import TrackUnavailable, TransientResolveError
+    from app.routers.ytdlp import BotCheckError, TrackUnavailable, TransientResolveError
 
     client = httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
     saved_tmp = None
     try:
         try:
             if source == "ytmusic":
-                from app.routers.ytdlp import _resolve_audio
+                # _resolve_cached, а не _resolve_audio: см. _resolve_for_track —
+                # стрим-эндпоинт, из которого нас и позвали, только что
+                # резолвил этот ролик, и его результат (как и негативную
+                # запись про bot-check) надо переиспользовать, а не идти к
+                # YouTube второй раз.
+                from app.routers.ytdlp import _resolve_cached as _resolve_yt
 
-                url, ext, _total = await _resolve_audio(external_id)
+                url, ext, _total, _fresh = await _resolve_yt(
+                    external_id, force=force_resolve
+                )
             elif source == "soundcloud":
                 if not permalink:
                     return ArchiveResult.NO_PERMALINK, None
                 from app.routers.soundcloud import _resolve_cached
 
-                url, ext, _total, _fresh = await _resolve_cached(external_id, permalink)
+                url, ext, _total, _fresh = await _resolve_cached(
+                    external_id, permalink, force=force_resolve
+                )
             else:
                 return ArchiveResult.UNSUPPORTED, None
         except TrackUnavailable:
             return ArchiveResult.UNAVAILABLE, None
+        except BotCheckError:
+            # Не TRANSIENT: ретраить bot-check нельзя, см. ArchiveResult.BLOCKED.
+            return ArchiveResult.BLOCKED, None
         except TransientResolveError:
             return ArchiveResult.TRANSIENT, None
 
@@ -756,8 +801,10 @@ async def schedule_archive_external(
                     return
                 resume_tmp = None
                 for attempt in range(_MAX_RETRIES + 1):
+                    # force_resolve со второй попытки — см. schedule_archive.
                     status, tmp_path = await _archive_external_core(
-                        db, source, external_id, permalink, track, resume_path=resume_tmp
+                        db, source, external_id, permalink, track,
+                        resume_path=resume_tmp, force_resolve=attempt > 0,
                     )
                     if status not in (ArchiveResult.TRANSIENT, ArchiveResult.FAILED):
                         if tmp_path and os.path.exists(tmp_path):
