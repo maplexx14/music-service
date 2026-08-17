@@ -166,13 +166,24 @@ def _evict_extra_devices(db: Session, user_id: int) -> None:
 
     Вытесняем по last_seen_at: заброшенный браузер полугодовой давности —
     первый кандидат на удаление, активный рабочий ноутбук — последний.
+
+    Добивка по id обязательна: last_seen_at ставится server-side (func.now()),
+    а у него грубое разрешение — CURRENT_TIMESTAMP в SQLite это целые секунды,
+    в Postgres now() одинаков внутри транзакции. Несколько устройств,
+    зарегистрированных подряд, получают ОДИН timestamp, и без tie-break порядок
+    внутри группы не определён: вытеснить может как самое давнее, так и только
+    что добавленное (последнее и ловил flaky-падение
+    test_device_limit_evicts_least_recently_used).
     """
     ids = [
         row.id
         for row in db.execute(
             select(user_trusted_devices.c.id)
             .where(user_trusted_devices.c.user_id == user_id)
-            .order_by(user_trusted_devices.c.last_seen_at.desc())
+            .order_by(
+                user_trusted_devices.c.last_seen_at.desc(),
+                user_trusted_devices.c.id.desc(),
+            )
         ).all()
     ]
     extra = ids[MAX_DEVICES_PER_USER:]
@@ -192,7 +203,12 @@ def list_devices(db: Session, user_id: int) -> list[dict]:
             user_trusted_devices.c.last_seen_at,
         )
         .where(user_trusted_devices.c.user_id == user_id)
-        .order_by(user_trusted_devices.c.last_seen_at.desc())
+        # Тот же tie-break, что в _evict_extra_devices: у устройств с одинаковым
+        # last_seen_at список иначе мог бы менять порядок между запросами.
+        .order_by(
+            user_trusted_devices.c.last_seen_at.desc(),
+            user_trusted_devices.c.id.desc(),
+        )
     ).all()
     return [
         {
