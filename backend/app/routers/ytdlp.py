@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
-from app.cache import get_cache_async, set_cache_async
+from app.cache import get_cache_async, record_proxy_traffic, set_cache_async
 from app.schemas import ExternalAlbumDetail, ExternalAlbumResponse, ExternalTrackResponse
 
 logger = logging.getLogger(__name__)
@@ -835,6 +835,11 @@ def proxy_for_url(url: str) -> Optional[str]:
         return None
     host = (urlsplit(url).hostname or "").lower()
     return proxy if host.endswith("googlevideo.com") else None
+
+
+def record_stream_proxy_traffic(url: str, amount: int) -> None:
+    """Record bytes that actually crossed the paid googlevideo proxy."""
+    record_proxy_traffic(proxy_for_url(url), amount)
 
 
 def _stream_client(timeout: httpx.Timeout, url: str) -> httpx.AsyncClient:
@@ -1707,6 +1712,7 @@ async def _warm_first_chunk(cache_id: str, url: str, ext: str) -> Optional[int]:
                 with os.fdopen(fd, "wb") as fh:
                     fd = None
                     async for chunk in resp.aiter_bytes(65536):
+                        record_stream_proxy_traffic(url, len(chunk))
                         fh.write(chunk)
         os.replace(tmp_path, warm_path)
         ok = True
@@ -2136,6 +2142,7 @@ async def stream_cached_audio(
                                     break
                                 if len(chunk) > remaining:
                                     chunk = chunk[:remaining]
+                                record_stream_proxy_traffic(direct_url, len(chunk))
                                 # Пишем в кэш только новые (за пределами уже
                                 # полученных got) байты сегмента.
                                 if tmp is not None:

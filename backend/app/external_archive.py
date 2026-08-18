@@ -34,7 +34,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app import storage
-from app.cache import set_cache_async
+from app.cache import record_proxy_traffic, set_cache_async
 from app.database import SessionLocal
 from app.models import Track
 from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
@@ -298,6 +298,11 @@ async def _download_to_temp(
         os.close(fd)
 
     state_path = tmp_path + ".state"
+    proxy = None
+    if "googlevideo.com" in (urlsplit(url).hostname or "").lower():
+        from app.routers.ytdlp import proxy_for_url
+
+        proxy = proxy_for_url(url)
     size = 0
     ok = False
 
@@ -375,6 +380,7 @@ async def _download_to_temp(
                                 resp.headers.get("content-range")
                             )
                         async for chunk in resp.aiter_bytes(256 * 1024):
+                            record_proxy_traffic(proxy, len(chunk))
                             fh.write(chunk)
                             size += len(chunk)
                             got += len(chunk)

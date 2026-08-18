@@ -1659,7 +1659,10 @@ async def get_flow(
         exploit.append(t)
 
     if limit == 15:
-        # Keep liked tracks as their own source for the fixed 15-track mix.
+        # Keep liked tracks as the priority prefix for the fixed 15-track mix,
+        # but retain the remaining local tracks from the same trusted artists.
+        # A curated playlist may contain only a seed per artist while the rest
+        # of that artist's local catalog is still valid exploitation material.
         liked_tracks = (
             db.query(Track)
             .filter(Track.id.in_(liked_ids))
@@ -1677,6 +1680,8 @@ async def get_flow(
                 and _media_available(t)
             )
         ]
+        liked_track_ids = {t.id for t in liked_tracks}
+        exploit = liked_tracks + [t for t in exploit if t.id not in liked_track_ids]
 
     # --- жанровая квота ---
     # genre_quota, artist_budget/artist_cap и favorite_cap посчитаны выше: от них

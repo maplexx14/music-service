@@ -3,6 +3,9 @@ import redis
 import json
 from typing import Optional, Any
 import os
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
+import threading
 
 # Таймауты обязательны: без socket_timeout зависший/перегруженный Redis
 # блокирует вызывающий тред НАВСЕГДА. Все sync-эндпоинты живут в anyio
@@ -27,6 +30,50 @@ redis_client = redis.Redis(
     retry_on_timeout=True,
     max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", "100")),
 )
+
+_PROXY_TRAFFIC_FLUSH_BYTES = int(os.getenv("PROXY_TRAFFIC_FLUSH_BYTES", str(64 * 1024)))
+_proxy_traffic_pending = {}
+_proxy_traffic_lock = threading.Lock()
+
+
+def _proxy_traffic_key(proxy_url: str) -> str:
+    parsed = urlsplit(proxy_url)
+    label = f"{parsed.hostname}:{parsed.port}"
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    return f"invidious:proxy-traffic:{month}:{label}"
+
+
+def record_proxy_traffic(proxy_url: Optional[str], amount: int) -> None:
+    """Accumulate bytes sent through a proxy and periodically persist them.
+
+    Accounting is best-effort: a Redis outage must never interrupt playback.
+    """
+    if not proxy_url or amount <= 0:
+        return
+    try:
+        key = _proxy_traffic_key(proxy_url)
+        with _proxy_traffic_lock:
+            pending = _proxy_traffic_pending.get(key, 0) + amount
+            if pending < _PROXY_TRAFFIC_FLUSH_BYTES:
+                _proxy_traffic_pending[key] = pending
+                return
+            _proxy_traffic_pending.pop(key, None)
+        def persist() -> None:
+            try:
+                pipe = redis_client.pipeline()
+                pipe.incrby(key, pending)
+                pipe.expire(key, 45 * 24 * 3600)
+                pipe.execute()
+            except Exception:
+                with _proxy_traffic_lock:
+                    _proxy_traffic_pending[key] = _proxy_traffic_pending.get(key, 0) + pending
+
+        try:
+            asyncio.get_running_loop().run_in_executor(None, persist)
+        except RuntimeError:
+            persist()
+    except Exception:
+        return
 
 
 def get_cache(key: str) -> Optional[Any]:

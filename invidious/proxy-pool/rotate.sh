@@ -101,29 +101,77 @@ urlenc() {
   printf '%s' "$out"
 }
 
-# Разбирает proxies.list в строки «label<TAB>url». label (ip:port) годится для
+# Разбирает proxies.list в строки «label<TAB>url<TAB>limit_bytes». label (ip:port) годится для
 # логов и имён файлов состояния, url содержит пароль и в лог не выводится.
 # IPv6 не поддержан намеренно: двоеточия в адресе неотличимы от разделителей
 # формата, а провайдеры отдают IPv4.
 parse_list() {
   [[ -f "$LIST" ]] || die "нет файла со списком прокси: $LIST (см. proxies.list.example)"
-  local line host port user pass
+  local line spec quota host port user pass limit_bytes
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"                     # комментарий в конце строки
     line="${line//[$' \t\r']/}"            # пробелы и CRLF, если файл из Windows
     [[ -z "$line" ]] && continue
+    quota=""
+    if [[ "$line" == *'|'* ]]; then
+      spec="${line%%|*}"
+      quota="${line#*|}"
+      line="$spec"
+    fi
     IFS=':' read -r host port user pass <<<"$line"
     if [[ -z "$host" || -z "$port" ]]; then
       log "строка списка не разобрана, пропускаю: ${line:0:24}…"
       continue
     fi
+    limit_bytes="$(quota_bytes "$quota")" || {
+      log "лимит прокси ${host}:${port} не разобран: ${quota} (ожидается 100GB)"
+      continue
+    }
     if [[ -n "$user" ]]; then
-      printf '%s:%s\thttp://%s:%s@%s:%s\n' \
-        "$host" "$port" "$(urlenc "$user")" "$(urlenc "$pass")" "$host" "$port"
+      printf '%s:%s\thttp://%s:%s@%s:%s\t%s\n' \
+        "$host" "$port" "$(urlenc "$user")" "$(urlenc "$pass")" "$host" "$port" "$limit_bytes"
     else
-      printf '%s:%s\thttp://%s:%s\n' "$host" "$port" "$host" "$port"
+      printf '%s:%s\thttp://%s:%s\t%s\n' "$host" "$port" "$host" "$port" "$limit_bytes"
     fi
   done <"$LIST"
+}
+
+# Лимит в строке пула: 100GB, 500MB, 1TB. Пустой лимит = безлимитный (-1).
+quota_bytes() {
+  local value="${1:-}" number unit multiplier
+  [[ -z "$value" || "$value" == "-" || "$value" == "unlimited" ]] && { printf '%s' -1; return 0; }
+  value="${value^^}"
+  if [[ "$value" =~ ^([0-9]+)(B|KB|MB|GB|TB)?$ ]]; then
+    number="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]:-B}"
+    case "$unit" in
+      B) multiplier=1;; KB) multiplier=1000;; MB) multiplier=1000000;;
+      GB) multiplier=1000000000;; TB) multiplier=1000000000000;;
+    esac
+    printf '%s' "$(( number * multiplier ))"
+    return 0
+  fi
+  return 1
+}
+
+traffic_key() {
+  printf 'invidious:proxy-traffic:%s:%s' "$(date -u +%Y-%m)" "$1"
+}
+
+traffic_used() {
+  local value
+  [[ -n "$REDIS_CONTAINER" ]] || { printf '0'; return 0; }
+  value="$(docker exec "$REDIS_CONTAINER" redis-cli --raw GET "$(traffic_key "$1")" 2>/dev/null || true)"
+  [[ "$value" =~ ^[0-9]+$ ]] && printf '%s' "$value" || printf '0'
+}
+
+format_bytes() {
+  local n="${1:-0}"
+  if (( n >= 1000000000000 )); then printf '%sTB' "$(( n / 1000000000000 ))"
+  elif (( n >= 1000000000 )); then printf '%sGB' "$(( n / 1000000000 ))"
+  elif (( n >= 1000000 )); then printf '%sMB' "$(( n / 1000000 ))"
+  elif (( n >= 1000 )); then printf '%sKB' "$(( n / 1000 ))"
+  else printf '%sB' "$n"; fi
 }
 
 # Имя файла состояния для прокси: ip:port → ip_port.
@@ -265,20 +313,31 @@ expire_cooldowns() {
 # Первый прокси из списка, который не отдыхает, не является текущим и реально
 # обслуживается YouTube. Печатает «label<TAB>url».
 pick_candidate() {
-  local current="$1" label url
-  while IFS=$'\t' read -r label url; do
+  local current="$1" label url limit used remaining best="" best_remaining=-1
+  while IFS=$'\t' read -r label url limit; do
     [[ "$label" == "$current" ]] && continue
+    limit="${limit:--1}"
+    used="$(traffic_used "$label")"
+    if (( limit >= 0 && used >= limit )); then
+      log "кандидат ${label} исчерпал лимит ($(format_bytes "$used")/${limit}B)"
+      continue
+    fi
     if cooling "$label"; then
       log "кандидат ${label} ещё отдыхает — пропускаю"
       continue
     fi
     if verify_proxy "$url"; then
-      printf '%s\t%s\n' "$label" "$url"
-      return 0
+      if (( limit < 0 )); then remaining=9223372036854775807; else remaining=$(( limit - used )); fi
+      if (( remaining > best_remaining )); then
+        best="${label}"$'\t'"${url}"
+        best_remaining="$remaining"
+      fi
+    else
+      log "кандидат ${label} не проходит: YouTube не отдаёт playabilityStatus OK"
     fi
-    log "кандидат ${label} не проходит: YouTube не отдаёт playabilityStatus OK"
   done < <(parse_list)
-  return 1
+  [[ -n "$best" ]] || return 1
+  printf '%s\n' "$best"
 }
 
 # Назначение выхода: запись файла + перевыпуск сессии. Общий путь для --activate
@@ -325,13 +384,19 @@ case "${1:-}" in
       "$(ts="$(cat "$STATE_DIR/last_rotate" 2>/dev/null || echo 0)"; \
          (( ts > 0 )) && date -Is -d "@$ts" || echo нет)"
     i=0
-    while IFS=$'\t' read -r label _; do
+    while IFS=$'\t' read -r label _ limit; do
       i=$(( i + 1 )); mark=""
       [[ "$label" == "$cur" ]] && mark=" ← активный"
       if f="$STATE_DIR/cool.$(key "$label")"; [[ -f "$f" ]]; then
         left=$(( COOLDOWN - (now - $(cat "$f")) ))
         (( left < 0 )) && left=0
         mark+=" (отдыхает ещё $(( left / 60 )) мин)"
+      fi
+      used="$(traffic_used "$label")"
+      if [[ "${limit:--1}" -ge 0 ]]; then
+        mark+=" [трафик: $(format_bytes "$used")/$(format_bytes "$limit")]"
+      else
+        mark+=" [трафик: $(format_bytes "$used")/безлимит]"
       fi
       printf '  %2d. %s%s\n' "$i" "$label" "$mark"
     done < <(parse_list)
@@ -345,37 +410,53 @@ esac
 now="$(date +%s)"
 expire_cooldowns
 
-if probe_invidious; then
+cur_label="$(active_label || true)"
+cur_url="$(active_url || true)"
+if [[ -z "$cur_url" ]]; then
+  die "активный выход не назначен ($ACTIVE отсутствует) — запустите $0 --activate 1"
+fi
+
+active_limit=-1
+while IFS=$'\t' read -r label _ limit; do
+  if [[ "$label" == "$cur_label" ]]; then
+    active_limit="${limit:--1}"
+    break
+  fi
+done < <(parse_list)
+active_used="$(traffic_used "$cur_label")"
+quota_exhausted=0
+if (( active_limit >= 0 && active_used >= active_limit )); then
+  quota_exhausted=1
+  log "выход ${cur_label} исчерпал месячный лимит ($(format_bytes "$active_used")/$(format_bytes "$active_limit"))"
+fi
+
+if (( ! quota_exhausted )) && probe_invidious; then
   echo 0 >"$STATE_DIR/fails"
   exit 0
 fi
 
-fails=$(( $(cat "$STATE_DIR/fails" 2>/dev/null || echo 0) + 1 ))
-echo "$fails" >"$STATE_DIR/fails"
-log "Invidious не отдаёт аудио-форматы (подряд: ${fails})"
+if (( quota_exhausted )); then
+  fails="$FAIL_THRESHOLD"
+else
+  fails=$(( $(cat "$STATE_DIR/fails" 2>/dev/null || echo 0) + 1 ))
+  echo "$fails" >"$STATE_DIR/fails"
+  log "Invidious не отдаёт аудио-форматы (подряд: ${fails})"
+fi
 
-if (( fails < FAIL_THRESHOLD )); then
+if (( ! quota_exhausted && fails < FAIL_THRESHOLD )); then
   log "ждём подтверждения на следующем запуске"
   exit 0
 fi
 
 last="$(cat "$STATE_DIR/last_rotate" 2>/dev/null || echo 0)"
-if (( now - last < MIN_INTERVAL )); then
+if (( ! quota_exhausted && now - last < MIN_INTERVAL )); then
   log "вмешательство было $(( (now - last) / 60 )) мин назад (< ${MIN_INTERVAL}с) — держим бэкофф"
   exit 0
 fi
 
-cur_label="$(active_label || true)"
-cur_url="$(active_url || true)"
-if [[ -z "$cur_url" ]]; then
-  # Оверлей подключён, но выход ни разу не назначали: ротировать нечего,
-  # и молча выбрать за оператора первый попавшийся тоже неправильно.
-  die "активный выход не назначен ($ACTIVE отсутствует) — запустите $0 --activate 1"
-fi
-
 # Сначала выясняем, в IP ли дело: если YouTube всё ещё обслуживает текущий
 # адрес, менять выход незачем — виновата сессия, её и перевыпускаем.
-if verify_proxy "$cur_url"; then
+if (( ! quota_exhausted )) && verify_proxy "$cur_url"; then
   log "выход ${cur_label} у YouTube не в блоке — дело в сессии, меняю только её"
   # Файл для бэкенда пишем и здесь: выход не сменился, но при первой установке
   # (или если каталог появился позже) файла может ещё не быть.
