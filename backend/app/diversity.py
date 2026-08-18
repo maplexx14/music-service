@@ -58,20 +58,54 @@ def primary_artist_key(name: str) -> str:
     return artist_key(_COLLAB_SPLIT.split((name or "").strip(), 1)[0])
 
 
+def _gap_weight(gap: int, min_gap: int) -> float:
+    """Насколько артист «остыл» с прошлого появления: множитель веса 0..1.
+
+    Мягкая версия кулдауна для случая, когда жёсткий невыполним. Квадрат, а не
+    линия: разнос в половину нужного должен быть заметно менее вероятен, а не
+    вдвое.
+    """
+    if gap >= min_gap:
+        return 1.0
+    if gap <= 1:
+        return 0.0  # подряд — никогда, пока остаётся хоть один другой артист
+    return (gap / min_gap) ** 2
+
+
 def interleave_artists(
     items,
     artist_getter=lambda item: getattr(item, "artist", None),
     min_gap: int = 3,
     previous_artists=None,
 ):
-    """Разносит треки одного артиста минимум на min_gap позиций.
+    """Разносит треки одного артиста, не превращая выдачу в ротацию.
 
     Раньше сравнивался только непосредственно предыдущий трек, из-за чего
     выдача легко скатывалась в A B A B A — «одни и те же артисты почти
     подряд». previous_artists (хвост прошлой порции, по порядку) продолжает
     разнос между подгрузками потока.
+
+    Выбор следующего артиста СЛУЧАЙНЫЙ, с весом по числу неотданных треков.
+    Детерминированный критерий («берём артиста с наибольшим числом оставшихся»)
+    вместе с жёстким кулдауном оставлял ровно одну возможную последовательность:
+    артист освобождается точно через min_gap позиций, и тот же критерий выбирает
+    его снова в том же порядке. Порция из трёх-четырёх артистов выходила строго
+    A B C A B C A B C — «артисты чередуются». Вес по числу оставшихся треков
+    сохраняет смысл прежнего критерия: редкие артисты не тратятся в начале,
+    иначе хвост выдачи схлопывается в блок самого представленного.
+
+    Кулдаун min_gap жёсткий, ПОКА он оставляет выбор хотя бы из двух артистов.
+    На d артистах требование «не ближе d-1» выполнимо единственным способом —
+    ротацией, поэтому там, где кулдаун диктует следующего артиста однозначно, он
+    становится мягким (_gap_weight): недобравший разнос артист получает
+    квадратично меньший вес, но остаётся возможным, и периодичность ломается.
+    Два трека одного артиста подряд не идут никогда, пока есть альтернатива.
     """
     remaining = list(items)
+    # Ключи считаем один раз: primary_artist_key — регулярка, а выбор идёт по
+    # всему остатку на каждой позиции.
+    keys = [primary_artist_key(artist_getter(item)) for item in remaining]
+    counts = Counter(keys)
     ordered = []
     # artist -> позиция последнего появления. Хвост прошлой порции сидим
     # отрицательными позициями: артист с конца прошлой выдачи ещё «горячий».
@@ -81,57 +115,38 @@ def interleave_artists(
         last_pos[artist] = offset - len(prev)
 
     while remaining:
-        counts = Counter(
-            primary_artist_key(artist_getter(item)) for item in remaining
-        )
-        gaps = {
-            i: len(ordered)
-            - last_pos.get(primary_artist_key(artist_getter(item)), -min_gap)
-            for i, item in enumerate(remaining)
-        }
-        eligible = [i for i, gap in gaps.items() if gap >= min_gap]
-        if eligible:
-            # Берём более представленного артиста раньше: редкие группы
-            # сохраняются для разрывов в хвосте, где иначе возникает A-B-A-B.
-            candidates = eligible
-            if len(ordered) >= 2:
-                second_last = primary_artist_key(artist_getter(ordered[-2]))
-                non_alternating = [
-                    i
-                    for i in candidates
-                    if primary_artist_key(artist_getter(remaining[i])) != second_last
-                ]
-                if non_alternating:
-                    candidates = non_alternating
-            index = max(
-                candidates,
-                key=lambda i: (counts[primary_artist_key(artist_getter(remaining[i]))], -i),
-            )
-        else:
-            # Когда строгий cooldown физически невыполним, всё равно избегаем
-            # соседнего и двухшагового повтора, пока есть другой вариант.
-            recent = {
-                primary_artist_key(artist_getter(item))
-                for item in ordered[-2:]
-            }
-            relaxed = [
-                i
-                for i in range(len(remaining))
-                if primary_artist_key(artist_getter(remaining[i])) not in recent
-            ]
-            candidates = relaxed or list(range(len(remaining)))
-            index = max(
-                candidates,
-                key=lambda i: (
-                    gaps[i],
-                    counts[primary_artist_key(artist_getter(remaining[i]))],
-                    -i,
-                ),
-            )
+        # Внутри артиста порядок не меняем: выше в списке то, что вызывающий
+        # счёл релевантнее.
+        first_index: dict = {}
+        for i, key in enumerate(keys):
+            first_index.setdefault(key, i)
+        gaps = {key: len(ordered) - last_pos.get(key, -min_gap) for key in counts}
 
-        item = remaining.pop(index)
-        ordered.append(item)
-        last_pos[primary_artist_key(artist_getter(item))] = len(ordered) - 1
+        cooled = [key for key, gap in gaps.items() if gap >= min_gap]
+        if len(cooled) >= 2:
+            pool, weights = cooled, [counts[key] for key in cooled]
+        else:
+            # Кулдаун оставил не больше одного варианта — ослабляем его, иначе
+            # выбора нет и порядок вырождается в цикл.
+            scored = {
+                key: counts[key] * _gap_weight(gaps[key], min_gap) for key in counts
+            }
+            pool = [key for key, weight in scored.items() if weight > 0]
+            weights = [scored[key] for key in pool]
+
+        if pool:
+            key = random.choices(pool, weights=weights, k=1)[0]
+        else:
+            # Все «горячие»: остался один артист — берём самого давнего.
+            key = max(counts, key=lambda k: (gaps[k], counts[k]))
+
+        index = first_index[key]
+        ordered.append(remaining.pop(index))
+        keys.pop(index)
+        counts[key] -= 1
+        if not counts[key]:
+            del counts[key]
+        last_pos[key] = len(ordered) - 1
 
     return ordered
 

@@ -4,7 +4,17 @@
 предыдущий трек, поэтому выдача скатывалась в A B A B A — «одни и те же
 артисты почти подряд». Плюс коллабы "A, B" считались отдельным артистом и
 проскакивали лимит.
+
+Вторая регрессия — обратная: жёсткий кулдаун плюс детерминированный выбор
+(«берём артиста с наибольшим числом оставшихся треков») давали ровно одну
+возможную последовательность, и порция из трёх-четырёх артистов выходила строго
+A B C A B C A B C. Отсюда проверки на НЕпериодичность ниже: на d артистах
+требование «не ближе d-1» выполнимо единственным способом, поэтому кулдаун
+мягкий там, где он не оставляет выбора.
 """
+
+import random
+from collections import Counter
 
 from app.diversity import (
     cap_per_artist,
@@ -24,25 +34,97 @@ def _items(*artists):
     return [{"artist": a, "title": f"t{i}"} for i, a in enumerate(artists)]
 
 
-def test_no_ababa_alternation():
-    items = _items("A", "A", "A", "B", "B", "B", "C", "C", "C")
-    order = _artists(interleave_artists(items, lambda i: i["artist"]))
-    # Ни один артист не встречается ближе чем через 3 позиции.
-    for i, a in enumerate(order):
-        assert a not in order[i + 1 : i + 3], f"{a} повторяется слишком рано: {order}"
-
-
-def test_scarce_artist_breaks_alternating_tail():
-    items = _items("A", "A", "A", "B", "B", "B", "C", "C")
-    order = _artists(
-        interleave_artists(items, lambda i: i["artist"], min_gap=4)
+def _order(artists, min_gap=4, previous_artists=None):
+    return _artists(
+        interleave_artists(
+            _items(*artists),
+            lambda i: i["artist"],
+            min_gap=min_gap,
+            previous_artists=previous_artists,
+        )
     )
+
+
+def test_never_adjacent_while_another_artist_remains():
+    """Два трека одного артиста подряд — только когда других уже не осталось.
+
+    Это единственная ЖЁСТКАЯ гарантия разноса: всё остальное (сам кулдаун
+    min_gap) при бедном по именам пуле физически невыполнимо.
+    """
+    pools = (
+        ["A"] * 5 + ["B"] * 5 + ["C"] * 5,
+        ["A"] * 6 + ["B"] * 4 + ["C"] * 2 + ["D"] * 2 + ["E"],
+        ["A"] * 4 + ["B"] * 4 + ["C"] * 4 + ["D"] * 4,
+        [c for c in "ABCDEFGH" for _ in range(2)],
+    )
+    for pool in pools:
+        for _ in range(50):
+            shuffled = pool[:]
+            random.shuffle(shuffled)
+            order = _order(shuffled)
+            for i in range(len(order) - 1):
+                if order[i] != order[i + 1]:
+                    continue
+                # Повтор допустим только если весь хвост — этот же артист.
+                assert set(order[i:]) == {order[i]}, (
+                    f"{order[i]} идёт подряд, хотя оставались другие: {order}"
+                )
+
+
+def test_order_is_not_a_fixed_rotation():
+    """Регрессия «артисты чередуются»: первый → второй → третий → первый.
+
+    Детерминированный выбор давал на 15 треках трёх артистов ровно одну
+    последовательность (шесть на 200 прогонов — по числу перестановок того,
+    кто начнёт), и волна читалась как заведённая карусель.
+    """
+    pool = ["A"] * 5 + ["B"] * 5 + ["C"] * 5
+    orders = set()
+    for _ in range(200):
+        shuffled = pool[:]
+        random.shuffle(shuffled)
+        orders.add(tuple(_order(shuffled)))
+    assert len(orders) > 50, f"порядок почти фиксирован: {len(orders)} вариантов на 200"
+
+
+def test_cooldown_holds_when_pool_has_enough_artists():
+    """Ослабление кулдауна — только для бедных по именам пулов.
+
+    Там, где артистов хватает, разнос min_gap должен соблюдаться практически
+    всегда: иначе «мягкость» превратилась бы в разрешение ставить одного
+    артиста через два трека при живых альтернативах.
+    """
+    pool = [c for c in "ABCDEFGH" for _ in range(2)]
+    positions = respected = 0
+    for _ in range(50):
+        shuffled = pool[:]
+        random.shuffle(shuffled)
+        order = _order(shuffled)
+        for i, artist in enumerate(order):
+            positions += 1
+            respected += artist not in order[i + 1 : i + 4]
+    assert respected / positions > 0.9, (
+        f"кулдаун соблюдён лишь в {100 * respected / positions:.0f}% позиций"
+    )
+
+
+def test_dominant_artist_is_spread_not_blocked():
+    # Половина порции у одного имени: блоками он идти всё равно не должен, пока
+    # в остатке есть кто-то ещё. Хвост, где кончились все остальные, — исключение
+    # (см. test_never_adjacent_while_another_artist_remains).
+    order = _order(["A"] * 8 + ["B"] * 3 + ["C"] * 2 + ["D"] * 2)
+    assert Counter(order)["A"] == 8, order
+    tail_start = max(i for i, a in enumerate(order) if a != "A") + 1
+    head = order[:tail_start]
     assert not any(
-        order[i] == order[i + 2]
-        and order[i + 1] == order[i + 3]
-        and order[i] != order[i + 1]
-        for i in range(len(order) - 3)
-    ), order
+        head[i] == head[i + 1] for i in range(len(head) - 1)
+    ), f"артист идёт блоком: {order}"
+
+
+def test_keeps_every_item():
+    pool = ["A"] * 5 + ["B"] * 3 + ["C"] * 2
+    order = _order(pool)
+    assert Counter(order) == Counter(pool), order
 
 
 def test_continues_across_batches():
