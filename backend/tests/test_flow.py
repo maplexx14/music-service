@@ -227,6 +227,40 @@ def test_flow_includes_lastfm_similar_tracks(client, db, monkeypatch):
     )
 
 
+def test_flow_trusts_lastfm_more_than_artist_graph(client, db, monkeypatch):
+    """Похожесть по ТРЕКУ важнее разведки по артистам.
+
+    Граф артистов отвечает на другой вопрос — «кто похож на этого исполнителя»,
+    — и раз за разом приводит дискографии вокруг уже выбранных юзером имён.
+    Пока похожести по треку хватает на порцию, за соседями по графу вообще не
+    ходим (это ещё и сетевой запрос на каждого артиста).
+    """
+    user = create_user(db)
+    _liked(db, user)
+
+    graph_calls = []
+
+    async def _graph(artist):
+        graph_calls.append(artist)
+        return [_external("GraphNeighbour", "сосед по графу", "g1")]
+
+    async def _lastfm(request, artist, title):
+        return [
+            _external(f"Similar{i}", f"похожий трек {i}", f"lfm{i}") for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _graph)
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+
+    artists = {t["artist"] for t in resp.json()}
+    assert artists, "выдача пуста"
+    assert "GraphNeighbour" not in artists, f"граф артистов вытеснил похожие треки: {artists}"
+    assert graph_calls == [], "граф опрошен, хотя похожести по треку хватило на порцию"
+
+
 def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
     """Похожие артисты не вытесняют непрослушанные треки любимого автора."""
     user = create_user(db)

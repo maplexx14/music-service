@@ -4,20 +4,26 @@
 (локальная библиотека по любимым артистам/жанрам). Фронт подгружает следующую
 порцию, когда очередь подходит к концу, передавая exclude-список уже сыгранного.
 
-Разведка идёт по четырём источникам, и это разделение существенно:
+Разведка идёт по четырём источникам, и главное в них — ЧЕМ источник засеян.
+Засеянный ТРЕКОМ отвечает на вопрос «что похоже на эту песню», засеянный
+ИМЕНЕМ АРТИСТА — на вопрос «кто похож на этого исполнителя», а это разные
+вопросы: второй раз за разом приводит дискографии вокруг имён, которые
+пользователь и так уже выбрал сам. Поэтому доверие распределено так:
 
-* граф артистов YouTube Music (_similar_pool) — соседи курированного артиста.
-  Работает от ИМЕНИ, поэтому доступен всегда;
-* радио YouTube Music (_radio_pool) — похожесть на уровне трека. Требует
-  ytmusic-видео в профиле, которого у SoundCloud-библиотеки может не быть;
 * похожие треки Last.fm по НАЗВАНИЮ курированного трека (_lastfm_pool, транспорт
-  — клиент beets, см. app/beets_similar.py). Тот же уровень похожести, что у
-  радио, но от пары артист+название, а не от videoId, — то есть доступен и
-  SoundCloud-библиотеке. Last.fm отдаёт только имена, играбельными их делает
-  резолв у провайдеров (_resolve_similar), поэтому источник включается РЕЗЕРВОМ:
-  ровно тогда, когда разведка по YT ничего не дала;
+  — клиент beets, см. app/beets_similar.py) — ОСНОВНОЙ источник. Засеян парой
+  артист+название, поэтому доступен и SoundCloud-библиотеке, у которой
+  ytmusic-сидов нет вовсе. Единственная разведка с ГАРАНТИРОВАННОЙ долей порции
+  (_LASTFM_SHARE), и берётся она первой, до каталога знакомых артистов. Last.fm
+  отдаёт только имена — играбельными их делает резолв у провайдеров
+  (_resolve_similar);
+* радио YouTube Music (_radio_pool) — тоже похожесть на уровне трека, но
+  засеяно videoId, которого у SoundCloud-библиотеки может не быть;
+* граф артистов YouTube Music (_similar_pool) — соседи курированного артиста.
+  Работает от ИМЕНИ, поэтому доступен всегда, но именно поэтому и резерв:
+  ходим за ним, только если похожести по треку не хватило на порцию;
 * поиск SoundCloud по имени артиста (_soundcloud_pool) — по сути дискография
-  самого артиста, НОВЫХ имён не даёт.
+  самого артиста, НОВЫХ имён не даёт, тоже резерв.
 
 Когда единственным источником было радио, любой его отказ (сломанный провайдер,
 нет ytmusic-сидов) обнулял всю разведку, и поток вырождался в дискографию тех
@@ -191,17 +197,28 @@ _PROFILE_SEEDS = 4
 _FAVORITE_ARTIST_LIMIT = 15
 _FAVORITE_EXPLORE_ARTISTS = 6
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
-# beets_similar). Радио YT Music умеет то же самое, но только от videoId,
-# которого у SoundCloud-библиотеки нет вовсе — а этот источник работает от пары
-# артист+название, то есть доступен всегда.
+# beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
+# засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
+# его же дискографию, _favorite_artist_pool — его точный каталог. Все они
+# отвечают на вопрос «кто похож на этого артиста», а не «что похоже на ЭТОТ
+# трек», и поэтому раз за разом возвращают дискографии вокруг уже выбранных
+# юзером имён. Last.fm засеян парой артист+название и отвечает именно на второй
+# вопрос — ему и доверяем в первую очередь.
 # Сколько курированных треков берём сидами за подгрузку (порядок в
 # profile["seed_tracks"] случайный — это ротация, а не фиксированный топ),
 # сколько похожих имён просим у Last.fm и сколько из них РАЗРЕШАЕМ у
 # провайдеров. Резолв — самая дорогая часть (один поиск на имя), поэтому он
 # ограничен жёстко, а результат кэшируется на сид.
-_LASTFM_SEED_TRACKS = 2
+_LASTFM_SEED_TRACKS = 3
 _LASTFM_SIMILAR_LIMIT = 20
 _LASTFM_RESOLVE = 5
+# ГАРАНТИРОВАННАЯ доля порции под похожие по треку. У разведки по артистам
+# гарантированной доли нет вовсе (_EXPLORE_SHARE = 0.0, она добор), а точный
+# каталог знакомых артистов забирал доверенную квоту целиком — то есть
+# «похожее на трек» доходило до выдачи только на остатках. Эта доля берётся
+# ПЕРВОЙ, до каталога артистов, поэтому источник влияет на каждую подгрузку, а
+# не только на бедный пул.
+_LASTFM_SHARE = 0.34
 # Список похожих на конкретный трек стабилен — держим сутки. Разрешённый пул
 # живёт меньше: у провайдера каталог меняется, да и ссылки стареют.
 _LASTFM_NAMES_TTL = 24 * 60 * 60
@@ -1221,6 +1238,7 @@ async def get_flow(
     # одном списке разведка после общего shuffle забирала слоты у любимого
     # артиста наравне с незнакомыми соседями по графу.
     favorite_explore: List[ExternalTrackResponse] = []
+    similar_explore: List[ExternalTrackResponse] = []
     explore: List[ExternalTrackResponse] = []
     banned = profile["banned_artists"]
 
@@ -1349,47 +1367,52 @@ async def get_flow(
     )
     favorite_artists = [artist for _, artist in favorite_artists][:_FAVORITE_EXPLORE_ARTISTS]
     favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
-    discovery = [_similar_pool(a) for a in similar_artists]
+
+    # Похожие по ТРЕКУ (Last.fm) идут в основной пачке и в СВОЙ пул: смешать их
+    # с разведкой по артистам нельзя, иначе гарантированная доля ниже достанется
+    # соседям по графу наравне с ними. Сиды перемешиваем — иначе каждая
+    # подгрузка ходила бы к одному и тому же самому свежему лайку.
+    seed_tracks = list(profile.get("seed_tracks") or [])
+    random.shuffle(seed_tracks)
+    seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
+    lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
+
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
     # волнами по два: при большом exclude каждая пустая волна добавляла полный
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
-    discovery += [_radio_pool(seed) for seed in seeds]
-    if discovery:
-        pools = await asyncio.gather(*favorite_jobs, *discovery)
+    discovery = [_radio_pool(seed) for seed in seeds]
+    if favorite_jobs or lastfm_jobs or discovery:
+        pools = await asyncio.gather(*favorite_jobs, *lastfm_jobs, *discovery)
         favorite_count = len(favorite_jobs)
+        lastfm_count = len(lastfm_jobs)
         _add_explore(
             (t for pool in pools[:favorite_count] for t in pool), favorite_explore
         )
         _add_explore(
-            t for pool in pools[favorite_count:] for t in pool if _matches_related(t)
-        )
-    elif favorite_jobs:
-        pools = await asyncio.gather(*favorite_jobs)
-        _add_explore((t for pool in pools for t in pool), favorite_explore)
-
-    # Похожие треки Last.fm по НАЗВАНИЮ курированного трека — тот же уровень
-    # похожести, что у радио (трек, а не артист), но от пары артист+название, а
-    # не от videoId. Стоит РЕЗЕРВОМ, как SoundCloud-разведка и теговый поиск, и
-    # по той же причине: источник стоит запрос к Last.fm плюс по поиску у
-    # провайдера на каждое имя, а последовательное ожидание провайдеров уже
-    # было главной причиной долгой подгрузки следующей порции.
-    #
-    # Резерв здесь не ослабляет источник, а ставит его точно на своё место:
-    # срабатывает он именно тогда, когда YT-разведка (граф артистов + радио)
-    # ничего не дала, — то есть в том самом случае, ради которого и добавлен:
-    # ytmusic-сидов нет, вся библиотека в SoundCloud.
-    #
-    # Сиды перемешиваем: иначе каждая подгрузка ходила бы к одному и тому же
-    # самому свежему лайку.
-    seed_tracks = list(profile.get("seed_tracks") or [])
-    random.shuffle(seed_tracks)
-    seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
-    if seed_tracks and len(favorite_explore) + len(explore) < limit:
-        lastfm_pools = await asyncio.gather(
-            *(_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks)
+            (
+                t
+                for pool in pools[favorite_count : favorite_count + lastfm_count]
+                for t in pool
+                if _matches_related(t)
+            ),
+            similar_explore,
         )
         _add_explore(
-            t for pool in lastfm_pools for t in pool if _matches_related(t)
+            t
+            for pool in pools[favorite_count + lastfm_count :]
+            for t in pool
+            if _matches_related(t)
+        )
+
+    # Граф артистов YT Music — РЕЗЕРВ. Он отвечает на вопрос «кто похож на этого
+    # артиста», то есть открывает соседей уже выбранных юзером имён, а не
+    # похожее на конкретный трек. Пока похожести по треку хватает на порцию, за
+    # соседями по графу ходить не за чем — тем более что это ещё и сетевые
+    # запросы на каждого артиста.
+    if similar_artists and len(favorite_explore) + len(similar_explore) + len(explore) < limit:
+        graph_pools = await asyncio.gather(*(_similar_pool(a) for a in similar_artists))
+        _add_explore(
+            t for pool in graph_pools for t in pool if _matches_related(t)
         )
 
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
@@ -1408,7 +1431,7 @@ async def get_flow(
     # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT
     # уже дал полную порцию свежих кандидатов (считаем оба пула: точный каталог
     # знакомых артистов тоже занимает слоты порции).
-    if sc_artists and len(favorite_explore) + len(explore) < limit:
+    if sc_artists and len(favorite_explore) + len(similar_explore) + len(explore) < limit:
         sc_pools = await asyncio.gather(
             *(_soundcloud_pool(request, a) for a in sc_artists)
         )
@@ -1452,7 +1475,7 @@ async def get_flow(
             tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
-    if tag_words and len(favorite_explore) + len(explore) < limit:
+    if tag_words and len(favorite_explore) + len(similar_explore) + len(explore) < limit:
         query = " ".join(tag_words[:2])
         _add_explore(
             t
@@ -1461,9 +1484,10 @@ async def get_flow(
         )
 
     logger.debug(
-        "flow explore user=%s favorite=%d fresh_candidates=%d excluded_external=%d",
+        "flow explore user=%s favorite=%d similar=%d fresh_candidates=%d excluded_external=%d",
         current_user.id,
         len(favorite_explore),
+        len(similar_explore),
         len(explore),
         len(external_exclude) + len(excl_videos),
     )
@@ -1476,6 +1500,12 @@ async def get_flow(
     random.shuffle(favorite_explore)
     favorite_explore = interleave_artists(
         favorite_explore,
+        artist_getter=lambda item: item.artist,
+        min_gap=_MIN_ARTIST_GAP,
+    )
+    random.shuffle(similar_explore)
+    similar_explore = interleave_artists(
+        similar_explore,
         artist_getter=lambda item: item.artist,
         min_gap=_MIN_ARTIST_GAP,
     )
@@ -1536,8 +1566,15 @@ async def get_flow(
     # предотвращаются исключениями (история прослушиваний, очередь, история
     # порций), поэтому обязательная доля разведки для этого не нужна.
     explore_quota = min(len(explore), round(limit * _EXPLORE_SHARE))
-    trusted_quota = max(0, genre_quota - explore_quota)
+    # Похожее по ТРЕКУ (Last.fm) — единственная разведка с гарантированной долей,
+    # и берётся она ПЕРВОЙ. Все прочие внешние источники засеяны именем артиста и
+    # потому крутятся вокруг уже выбранных юзером имён; доверяем им меньше.
+    lastfm_quota = min(len(similar_explore), round(limit * _LASTFM_SHARE))
+    trusted_quota = max(0, genre_quota - explore_quota - lastfm_quota)
 
+    relevant_similar, similar_rest = take_capped(
+        similar_explore, lastfm_quota, artist_cap, _artist_of, artist_budget
+    )
     relevant_favorite, favorite_rest = take_capped(
         favorite_explore, trusted_quota, favorite_cap, _artist_of, artist_budget
     )
@@ -1551,18 +1588,27 @@ async def get_flow(
     relevant_external, explore_rest = take_capped(
         explore, explore_quota, artist_cap, _artist_of, artist_budget
     )
-    used_external = len(relevant_favorite) + len(relevant_external)
+    used_external = (
+        len(relevant_similar) + len(relevant_favorite) + len(relevant_external)
+    )
 
     mix: List[dict] = [
         TrackResponse.model_validate(t).model_dump(mode="json")
         for t in relevant_local
     ]
+    mix.extend(t.model_dump() for t in relevant_similar)
     mix.extend(t.model_dump() for t in relevant_favorite)
     mix.extend(t.model_dump() for t in relevant_external)
 
-    # Кап по артисту мог не дать набрать доверенную долю — сначала пробуем
-    # других знакомых артистов (их точный каталог, затем локальную библиотеку),
-    # и только потом добираем разведкой.
+    # Кап по артисту мог не дать набрать доверенную долю. Добираем в порядке
+    # доверия: сначала ещё похожее по треку, затем точный каталог знакомых
+    # артистов, затем локальная библиотека, и только потом разведка по артистам.
+    if len(mix) < genre_quota:
+        extra_similar, similar_rest = take_capped(
+            similar_rest, genre_quota - len(mix), artist_cap, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in extra_similar)
+        used_external += len(extra_similar)
     if len(mix) < genre_quota:
         extra_favorite, favorite_rest = take_capped(
             favorite_rest, genre_quota - len(mix), favorite_cap, _artist_of, artist_budget
@@ -1597,6 +1643,13 @@ async def get_flow(
     # не участвует в гарантированных 14 жанровых позициях. Незнакомый артист
     # получает его последним: сначала непрослушанное у знакомых.
     remaining = limit - len(mix)
+    if remaining:
+        extra_similar, similar_rest = take_capped(
+            similar_rest, remaining, artist_cap, _artist_of, artist_budget
+        )
+        mix.extend(t.model_dump() for t in extra_similar)
+        used_external += len(extra_similar)
+        remaining = limit - len(mix)
     if remaining:
         extra_favorite, favorite_rest = take_capped(
             favorite_rest, remaining, favorite_cap, _artist_of, artist_budget
