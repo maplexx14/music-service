@@ -132,6 +132,7 @@ def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
     db.commit()
 
     async def _lastfm(request, artist, title):
+        lastfm_calls.append((artist, title))
         suffix = title.rsplit("-", 1)[-1]
         return [_external(f"Explore{suffix}", f"explore-{suffix}", f"lfm{suffix}")]
 
@@ -142,6 +143,7 @@ def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
             for i in range(7)
         ]
 
+    lastfm_calls = []
     monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
 
@@ -160,6 +162,109 @@ def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
         str(track.get("external_id") or "").startswith("favorite")
         for track in tracks
     ) == 7
+    assert len(lastfm_calls) == 3
+
+
+def test_flow_spreads_favorite_quota_across_artists(client, db, monkeypatch):
+    """Семь favorite-слотов сначала берут по одному треку разных артистов."""
+    user = create_user(db, username="diverse-favorites-user")
+    playlist = Playlist(
+        name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist=f"LovedArtist{i}",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/liked-{i}.mp3",
+        )
+        for i in range(7)
+    ]
+    db.add_all(liked)
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    async def _favorite(request, artist):
+        return [_external(artist, f"new-{artist}", f"favorite-{artist}")]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="diverse-favorites-user"),
+    )
+    assert response.status_code == 200, response.text
+    favorite = [
+        track for track in response.json()
+        if str(track.get("external_id") or "").startswith("favorite-")
+    ]
+    assert len(favorite) == 7
+    assert len({track["artist"] for track in favorite}) == 7
+
+
+def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
+    """Большая коллекция лайков не должна вытеснять новые локальные треки."""
+    user = create_user(db, username="likes-and-new-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/liked-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/fresh-{i}.mp3",
+        )
+        for i in range(10)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="likes-and-new-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    assert len(tracks) == 15
+    assert sum(track["title"].startswith("liked-") for track in tracks) == 5
+    assert sum(track["title"].startswith("fresh-") for track in tracks) == 10
 
 
 def test_flow_returns_local_tracks_after_session_close(client, db):

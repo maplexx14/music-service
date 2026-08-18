@@ -199,8 +199,12 @@ _FLOW_HISTORY_TTL = 6 * 60 * 60
 # обход графа YT Music. Больше сидов за запрос заметно увеличит внешние вызовы.
 _CONTINUATION_SEEDS = 6
 _PROFILE_SEEDS = 4
+_STANDARD_FLOW_LIMIT = 15
+_STANDARD_LASTFM_SLOTS = 3
+_STANDARD_LIKED_SLOTS = 5
+_STANDARD_FAVORITE_SLOTS = 7
 _FAVORITE_ARTIST_LIMIT = 15
-_FAVORITE_EXPLORE_ARTISTS = 6
+_FAVORITE_EXPLORE_ARTISTS = _STANDARD_FAVORITE_SLOTS
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
 # beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
 # засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
@@ -1277,7 +1281,7 @@ async def get_flow(
     seen_keys = set(profile["recent_keys"])
     # A 15-track batch treats the liked library as a source, so the same
     # library tracks must not re-enter through a provider's artist search.
-    if limit == 15:
+    if limit == _STANDARD_FLOW_LIMIT:
         seen_keys.update(
             tuple(key)
             for key in profile.get("liked_keys") or []
@@ -1303,7 +1307,11 @@ async def get_flow(
     # Для стандартной порции из 15 резервируем 14 жанрово проверенных позиций.
     # Пятнадцатая остаётся разведочной, но и она проходит жанровый фильтр: квота
     # гарантирует минимум 14/15, а обычно релевантны все 15.
-    genre_quota = limit if limit == 15 else min(limit, max(0, limit - 1))
+    genre_quota = (
+        limit
+        if limit == _STANDARD_FLOW_LIMIT
+        else min(limit, max(0, limit - 1))
+    )
     # ОДИН бюджет — на локальных и внешних кандидатов сразу и с переносом на
     # несколько подгрузок вперёд (history["artists"]). Раньше кап применялся к
     # каждому пулу отдельно (_local_candidates капил ещё и в каждом из двух своих
@@ -1433,7 +1441,7 @@ async def get_flow(
     # playlists are useful local signals, but must not open a provider catalog for
     # every imported name.
     catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
-    if limit == 15:
+    if limit == _STANDARD_FLOW_LIMIT:
         catalog_artists = list(dict.fromkeys(profile.get("liked_artists") or []))
     artist_history = Counter(history.get("artists") or [])
     favorite_artists = sorted(
@@ -1497,6 +1505,14 @@ async def get_flow(
     seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
     lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
 
+    def _round_robin(pools):
+        """Interleave Last.fm pools so the first slots use different seeds."""
+        pools = [list(pool) for pool in pools]
+        for index in range(max((len(pool) for pool in pools), default=0)):
+            for pool in pools:
+                if index < len(pool):
+                    yield pool[index]
+
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
     # волнами по два: при большом exclude каждая пустая волна добавляла полный
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
@@ -1510,9 +1526,9 @@ async def get_flow(
         )
         _add_explore(
             (
-                t
-                for pool in pools[favorite_count : favorite_count + lastfm_count]
-                for t in pool
+                t for t in _round_robin(
+                    pools[favorite_count : favorite_count + lastfm_count]
+                )
                 if _matches_related(t)
             ),
             similar_explore,
@@ -1638,8 +1654,18 @@ async def get_flow(
 
     # --- эксплуатация: локальная библиотека по вкусу ---
     local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
+    # Для стандартной порции из 15 треков лайки — отдельный источник. Раньше
+    # они добавлялись в начало общего ``exploit``-пула, а квота ``liked``
+    # применялась уже к нему целиком. Если внешние источники были пусты,
+    # первые 15 строк занимали лайки и новые треки из той же библиотеки до
+    # выдачи не доходили. Держим локальные треки без лайка отдельно, чтобы
+    # квота лайков не могла поглотить весь поток.
     exploit: List[Track] = []
-    liked_ids = set(profile.get("liked_track_ids") or []) if limit == 15 else set()
+    liked_ids = (
+        set(profile.get("liked_track_ids") or [])
+        if limit == _STANDARD_FLOW_LIMIT
+        else set()
+    )
     blocked_local_ids = set(excl_ids)
     blocked_local_keys = set(seen_keys) - {
         tuple(key) for key in profile.get("liked_keys") or []
@@ -1658,7 +1684,8 @@ async def get_flow(
         excl_ids.add(t.id)
         exploit.append(t)
 
-    if limit == 15:
+    liked_source: List[Track] = []
+    if limit == _STANDARD_FLOW_LIMIT:
         # Keep liked tracks as the priority prefix for the fixed 15-track mix,
         # but retain the remaining local tracks from the same trusted artists.
         # A curated playlist may contain only a seed per artist while the rest
@@ -1681,24 +1708,18 @@ async def get_flow(
             )
         ]
         liked_track_ids = {t.id for t in valid_liked_tracks}
-        priority_exploit_count = len(valid_liked_tracks)
-        exploit = valid_liked_tracks + [
-            t for t in exploit if t.id not in liked_track_ids
-        ]
-    else:
-        priority_exploit_count = 0
+        liked_source = valid_liked_tracks
 
     # --- жанровая квота ---
     # genre_quota, artist_budget/artist_cap и favorite_cap посчитаны выше: от них
     # зависело, нужны ли резервные источники разведки (_batch_capacity).
-    if limit == 15:
-        suffix = exploit[priority_exploit_count:]
-        random.shuffle(suffix)
-        exploit[priority_exploit_count:] = suffix
+    if limit == _STANDARD_FLOW_LIMIT:
+        random.shuffle(liked_source)
+        random.shuffle(exploit)
     else:
         random.shuffle(exploit)
 
-    if limit == 15:
+    if limit == _STANDARD_FLOW_LIMIT:
         # The source contract is stronger than the cross-batch artist budget:
         # a small library may legitimately contain only one liked artist.
         artist_budget = {}
@@ -1717,38 +1738,59 @@ async def get_flow(
     # Похожее по ТРЕКУ (Last.fm) — единственная разведка с гарантированной долей,
     # и берётся она ПЕРВОЙ. Все прочие внешние источники засеяны именем артиста и
     # потому крутятся вокруг уже выбранных юзером имён; доверяем им меньше.
-    if limit == 15:
+    if limit == _STANDARD_FLOW_LIMIT:
         quotas = _balanced_quota(
-            {"lastfm": 3, "liked": 5, "favorite": 7},
+            {
+                "lastfm": _STANDARD_LASTFM_SLOTS,
+                "liked": _STANDARD_LIKED_SLOTS,
+                "favorite": _STANDARD_FAVORITE_SLOTS,
+            },
             {
                 "lastfm": len(similar_explore),
-                "liked": len(exploit),
+                # Keep the five-track liked target fixed. If discovery pools
+                # are empty, the deficit must go to new local tracks rather
+                # than expanding the liked prefix to the whole batch.
+                "liked": min(len(liked_source), _STANDARD_LIKED_SLOTS),
                 "favorite": len(favorite_explore),
             },
-            15,
+            _STANDARD_FLOW_LIMIT,
         )
         lastfm_quota = quotas["lastfm"]
         liked_quota = quotas["liked"]
         favorite_quota = quotas["favorite"]
-        trusted_quota = quotas["liked"] + favorite_quota
+        local_quota = min(
+            len(exploit), _STANDARD_FLOW_LIMIT - sum(quotas.values())
+        )
+        trusted_quota = quotas["liked"] + favorite_quota + local_quota
     else:
         lastfm_quota = min(len(similar_explore), round(limit * _LASTFM_SHARE))
         liked_quota = 0
+        local_quota = 0
         favorite_quota = max(0, genre_quota - explore_quota - lastfm_quota)
         trusted_quota = favorite_quota
 
     relevant_similar, similar_rest = take_capped(
         similar_explore, lastfm_quota, artist_cap, _artist_of, artist_budget
     )
+    favorite_selection_cap = 1 if limit == _STANDARD_FLOW_LIMIT else favorite_cap
     relevant_favorite, favorite_rest = take_capped(
-        favorite_explore, favorite_quota, favorite_cap, _artist_of, artist_budget
+        favorite_explore,
+        favorite_quota,
+        favorite_selection_cap,
+        _artist_of,
+        artist_budget,
     )
     relevant_local, exploit_rest = take_capped(
-        exploit,
-        liked_quota if limit == 15 else trusted_quota - len(relevant_favorite),
+        liked_source if limit == _STANDARD_FLOW_LIMIT else exploit,
+        liked_quota if limit == _STANDARD_FLOW_LIMIT else trusted_quota - len(relevant_favorite),
         artist_cap,
         _artist_of,
         artist_budget,
+    )
+    relevant_nonliked, exploit_rest = (
+        take_capped(exploit, local_quota, artist_cap, _artist_of, artist_budget)
+        if limit == _STANDARD_FLOW_LIMIT
+        else ([], exploit_rest)
     )
     relevant_external, explore_rest = take_capped(
         explore, explore_quota, artist_cap, _artist_of, artist_budget
@@ -1761,6 +1803,10 @@ async def get_flow(
         TrackResponse.model_validate(t).model_dump(mode="json")
         for t in relevant_local
     ]
+    mix.extend(
+        TrackResponse.model_validate(t).model_dump(mode="json")
+        for t in relevant_nonliked
+    )
     mix.extend(t.model_dump() for t in relevant_similar)
     mix.extend(t.model_dump() for t in relevant_favorite)
     mix.extend(t.model_dump() for t in relevant_external)
@@ -1768,6 +1814,19 @@ async def get_flow(
     # Кап по артисту мог не дать набрать доверенную долю. Добираем в порядке
     # доверия: сначала ещё похожее по треку, затем точный каталог знакомых
     # артистов, затем локальная библиотека, и только потом разведка по артистам.
+    if len(mix) < genre_quota:
+        # First complete the guaranteed favorite-artist quota. The first pass
+        # takes at most one track per artist; only a shortage of distinct
+        # artists permits additional tracks from an already selected artist.
+        favorite_shortage = max(0, favorite_quota - len(relevant_favorite))
+        extra_favorite, favorite_rest = take_capped(
+            favorite_rest,
+            min(favorite_shortage, genre_quota - len(mix)),
+            favorite_cap,
+            _artist_of,
+            artist_budget,
+        )
+        mix.extend(t.model_dump() for t in extra_favorite)
     if len(mix) < genre_quota:
         extra_similar, similar_rest = take_capped(
             similar_rest, genre_quota - len(mix), artist_cap, _artist_of, artist_budget
@@ -1797,7 +1856,7 @@ async def get_flow(
     #
     # Радио одного сида и SC-поиск по артисту возвращают пачками треки ОДНОГО
     # исполнителя, поэтому внешние кандидаты идут через тот же бюджет.
-    if len(mix) < genre_quota and limit != 15:
+    if len(mix) < genre_quota and limit != _STANDARD_FLOW_LIMIT:
         extra_external, explore_rest = take_capped(
             explore_rest, genre_quota - len(mix), artist_cap, _artist_of, artist_budget
         )
@@ -1831,7 +1890,20 @@ async def get_flow(
             for t in extra_local
         )
         remaining = limit - len(mix)
-    if remaining and limit != 15:
+    if remaining and limit == _STANDARD_FLOW_LIMIT:
+        extra_nonliked, exploit_rest = take_capped(
+            exploit_rest,
+            remaining,
+            artist_cap,
+            _artist_of,
+            artist_budget,
+        )
+        mix.extend(
+            TrackResponse.model_validate(t).model_dump(mode="json")
+            for t in extra_nonliked
+        )
+        remaining = limit - len(mix)
+    if remaining and limit != _STANDARD_FLOW_LIMIT:
         discovery, explore_rest = take_capped(
             explore_rest, remaining, artist_cap, _artist_of, artist_budget
         )
