@@ -296,6 +296,19 @@ cooling() {  # прокси «отдыхает»? (истёкшие метки �
   [[ -f "$STATE_DIR/cool.$(key "$1")" ]]
 }
 
+# После неудачного выпуска токена не перевыпускаем companion бесконечно на том же выходе.
+session_reissued() {
+  [[ -f "$STATE_DIR/session-reissued.$(key "$1")" ]]
+}
+
+mark_session_reissued() {
+  printf '%s\n' "$(date +%s)" >"$STATE_DIR/session-reissued.$(key "$1")"
+}
+
+clear_session_reissued() {
+  rm -f "$STATE_DIR/session-reissued.$(key "$1")"
+}
+
 expire_cooldowns() {
   local f ts srv now; now="$(date +%s)"
   shopt -s nullglob
@@ -344,6 +357,7 @@ pick_candidate() {
 # и для автоматической ротации, чтобы эти два сценария не разъезжались.
 switch_to() {
   local label="$1" url="$2"
+  clear_session_reissued "$label"
   write_active "$url" "$label"
   write_stream_url "$url" "$label"
   log "активный выход → ${label}"
@@ -431,6 +445,7 @@ if (( active_limit >= 0 && active_used >= active_limit )); then
 fi
 
 if (( ! quota_exhausted )) && probe_invidious; then
+  clear_session_reissued "$cur_label"
   echo 0 >"$STATE_DIR/fails"
   exit 0
 fi
@@ -456,19 +471,24 @@ fi
 
 # Сначала выясняем, в IP ли дело: если YouTube всё ещё обслуживает текущий
 # адрес, менять выход незачем — виновата сессия, её и перевыпускаем.
-if (( ! quota_exhausted )) && verify_proxy "$cur_url"; then
+if (( ! quota_exhausted )) && verify_proxy "$cur_url" && ! session_reissued "$cur_label"; then
   log "выход ${cur_label} у YouTube не в блоке — дело в сессии, меняю только её"
   # Файл для бэкенда пишем и здесь: выход не сменился, но при первой установке
   # (или если каталог появился позже) файла может ещё не быть.
   write_stream_url "$cur_url" "$cur_label"
   reissue_session
   flush_resolve_cache
+  mark_session_reissued "$cur_label"
   echo "$now" >"$STATE_DIR/last_rotate"
   echo 0 >"$STATE_DIR/fails"
   exit 0
 fi
 
-log "выход ${cur_label} YouTube больше не обслуживает — ищу замену"
+if (( ! quota_exhausted )) && session_reissued "$cur_label"; then
+  log "повторный выпуск сессии на ${cur_label} не помог — ищу другой выход"
+else
+  log "выход ${cur_label} YouTube больше не обслуживает — ищу замену"
+fi
 if ! entry="$(pick_candidate "$cur_label")"; then
   # Ничего не меняем: рабочего кандидата нет, а переключение «наугад» лишь
   # оставило бы companion без egress до следующего запуска таймера. Бэкенд в
