@@ -1,17 +1,18 @@
 [Unit]
 Description=Ротация исходящего прокси invidious-companion при блоке BotGuard
-Documentation=file:/opt/music-service/invidious/proxy-pool/README.md
+Documentation=file:/root/music-service/invidious/proxy-pool/README.md
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
 # Единственное, что обычно нужно поправить, — путь до стека, если DEPLOY_PATH
-# не /opt/music-service. Остальные ручки (COOLDOWN, MIN_INTERVAL,
+# не /root/music-service. Остальные ручки (COOLDOWN, MIN_INTERVAL,
 # FAIL_THRESHOLD, PROBE_IDS) описаны в шапке rotate.sh и переопределяются
 # такими же строками Environment=.
-Environment=COMPOSE_DIR=/opt/music-service/invidious
-ExecStart=/opt/music-service/invidious/proxy-pool/rotate.sh
+Environment=COMPOSE_DIR=/root/music-service/invidious
+# Явно запускаем через bash: при деплое с Windows executable-бит файла может потеряться.
+ExecStart=/usr/bin/bash /root/music-service/invidious/proxy-pool/rotate.sh
 # root нужен: скрипт вызывает docker, пишет active.env (0600, с паролем) и
 # состояние в /var/lib. Сеть нужна к Invidious на loopback и к самим прокси —
 # проверка кандидата идёт через них, а не через контейнер.
