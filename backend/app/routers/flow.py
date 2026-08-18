@@ -4,18 +4,28 @@
 (локальная библиотека по любимым артистам/жанрам). Фронт подгружает следующую
 порцию, когда очередь подходит к концу, передавая exclude-список уже сыгранного.
 
-Разведка идёт по трём источникам, и это разделение существенно:
+Разведка идёт по четырём источникам, и это разделение существенно:
 
 * граф артистов YouTube Music (_similar_pool) — соседи курированного артиста.
   Работает от ИМЕНИ, поэтому доступен всегда;
 * радио YouTube Music (_radio_pool) — похожесть на уровне трека. Требует
   ytmusic-видео в профиле, которого у SoundCloud-библиотеки может не быть;
+* похожие треки Last.fm по НАЗВАНИЮ курированного трека (_lastfm_pool, транспорт
+  — клиент beets, см. app/beets_similar.py). Тот же уровень похожести, что у
+  радио, но от пары артист+название, а не от videoId, — то есть доступен и
+  SoundCloud-библиотеке. Last.fm отдаёт только имена, играбельными их делает
+  резолв у провайдеров (_resolve_similar), поэтому источник включается РЕЗЕРВОМ:
+  ровно тогда, когда разведка по YT ничего не дала;
 * поиск SoundCloud по имени артиста (_soundcloud_pool) — по сути дискография
   самого артиста, НОВЫХ имён не даёт.
 
 Когда единственным источником было радио, любой его отказ (сломанный провайдер,
 нет ytmusic-сидов) обнулял всю разведку, и поток вырождался в дискографию тех
 артистов, которых пользователь уже выбрал сам.
+
+Разведка по тегам вкуса, когда своих слов у юзера нет, спрашивает поджанры у
+жанрового дерева beets (app/beets_genre.py): наши 12 жанровых ключей — общие
+слова, и склейка двух как поисковый запрос у провайдера возвращала мусор.
 """
 
 import asyncio
@@ -33,7 +43,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
-from app import storage
+from app import beets_genre, beets_similar, storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -54,7 +64,7 @@ from app.diversity import (
     take_overflow,
     weighted_order,
 )
-from app.artist_utils import artist_key
+from app.artist_utils import artist_key, same_artist
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
@@ -75,6 +85,24 @@ _RECENT_PLAYS_EXCLUDE = 100
 # прослушиваний одного трека. Смысл порога сохраняется: одно случайное
 # прослушивание одного трека артистом вкуса не делает.
 _PLAYED_ARTIST_MIN_PLAYS = 2
+# Минимум треков АРТИСТА в собственных плейлистах, с которого он считается
+# любимым (курированным). Импорт приводит сотни имён одним движением, и каждое
+# становилось любимым с первого же трека: любимый артист проходит вкусовой
+# фильтр в обход всех проверок (taste.py — trusted_artist_keys), забирает
+# гарантированную квоту разведки и открывает свой каталог у провайдера. Так один
+# попутный трек из импортированного плейлиста размывал профиль до «подходит всё»
+# — особенно с SoundCloud, где артистом трека часто оказывается не исполнитель, а
+# перезаливщик (см. artist_utils.resolve_track_artist).
+# Порог по артисту, а не по плейлисту: три трека в коллекции — это выбор, один —
+# попутный груз импорта. Ниже порога трек остаётся положительным сигналом (жанр,
+# язык, скоуп своей библиотеки), но любимым артиста не делает.
+_PLAYLIST_ARTIST_MIN_TRACKS = 3
+# Вес плейлистного трека артиста, который порог ещё не набрал. Полный
+# кураторский +4.0 сам по себе выше порога доверия (recommendations.py,
+# _ARTIST_TRUST_THRESHOLD = 3.0), т.е. одного трека хватало, чтобы имя из
+# импорта встало в топ вкуса наравне с любимыми. Меньший вес оставляет артиста
+# в скоупе своей библиотеки, но не выдаёт его за любимого.
+_PLAYLIST_WEAK_WEIGHT = 1.0
 # Кэш радио-пула на сид: радио YT Music стабильно на коротком горизонте,
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
@@ -100,9 +128,11 @@ _SC_EXPLORE_ARTISTS = 6
 _SC_EXPLORE_LIMIT = 15
 _SC_EXPLORE_TTL = 1800
 # Сколько из SC-разведочных слотов ГАРАНТИРОВАННО отдаём артистам из
-# импортированных плейлистов — независимо от их весового ранга. Плейлистные
-# треки имеют strongest weight (+4.0), но эта квота сохраняется для SC-разведки,
-# чтобы импорт из SoundCloud точно влиял на волну (SC-треки не сеют YT-радио).
+# импортированных плейлистов — независимо от их весового ранга. У любимого
+# плейлистного артиста strongest weight (+4.0), но эта квота сохраняется для
+# SC-разведки, чтобы импорт из SoundCloud точно влиял на волну (SC-треки не
+# сеют YT-радио). Квота — только для артистов, набравших порог любимого
+# (_PLAYLIST_ARTIST_MIN_TRACKS), иначе её занимали случайные имена импорта.
 _SC_PLAYLIST_ARTISTS = 3
 # Разведка по пользовательским тегам (title_tags) — поиск НОВЫХ треков (не
 # обязательно от уже знакомых артистов) прямо у провайдеров по словам, которые
@@ -160,6 +190,24 @@ _CONTINUATION_SEEDS = 6
 _PROFILE_SEEDS = 4
 _FAVORITE_ARTIST_LIMIT = 15
 _FAVORITE_EXPLORE_ARTISTS = 6
+# Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
+# beets_similar). Радио YT Music умеет то же самое, но только от videoId,
+# которого у SoundCloud-библиотеки нет вовсе — а этот источник работает от пары
+# артист+название, то есть доступен всегда.
+# Сколько курированных треков берём сидами за подгрузку (порядок в
+# profile["seed_tracks"] случайный — это ротация, а не фиксированный топ),
+# сколько похожих имён просим у Last.fm и сколько из них РАЗРЕШАЕМ у
+# провайдеров. Резолв — самая дорогая часть (один поиск на имя), поэтому он
+# ограничен жёстко, а результат кэшируется на сид.
+_LASTFM_SEED_TRACKS = 2
+_LASTFM_SIMILAR_LIMIT = 20
+_LASTFM_RESOLVE = 5
+# Список похожих на конкретный трек стабилен — держим сутки. Разрешённый пул
+# живёт меньше: у провайдера каталог меняется, да и ссылки стареют.
+_LASTFM_NAMES_TTL = 24 * 60 * 60
+_LASTFM_POOL_TTL = 6 * 60 * 60
+# Сколько свежих курированных треков держим в профиле как потенциальные сиды.
+_SEED_TRACK_LIMIT = 20
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -229,6 +277,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     artist_play_totals: Counter = Counter()
     for track, play_count, _last_played in played:
         artist_play_totals[artist_key(track.artist)] += play_count or 1
+    # Сколько треков артиста лежит в собственных плейлистах — по этому счётчику
+    # работает порог «любимого» (_PLAYLIST_ARTIST_MIN_TRACKS).
+    playlist_artist_totals: Counter = Counter(
+        artist_key(track.artist) for track, _added_at in playlisted
+    )
 
     # Скипы — негативный сигнал (фронт шлёт их только при <25% прослушивания).
     # disliked — явный дизлайк из плеера: штраф тяжелее и без затухания.
@@ -256,10 +309,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     seeds: List[str] = []  # video_id ytmusic-треков, свежие первыми
     seen_seed = set()
     # Плейлист-ПРОИЗВОДНЫЕ сигналы — отдельно от весового топа, чтобы дать им
-    # ГАРАНТИРОВАННУЮ долю в разведке. Плейлистные треки имеют最强ший вес (+4.0),
-    # но историческая логика сохраняется: SC-разведка плейлистных артистов
-    # гарантирована отдельной квотой, чтобы импорт из SoundCloud (чьи треки
-    # не могут сеять YT-радио) точно влиял на волну.
+    # ГАРАНТИРОВАННУЮ долю в разведке. У любимого плейлистного артиста
+    # сильнейший вес (+4.0), но историческая логика сохраняется: SC-разведка
+    # плейлистных артистов гарантирована отдельной квотой, чтобы импорт из
+    # SoundCloud (чьи треки не могут сеять YT-радио) точно влиял на волну.
+    # В список идут только артисты, набравшие _PLAYLIST_ARTIST_MIN_TRACKS.
     playlist_artist_keys: List[str] = []  # порядок = свежесть добавления
     seen_pl_artist = set()
     # Курированные артисты (лайки + собственные плейлисты) — самый надёжный
@@ -298,20 +352,24 @@ def _taste_profile(db: Session, user_id: int) -> dict:
 
     # Плейлистные треки — сильнейший сигнал вкуса (вес выше лайков):
     # пользователь осознанно подбирал композиции в плейлист, что является
-    # более надёжным индикатором предпочтений, чем одиночный лайк.
+    # более надёжным индикатором предпочтений, чем одиночный лайк. Но только
+    # начиная с _PLAYLIST_ARTIST_MIN_TRACKS треков артиста: одиночное имя из
+    # импорта осознанным выбором не является.
     for track, added_at in playlisted:
         lang_texts.append(f"{track.title} {track.artist}")
         key = artist_key(track.artist)
-        artist_weight[key] = artist_weight.get(key, 0) + 4.0 * _decay(added_at)
+        favorite = playlist_artist_totals[key] >= _PLAYLIST_ARTIST_MIN_TRACKS
+        weight = (4.0 if favorite else _PLAYLIST_WEAK_WEIGHT) * _decay(added_at)
+        artist_weight[key] = artist_weight.get(key, 0) + weight
         artist_display.setdefault(key, track.artist)
-        if key and key not in seen_curated_artist:
+        if favorite and key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
         genre = track.genre or infer_genre_from_text(track.title, track.artist)
         if genre:
             genres.append(genre)
-        weighted_titles.append((track.title, 4.0 * _decay(added_at)))
-        if key not in seen_pl_artist:
+        weighted_titles.append((track.title, weight))
+        if favorite and key not in seen_pl_artist:
             playlist_artist_keys.append(key)
             seen_pl_artist.add(key)
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
@@ -459,7 +517,13 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # SoundCloud), и тогда любителю русского рэпа сюда попадал ню-метал другого
     # пользователя сервиса, а радио строилось вокруг него. Сиды для такого
     # случая резолвит эндпоинт по именам артистов (_artist_seed_videos).
-    if not seeds and not curated_artist_keys:
+    #
+    # Своим сигналом считаем ЛЮБОЙ положительный вес, а не только курирование:
+    # библиотека из одиночных импортов ни одного артиста до порога любимого
+    # (_PLAYLIST_ARTIST_MIN_TRACKS) не дотягивает, но вкус у такого юзера есть —
+    # чужой глобальный топ ему тем более противопоказан.
+    has_own_signal = any(w > 0 for w in artist_weight.values())
+    if not seeds and not curated_artist_keys and not has_own_signal:
         popular_yt = (
             db.query(Track.external_id)
             .filter(Track.source == "ytmusic", Track.external_id.isnot(None))
@@ -500,9 +564,30 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Сиды-производные плейлистов (ytmusic) — исключаем скипнутые.
     playlist_seeds = [s for s in playlist_seeds if s not in skipped_video_ids]
 
+    # Сиды для похожести по НАЗВАНИЮ (beets_similar → Last.fm). В отличие от
+    # radio-сидов это не videoId, а пара артист+название, поэтому годится любой
+    # курированный трек — в том числе из SoundCloud-библиотеки, у которой
+    # ytmusic-сидов не бывает вовсе. Лайк идёт раньше плейлиста: это адресный
+    # сигнал именно про ЭТОТ трек, а плейлист бывает и импортированным.
+    seed_tracks: List[tuple] = []
+    seen_seed_track = set()
+    for track, _added_at in liked + playlisted:
+        key = _norm_key(track.artist, track.title)
+        if key in skipped_keys or key in seen_seed_track:
+            continue
+        if not track.artist or not track.title:
+            continue
+        if artist_key(track.artist) in excluded_artists:
+            continue
+        seen_seed_track.add(key)
+        seed_tracks.append((track.artist, track.title))
+        if len(seed_tracks) >= _SEED_TRACK_LIMIT:
+            break
+
     return {
         "user_id": user_id,
         "seeds": seeds,
+        "seed_tracks": seed_tracks,
         "playlist_artists": playlist_artists,
         "playlist_seeds": playlist_seeds,
         "artists": top_artists,
@@ -767,6 +852,120 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
             pool.append(t)
 
     await set_cache_async(key, [t.model_dump() for t in pool], expire=_RADIO_TTL)
+    return pool
+
+
+async def _lastfm_similar_names(artist: str, title: str) -> List[list]:
+    """Похожие на (artist, title) треки как ИМЕНА, с кэшем в Redis.
+
+    Кэш на пару артист+название, а не на пользователя: похожесть — свойство
+    самого трека, и у популярного сида она переиспользуется всеми сразу.
+    Негативный кэш короткий: Last.fm мог не знать трек сейчас, но узнать
+    позже, — вычёркивать сид навсегда не за что (та же логика, что у
+    _similar_artist_names).
+    """
+    norm_artist, norm_title = _norm_key(artist, title)
+    key = f"flow:lastfm_similar:{norm_artist}|{norm_title}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return cached
+
+    pairs = await beets_similar.similar_tracks_async(
+        artist, title, limit=_LASTFM_SIMILAR_LIMIT
+    )
+    # json не знает про tuple — храним списками, чтобы кэш и свежий ответ
+    # выглядели для вызывающего одинаково.
+    payload = [[found_artist, found_title] for found_artist, found_title in pairs]
+    await set_cache_async(
+        key, payload, expire=_LASTFM_NAMES_TTL if payload else 600
+    )
+    return payload
+
+
+def _is_same_track(artist: str, title: str, found: ExternalTrackResponse) -> bool:
+    """Найденный у провайдера трек — это действительно искомые артист+название?
+
+    Поиск у провайдеров полнотекстовый: по запросу "Artist Title" он с
+    готовностью отдаёт чужие треки, где эти слова встретились в названии или
+    описании (ровно та проблема, из-за которой фильтруется _soundcloud_pool).
+    Имя артиста сверяем через artist_utils.same_artist — он снимает разницу
+    алфавита и схемы романизации, — и дополнительно допускаем вхождение в любую
+    сторону: у провайдера в поле artist часто стоит "A, B" (фичеринг) или
+    сокращение.
+    """
+    want_artist, want_title = _norm_key(artist, title)
+    got_artist, got_title = _norm_key(found.artist, found.title)
+    if not want_artist or not want_title or not got_artist or not got_title:
+        return False
+    artist_ok = (
+        same_artist(artist, found.artist)
+        or want_artist in got_artist
+        or got_artist in want_artist
+    )
+    if not artist_ok:
+        return False
+    return want_title in got_title or got_title in want_title
+
+
+async def _resolve_similar(
+    request: Request, artist: str, title: str
+) -> Optional[ExternalTrackResponse]:
+    """Имя похожего трека → играбельный трек у провайдера.
+
+    Last.fm отдаёт только имена, поэтому играбельным трек делает поиск. Оба
+    провайдера спрашиваем ОДНОВРЕМЕННО (как в _tag_pool): последовательное
+    ожидание удваивало бы задержку на каждом имени, которого нет в YT Music.
+    YT Music предпочитаем — у него метаданные ближе к тому, что называет
+    Last.fm, и меньше перезаливов.
+    """
+    query = f"{artist} {title}"
+    yt_results, sc_results = await asyncio.gather(
+        ytdlp.search_ytmusic(request, query, limit=3),
+        soundcloud.search_soundcloud(request, query, limit=3),
+        return_exceptions=True,
+    )
+    for results in (yt_results, sc_results):
+        if isinstance(results, Exception):
+            logger.warning("flow lastfm resolve failed for %s: %s", query, results)
+            continue
+        for found in results:
+            if _is_same_track(artist, title, found):
+                return found
+    return None
+
+
+async def _lastfm_pool(
+    request: Request, artist: str, title: str
+) -> List[ExternalTrackResponse]:
+    """Похожие на трек треки, уже играбельные, с кэшем в Redis.
+
+    Единственный источник похожести на уровне ТРЕКА, не требующий ytmusic-сида
+    (см. beets_similar). Резолв ограничен _LASTFM_RESOLVE именами: он стоит по
+    поиску на имя, и это самая дорогая часть источника.
+    """
+    norm_artist, norm_title = _norm_key(artist, title)
+    key = f"flow:lastfm_pool:{norm_artist}|{norm_title}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+
+    names = await _lastfm_similar_names(artist, title)
+    if not names:
+        return []
+
+    resolved = await asyncio.gather(
+        *(
+            _resolve_similar(request, pair[0], pair[1])
+            for pair in names[:_LASTFM_RESOLVE]
+            if len(pair) == 2
+        )
+    )
+    pool = [t for t in resolved if t is not None]
+    await set_cache_async(
+        key,
+        [t.model_dump() for t in pool],
+        expire=_LASTFM_POOL_TTL if pool else 600,
+    )
     return pool
 
 
@@ -1168,6 +1367,31 @@ async def get_flow(
         pools = await asyncio.gather(*favorite_jobs)
         _add_explore((t for pool in pools for t in pool), favorite_explore)
 
+    # Похожие треки Last.fm по НАЗВАНИЮ курированного трека — тот же уровень
+    # похожести, что у радио (трек, а не артист), но от пары артист+название, а
+    # не от videoId. Стоит РЕЗЕРВОМ, как SoundCloud-разведка и теговый поиск, и
+    # по той же причине: источник стоит запрос к Last.fm плюс по поиску у
+    # провайдера на каждое имя, а последовательное ожидание провайдеров уже
+    # было главной причиной долгой подгрузки следующей порции.
+    #
+    # Резерв здесь не ослабляет источник, а ставит его точно на своё место:
+    # срабатывает он именно тогда, когда YT-разведка (граф артистов + радио)
+    # ничего не дала, — то есть в том самом случае, ради которого и добавлен:
+    # ytmusic-сидов нет, вся библиотека в SoundCloud.
+    #
+    # Сиды перемешиваем: иначе каждая подгрузка ходила бы к одному и тому же
+    # самому свежему лайку.
+    seed_tracks = list(profile.get("seed_tracks") or [])
+    random.shuffle(seed_tracks)
+    seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
+    if seed_tracks and len(favorite_explore) + len(explore) < limit:
+        lastfm_pools = await asyncio.gather(
+            *(_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks)
+        )
+        _add_explore(
+            t for pool in lastfm_pools for t in pool if _matches_related(t)
+        )
+
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
     # у SC нет, поэтому это поиск — зато волна перестаёт быть моно-ytmusic.
     # Уже целевой источник (сам артист — часть вкуса), доп. фильтр по теме не
@@ -1198,8 +1422,34 @@ async def get_flow(
     # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
     # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
     tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
+    tag_check = _matches_taste
     if not tag_words:
-        tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
+        # Своих слов у юзера нет — остаются жанры, но наши 12 ключей это общие
+        # слова, и склейка двух ("phonk hip-hop") как поисковый запрос у
+        # провайдера возвращает мусор. Дерево жанров beets разворачивает вкус в
+        # НАСТОЯЩИЕ имена поджанров ("memphis rap", "witch house", "dark wave"),
+        # по которым у SoundCloud и YT Music есть каталог. Берём одно случайное
+        # за подгрузку — это ротация разведки, а не фиксированный запрос.
+        pool = beets_genre.subgenres(profile.get("genres") or [])
+        if pool:
+            subgenre = random.choice(pool)
+            tag_words = [subgenre]
+            # Имя поджанра добавляем в тематические слова ИМЕННО для этого пула:
+            # запрос выведен из жанрового профиля юзера, поэтому трек, который
+            # сам называет этот поджанр в заголовке, — подтверждённый вкусом
+            # кандидат. Без этого треки, найденные по "memphis rap", у юзера с
+            # кириллической библиотекой отбраковывались языковым прокси все до
+            # одного, и разведка по жанрам не давала ничего.
+            tag_check = track_check(
+                make_relevance_check(
+                    trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+                    user_genres=set(profile.get("genres") or []),
+                    prefer_cyrillic=profile.get("prefer_cyrillic"),
+                    keywords=taste_keywords + subgenre.split(),
+                )
+            )
+        else:
+            tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
     if tag_words and len(favorite_explore) + len(explore) < limit:
@@ -1207,7 +1457,7 @@ async def get_flow(
         _add_explore(
             t
             for t in await _tag_pool(request, query)
-            if _matches_taste(t)
+            if tag_check(t)
         )
 
     logger.debug(

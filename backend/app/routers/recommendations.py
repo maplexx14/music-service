@@ -64,6 +64,14 @@ _CURATION_DECAY_FLOOR = 0.5
 # добавил его треки в коллекцию — это явное предпочтение, а не случайность.
 _CURATED_TRUST_COUNT = 2
 
+# Минимум треков артиста в собственных плейлистах, с которого плейлист считается
+# курированием ЭТОГО артиста. Зеркало _PLAYLIST_ARTIST_MIN_TRACKS в flow.py:
+# импорт приводит сотни имён сразу, и каждое становилось любимым с первого
+# трека. Ниже порога трек остаётся положительным сигналом (и держит артиста в
+# scope_artist_keys), но кураторского веса и приоритета не даёт.
+_PLAYLIST_ARTIST_MIN_TRACKS = 3
+_PLAYLIST_WEAK_WEIGHT = 1.0
+
 # Сколько треков одного артиста максимум допускать подряд в выдаче — без
 # этого сортировка по play_count раз за разом выдаёт одних и тех же
 # нескольких самых заигранных артистов вкуса.
@@ -76,7 +84,9 @@ _MAX_PER_ARTIST = 2
 # больше не режут весь каталог (см. ниже) — только сам скипнутый трек, и он и
 # так исключается из выдачи. У ещё НЕ доверенного скипы сильно влияют: он
 # попадает в сид, только если положительный сигнал перевешивает скипы.
-# Плейлистные треки (вес +4.0) достигают порога ещё быстрее.
+# Плейлистные треки (вес +4.0) достигают порога ещё быстрее — но только у
+# артиста, набравшего _PLAYLIST_ARTIST_MIN_TRACKS: иначе один трек из импорта
+# сам по себе перекрывал порог и объявлял постороннее имя доверенным.
 _ARTIST_TRUST_THRESHOLD = 3.0
 
 # Насколько положительный сигнал должен ПЕРЕВЕШИВАТЬ скипы, чтобы недоверенный
@@ -385,6 +395,11 @@ def get_recommendations(
         # Курируемые артисты (собственные плейлисты и явный выбор) — strongest
         # signal. Их треки получают приоритет, даже если play_count низкий.
         priority_artist_keys: set = set()
+        # Сколько треков артиста лежит в собственных плейлистах — по этому
+        # счётчику работает порог _PLAYLIST_ARTIST_MIN_TRACKS.
+        playlist_artist_totals: Counter = Counter(
+            artist_key(t.artist) for t, _added_at in playlisted
+        )
 
         # Выбранные при регистрации артисты — такой же осознанный сигнал, как
         # лайк: сразу ограничиваем ими локальный каталог и даём им приоритет.
@@ -409,13 +424,20 @@ def get_recommendations(
             weighted_titles.append((t.title, 3.0 * _curation_decay(added_at)))
         for t, added_at in playlisted:
             key = artist_key(t.artist)
-            artist_positive[key] = artist_positive.get(key, 0) + 4.0 * _curation_decay(added_at)
-            artist_curated_count[key] = artist_curated_count.get(key, 0) + 1
-            priority_artist_keys.add(key)
+            # Плейлист курирует АРТИСТА только с _PLAYLIST_ARTIST_MIN_TRACKS
+            # треков: одиночное имя из импорта осознанным выбором не является.
+            favorite = playlist_artist_totals[key] >= _PLAYLIST_ARTIST_MIN_TRACKS
+            weight = (
+                4.0 if favorite else _PLAYLIST_WEAK_WEIGHT
+            ) * _curation_decay(added_at)
+            artist_positive[key] = artist_positive.get(key, 0) + weight
+            if favorite:
+                artist_curated_count[key] = artist_curated_count.get(key, 0) + 1
+                priority_artist_keys.add(key)
             genre = t.genre or infer_genre_from_text(t.title, t.artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, 4.0 * _curation_decay(added_at)))
+            weighted_titles.append((t.title, weight))
         for t, play_count, last_played in played:
             w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
             # Доля дослушивания модулирует вес прослушиваний: стабильно

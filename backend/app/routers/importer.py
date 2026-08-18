@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
+from app.artist_utils import split_title_artist
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
@@ -376,11 +377,11 @@ async def _extract_collection(
         if e.get("artists") or e.get("uploader") or e.get("artist"):
             continue
         title = e.get("title") or ""
-        if " - " in title:
-            artist, _, rest = title.partition(" - ")
-            # artists читают и _artist_of, и soundcloud._artist.
-            e["artists"] = [artist.strip()]
-            e["title"] = rest.strip() or title
+        split = split_title_artist(title)
+        if split:
+            # artists читают и _artist_of, и soundcloud._declared_artist.
+            e["artists"] = [split[0]]
+            e["title"] = split[1]
         elif coll_artist:
             e["artists"] = [coll_artist]
 

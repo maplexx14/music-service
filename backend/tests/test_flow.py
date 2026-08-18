@@ -42,6 +42,7 @@ def _no_network(monkeypatch):
     monkeypatch.setattr("app.routers.flow._soundcloud_pool", _empty)
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _empty)
     monkeypatch.setattr("app.routers.flow._tag_pool", _empty)
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _empty)
 
 
 def _external(artist, title, external_id):
@@ -196,6 +197,33 @@ def test_flow_includes_similar_artists(client, db, monkeypatch):
     artists = {t["artist"] for t in resp.json()}
     assert artists & {"UnknownNeighbour", "AnotherNeighbour"}, (
         f"похожие артисты не дошли до выдачи: {artists}"
+    )
+
+
+def test_flow_includes_lastfm_similar_tracks(client, db, monkeypatch):
+    """Похожие треки Last.fm доезжают до выдачи, когда YT-разведка молчит.
+
+    Тот самый случай, ради которого источник и добавлен: у юзера нет ни одного
+    ytmusic-трека, поэтому радио сеять нечем, а граф артистов (тоже YT) пуст.
+    Похожесть по паре артист+название от videoId не зависит и работает —
+    см. app/beets_similar.py и модульный docstring flow.py.
+    """
+    user = create_user(db)
+    _liked(db, user)
+
+    async def _lastfm(request, artist, title):
+        # Курированный трек — "GoodArtist - liked-song" (см. _liked).
+        assert (artist, title) == ("GoodArtist", "liked-song")
+        return [_external("SimilarByName", "похожий трек", "lfm1")]
+
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+
+    artists = {t["artist"] for t in resp.json()}
+    assert "SimilarByName" in artists, (
+        f"похожие по названию треки не дошли до выдачи: {artists}"
     )
 
 
@@ -589,6 +617,124 @@ def test_flow_does_not_treat_imported_playlist_as_favorite_artists(
     )
     assert resp.status_code == 200, resp.text
     assert requested_artists == [], requested_artists
+
+
+def _imported_playlist(db, user, tracks, name="Imported"):
+    """Импортированный плейлист: (артист, название) → треки в коллекции юзера."""
+    playlist = Playlist(
+        name=name,
+        description="Импортировано из SoundCloud",
+        is_public=False,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    for position, (artist, title) in enumerate(tracks):
+        track = Track(
+            title=title,
+            artist=artist,
+            duration=100,
+            source="local",
+            file_path=f"minio://music/{artist}-{position}.mp3",
+        )
+        db.add(track)
+        db.commit()
+        db.execute(
+            playlist_tracks.insert().values(
+                playlist_id=playlist.id, track_id=track.id, position=position
+            )
+        )
+    db.commit()
+    return playlist
+
+
+def test_flow_needs_three_playlist_tracks_to_call_an_artist_favorite(db):
+    """Один трек из импорта любимым артиста не делает, три — делают.
+
+    Импорт приводит сотни имён одним движением, и каждое становилось любимым с
+    первого же трека: любимый проходит вкусовой фильтр в обход всех проверок и
+    забирает гарантированную квоту разведки. Порог — по числу треков артиста в
+    собственных плейлистах (_PLAYLIST_ARTIST_MIN_TRACKS).
+    """
+    from app.routers.flow import _taste_profile
+
+    user = create_user(db, username="import-threshold-user")
+    _imported_playlist(
+        db,
+        user,
+        [("RealFavorite", f"песня {i}") for i in range(3)]
+        + [("PassingBy", "единственная песня"), ("AlsoPassing", "тоже одна")],
+    )
+
+    profile = _taste_profile(db, user.id)
+    curated = set(profile["curated_artist_keys"])
+    assert "realfavorite" in curated
+    assert curated.isdisjoint({"passingby", "alsopassing"}), curated
+    # Гарантированная квота SC-разведки — тоже только любимым.
+    assert [a.lower() for a in profile["playlist_artists"]] == ["realfavorite"]
+    # Но их треки остаются СВОЕЙ библиотекой: артист не выпадает из скоупа,
+    # иначе локальный пул перестал бы видеть остальной каталог этих имён.
+    assert {"passingby", "alsopassing"} <= set(profile["artist_weight"])
+
+
+def test_flow_keeps_import_only_library_out_of_global_top(client, db):
+    """Библиотека из одиночных импортов не включает холодный старт.
+
+    Ни один артист порога любимого не набирает, но вкус у юзера есть — чужой
+    глобальный топ по play_count ему тем более противопоказан (см. регрессию в
+    test_flow_ignores_other_users_library).
+    """
+    user = create_user(db, username="import-only-user")
+    _imported_playlist(db, user, [("MineArtist", "своя песня")])
+    # Второй трек того же артиста НЕ в плейлисте — иначе выдача пуста по
+    # постороннему поводу (плейлистные треки исключаются как «уже в коллекции»)
+    # и тест прошёл бы, ничего не проверив.
+    mine_fresh = Track(
+        title="ещё своя песня",
+        artist="MineArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/mine-fresh.mp3",
+    )
+    db.add(mine_fresh)
+    db.commit()
+
+    stranger = create_user(db, username="stranger")
+    stranger_pl = Playlist(name="Импорт", is_public=False, owner_id=stranger.id)
+    db.add(stranger_pl)
+    db.commit()
+    db.refresh(stranger_pl)
+    loud = [
+        Track(
+            title=f"Чужой хит {i}",
+            artist=f"StrangerArtist{i}",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/stranger{i}.mp3",
+            play_count=900 + i,
+        )
+        for i in range(10)
+    ]
+    db.add_all(loud)
+    db.commit()
+    for position, track in enumerate(loud):
+        db.execute(
+            playlist_tracks.insert().values(
+                playlist_id=stranger_pl.id, track_id=track.id, position=position
+            )
+        )
+    db.commit()
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=10",
+        headers=auth_headers(client, username="import-only-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    artists = {t["artist"] for t in resp.json()}
+    leaked = {a for a in artists if a.startswith("Stranger")}
+    assert not leaked, f"в волну протекла чужая библиотека: {leaked}"
+    assert "MineArtist" in artists, f"своя библиотека тоже пропала: {artists}"
 
 
 def test_flow_searches_explicit_genres(client, db, monkeypatch):

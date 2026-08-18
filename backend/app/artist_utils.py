@@ -5,6 +5,7 @@ artists.py для единообразного сравнения имён ар�
 (SoundCloud/YT Music отдают одно имя в разном регистре/формате).
 """
 import re
+from typing import Optional
 
 
 def artist_key(name: str) -> str:
@@ -146,3 +147,108 @@ def split_artists(name: str) -> list[str]:
         return parts
     fallback = (name or "").strip()
     return [fallback] if fallback else []
+
+
+# --- «Артист - Название» в заголовке трека («артисты-загрузчики») -----------
+#
+# SoundCloud полон каналов-перезаливщиков: аккаунт сам ничего не исполняет, а
+# выкладывает чужое, указывая настоящего исполнителя прямо в названии трека —
+# «Kordhell - Murder In My Mind». Имя такого аккаунта исполнителем не является:
+# без разбора одна витрина уезжала в медиатеку «артистом» сотни чужих треков,
+# её страница собирала музыку разных людей, а профиль вкуса получал имя,
+# которого пользователь никогда не слушал.
+#
+# Разбор намеренно осторожный: принять часть названия за артиста дороже, чем не
+# опознать перезаливщика (первое портит и страницу артиста, и профиль вкуса,
+# второе лишь сохраняет нынешнее поведение), поэтому всё сомнительное
+# остаётся как есть — исполнителем становится аккаунт. Известный остаточный
+# промах — префикс релиза вместо имени («Succession - Andante Risoluto», где
+# исполнитель Nicholas Britell); его снимают метаданные провайдера
+# (publisher_metadata.artist / album_title), когда они есть.
+
+# Разделитель — только с пробелами по краям: «Sub-Zero» и «K-391» не должны
+# разъезжаться на артиста и название.
+_TITLE_SPLIT_RE = re.compile(r"\s+[-–—―‒]\s+|\s+\|\s+")
+
+# Промо-обвязка перед именем: «[FREE] Artist - Title», «PREMIERE: Artist -
+# Title», «FREE DL | Artist - Title».
+_PROMO = (
+    r"free(?:\s*(?:dl|d/l|download|release))?|premieres?|exclusive|out\s*now"
+    r"|new|unreleased|teaser|snippet|preview|repost|sponsored"
+    r"|премьера|эксклюзив|новинка|бесплатно"
+)
+_PROMO_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"[\(\[{]\s*(?:" + _PROMO + r")[^)\]}]{0,24}[)\]}]"
+    r"|(?:" + _PROMO + r")\s*[:|]"
+    r")\s*",
+    re.IGNORECASE,
+)
+
+# Левая часть, которая исполнителем быть не может: номер дорожки, промо-слово.
+_NOT_ARTIST_RE = re.compile(
+    r"^(?:\d{1,3}[.)]?|track\s*\d+|" + _PROMO + r")$", re.IGNORECASE
+)
+
+# Правая часть — только пометка версии: значит слева НЕ артист, а название
+# трека («Midnight City - Extended Mix»).
+_VERSION_ONLY_RE = re.compile(
+    r"^(?:(?:extended|original|radio|club|dub|vip|instrumental|acoustic|live"
+    r"|dirty|clean|slowed|reverb|sped\s*up|nightcore|festival|bass|tech|deep"
+    r"|future|hard)\s+){0,2}"
+    r"(?:mix|edit|remix|version|master|remaster(?:ed)?|cut|bootleg|flip|dub"
+    r"|vip|intro|outro|interlude|snippet|preview|demo|instrumental|acapella"
+    r"|single|ep|lp)$",
+    re.IGNORECASE,
+)
+
+# Имя исполнителя короткое: длинная левая часть — это описание релиза, а не имя.
+_ARTIST_TITLE_MAX_WORDS = 6
+_ARTIST_TITLE_MAX_CHARS = 50
+
+
+def split_title_artist(title: str) -> Optional[tuple[str, str]]:
+    """«Артист - Название» → (артист, название). None, если разбор ненадёжен."""
+    raw = _PROMO_PREFIX_RE.sub("", title or "").strip()
+    parts = _TITLE_SPLIT_RE.split(raw, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    artist, rest = (part.strip(" -–—―‒|") for part in parts)
+    if not artist or not rest:
+        return None
+    if len(artist) > _ARTIST_TITLE_MAX_CHARS:
+        return None
+    if len(artist.split()) > _ARTIST_TITLE_MAX_WORDS:
+        return None
+    if _NOT_ARTIST_RE.match(artist) or _VERSION_ONLY_RE.match(rest):
+        return None
+    return artist, rest
+
+
+def resolve_track_artist(
+    title: str,
+    uploader: str = "",
+    declared: str = "",
+    album: str = "",
+) -> tuple[str, str]:
+    """(исполнитель, название) для трека, у которого известен лишь аккаунт.
+
+    declared — исполнитель из метаданных провайдера (у SoundCloud это
+    publisher_metadata.artist): он авторитетнее и аккаунта, и разбора названия.
+    album — релиз оттуда же: если именно он стоит префиксом в заголовке, слева
+    не исполнитель. uploader — имя аккаунта, последний резерв.
+    """
+    title = (title or "").strip()
+    declared = (declared or "").strip()
+    split = split_title_artist(title)
+    if split and album and same_artist(split[0], album):
+        split = None  # префикс — название релиза, а не имя исполнителя
+    if declared:
+        # Префикс дублирует исполнителя («Kordhell - Murder In My Mind» при
+        # publisher_metadata.artist = «Kordhell») — в названии он лишний.
+        if split and same_artist(split[0], declared):
+            return declared, split[1]
+        return declared, title
+    if split:
+        return split
+    return (uploader or "").strip() or "Unknown Artist", title

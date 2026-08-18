@@ -200,6 +200,9 @@ services:
       # Статическая альтернатива файлу: адрес прокси одной строкой.
       STREAM_PROXY: ${STREAM_PROXY:-}
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
+      # Похожие треки по названию для потока рекомендаций (см.
+      # app/beets_similar.py). Пусто = источник выключен.
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
       SPOTIFY_MARKET: ${SPOTIFY_MARKET:-US}

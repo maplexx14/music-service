@@ -9,10 +9,21 @@
 Не претендует на точность полноценной жанровой классификации — простое
 совпадение по подстроке, порядок словаря — это и приоритет (специфичное
 раньше общего, например "phonk" проверяется раньше "electronic").
+
+На промахе этого словаря спрашиваем ЖАНРОВЫЕ ДАННЫЕ BEETS (см. beets_genre):
+там 1568 канонических имён, таблица вариантов написания и дерево наследования,
+которое сводит незнакомое имя ("Dark Wave", "Eurodance", "Witch House") к
+одному из ключей ниже. Словарь проекта остаётся первым и главным: он знает
+кириллицу и фонк, которых у beets нет, а спорные имена (trap!) закреплены за
+нашей трактовкой в beets_genre._APP_OWNED. Beets только ДОБАВЛЯЕТ определения
+там, где раньше возвращался None, — а None в taste.py означал «жанр
+неопределим» и пропускал кандидата на грубую языковую проверку.
 """
 import re
 from collections import Counter
 from typing import Optional
+
+from app import beets_genre
 
 GENRE_KEYWORDS: dict = {
     "phonk": ["phonk", "фонк", "drift phonk", "funk"],
@@ -85,14 +96,20 @@ _KEYWORD_PATTERNS = {
 def infer_genre_from_text(title: str, artist: str = "") -> Optional[str]:
     """Возвращает первый жанр, чьи ключевые слова встретились в title/artist,
     либо None, если ничего не подошло. Слова-модификаторы (remix и т.п.)
-    сами по себе жанром не считаются."""
+    сами по себе жанром не считаются.
+
+    На промахе словаря ищем в тексте СОСТАВНОЕ имя жанра из данных beets
+    ("Dark Wave", "Drum & Bass", "Witch House") и сводим его деревом к нашему
+    ключу. Одиночные слова у beets не спрашиваем — на прозе они дают ровно те
+    ложные срабатывания, от которых защищает _KEYWORD_PATTERNS.
+    """
     text = f"{title or ''} {artist or ''}"
     if not text.strip():
         return None
     for genre, pattern in _KEYWORD_PATTERNS.items():
         if pattern.search(text):
             return genre
-    return None
+    return beets_genre.internal_from_text(text)
 
 
 def top_genre_keywords(genre_counts: dict, top_n: int = 3) -> list:
@@ -149,4 +166,12 @@ def genre_is_compatible(explicit_genre, title: str, artist: str, user_genres: se
     # Провайдеры часто присылают свободную строку вроде "Rock & Roll" вместо
     # внутреннего ключа "rock". Прогоняем метаданные через тот же словарь.
     inferred = infer_genre_from_text(normalized_genre)
-    return inferred in normalized_user_genres if inferred else False
+    if inferred:
+        return inferred in normalized_user_genres
+    # Словарь проекта имя не узнал. Здесь строка ЗАЯВЛЕНА жанром целиком,
+    # поэтому beets можно спросить и об односложном имени ("Eurodance",
+    # "Grime", "Shoegaze") — в отличие от поиска по названию трека. Ответ
+    # учитываем только положительный: своё «не узнал» и так означало
+    # отбраковку, так что beets способен лишь вернуть в выдачу жанр, который
+    # действительно сводится ко вкусу юзера, но отсутствует в наших 12 ключах.
+    return beets_genre.matches_user_genres(normalized_genre, normalized_user_genres)

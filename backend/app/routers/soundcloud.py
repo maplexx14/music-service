@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from app.cache import get_cache_async, set_cache_async
+from app.artist_utils import resolve_track_artist
 from app.routers.ytdlp import (
     CACHE_DIR,
     MEDIA_TYPES,
@@ -55,10 +56,11 @@ _TRANSIENT_TTL = 25
 _HLS_MAX_BYTES = int(os.getenv("ARCHIVE_MAX_AUDIO_BYTES", str(60 * 1024 * 1024)))
 
 
-def _artist(entry: dict) -> str:
+def _declared_artist(entry: dict) -> str:
+    """Исполнитель из метаданных yt-dlp (не имя аккаунта). '' — метаданных нет."""
     artists = entry.get("artists") or []
     name = ", ".join(a for a in artists if a).strip()
-    return name or (entry.get("uploader") or "Unknown Artist")
+    return name or (entry.get("artist") or "").strip()
 
 
 def _thumb(entry: dict) -> Optional[str]:
@@ -102,12 +104,19 @@ def _normalize(request: Request, entry: dict) -> Optional[ExternalTrackResponse]
 
     base_url = str(request.base_url).rstrip("/")
     token = _encode_token(str(track_id), permalink)
+    # Имя аккаунта — последний резерв: у перезаливщика оно не имя исполнителя
+    # (см. artist_utils.resolve_track_artist).
+    artist, title = resolve_track_artist(
+        entry.get("title") or "Unknown",
+        uploader=entry.get("uploader") or "",
+        declared=_declared_artist(entry),
+    )
     return ExternalTrackResponse(
         id=f"soundcloud:{track_id}",
         source="soundcloud",
         external_id=str(track_id),
-        title=clean_title(entry.get("title") or "Unknown"),
-        artist=_artist(entry),
+        title=clean_title(title),
+        artist=artist,
         album=None,
         duration=int(entry.get("duration") or 0),
         cover_url=_thumb(entry),
@@ -150,6 +159,23 @@ def entry_to_import(request: Request, entry: dict) -> Optional["ExternalTrackImp
 # обновление при 401/403). yt-dlp остаётся фолбэком на случай смены API.
 
 
+def _api_artist_title(item: dict) -> tuple[str, str]:
+    """(исполнитель, название) из полного объекта трека api-v2.
+
+    publisher_metadata — метаданные дистрибуции самого правообладателя, они
+    точнее и имени аккаунта, и разбора заголовка. Их нет у любительских
+    загрузок — там опознаём перезаливщика по заголовку «Артист - Название»
+    (см. artist_utils.resolve_track_artist).
+    """
+    publisher = item.get("publisher_metadata") or {}
+    return resolve_track_artist(
+        item.get("title") or "Unknown",
+        uploader=(item.get("user") or {}).get("username") or "",
+        declared=publisher.get("artist") or "",
+        album=publisher.get("album_title") or "",
+    )
+
+
 def _normalize_api(request: Request, item: dict) -> Optional[ExternalTrackResponse]:
     """Трек из api-v2 /search/tracks → ExternalTrackResponse."""
     track_id = item.get("id")
@@ -162,12 +188,13 @@ def _normalize_api(request: Request, item: dict) -> Optional[ExternalTrackRespon
         artwork = artwork.replace("-large.", "-t500x500.")
     base_url = str(request.base_url).rstrip("/")
     token = _encode_token(str(track_id), permalink)
+    artist, title = _api_artist_title(item)
     return ExternalTrackResponse(
         id=f"soundcloud:{track_id}",
         source="soundcloud",
         external_id=str(track_id),
-        title=clean_title(item.get("title") or "Unknown"),
-        artist=(item.get("user") or {}).get("username") or "Unknown Artist",
+        title=clean_title(title),
+        artist=artist,
         album=None,
         duration=int((item.get("duration") or 0) / 1000),
         cover_url=artwork,
@@ -885,13 +912,7 @@ def _track_from_api(request: Request, item: dict) -> Optional[ExternalTrackRespo
     if not track_id or not permalink or "soundcloud.com/" not in permalink:
         return None
     user = item.get("user") or {}
-    title = item.get("title") or "Unknown"
-    artist = user.get("username") or "Unknown Artist"
-    # Частый паттерн «Артист - Название» в title — раскладываем.
-    if " - " in title and (not user.get("username") or artist == title.partition(" - ")[0]):
-        maybe_artist, _, rest = title.partition(" - ")
-        if rest.strip():
-            artist, title = maybe_artist.strip(), rest.strip()
+    artist, title = _api_artist_title(item)
 
     base_url = str(request.base_url).rstrip("/")
     token = _encode_token(str(track_id), permalink)

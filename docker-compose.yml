@@ -139,6 +139,13 @@ services:
       # ─── Yandex Music (нативная интеграция) ───
       # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
+      # ─── Last.fm (похожие треки для потока рекомендаций) ───
+      # Ключ нужен только источнику «похожие по названию трека»
+      # (app/beets_similar.py → flow._lastfm_pool). Пусто = источник выключен,
+      # поток работает на остальных трёх. Встроенный ключ beets в фолбэке есть,
+      # но Last.fm отвечает на него Access Denied, так что нужен свой:
+      # https://www.last.fm/api/account/create
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
       # ─── Spotify (метаданные для импорта; аудио матчится в YouTube Music) ───
       # Client ID/Secret приложения: https://developer.spotify.com/dashboard
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
