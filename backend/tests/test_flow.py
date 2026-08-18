@@ -8,12 +8,14 @@ _local_candidates и к current_user.id — если закрытие что-т�
 падает на пустой выдаче или на DetachedInstanceError.
 """
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.cache import clear_pattern
 from app.models import Track, Playlist, playlist_tracks, user_track_plays
+from app.routers.flow import _MAX_PER_ARTIST, _MIN_ARTIST_GAP, _artist_cap
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -359,10 +361,16 @@ def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
     first_ids = {track["external_id"] for track in first.json()}
     second_ids = {track["external_id"] for track in second.json()}
     assert first_ids.isdisjoint(second_ids), (first_ids, second_ids)
-    assert {"Loved6", "Loved7"} <= second_artists, (
-        first_artists,
-        second_artists,
+    # Ротация дошла до имён, которых в первой порции не было.
+    assert second_artists - first_artists, (first_artists, second_artists)
+    # Бюджет мест на артиста переносится между подгрузками (history["artists"]),
+    # поэтому за две порции ни одно имя не набирает больше своего капа. Проверять
+    # конкретные Loved6/Loved7 нельзя: сколько имён поместится в порцию, решает
+    # кап, а какие именно — случайный порядок внутри пула.
+    across_batches = Counter(
+        track["artist"] for track in first.json() + second.json()
     )
+    assert max(across_batches.values()) <= _artist_cap(6), across_batches
 
 
 def test_flow_spreads_dominant_artist(client, db, monkeypatch):
@@ -814,6 +822,21 @@ def test_flow_discovery_never_overflows_artist_cap(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
     artists = [track["artist"] for track in resp.json()]
     assert artists.count("Solo") <= 4, artists
+
+
+def test_artist_cap_allows_only_what_the_gap_can_spread():
+    """Кап на артиста и разнос — одно требование с двух сторон.
+
+    Повторы имени в порции разрешены, но k треков одного артиста укладываются в
+    limit позиций с зазором _MIN_ARTIST_GAP только при (k - 1) * gap < limit.
+    Прежний кап (6 из 15) это условие нарушал, и одно имя возвращалось каждые
+    два-три трека — разнести его было уже физически нечем.
+    """
+    for limit in (5, 8, 15, 20, 30, 50):
+        cap = _artist_cap(limit)
+        assert (cap - 1) * _MIN_ARTIST_GAP < limit or cap == 2, (limit, cap)
+        assert cap <= _MAX_PER_ARTIST, (limit, cap)
+    assert _artist_cap(15) == 4, "порция из 15 должна допускать 4 трека одного имени"
 
 
 def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):
