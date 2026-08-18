@@ -76,6 +76,10 @@ const QUEUE_EXTEND_LEAD = 5
 // реального прибытия хвоста — в том числе когда запрос стартовал до его вызова.
 let queueExtendPromise = null
 
+// Сколько треков «Перемешать» на странице плейлиста забирает перед стартом
+// (см. shufflePlaylist). 100 — максимум страницы на бэке (limit le=100).
+const SHUFFLE_WINDOW = 100
+
 // Монотонный id позволяет обработчику перемотки сбросить именно тот запрос,
 // который он применил, не затерев более свежий seek из следующего рендера.
 let seekRequestSequence = 0
@@ -678,6 +682,53 @@ const usePlayerStore = create((set, get) => ({
       [tracks[actualIndex], get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean),
       3
     )
+  },
+
+  // «Перемешать» со страницы плейлиста: включает случайный порядок и стартует
+  // с произвольного трека. Отдельное действие, а не toggleShuffle +
+  // playPlaylist: toggle выключил бы режим, если он уже включён, а playPlaylist
+  // начинает ровно с переданного индекса — то есть первый трек оказался бы не
+  // случайным.
+  //
+  // Страница отдаёт только загруженный ею кусок плейлиста (первые 20 треков),
+  // поэтому перед стартом добираем окно пошире одним запросом: иначе
+  // «перемешать» на большом плейлисте — это случайный порядок двадцати самых
+  // заигранных треков, а не плейлиста. Хвост дальше окна доберёт по пейджеру
+  // extendQueueIfNeeded (он тоже подмешивает новые индексы в конец порядка).
+  shufflePlaylist: async (tracks, source = null, pager = null) => {
+    if (tracks.length === 0) return
+    let list = tracks
+    if (pager?.url && pager.total > tracks.length && tracks.length < SHUFFLE_WINDOW) {
+      try {
+        const response = await api.get(pager.url, {
+          params: { ...pager.params, skip: 0, limit: SHUFFLE_WINDOW },
+          skipErrorToast: true,
+        })
+        const fetched = response.data?.tracks || []
+        if (fetched.length > list.length) list = fetched
+      } catch (error) {
+        // Не повод не перемешать: стартуем тем, что уже загружено.
+        console.error('Shuffle window fetch error:', error)
+      }
+    }
+    // set до playPlaylist: он читает isShuffle через get() и сам раскладывает
+    // перемешанный порядок обхода очереди.
+    set({ isShuffle: true })
+    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager)
+    // playPlaylist ставит стартовый трек туда, куда он попал в перемешанном
+    // порядке, — то есть в середину, и всё, что оказалось до него, за проход
+    // вперёд уже не сыграет. Прокручиваем порядок так, чтобы старт стал первым:
+    // тогда «Перемешать» обходит весь плейлист, а не случайный его хвост.
+    const { shuffledOrder, currentShuffleIndex } = get()
+    if (currentShuffleIndex > 0) {
+      set({
+        shuffledOrder: [
+          ...shuffledOrder.slice(currentShuffleIndex),
+          ...shuffledOrder.slice(0, currentShuffleIndex),
+        ],
+        currentShuffleIndex: 0,
+      })
+    }
   },
 
   toggleRepeatOne: () => {

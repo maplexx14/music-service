@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
-import { Play, Heart, MoreVertical, Plus } from 'lucide-react'
+import { Play, Shuffle, Heart, MoreVertical, Plus } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
@@ -26,9 +26,13 @@ function PlaylistDetail() {
   const [loadError, setLoadError] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
+  // Взведён, пока «Перемешать» добирает окно треков перед стартом (см.
+  // shufflePlaylist в store) — иначе нажатие ничем не отвечает.
+  const [shuffling, setShuffling] = useState(false)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const shufflePlaylist = usePlayerStore((s) => s.shufflePlaylist)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
@@ -98,6 +102,16 @@ function PlaylistDetail() {
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
       playPlaylist(playlist.tracks, 0, null, queuePager())
+    }
+  }
+
+  const handleShuffle = async () => {
+    if (shuffling || !playlist.tracks || playlist.tracks.length === 0) return
+    setShuffling(true)
+    try {
+      await shufflePlaylist(playlist.tracks, null, queuePager())
+    } finally {
+      setShuffling(false)
     }
   }
 
@@ -186,10 +200,19 @@ function PlaylistDetail() {
               </>
             )}
           </div>
-          <div className="playlist-actions">
+          <div className="playlist-actions shuffle-actions">
             <button className="play-button-large" onClick={handlePlay}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
+            </button>
+            <button
+              className="play-button-large secondary"
+              onClick={handleShuffle}
+              disabled={shuffling}
+              title="Перемешать и воспроизвести"
+            >
+              <Shuffle size={20} />
+              {shuffling ? 'Загрузка…' : 'Перемешать'}
             </button>
           </div>
         </div>
