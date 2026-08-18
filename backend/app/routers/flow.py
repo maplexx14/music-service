@@ -1671,7 +1671,7 @@ async def get_flow(
             if liked_ids
             else []
         )
-        exploit = [
+        valid_liked_tracks = [
             t for t in liked_tracks
             if (
                 t.id not in blocked_local_ids
@@ -1680,13 +1680,23 @@ async def get_flow(
                 and _media_available(t)
             )
         ]
-        liked_track_ids = {t.id for t in liked_tracks}
-        exploit = liked_tracks + [t for t in exploit if t.id not in liked_track_ids]
+        liked_track_ids = {t.id for t in valid_liked_tracks}
+        priority_exploit_count = len(valid_liked_tracks)
+        exploit = valid_liked_tracks + [
+            t for t in exploit if t.id not in liked_track_ids
+        ]
+    else:
+        priority_exploit_count = 0
 
     # --- жанровая квота ---
     # genre_quota, artist_budget/artist_cap и favorite_cap посчитаны выше: от них
     # зависело, нужны ли резервные источники разведки (_batch_capacity).
-    random.shuffle(exploit)
+    if limit == 15:
+        suffix = exploit[priority_exploit_count:]
+        random.shuffle(suffix)
+        exploit[priority_exploit_count:] = suffix
+    else:
+        random.shuffle(exploit)
 
     if limit == 15:
         # The source contract is stronger than the cross-batch artist budget:
