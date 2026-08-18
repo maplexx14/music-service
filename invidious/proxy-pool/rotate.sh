@@ -43,7 +43,7 @@
 #  * Пароли в лог не попадают: везде печатается только ip:port.
 set -Eeuo pipefail
 
-COMPOSE_DIR="${COMPOSE_DIR:-/opt/music-service/invidious}"
+COMPOSE_DIR="${COMPOSE_DIR:-/root/music-service/invidious}"
 # Список прокси и файл активного выхода (последний генерируется скриптом и
 # читается compose как env_file).
 LIST="${LIST:-$COMPOSE_DIR/proxy-pool/proxies.list}"

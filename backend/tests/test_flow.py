@@ -15,7 +15,12 @@ import pytest
 
 from app.cache import clear_pattern
 from app.models import Track, Playlist, playlist_tracks, user_track_plays
-from app.routers.flow import _MAX_PER_ARTIST, _MIN_ARTIST_GAP, _artist_cap
+from app.routers.flow import (
+    _MAX_PER_ARTIST,
+    _MIN_ARTIST_GAP,
+    _artist_cap,
+    _balanced_quota,
+)
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -75,6 +80,86 @@ def _liked(db, user, artist="GoodArtist", title="liked-song"):
     )
     db.commit()
     return playlist, track
+
+
+def test_balanced_quota_uses_requested_distribution():
+    assert _balanced_quota(
+        {"lastfm": 3, "liked": 5, "favorite": 7},
+        {"lastfm": 20, "liked": 20, "favorite": 20},
+        15,
+    ) == {"lastfm": 3, "liked": 5, "favorite": 7}
+
+
+def test_balanced_quota_spreads_missing_slots_evenly():
+    assert _balanced_quota(
+        {"lastfm": 3, "liked": 5, "favorite": 7},
+        {"lastfm": 0, "liked": 20, "favorite": 20},
+        15,
+    ) == {"lastfm": 0, "liked": 7, "favorite": 8}
+
+
+def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
+    client, db, monkeypatch
+):
+    user = create_user(db, username="quota-user")
+    playlist = Playlist(
+        name="Liked",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="LovedArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/liked-{i}.mp3",
+        )
+        for i in range(5)
+    ]
+    db.add_all(liked)
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    async def _lastfm(request, artist, title):
+        suffix = title.rsplit("-", 1)[-1]
+        return [_external(f"Explore{suffix}", f"explore-{suffix}", f"lfm{suffix}")]
+
+    async def _favorite(request, artist):
+        assert artist == "LovedArtist"
+        return [
+            _external("LovedArtist", f"new-{i}", f"favorite{i}")
+            for i in range(7)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="quota-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    tracks = resp.json()
+    assert len(tracks) == 15
+    assert sum(isinstance(track["id"], int) for track in tracks) == 5
+    assert sum(
+        str(track.get("external_id") or "").startswith("lfm") for track in tracks
+    ) == 3
+    assert sum(
+        str(track.get("external_id") or "").startswith("favorite")
+        for track in tracks
+    ) == 7
 
 
 def test_flow_returns_local_tracks_after_session_close(client, db):
