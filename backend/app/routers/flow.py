@@ -699,6 +699,14 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
+    # In the fixed 15-track mix, liked tracks are emitted by a dedicated
+    # source. Keep them out of the non-liked local pool so they cannot consume
+    # the per-artist candidate window before the liked quota is applied.
+    if limit == _STANDARD_FLOW_LIMIT:
+        exclude_ids.update(profile.get("liked_track_ids") or [])
+    candidate_artist_cap = (
+        limit if limit == _STANDARD_FLOW_LIMIT else _MAX_PER_ARTIST
+    )
     # Уже прослушанные треки исключаем ВСЕ, а не только последние
     # _RECENT_PLAYS_EXCLUDE: recent_ids — окно из 100 записей, и на истории
     # длиннее окна волна возвращала давно сыгранное как «новое». Anti-join
@@ -809,7 +817,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         candidates = q.order_by(func.random()).limit(max(limit * 100, 500)).all()
         candidates = [t for t in candidates if _keep(t) and _media_available(t)]
         candidates.sort(key=_score)
-        candidates = cap_per_artist(candidates, _MAX_PER_ARTIST)
+        candidates = cap_per_artist(candidates, candidate_artist_cap)
 
     # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
     # жанровой проверки попадал случайный глобальный top по play_count — именно
@@ -845,7 +853,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             if _keep_strict(t) and _media_available(t)
         ]
         pool.sort(key=_score)
-        candidates.extend(cap_per_artist(pool, _MAX_PER_ARTIST)[: limit * 2])
+        candidates.extend(cap_per_artist(pool, candidate_artist_cap)[: limit * 2])
 
     return candidates
 
