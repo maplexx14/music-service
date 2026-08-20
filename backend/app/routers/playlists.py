@@ -10,6 +10,7 @@ from app.models import Playlist, Track, User, playlist_tracks
 from app.schemas import PlaylistResponse, PlaylistSummaryResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
 from app.dependencies import get_current_active_user
 from app.routers.tracks import get_or_create_liked_playlist
+from app.recommendation_cache import invalidate_recommendation_cache
 
 # Дефолт для страницы плейлиста: показываем DEFAULT_TRACKS_LIMIT треков,
 # остальное подгружается кнопкой «Показать ещё» (см. get_playlist/
@@ -142,6 +143,7 @@ def create_playlist(
     db.add(db_playlist)
     db.commit()
     db.refresh(db_playlist)
+    invalidate_recommendation_cache(current_user.id)
     return db_playlist
 
 
@@ -165,6 +167,7 @@ def update_playlist(
     
     db.commit()
     db.refresh(playlist)
+    invalidate_recommendation_cache(current_user.id)
     return playlist
 
 
@@ -225,6 +228,7 @@ def delete_playlist(
 
     db.delete(playlist)
     db.commit()
+    invalidate_recommendation_cache(current_user.id)
     return None
 
 
@@ -265,6 +269,7 @@ def add_track_to_playlist(
     )
     db.execute(stmt)
     db.commit()
+    invalidate_recommendation_cache(current_user.id)
     
     return {"message": "Track added to playlist"}
 
@@ -292,4 +297,5 @@ def remove_track_from_playlist(
     
     playlist.tracks.remove(track)
     db.commit()
+    invalidate_recommendation_cache(current_user.id)
     return {"message": "Track removed from playlist"}

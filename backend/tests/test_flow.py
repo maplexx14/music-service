@@ -12,14 +12,22 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from app.cache import clear_pattern
-from app.models import Track, Playlist, playlist_tracks, user_track_plays
+from app.models import (
+    Track,
+    Playlist,
+    playlist_tracks,
+    recommendation_impressions,
+    user_track_plays,
+)
 from app.routers.flow import (
     _MAX_PER_ARTIST,
     _MIN_ARTIST_GAP,
     _artist_cap,
     _balanced_quota,
+    _persisted_flow_history,
 )
 from app.schemas import ExternalTrackResponse
 
@@ -80,6 +88,21 @@ def _liked(db, user, artist="GoodArtist", title="liked-song"):
     )
     db.commit()
     return playlist, track
+
+
+def test_persisted_flow_history_missing_table_preserves_outer_transaction(db):
+    """Rolling deploys may hit a DB before recommendation telemetry migrates."""
+    user = create_user(db, username="legacy-schema-flow-user")
+    user.full_name = "must survive probe"
+    # The fixture creates telemetry tables, so emulate an older schema by
+    # removing just the optional table after the pending user update.
+    db.execute(text("DROP TABLE recommendation_impressions"))
+
+    assert _persisted_flow_history(db, user.id, 10) == {}
+    db.commit()
+
+    db.refresh(user)
+    assert user.full_name == "must survive probe"
 
 
 def test_balanced_quota_uses_requested_distribution():
@@ -307,6 +330,65 @@ def test_flow_returns_local_tracks_after_session_close(client, db):
     # означала бы, что переоткрытие сессии не сработало.
     assert mix, "flow вернул пустую выдачу — локальные кандидаты не прочитались"
     assert any(t["artist"] == "GoodArtist" for t in mix)
+
+
+def test_flow_response_metadata_matches_delivery_rows(client, db):
+    user = create_user(db, username="flow-telemetry-user")
+    liked_pl = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(liked_pl)
+    db.commit()
+    liked = Track(
+        title="flow-seed",
+        artist="Flow Artist",
+        duration=100,
+        source="local",
+        file_path="minio://music/flow-seed.mp3",
+    )
+    candidate = Track(
+        title="flow-candidate",
+        artist="Flow Artist",
+        duration=100,
+        source="local",
+        file_path="minio://music/flow-candidate.mp3",
+    )
+    db.add_all([liked, candidate])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=liked_pl.id,
+            track_id=liked.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username=user.username),
+    )
+    assert response.status_code == 200, response.text
+    items = response.json()
+    assert items
+    request_ids = {item["recommendation_id"] for item in items}
+    assert len(request_ids) == 1
+    request_id = request_ids.pop()
+
+    rows = db.execute(
+        recommendation_impressions.select()
+        .where(recommendation_impressions.c.request_id == request_id)
+        .order_by(recommendation_impressions.c.position)
+    ).mappings().all()
+    assert len(rows) == len(items)
+    for position, (item, row) in enumerate(zip(items, rows)):
+        assert item["recommendation_surface"] == row["surface"] == "flow"
+        assert item["recommendation_position"] == row["position"] == position
+        assert item["recommendation_score"] == row["score"]
+        assert item["recommendation_model_version"] == row["algorithm_version"]
 
 
 def test_flow_excludes_played_tracks_but_keeps_new_tracks_by_same_artist(client, db):
@@ -556,7 +638,7 @@ def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
     # Бюджет мест на артиста переносится между подгрузками (history["artists"]),
     # поэтому за две порции ни одно имя не набирает больше своего капа. Проверять
     # конкретные Loved6/Loved7 нельзя: сколько имён поместится в порцию, решает
-    # кап, а какие именно — случайный порядок внутри пула.
+    # кап, а какие именно — контекстный порядок внутри пула.
     across_batches = Counter(
         track["artist"] for track in first.json() + second.json()
     )
@@ -597,7 +679,7 @@ def test_flow_spreads_dominant_artist(client, db, monkeypatch):
     # A-B-A-B здесь НЕ проверяем: артистов в пуле меньше, чем требует разнос, а
     # единственный способ разложить три имени без «через один» — строгая ротация
     # A B C A B C, то есть ровно тот дефект, из-за которого выбор в
-    # interleave_artists сделан стохастическим. Непериодичность проверяется на
+    # interleave_artists сделан контекстным и воспроизводимым. Непериодичность проверяется на
     # многих прогонах в test_diversity.py.
     # Миноритарные артисты не должны быть вытеснены доминирующим целиком.
     assert len(set(order)) >= 3, f"выдача выродилась в одного-двух артистов: {order}"
@@ -704,17 +786,10 @@ def test_flow_response_is_not_cacheable(client, db):
     assert resp.headers.get("cache-control") == "no-store"
 
 
-def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
-    client, db, monkeypatch
-):
-    """Новые артисты не вытесняют точные рекомендации при богатом пуле.
-
-    Повторы теперь исключаются историей прослушиваний и выданных порций, поэтому
-    для их устранения не нужна обязательная доля разведки. У каждого из десяти
-    курированных артистов есть непрослушанные треки, которых достаточно на всю
-    порцию.
-    """
-    user = create_user(db)
+def _rich_familiar_profile(db, username="alice"):
+    """Десять курированных артистов с непрослушанными треками — знакомого хватает
+    на всю порцию, поэтому доля разведки определяется ТОЛЬКО настройкой."""
+    user = create_user(db, username=username)
     _liked(db, user)
     liked_pl = db.query(Playlist).filter_by(owner_id=user.id, is_liked=True).first()
 
@@ -733,16 +808,29 @@ def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
             playlist_id=liked_pl.id, track_id=seed.id, position=pos))
         pos += 1
         for i in range(2):
-            t = Track(
+            db.add(Track(
                 title=f"свой трек {a}-{i}",
                 artist=f"OwnArtist{a}",
                 duration=100,
                 source="local",
                 file_path=f"minio://music/own{a}_{i}.mp3",
-            )
-            db.add(t)
+            ))
             db.commit()
     db.commit()
+    return user
+
+
+def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
+    client, db, monkeypatch
+):
+    """Новые артисты не вытесняют точные рекомендации при богатом пуле.
+
+    Повторы теперь исключаются историей прослушиваний и выданных порций, поэтому
+    для их устранения не нужна обязательная доля разведки. У каждого из десяти
+    курированных артистов есть непрослушанные треки, которых достаточно на всю
+    порцию. Проверяется ДЕФОЛТНАЯ доля разведки: юзер её не менял.
+    """
+    _rich_familiar_profile(db)
 
     # Разведка живая: граф артистов даёт треки НОВЫХ артистов. Берём
     # _similar_pool, а не радио: радио строится от videoId, а ytmusic-треков у
@@ -763,6 +851,62 @@ def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
     assert len(artists) == 15, artists
     assert all(a.startswith("OwnArtist") for a in artists), (
         f"разведка вытеснила точные рекомендации знакомых артистов: {artists}"
+    )
+
+
+def test_flow_high_discovery_ratio_uses_artist_graph_reserve(client, db, monkeypatch):
+    """Ползунок выше дефолта поднимает резерв разведки.
+
+    Пул похожих по ТРЕКУ (Last.fm) рассчитан на дефолтные 3 места из 15, и когда
+    юзер просит больше, граф артистов перестаёт быть только резервом — иначе
+    настройка упиралась бы в потолок пула и молча отдавала места знакомому.
+    Обратный контракт (на дефолте граф мест не занимает) — в тесте выше.
+    """
+    user = _rich_familiar_profile(db, "much-new-user")
+    user.discovery_ratio = 0.6
+    db.commit()
+
+    async def _similar(artist):
+        return [
+            _external(f"NeighbourArtist{i}", f"новый трек {i}", f"ext{i}")
+            for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="much-new-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    artists = [t["artist"] for t in resp.json()]
+    assert len(artists) == 15, artists
+    new_names = [a for a in artists if a.startswith("NeighbourArtist")]
+    assert len(new_names) >= 3, f"ползунок не поднял долю нового: {artists}"
+
+
+def test_flow_zero_discovery_ratio_drops_the_lastfm_quota(client, db, monkeypatch):
+    """Ползунок в нуле снимает гарантированную долю разведки целиком."""
+    user = _rich_familiar_profile(db, "no-new-flow-user")
+    user.discovery_ratio = 0.0
+    db.commit()
+
+    async def _lastfm(request, artist, title):
+        return [
+            _external(f"Similar{i}", f"похожий трек {i}", f"lfm{i}") for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="no-new-flow-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    artists = [t["artist"] for t in resp.json()]
+    assert len(artists) == 15, artists
+    assert all(a.startswith("OwnArtist") for a in artists), (
+        f"разведка попала в выдачу при нулевой доле: {artists}"
     )
 
 

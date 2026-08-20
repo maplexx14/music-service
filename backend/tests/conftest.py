@@ -2,6 +2,16 @@ import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+# Rate limits are not the subject of most unit tests.  Keeping their counters
+# in process makes the suite self-contained instead of requiring the Docker
+# Redis hostname merely to reset a fixture between tests.
+os.environ.setdefault("RATE_LIMIT_STORAGE_URI", "memory://")
+# Cache helpers are best-effort in production.  Use a loopback endpoint and
+# tiny timeouts in tests so their cleanup fixtures fail fast when Redis is not
+# running locally instead of adding several seconds to every case.
+os.environ.setdefault("REDIS_HOST", "127.0.0.1")
+os.environ.setdefault("REDIS_CONNECT_TIMEOUT", "0.05")
+os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.05")
 
 import pytest
 from fastapi.testclient import TestClient

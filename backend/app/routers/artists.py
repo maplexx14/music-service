@@ -29,6 +29,7 @@ from app.models import Playlist, Track, User, playlist_tracks
 from app.routers import soundcloud, ytdlp
 from app.routers.aggregate import dedup_key, dedup_sequential
 from app.routers.tracks import get_or_create_external_track
+from app.recommendation_telemetry import link_materialized_deliveries
 from app.schemas import (
     ArtistLikeResponse,
     ArtistNameRequest,
@@ -413,6 +414,13 @@ async def save_artist_playlist(
         except Exception:  # noqa: BLE001 — один битый трек не должен ронять всё
             logger.warning("failed to materialize %s for artist %s", ext.id, canonical)
             continue
+        link_materialized_deliveries(
+            db,
+            user_id=current_user.id,
+            source=ext.source,
+            external_id=ext.external_id,
+            track_id=saved.id,
+        )
         track_ids.append(saved.id)
 
     # Позиции продолжают существующие: плейлист отдаётся отсортированным по

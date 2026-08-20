@@ -11,12 +11,11 @@ user_id. У трека, который есть только у него, pop = 
 юзеру, и единственным выхлопом CF стала его приватная библиотека со скором 1.0,
 уехавшая первому юзеру в exploration.
 
-Сам rebuild здесь не гоняем: _REBUILD_SQL написан под Postgres (NOW(),
-`::float`), а тесты идут на SQLite (см. conftest). Проверяем то, что от этого
-не зависит, — сам порог и то, что он считает именно юзеров. Полный пересчёт
-проверяется на живой базе: `rebuild_cooccurrence` на двух юзерах обязан дать
-близко к нулю пар.
+SQL пересчёта совместим и с PostgreSQL, и с SQLite: тестовый раннер может
+выполнить тот же CTE без отдельной реализации.
 """
+
+from sqlalchemy import create_engine, text
 
 from app.cooccurrence import _MIN_COMMON, _REBUILD_SQL
 
@@ -41,3 +40,29 @@ def test_threshold_counts_distinct_users():
     assert "COUNT(DISTINCT a.user_id) >= :min_common" in sql, (
         f"порог должен считать разных юзеров, а не строки:\n{sql}"
     )
+
+
+def test_rebuild_sql_runs_on_sqlite():
+    engine = create_engine("sqlite://")
+    with engine.begin() as db:
+        db.exec_driver_sql(
+            "CREATE TABLE user_track_plays "
+            "(user_id INTEGER, track_id INTEGER, play_count INTEGER)"
+        )
+        db.exec_driver_sql(
+            "CREATE TABLE user_track_skips "
+            "(user_id INTEGER, track_id INTEGER, skip_count INTEGER, disliked BOOLEAN)"
+        )
+        db.exec_driver_sql(
+            "CREATE TABLE playlist_tracks (playlist_id INTEGER, track_id INTEGER)"
+        )
+        db.exec_driver_sql(
+            "CREATE TABLE playlists (id INTEGER, owner_id INTEGER, is_liked BOOLEAN)"
+        )
+        db.exec_driver_sql(
+            "CREATE TABLE track_cooccurrence "
+            "(track_id INTEGER, other_track_id INTEGER, score FLOAT, "
+            "common_users INTEGER, updated_at TIMESTAMP)"
+        )
+        db.execute(_REBUILD_SQL, {"top_n": 50, "min_common": 2})
+        assert db.execute(text("SELECT COUNT(*) FROM track_cooccurrence")).scalar() == 0

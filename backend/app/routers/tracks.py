@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from typing import List, Optional
 import logging
 import os
@@ -14,6 +15,7 @@ from mutagen import File as MutagenFile
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.recommendation_cache import invalidate_recommendation_cache
+from app.recommendation_telemetry import link_materialized_deliveries
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips, user_play_events, rec_impressions
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
 from pydantic import BaseModel, Field
@@ -28,6 +30,12 @@ from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _dialect_insert(db: Session, table):
+    if db.get_bind().dialect.name == "sqlite":
+        return sqlite_insert(table)
+    return pg_insert(table)
 
 # Allowed audio file extensions
 ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac'}
@@ -367,7 +375,16 @@ def import_external_track(
     """Материализует внешний трек в БД, возвращает локальную запись (int id)."""
     if payload.source == "local":
         raise HTTPException(status_code=400, detail="Нельзя импортировать локальный трек")
-    return get_or_create_external_track(db, payload)
+    track = get_or_create_external_track(db, payload)
+    link_materialized_deliveries(
+        db,
+        user_id=current_user.id,
+        source=payload.source,
+        external_id=payload.external_id,
+        track_id=track.id,
+    )
+    db.commit()
+    return track
 
 
 @router.post("/upload", response_model=TrackResponse, status_code=status.HTTP_201_CREATED)
@@ -873,22 +890,36 @@ def record_track_play(
         db.rollback()
         raise HTTPException(status_code=404, detail="Track not found")
 
-    # Сразу собираем атомарный UPSERT
-    stmt = pg_insert(user_track_plays).values(
+    # Insert first so we can distinguish the first listener from a repeat.
+    # The primary key makes this race-safe across concurrent play requests.
+    insert_stmt = _dialect_insert(db, user_track_plays).values(
         user_id=current_user.id,
         track_id=track_id,
         play_count=1,
         last_played=func.now(),
-    ).on_conflict_do_update(
+    ).on_conflict_do_nothing(
         index_elements=[user_track_plays.c.user_id, user_track_plays.c.track_id],
-        set_={
-            "play_count": user_track_plays.c.play_count + 1,
-            "last_played": func.now(),
-        },
     )
     
     try:
-        db.execute(stmt)
+        inserted = db.execute(insert_stmt).rowcount or 0
+        if inserted:
+            db.query(Track).filter(Track.id == track_id).update(
+                {Track.unique_listener_count: Track.unique_listener_count + 1},
+                synchronize_session=False,
+            )
+        else:
+            db.execute(
+                user_track_plays.update()
+                .where(
+                    (user_track_plays.c.user_id == current_user.id)
+                    & (user_track_plays.c.track_id == track_id)
+                )
+                .values(
+                    play_count=user_track_plays.c.play_count + 1,
+                    last_played=func.now(),
+                )
+            )
         # Сыгранный трек больше не «непринятая рекомендация» — сбрасываем его
         # счётчик показов, чтобы он не ушёл в impression-fatigue (см.
         # recommendations.py) из-за показов ДО того, как юзер его послушал.
@@ -906,6 +937,7 @@ def record_track_play(
             raise HTTPException(status_code=404, detail="Track not found")
         raise HTTPException(status_code=400, detail="Database integrity error")
         
+    invalidate_recommendation_cache(current_user.id)
     return {"message": "Play recorded"}
 
 
@@ -926,7 +958,7 @@ def record_track_skip(
         raise HTTPException(status_code=404, detail="Track not found")
 
     # Атомарный upsert — как и в /play, защищает от гонки параллельных запросов.
-    stmt = pg_insert(user_track_skips).values(
+    stmt = _dialect_insert(db, user_track_skips).values(
         user_id=current_user.id,
         track_id=track_id,
         skip_count=1,
@@ -1058,6 +1090,7 @@ def record_listen_event(
         )
     )
     db.commit()
+    invalidate_recommendation_cache(current_user.id)
     return {"message": "Listen recorded"}
 
 

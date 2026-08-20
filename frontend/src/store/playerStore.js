@@ -57,6 +57,50 @@ function invalidateFlowPreload() {
   usePlayerStore.setState({ flowPreload: null })
 }
 
+function recommendationTrackPayload(track, eventType, value, metadata = null) {
+  // Generic playback already feeds /play, /listen and /skip.  This stream is
+  // specifically for attribution to a delivered recommendation; rows without
+  // a request id cannot be evaluated and only duplicate the generic signals.
+  if (!track?.recommendation_id || !eventType) return null
+  const localId =
+    track.db_id ?? (typeof track.id === 'number' ? track.id : null)
+  const rawId = typeof track.id === 'string' ? track.id : ''
+  const externalId =
+    track.external_id ?? (rawId.includes(':') ? rawId.split(':').slice(1).join(':') : null)
+  return {
+    event_type: eventType,
+    track_id: localId || undefined,
+    source: track.source || (localId ? 'local' : undefined),
+    external_id: externalId || undefined,
+    title: track.title || undefined,
+    artist: track.artist || undefined,
+    value: value == null ? undefined : Number(value),
+    surface: track.recommendation_surface || undefined,
+    position: Number.isInteger(track.recommendation_position)
+      ? track.recommendation_position
+      : undefined,
+    request_id: track.recommendation_id || undefined,
+    algorithm_version: track.recommendation_model_version || undefined,
+    client_hour: new Date().getHours(),
+    metadata: metadata || undefined,
+  }
+}
+
+// Recommendation telemetry must never make playback controls fail. The call
+// is intentionally fire-and-forget; the server keeps external identity even
+// when materialisation is still pending.
+function postRecommendationEvent(track, eventType, value = null, metadata = null) {
+  const payload = recommendationTrackPayload(track, eventType, value, metadata)
+  if (!payload) return Promise.resolve()
+  return api
+    .post('/recommendations/events', payload, { skipErrorToast: true })
+    .catch(() => {})
+}
+
+function recordRecommendationImpression(track, metadata = null) {
+  return postRecommendationEvent(track, 'impression', null, metadata)
+}
+
 // --- Постраничная очередь (см. queuePager / extendQueueIfNeeded) ---
 // Страница плейлиста рисует треки не все сразу, а страницами по мере прокрутки,
 // и в очередь плеера попадало ровно то, что она успела загрузить. Поэтому
@@ -216,7 +260,7 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  toggleTrackLike: async (trackId) => {
+  toggleTrackLike: async (trackId, trackContext = null) => {
     if (!trackId) return
 
     const { likedTrackIds } = get()
@@ -242,6 +286,11 @@ const usePlayerStore = create((set, get) => ({
       } else {
         await api.post(`/tracks/${trackId}/like`)
       }
+      const context = trackContext || get().currentTrack
+      if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, wasLiked ? 'unlike' : 'like')
+      }
+      invalidateFlowPreload()
     } catch (error) {
       set({ likedTrackIds, dislikedTrackIds })
       throw error
@@ -264,7 +313,7 @@ const usePlayerStore = create((set, get) => ({
   // Дизлайк («не нравится»): трек уходит из рекомендаций и волны. Лайк при
   // этом снимается и на бэке (см. dislike_track), поэтому чистим его и в
   // локальном состоянии — иначе сердечко осталось бы залитым.
-  toggleTrackDislike: async (trackId) => {
+  toggleTrackDislike: async (trackId, trackContext = null) => {
     if (!trackId) return
     const { dislikedTrackIds, likedTrackIds } = get()
     const wasDisliked = dislikedTrackIds.includes(trackId)
@@ -283,6 +332,11 @@ const usePlayerStore = create((set, get) => ({
       } else {
         await api.post(`/tracks/${trackId}/dislike`)
       }
+      const context = trackContext || get().currentTrack
+      if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, wasDisliked ? 'undislike' : 'dislike')
+      }
+      invalidateFlowPreload()
     } catch (error) {
       set({ dislikedTrackIds, likedTrackIds })
       throw error
@@ -297,6 +351,11 @@ const usePlayerStore = create((set, get) => ({
     set({ likedTrackIds: likedTrackIds.filter((id) => id !== trackId) })
     try {
       await api.delete(`/tracks/${trackId}/like`)
+      const context = get().currentTrack
+      if (context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, 'unlike')
+      }
+      invalidateFlowPreload()
     } catch (error) {
       set({ likedTrackIds })
       throw error
@@ -779,10 +838,22 @@ const usePlayerStore = create((set, get) => ({
     if (!currentTrack || !isPlaying) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
     if (durationKnown && currentTime / duration >= 0.25) return
+    const completion = durationKnown ? currentTime / duration : 0
+    postRecommendationEvent(currentTrack, 'skip', completion)
+    invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
-    if (!dbId) return // внешний трек ещё не материализован — сигнал пропускаем
-    postSkipWithRetry(dbId)
+    if (dbId) {
+      postSkipWithRetry(dbId)
+    } else if (currentTrack.source) {
+      const externalTrack = currentTrack
+      get()
+        .materializeTrack(externalTrack)
+        .then((id) => {
+          if (id) postSkipWithRetry(id)
+        })
+        .catch(() => {})
+    }
   },
 
   // Финальная доля прослушивания при КАЖДОМ уходе с трека (переключение
@@ -794,10 +865,22 @@ const usePlayerStore = create((set, get) => ({
     if (!currentTrack) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
     if (!durationKnown || currentTime <= 0) return // не успел начаться — не событие
+    const completion = Math.max(0, Math.min(1, currentTime / duration))
+    postRecommendationEvent(currentTrack, 'listen', completion)
+    invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
-    if (!dbId) return // внешний трек ещё не материализован — сигнал пропускаем
-    postListenEvent(dbId, currentTime / duration)
+    if (dbId) {
+      postListenEvent(dbId, completion)
+    } else if (currentTrack.source) {
+      const externalTrack = currentTrack
+      get()
+        .materializeTrack(externalTrack)
+        .then((id) => {
+          if (id) postListenEvent(id, completion)
+        })
+        .catch(() => {})
+    }
   },
 
   nextTrack: () => {
@@ -956,4 +1039,11 @@ function trackIntentHandlers(track) {
   }
 }
 
-export { usePlayerStore, prefetchOnIntent, trackIntentHandlers, invalidateFlowPreload }
+export {
+  usePlayerStore,
+  prefetchOnIntent,
+  trackIntentHandlers,
+  invalidateFlowPreload,
+  postRecommendationEvent,
+  recordRecommendationImpression,
+}

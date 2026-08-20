@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
-import { usePlayerStore } from '../store/playerStore'
+import {
+  invalidateFlowPreload,
+  postRecommendationEvent,
+  usePlayerStore,
+} from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -185,9 +189,11 @@ function FullScreenPlayer() {
     if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
+    postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
+    invalidateFlowPreload()
     try {
       const id = dbTrackId ?? (await materializeCurrentTrack())
-      if (id) await toggleTrackLike(id)
+      if (id) await toggleTrackLike(id, currentTrack)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -201,11 +207,13 @@ function FullScreenPlayer() {
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
+    postRecommendationEvent(currentTrack, isDisliked ? 'undislike' : 'dislike')
+    invalidateFlowPreload()
     try {
       const id = dbTrackId ?? (await materializeCurrentTrack())
       if (!id) return
       const wasDisliked = usePlayerStore.getState().dislikedTrackIds.includes(id)
-      await toggleTrackDislike(id)
+      await toggleTrackDislike(id, currentTrack)
       if (!wasDisliked) nextTrack()
     } catch (error) {
       console.error('Error toggling dislike:', error)
@@ -379,8 +387,6 @@ function FullScreenPlayer() {
 }
 
 export default FullScreenPlayer
-
-
 
 
 

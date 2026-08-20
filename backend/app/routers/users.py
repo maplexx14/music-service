@@ -123,6 +123,10 @@ def update_preferences(
             seen_excluded.add(key)
             excluded.append(name)
     current_user.excluded_artists = excluded[:50]
+    # Ползунок «новые артисты / знакомые». Не прислали — не трогаем: клиент,
+    # который сохраняет только жанры, не должен сбрасывать баланс в дефолт.
+    if prefs.discovery_ratio is not None:
+        current_user.discovery_ratio = round(float(prefs.discovery_ratio), 2)
     db.commit()
     db.refresh(current_user)
     # Следующий запрос должен сразу учитывать новый выбор, а не отдавать

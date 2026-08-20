@@ -34,13 +34,14 @@ def _items(*artists):
     return [{"artist": a, "title": f"t{i}"} for i, a in enumerate(artists)]
 
 
-def _order(artists, min_gap=4, previous_artists=None):
+def _order(artists, min_gap=4, previous_artists=None, context=""):
     return _artists(
         interleave_artists(
             _items(*artists),
             lambda i: i["artist"],
             min_gap=min_gap,
             previous_artists=previous_artists,
+            context=context,
         )
     )
 
@@ -80,10 +81,10 @@ def test_order_is_not_a_fixed_rotation():
     """
     pool = ["A"] * 5 + ["B"] * 5 + ["C"] * 5
     orders = set()
-    for _ in range(200):
+    for batch in range(200):
         shuffled = pool[:]
         random.shuffle(shuffled)
-        orders.add(tuple(_order(shuffled)))
+        orders.add(tuple(_order(shuffled, context=f"batch-{batch}")))
     assert len(orders) > 50, f"порядок почти фиксирован: {len(orders)} вариантов на 200"
 
 
@@ -153,13 +154,21 @@ def test_collab_separators_beyond_comma():
     assert len(cap_per_artist(items, 1, lambda i: i["artist"])) == 2
 
 
-def test_weighted_order_rotates_but_favours_weight():
+def test_weighted_order_is_stable_and_context_rotates_with_weight():
     keys = [f"a{i}" for i in range(20)]
     weights = {k: 1.0 for k in keys}
     weights["a0"] = 50.0  # любимый артист
-    orders = {tuple(weighted_order(keys, weights)) for _ in range(20)}
-    assert len(orders) > 1, "порядок артистов фиксированный — выдача не ротируется"
-    first = [weighted_order(keys, weights)[0] for _ in range(40)]
+    stable = weighted_order(keys, weights, context="same-user")
+    assert weighted_order(keys, weights, context="same-user") == stable
+    orders = {
+        tuple(weighted_order(keys, weights, context=f"batch-{i}"))
+        for i in range(20)
+    }
+    assert len(orders) > 1, "явный context должен ротировать порядок"
+    first = [
+        weighted_order(keys, weights, context=f"batch-{i}")[0]
+        for i in range(40)
+    ]
     assert first.count("a0") > 10, "тяжёлый артист потерял приоритет"
     assert len(set(first)) > 1, "первым всегда один и тот же артист"
 

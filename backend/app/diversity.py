@@ -6,31 +6,37 @@
 порядок (важные/популярные треки остаются впереди), но не даёт одному
 артисту занять больше max_per_artist мест.
 """
-import random
 import re
 from collections import Counter
 from typing import Callable, Iterable, List, Optional, Tuple, TypeVar
 
 from app.artist_utils import artist_key
+from app.recommendation_scoring import stable_jitter
 
 T = TypeVar("T")
 
 
 def weighted_order(
-    keys: Iterable[str], weights: dict, default: float = 1.0
+    keys: Iterable[str],
+    weights: dict,
+    default: float = 1.0,
+    *,
+    context: object = "",
 ) -> List[str]:
-    """Случайный порядок артистов с приоритетом по весу вкуса.
+    """Детерминированный взвешенный порядок для заданного контекста.
 
     Раньше выдача строилась вокруг ФИКСИРОВАННОГО топа по весу (top-12 в
     flow.py, сортировка по play_count в recommendations.py) — набор артистов не
     менялся от запроса к запросу, и в выдаче крутились одни и те же, хотя в
     библиотеке их сотни. Взвешенная выборка без повторов (Efraimidis-Spirakis:
-    ключ u^(1/w)) оставляет любимых чаще впереди, но каждый запрос даёт свой
-    набор — остальная библиотека тоже доходит до выдачи.
+    ключ u^(1/w)) оставляет любимых чаще впереди. Псевдослучайный ``u`` берётся
+    из стабильного хэша контекста: выдачу можно воспроизвести офлайн, а смена
+    контекста всё равно ротирует набор.
     """
     return sorted(
-        keys,
-        key=lambda k: random.random() ** (1.0 / max(weights.get(k, default), 1e-6)),
+        list(keys),
+        key=lambda k: stable_jitter(context, k)
+        ** (1.0 / max(weights.get(k, default), 1e-6)),
         reverse=True,
     )
 
@@ -77,6 +83,7 @@ def interleave_artists(
     artist_getter=lambda item: getattr(item, "artist", None),
     min_gap: int = 3,
     previous_artists=None,
+    context: object = "",
 ):
     """Разносит треки одного артиста, не превращая выдачу в ротацию.
 
@@ -85,7 +92,8 @@ def interleave_artists(
     подряд». previous_artists (хвост прошлой порции, по порядку) продолжает
     разнос между подгрузками потока.
 
-    Выбор следующего артиста СЛУЧАЙНЫЙ, с весом по числу неотданных треков.
+    Выбор следующего артиста псевдослучайный и воспроизводимый для заданного
+    context, с весом по числу неотданных треков.
     Детерминированный критерий («берём артиста с наибольшим числом оставшихся»)
     вместе с жёстким кулдауном оставлял ровно одну возможную последовательность:
     артист освобождается точно через min_gap позиций, и тот же критерий выбирает
@@ -135,7 +143,13 @@ def interleave_artists(
             weights = [scored[key] for key in pool]
 
         if pool:
-            key = random.choices(pool, weights=weights, k=1)[0]
+            weighted_keys = list(zip(pool, weights))
+            position_context = f"{context}:{len(ordered)}"
+            key = max(
+                weighted_keys,
+                key=lambda pair: stable_jitter(position_context, pair[0])
+                ** (1.0 / max(pair[1], 1e-6)),
+            )[0]
         else:
             # Все «горячие»: остался один артист — берём самого давнего.
             key = max(counts, key=lambda k: (gaps[k], counts[k]))

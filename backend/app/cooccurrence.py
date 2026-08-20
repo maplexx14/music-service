@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Сколько соседей хранить на трек. Больше — точнее exploration, но таблица
 # растёт как N_tracks * TOP_N.
-_TOP_N = 30
+_TOP_N = 50
 
 # Пара (X, Y) попадает в матрицу, если её держат хотя бы столько РАЗНЫХ юзеров.
 #
@@ -45,41 +45,64 @@ _MIN_COMMON = 2
 _REBUILD_SQL = text(
     """
     WITH signals AS (
-        SELECT user_id, track_id FROM user_track_plays WHERE play_count >= 2
+        SELECT DISTINCT p.user_id, p.track_id
+        FROM user_track_plays p
+        WHERE p.play_count >= 2
+          AND NOT EXISTS (
+              SELECT 1 FROM user_track_skips s
+              WHERE s.user_id = p.user_id
+                AND s.track_id = p.track_id
+                AND (s.disliked IS TRUE OR s.skip_count >= 3)
+          )
         UNION
-        SELECT p.owner_id AS user_id, pt.track_id
+        SELECT DISTINCT pl.owner_id AS user_id, pt.track_id
         FROM playlist_tracks pt
-        JOIN playlists p ON p.id = pt.playlist_id
+        JOIN playlists pl ON pl.id = pt.playlist_id
+        WHERE pl.is_liked IS FALSE OR pl.is_liked IS NULL
     ),
     pop AS (
-        SELECT track_id, COUNT(*) AS cnt FROM signals GROUP BY track_id
+        SELECT track_id, COUNT(DISTINCT user_id) AS cnt FROM signals GROUP BY track_id
     ),
     pairs AS (
-        SELECT a.track_id, b.track_id AS other_track_id, COUNT(*) AS common
+        SELECT
+            a.track_id,
+            b.track_id AS other_track_id,
+            COUNT(DISTINCT a.user_id) AS common_users
         FROM signals a
         JOIN signals b ON a.user_id = b.user_id AND a.track_id <> b.track_id
         GROUP BY a.track_id, b.track_id
-        -- COUNT(DISTINCT user_id), а не COUNT(*): signals собран через UNION и
-        -- уже даёт не больше строки на (user_id, track_id), так что счётчики
-        -- совпадают — но порог означает «сколько РАЗНЫХ юзеров», и полагаться
-        -- здесь на неявную дедупликацию нельзя (см. _MIN_COMMON).
+        -- Keep this explicit: the threshold is the number of DISTINCT users,
+        -- not the number of duplicate play rows.
         HAVING COUNT(DISTINCT a.user_id) >= :min_common
     ),
     scored AS (
         SELECT
             p.track_id,
             p.other_track_id,
-            p.common / sqrt(pa.cnt::float * pb.cnt::float) AS score,
+            p.common_users,
+            (
+                p.common_users / sqrt(
+                    CAST(pa.cnt AS FLOAT) * CAST(pb.cnt AS FLOAT)
+                )
+            ) * (
+                p.common_users / (p.common_users + 3.0)
+            ) AS score,
             ROW_NUMBER() OVER (
                 PARTITION BY p.track_id
-                ORDER BY p.common / sqrt(pa.cnt::float * pb.cnt::float) DESC
+                ORDER BY (
+                    p.common_users / sqrt(
+                        CAST(pa.cnt AS FLOAT) * CAST(pb.cnt AS FLOAT)
+                    )
+                ) * (p.common_users / (p.common_users + 3.0)) DESC,
+                p.other_track_id
             ) AS rn
         FROM pairs p
         JOIN pop pa ON pa.track_id = p.track_id
         JOIN pop pb ON pb.track_id = p.other_track_id
     )
-    INSERT INTO track_cooccurrence (track_id, other_track_id, score, updated_at)
-    SELECT track_id, other_track_id, score, NOW()
+    INSERT INTO track_cooccurrence
+        (track_id, other_track_id, score, common_users, updated_at)
+    SELECT track_id, other_track_id, score, common_users, CURRENT_TIMESTAMP
     FROM scored
     WHERE rn <= :top_n
     """

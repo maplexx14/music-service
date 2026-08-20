@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { usePlayerStore } from '../store/playerStore'
+import {
+  invalidateFlowPreload,
+  postRecommendationEvent,
+  recordRecommendationImpression,
+  usePlayerStore,
+} from '../store/playerStore'
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
@@ -321,6 +326,7 @@ function PlayerInner() {
   }, [])
 
   const lastRecordedTrackIdRef = useRef(null)
+  const recommendationImpressionRef = useRef(null)
   // Токен актуальности источника (см. эффект ниже) — защита от того,
   // что устаревший (для уже пропущенного трека) fetch применит свой результат
   // позже, чем актуальный.
@@ -1426,6 +1432,8 @@ function PlayerInner() {
     const playKey = track.external_id ?? track.id
     if (lastRecordedTrackIdRef.current === playKey) return
     lastRecordedTrackIdRef.current = playKey
+    postRecommendationEvent(track, 'play', Math.max(0, Math.min(1, audio.currentTime / (dur || track.duration || 1))))
+    invalidateFlowPreload()
     ;(async () => {
       try {
         const id = dbId ?? (await state.materializeCurrentTrack())
@@ -1435,6 +1443,22 @@ function PlayerInner() {
       }
     })()
   }
+
+  // In Flow the currently selected item is the visible recommendation. A
+  // server delivery alone is not an impression: confirm it only when the
+  // player actually switches to that track.
+  useEffect(() => {
+    if (!currentTrack?.recommendation_id || currentTrack.recommendation_surface !== 'flow') return
+    const key = `${currentTrack.recommendation_id}:${currentTrack.recommendation_position}:${currentTrack.id}`
+    if (recommendationImpressionRef.current === key) return
+    recommendationImpressionRef.current = key
+    recordRecommendationImpression(currentTrack, { trigger: 'current_track' })
+  }, [
+    currentTrack?.id,
+    currentTrack?.recommendation_id,
+    currentTrack?.recommendation_position,
+    currentTrack?.recommendation_surface,
+  ])
 
   // Громкость — на оба элемента движка: после подмены новый активный должен
   // играть так же громко, как предыдущий (иначе трек «начинается тише»).
@@ -1788,9 +1812,11 @@ function PlayerInner() {
     if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
+    postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
+    invalidateFlowPreload()
     try {
       const id = dbTrackId ?? (await materializeCurrentTrack())
-      if (id) await toggleTrackLike(id)
+      if (id) await toggleTrackLike(id, currentTrack)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -1808,11 +1834,19 @@ function PlayerInner() {
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
+    const wasDislikedBeforeMaterialize = dbTrackId
+      ? usePlayerStore.getState().dislikedTrackIds.includes(dbTrackId)
+      : false
+    postRecommendationEvent(
+      currentTrack,
+      wasDislikedBeforeMaterialize ? 'undislike' : 'dislike',
+    )
+    invalidateFlowPreload()
     try {
       const id = dbTrackId ?? (await materializeCurrentTrack())
       if (!id) return
       const wasDisliked = usePlayerStore.getState().dislikedTrackIds.includes(id)
-      await toggleTrackDislike(id)
+      await toggleTrackDislike(id, currentTrack)
       if (!wasDisliked) nextTrack()
     } catch (error) {
       console.error('Error toggling dislike:', error)

@@ -1,13 +1,11 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_, select, union
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from typing import List, Optional
 from datetime import datetime, timezone
 from collections import Counter
 import math
 import re
-import random
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import (
@@ -20,7 +18,7 @@ from app.models import (
     user_play_events,
     rec_impressions,
 )
-from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse
+from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse, RecommendationEventPayload
 from app.dependencies import get_current_active_user
 from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords
 from app.lang import dominant_is_cyrillic, is_foreign_script
@@ -28,9 +26,22 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
+from app.discovery import discovery_ratio, discovery_slots
 from app.recommendation_cache import recommendation_cache_key
-from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, weighted_order
+from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key
 from app.artist_utils import artist_key
+from app.recommendation_scoring import (
+    ALGORITHM_VERSION,
+    score_track,
+    stable_jitter,
+)
+from app.recommendation_telemetry import (
+    ALLOWED_EVENT_TYPES,
+    new_request_id,
+    record_delivery,
+    record_event,
+    record_impression,
+)
 
 router = APIRouter()
 
@@ -47,7 +58,7 @@ _RECS_TTL = 300
 # фикс в flow.py). Полураспад — раз в столько дней сигнал слабеет вдвое;
 # лимит выборки — защита от неограниченного запроса, не смысловая отсечка.
 _TASTE_HALF_LIFE_DAYS = 14.0
-_TASTE_QUERY_LIMIT = 300
+_TASTE_QUERY_LIMIT = 1000
 
 # Сигналы КУРИРОВАНИЯ (лайки, треки в собственных плейлистах) затухают
 # ГОРАЗДО медленнее поведенческих (прослушивания/скипы) и не ниже
@@ -116,7 +127,10 @@ _DISLIKE_ARTIST_PENALTY = 3.5
 # Доля слотов выдачи под «исследование»: co-occurrence-соседи любимых треков
 # (коллаборативный сигнал), в приоритете — артисты, которых юзер ещё не
 # слушал. Остальная выдача — «эксплуатация» известного вкуса.
-_EXPLORE_RATIO = 0.2
+#
+# Саму долю задаёт юзер ползунком в настройках (User.discovery_ratio); её
+# семантика и дефолт живут в app/discovery.py — там же, откуда её читает волна,
+# чтобы у двух движков не разъезжался смысл одной настройки.
 
 # Доля от score самого похожего соседа, ниже которой co-occurrence-сосед
 # считается шумом. Матрица строится с _MIN_COMMON=1 (иначе на малой базе она
@@ -165,6 +179,8 @@ def _varied_popular(
     keep=None,
     used: Optional[dict] = None,
     restrict_artists: Optional[set] = None,
+    excluded_artists: Optional[set] = None,
+    user_id: Optional[int] = None,
 ) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
     Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
@@ -192,6 +208,8 @@ def _varied_popular(
     q = db.query(Track)
     if restrict_artists:
         q = q.filter(func.lower(Track.artist).in_(restrict_artists))
+    if excluded_artists:
+        q = q.filter(~func.lower(Track.artist).in_(excluded_artists))
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
     # С предикатом вкуса отсев жёстче, поэтому берём пул с большим запасом.
@@ -203,8 +221,98 @@ def _varied_popular(
         # старт не должен подсовывать стабильно скипаемые CJK/вьетнамские хиты.
         if not is_foreign_script(t.title) and (keep is None or keep(t))
     ]
-    random.shuffle(pool)
+    # Popularity is a bounded feature, not the ranking itself.  Freshness and
+    # deterministic jitter keep a single global counter from monopolising the
+    # fallback while still making cold start stable and reproducible.
+    pool.sort(
+        key=lambda t: (
+            -score_track(t, user_id=user_id),
+            stable_jitter(user_id, t.id),
+            t.id,
+        )
+    )
     return cap_per_artist(pool, _MAX_PER_ARTIST, used=used)[:need]
+
+
+def _rank_public_playlists(
+    db: Session,
+    *,
+    current_user: User,
+    preferred_genres: list[str] | None = None,
+    preferred_artist_keys: set[str] | None = None,
+    limit: int = 10,
+) -> list[Playlist]:
+    """Rank public playlists by taste overlap, engagement and freshness.
+
+    Playlist recommendations used to be a newest-first list, which made the
+    section unrelated to the track recommender and rewarded empty/new lists.
+    We fetch a bounded pool with aggregates, then do the small overlap score in
+    Python so the same code works on SQLite and PostgreSQL.
+    """
+    pool_limit = max(limit * 20, 100)
+    rows = (
+        db.query(
+            Playlist,
+            func.count(playlist_tracks.c.track_id).label("track_count"),
+            func.coalesce(func.sum(Track.play_count), 0).label("engagement"),
+            func.max(playlist_tracks.c.added_at).label("last_added"),
+        )
+        .outerjoin(playlist_tracks, playlist_tracks.c.playlist_id == Playlist.id)
+        .outerjoin(Track, Track.id == playlist_tracks.c.track_id)
+        .filter(Playlist.is_public.is_(True), Playlist.is_liked.is_(False))
+        .group_by(Playlist.id)
+        .order_by(Playlist.id)
+        .limit(pool_limit)
+        .all()
+    )
+    if not rows:
+        return []
+
+    playlist_ids = [playlist.id for playlist, *_ in rows]
+    details = (
+        db.query(
+            playlist_tracks.c.playlist_id,
+            Track.artist,
+            Track.genre,
+        )
+        .join(Track, Track.id == playlist_tracks.c.track_id)
+        .filter(playlist_tracks.c.playlist_id.in_(playlist_ids))
+        .all()
+    )
+    by_playlist: dict[int, list[tuple[str, str | None]]] = {}
+    for playlist_id, artist, genre in details:
+        by_playlist.setdefault(playlist_id, []).append((artist or "", genre))
+
+    wanted_genres = {str(value).strip().lower() for value in (preferred_genres or []) if value}
+    wanted_artists = set(preferred_artist_keys or ())
+    now = datetime.now(timezone.utc)
+
+    def _playlist_score(row) -> tuple:
+        playlist, track_count, engagement, last_added = row
+        items = by_playlist.get(playlist.id, [])
+        size = max(1, int(track_count or 0))
+        artist_overlap = sum(
+            1 for artist, _genre in items if artist_key(artist) in wanted_artists
+        ) / size
+        genre_overlap = sum(
+            1
+            for _artist, genre in items
+            if genre and str(genre).strip().lower() in wanted_genres
+        ) / size
+        timestamp = last_added or playlist.updated_at or playlist.created_at
+        if timestamp is None:
+            freshness = 0.0
+        else:
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            freshness = math.exp(
+                -max(0.0, (now - timestamp).total_seconds() / 86400.0) / 180.0
+            )
+        engagement_score = math.tanh(math.log1p(max(0, int(engagement or 0))) / 5.0)
+        score = 2.2 * artist_overlap + 1.1 * genre_overlap + 0.45 * engagement_score + 0.25 * freshness
+        return (-score, stable_jitter(current_user.id, f"playlist:{playlist.id}"), playlist.id)
+
+    return [playlist for playlist, *_ in sorted(rows, key=_playlist_score)[:limit]]
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -257,11 +365,46 @@ def get_recommendations(
     # hour — локальный час клиента (таймзона юзера серверу неизвестна).
     # Кэш сегментируем по временному интервалу: утренняя и вечерняя выдачи
     # различаются и не должны перетирать друг друга.
+    request_id = new_request_id()
+    ranking_now = datetime.now(timezone.utc)
     bucket = _hour_bucket(hour)
     cache_key = recommendation_cache_key(current_user.id, limit, bucket)
     cached = get_cache(cache_key)
     if cached is not None:
-        return RecommendationResponse(**cached)
+        # A cached candidate list is reusable, but a delivery is not.  Give
+        # every response its own request id/positions so feedback can be
+        # attributed to the actual viewport session rather than the cache fill.
+        cached_payload = dict(cached)
+        cached_tracks = []
+        cached_scores = {}
+        for position, item in enumerate(cached_payload.get("tracks", [])):
+            item = dict(item)
+            item.update(
+                {
+                    "recommendation_id": request_id,
+                    "recommendation_surface": "library",
+                    "recommendation_position": position,
+                    # Cache entries can outlive a model rollout.  Never let
+                    # an old cached attribution label leak into the response
+                    # or disagree with the delivery row written below.
+                    "recommendation_model_version": ALGORITHM_VERSION,
+                }
+            )
+            cached_tracks.append(item)
+            if item.get("id") is not None and item.get("recommendation_score") is not None:
+                cached_scores[item["id"]] = item["recommendation_score"]
+        cached_payload["tracks"] = cached_tracks
+        record_delivery(
+            db,
+            user_id=current_user.id,
+            items=cached_tracks,
+            surface="library",
+            request_id=request_id,
+            scores=cached_scores,
+            algorithm_version=ALGORITHM_VERSION,
+        )
+        db.commit()
+        return RecommendationResponse(**cached_payload)
 
     # Get user's liked tracks and frequently played tracks
     liked_playlist_id = db.query(Playlist.id).filter(
@@ -327,6 +470,7 @@ def get_recommendations(
         .all()
     )
     skipped_track_ids = {row[0] for row in skipped}
+    skip_by_track = {row[0]: row for row in skipped}
 
     # Средняя доля дослушивания по трекам юзера (из лога событий) — уточняет
     # бинарный play/skip: см. комментарий у _COMPLETION_*.
@@ -364,9 +508,45 @@ def get_recommendations(
     # и получал глобально популярное, независимо от выбранного жанра.
     preferred_genres = list(current_user.preferred_genres or [])
     preferred_artists = list(current_user.preferred_artists or [])
+    excluded_artist_keys = {
+        artist_key(name)
+        for name in (current_user.excluded_artists or [])
+        if artist_key(name)
+    }
+    excluded_artist_keys -= {
+        artist_key(name) for name in preferred_artists if artist_key(name)
+    }
     has_explicit_preferences = bool(preferred_genres or preferred_artists)
 
     recommended_tracks = []
+    # These collections are deliberately initialized before the warm/cold
+    # branch.  Telemetry and fallback ranking must not depend on ``locals()``
+    # or on whether a user happened to have a taste profile.
+    artist_keys = []
+    known_artist_keys = set()
+    artist_positive = {}
+    genres = list(preferred_genres)
+    score_by_track = {}
+
+    def _candidate_score(track: Track) -> float:
+        row = skip_by_track.get(track.id)
+        completion = completion_by_track.get(track.id)
+        score = score_track(
+            track,
+            user_id=current_user.id,
+            artist_affinity=artist_positive.get(artist_key(track.artist), 0.0),
+            genres=genres,
+            completion=completion[0] if completion else None,
+            skip_count=row[2] if row else 0,
+            disliked=bool(row[4]) if row else False,
+            fatigued=track.id in fatigued_ids,
+            novelty=artist_key(track.artist) not in known_artist_keys,
+            source=getattr(track, "source", None),
+            listener_count=getattr(track, "unique_listener_count", 0) or 0,
+            now=ranking_now,
+        )
+        score_by_track[track.id] = score
+        return score
 
     if user_track_ids or has_explicit_preferences:
         # Вес артиста: лайк/повтор — плюс (затухающий со временем), скип —
@@ -508,6 +688,8 @@ def get_recommendations(
             or artist_curated_count.get(key, 0) >= _CURATED_TRUST_COUNT
             or pos - artist_skip_penalty.get(key, 0) >= _NET_TRUST_MARGIN
         ]
+        artist_keys = [key for key in artist_keys if key not in excluded_artist_keys]
+        known_artist_keys = set(artist_keys)
 
         # Артисты, по которым у юзера есть ЛЮБОЙ положительный сигнал. Шире
         # artist_keys выше: тот уже сужен порогом доверия и как скоуп вырезал бы
@@ -517,7 +699,9 @@ def get_recommendations(
         # рекомендации всем остальным. Открытие НОВЫХ имён остаётся за
         # co-occurrence: это единственный путь, которому межюзерность нужна
         # по смыслу (см. app/cooccurrence.py).
-        scope_artist_keys = set(artist_positive)
+        scope_artist_keys = {
+            key for key in artist_positive if key not in excluded_artist_keys
+        }
 
         # Единая проверка релевантности для ВСЕХ путей выдачи (основной пул,
         # co-occurrence-соседи, добор популярным). Раньше каждый путь фильтровал
@@ -527,22 +711,30 @@ def get_recommendations(
             + [f"{t.title} {t.artist}" for t, *_ in playlisted]
             + [f"{t.title} {t.artist}" for t, *_ in played]
         )
-        keep_track = track_check(
+        _keep_track_base = track_check(
             make_relevance_check(
                 trusted_artist_keys=set(artist_keys),
                 user_genres=set(genres),
                 prefer_cyrillic=_prefer_cyrillic,
             )
         )
+        keep_track = lambda track: (
+            artist_key(track.artist) not in excluded_artist_keys
+            and _keep_track_base(track)
+        )
         # Для добора глобально популярным — строгий вариант: там кандидат не
         # связан со вкусом ничем, поэтому нужно положительное подтверждение.
-        keep_unrelated = track_check(
+        _keep_unrelated_base = track_check(
             make_relevance_check(
                 trusted_artist_keys=set(artist_keys),
                 user_genres=set(genres),
                 prefer_cyrillic=_prefer_cyrillic,
                 require_signal=True,
             )
+        )
+        keep_unrelated = lambda track: (
+            artist_key(track.artist) not in excluded_artist_keys
+            and _keep_unrelated_base(track)
         )
 
         # Кандидаты по вкусу; скипнутые треки исключаем целиком. Условия строим
@@ -624,7 +816,10 @@ def get_recommendations(
             # крутила одних и тех же, хотя вкусовых артистов в библиотеке сотни.
             # Никакая сортировка в Python остальных уже не достанет — их просто
             # нет в выборке.
-            pool = q.order_by(func.random()).limit(limit * 8).all()
+            # Fetch a generous deterministic candidate window and rank it in
+            # Python.  ORDER BY RANDOM() made the same query impossible to
+            # replay and could hide niche tracks behind a small random sample.
+            pool = q.order_by(Track.id).limit(max(limit * 100, 500)).all()
             # Гарантируем, что треки доверенных артистов (из плейлистов)
             # попадают в пул, даже если их play_count низкий и они не
             # прошли в limit*8 по популярности. Иначе плейлисты с нишевыми
@@ -655,24 +850,20 @@ def get_recommendations(
             # -play_count. По популярности первые слоты (после cap 2/артист)
             # доставались одной и той же горстке самых заигранных артистов при
             # каждом пересчёте — остальные артисты библиотеки не показывались.
-            rotation = {
-                key: i
-                for i, key in enumerate(weighted_order(artist_keys, artist_positive))
-            }
-            pool.sort(
-                key=lambda t: (
-                    1 if t.id in fatigued_ids else 0,
-                    0 if artist_key(t.artist) in priority_artist_keys else 1,
-                    rotation.get(artist_key(t.artist), len(rotation)),
-                    -t.play_count,
-                )
-            )
             # Совпадение по слову в названии/теге само по себе не значит
             # "тот же дух" — трек мог попасть в выдачу по случайному слову в
             # заголовке, будучи из совсем другого жанра (плюс отсев иностранного
             # и, при одноязычной библиотеке, чужого языка). Артисты, которых
             # юзер реально слушает, проходят проверку сами по себе.
             pool = [t for t in pool if keep_track(t)]
+            def _track_rank(t: Track) -> tuple:
+                return (
+                    -_candidate_score(t),
+                    stable_jitter(current_user.id, t.id),
+                    t.id,
+                )
+
+            pool.sort(key=_track_rank)
             capped = cap_per_artist(pool, _MAX_PER_ARTIST)
             # Разнообразие по АУДИТОРИИ, а не только по имени артиста: cap выше
             # не видит, когда артисты формально разные, но все из одной тусовки.
@@ -683,14 +874,20 @@ def get_recommendations(
                 shortlist, pair_scores(db, [t.id for t in shortlist])
             )[:limit]
 
-        # Exploration-слоты: ~20% выдачи — co-occurrence-соседи любимых треков
-        # («слушавшие X слушают и Y»). Единственный сигнал, открывающий юзеру
-        # НОВЫХ артистов: контентные фильтры выше рекомендуют в основном
-        # каталог уже знакомых. Приоритет — треки артистов вне artist_keys.
+        # Exploration-слоты: co-occurrence-соседи любимых треков («слушавшие X
+        # слушают и Y»). Единственный сигнал, открывающий юзеру НОВЫХ артистов:
+        # контентные фильтры выше рекомендуют в основном каталог уже знакомых.
+        # Приоритет — треки артистов вне artist_keys.
         # Плейлистные треки — strongest signal (+4.0), их сиды должны
         # питать co-occurrence, иначе нишевые артисты из плейлистов
         # не открывают похожих (см. баг: playlist 30 → user 11 пусто).
-        n_explore = max(1, int(limit * _EXPLORE_RATIO))
+        #
+        # Размер квоты задаёт САМ ЮЗЕР ползунком в настройках (0% — только
+        # знакомые, 100% — только новые имена), дефолт — прежние 20%. Соседей
+        # считаем и при квоте 0: ниже они идут в добор, когда знакомого пула не
+        # хватило на limit.
+        explore_ratio = discovery_ratio(current_user)
+        n_explore = discovery_slots(limit, explore_ratio)
         got_ids = {t.id for t in recommended_tracks}
         seeds = (liked_track_ids + played_track_ids + playlisted_track_ids)[:80]
         scored_neighbors = similar_track_ids(db, seeds, limit=300)
@@ -729,8 +926,12 @@ def get_recommendations(
             # нового, а не заполнять слоты одним новым артистом. Лимит считаем
             # с учётом уже отобранного основного пула — иначе артист, у
             # которого там уже 2 трека, получал сверху ещё и explore-слот.
+            #
+            # Ползунок в нуле («только знакомые») переворачивает порядок:
+            # соседи всё ещё идут в добор, когда знакомого пула не хватило,
+            # но начинается он с уже знакомых артистов, а не с новых имён.
             neighbors = cap_per_artist(
-                fresh + known,
+                fresh + known if explore_ratio > 0 else known + fresh,
                 1,
                 used=Counter(
                     primary_artist_key(t.artist) for t in recommended_tracks
@@ -775,6 +976,8 @@ def get_recommendations(
                     primary_artist_key(t.artist) for t in recommended_tracks
                 ),
                 restrict_artists=scope_artist_keys or None,
+                excluded_artists=excluded_artist_keys,
+                user_id=current_user.id,
             )
             # Пул вкуса исчерпан (у активного юзера почти весь релевантный
             # каталог уже в коллекции/показах) — отдаём КОРОТКУЮ выдачу вместо
@@ -784,7 +987,13 @@ def get_recommendations(
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
         # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных
         # юзеров место релевантного занимали глобальные хиты — это и убрано.)
-        recommended_tracks = _varied_popular(db, skipped_track_ids | fatigued_ids, limit)
+        recommended_tracks = _varied_popular(
+            db,
+            skipped_track_ids | fatigued_ids,
+            limit,
+            excluded_artists=excluded_artist_keys,
+            user_id=current_user.id,
+        )
 
     # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
     # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
@@ -800,46 +1009,121 @@ def get_recommendations(
     # 10k. Дедуп по track_id обязателен: ON CONFLICT DO UPDATE не может дважды
     # обновить одну строку в одном statement ("cannot affect row a second time"),
     # а порядок выдачи (interleave_artists/добор соседями) дублей не исключает.
-    seen_impression_ids = set()
-    impression_rows = []
-    for t in recommended_tracks:
-        if t.id in seen_impression_ids:
-            continue
-        seen_impression_ids.add(t.id)
-        impression_rows.append(
-            {
-                "user_id": current_user.id,
-                "track_id": t.id,
-                "shown_count": 1,
-                "last_shown": func.now(),
-            }
-        )
-    if impression_rows:
-        stmt = pg_insert(rec_impressions).values(impression_rows)
-        db.execute(
-            stmt.on_conflict_do_update(
-                index_elements=[rec_impressions.c.user_id, rec_impressions.c.track_id],
-                set_={
-                    "shown_count": rec_impressions.c.shown_count + 1,
-                    "last_shown": func.now(),
-                },
-            )
-        )
-        db.commit()
+    # Keep the compact fatigue aggregate above, but also append a complete
+    # delivery record for offline evaluation (position/source/score/version).
+    for track in recommended_tracks:
+        _candidate_score(track)
+    record_delivery(
+        db,
+        user_id=current_user.id,
+        items=recommended_tracks,
+        surface="library",
+        request_id=request_id,
+        scores=score_by_track,
+        algorithm_version=ALGORITHM_VERSION,
+    )
 
     # Get popular playlists — без selectinload(tracks): ответ встраивает только
     # метаданные плейлистов (название, обложка), а не все их треки. Полный
     # список треков плейлиста загружается при открытии PlaylistDetail.
-    popular_playlists = db.query(Playlist).filter(
-        Playlist.is_public == True
-    ).order_by(desc(Playlist.created_at)).limit(10).all()
+    popular_playlists = _rank_public_playlists(
+        db,
+        current_user=current_user,
+        preferred_genres=preferred_genres,
+        preferred_artist_keys=known_artist_keys,
+        limit=10,
+    )
+
+    track_payloads = []
+    for position, track in enumerate(recommended_tracks):
+        score = score_by_track.get(track.id)
+        if score is None:
+            score = _candidate_score(track)
+        payload = TrackResponse.model_validate(track).model_copy(
+            update={
+                "recommendation_id": request_id,
+                "recommendation_surface": "library",
+                "recommendation_position": position,
+                "recommendation_score": score,
+                "recommendation_model_version": ALGORITHM_VERSION,
+            }
+        )
+        track_payloads.append(payload)
 
     response = RecommendationResponse(
-        tracks=[TrackResponse.model_validate(t) for t in recommended_tracks],
+        tracks=track_payloads,
         playlists=[PlaylistResponse.model_validate(p) for p in popular_playlists]
     )
+    # The endpoint is intentionally cacheable, but callers can associate
+    # subsequent feedback with the exact non-cached generation.
     set_cache(cache_key, response.model_dump(mode="json"), expire=_RECS_TTL)
+    db.commit()
     return response
+
+
+@router.post("/events", status_code=204)
+def record_recommendation_event(
+    payload: RecommendationEventPayload,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Record feedback for a local or external recommendation item.
+
+    External items are accepted without materialisation.  Known local items
+    are linked opportunistically; malformed/unknown ids do not make telemetry
+    fail the playback UI.
+    """
+    if payload.event_type not in ALLOWED_EVENT_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported recommendation event")
+
+    track_id = payload.track_id
+    if track_id is not None:
+        known = db.query(Track.id).filter(Track.id == track_id).scalar()
+        if known is None:
+            track_id = None
+    if track_id is None and payload.source and payload.external_id:
+        track_id = db.query(Track.id).filter(
+            Track.source == payload.source,
+            Track.external_id == payload.external_id,
+        ).scalar()
+    if payload.event_type == "impression":
+        recorded = record_impression(
+            db,
+            user_id=current_user.id,
+            request_id=payload.request_id,
+            track_id=track_id,
+            source=payload.source,
+            external_id=payload.external_id,
+            position=payload.position,
+        )
+        # A browser observer/player effect may fire more than once.  The
+        # delivery update is the idempotency gate, so duplicate confirmations
+        # must not inflate the immutable event stream either.
+        if not recorded:
+            db.rollback()
+            return None
+    record_event(
+        db,
+        user_id=current_user.id,
+        event_type=payload.event_type,
+        track_id=track_id,
+        source=payload.source,
+        external_id=payload.external_id,
+        title=payload.title,
+        artist=payload.artist,
+        value=payload.value,
+        surface=payload.surface,
+        position=payload.position,
+        request_id=payload.request_id,
+        client_hour=payload.client_hour,
+        metadata=payload.metadata,
+        # The client may report an older build, but it must not be able to
+        # rewrite the server's attribution label.  The delivery row and every
+        # feedback event use the scorer that actually produced the response.
+        algorithm_version=ALGORITHM_VERSION,
+    )
+    db.commit()
+    return None
 
 
 @router.get("/tracks", response_model=List[TrackResponse])

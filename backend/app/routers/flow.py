@@ -14,7 +14,8 @@
   — клиент beets, см. app/beets_similar.py) — ОСНОВНОЙ источник. Засеян парой
   артист+название, поэтому доступен и SoundCloud-библиотеке, у которой
   ytmusic-сидов нет вовсе. Единственная разведка с ГАРАНТИРОВАННОЙ долей порции
-  (_LASTFM_SHARE), и берётся она первой, до каталога знакомых артистов. Last.fm
+  (её задаёт юзер ползунком «новые артисты / знакомые», см. app/discovery.py),
+  и берётся она первой, до каталога знакомых артистов. Last.fm
   отдаёт только имена — играбельными их делает резолв у провайдеров
   (_resolve_similar);
 * радио YouTube Music (_radio_pool) — тоже похожесть на уровне трека, но
@@ -38,7 +39,6 @@ import asyncio
 import logging
 import math
 import os
-import random
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -53,6 +53,7 @@ from app import beets_genre, beets_similar, storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
+from app.discovery import discovery_ratio, discovery_slots
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -70,8 +71,18 @@ from app.diversity import (
     take_overflow,
     weighted_order,
 )
+from app.recommendation_scoring import ALGORITHM_VERSION, score_track, stable_jitter
+from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import artist_key, same_artist
-from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips
+from app.models import (
+    Track,
+    User,
+    Playlist,
+    playlist_tracks,
+    user_track_plays,
+    user_track_skips,
+    recommendation_impressions,
+)
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import ExternalTrackResponse, TrackResponse
@@ -118,8 +129,8 @@ _RADIO_LIMIT = 50
 # и «похожие артисты» из волны исчезали совсем — оставались ровно те, кого юзер
 # выбрал сам. Граф работает от имени артиста и этой дырки не имеет.
 # Сколько соседей берём у одного артиста и сколько артистов вкуса зондируем за
-# подгрузку (порядок в profile["artists"] уже взвешенно случайный, так что это
-# ротация, а не фиксированный топ).
+# подгрузку. Порядок в profile["artists"] дальше ротируется контекстным хэшем,
+# так что это не фиксированный топ.
 _SIMILAR_ARTISTS = 6
 _SIMILAR_SEED_ARTISTS = 2
 # Список соседей практически не меняется — держим сутки. Треки конкретного
@@ -156,10 +167,10 @@ _MAX_PER_ARTIST = 6
 # _local_candidates), текущей очередью и серверной историей порций, поэтому
 # гарантированная доля разведки для борьбы с повторами не нужна.
 _EXPLORE_SHARE = 0.0
-# Сколько артистов вкуса берём в работу за один запрос. Порядок взвешенно
-# случайный (см. diversity.weighted_order), поэтому это не «топ-N навсегда», а
-# ротация: любимые попадают чаще, но каждая подгрузка достаёт и других из
-# библиотеки. Прежний фиксированный топ-12 был причиной «крутит одних и тех же».
+# Сколько артистов вкуса берём в работу за один запрос. Дальше endpoint
+# переупорядочивает их стабильным хэшем текущей flow-history, поэтому это не
+# «топ-N навсегда»: каждая подгрузка достаёт и другие имена из библиотеки.
+# Прежний фиксированный топ-12 был причиной «крутит одних и тех же».
 _FLOW_ARTISTS = 30
 # Сколько последних ОТДАННЫХ треков помним для разноса артистов между
 # подгрузками. Раньше помнили ровно min_gap (3 артиста) — только чтобы артист
@@ -172,7 +183,7 @@ _ARTIST_HISTORY = 45
 # допускали A _ _ A _ _ A — формально «не подряд», на слух «опять он».
 # Само по себе число периодичность НЕ лечит: требование «не ближе d-1» на d
 # артистах выполнимо единственным способом — ротацией, поэтому за порядок
-# отвечает стохастический выбор в diversity.interleave_artists.
+# отвечает контекстный взвешенный выбор в diversity.interleave_artists.
 # Из этого же числа выводится кап на артиста (_artist_cap): разнос и кап — одно
 # требование с двух сторон, см. там.
 _MIN_ARTIST_GAP = 4
@@ -200,6 +211,10 @@ _FLOW_HISTORY_TTL = 6 * 60 * 60
 _CONTINUATION_SEEDS = 6
 _PROFILE_SEEDS = 4
 _STANDARD_FLOW_LIMIT = 15
+# Разбивка стандартной порции при ДЕФОЛТНОЙ доле разведки: 3 места под похожее
+# по треку (незнакомые имена), 5 под лайки и 7 под точный каталог знакомых
+# артистов. Реальную разбивку считает _standard_slots от настройки юзера —
+# здесь только соотношение, из которого она исходит.
 _STANDARD_LASTFM_SLOTS = 3
 _STANDARD_LIKED_SLOTS = 5
 _STANDARD_FAVORITE_SLOTS = 7
@@ -214,7 +229,7 @@ _FAVORITE_EXPLORE_ARTISTS = _STANDARD_FAVORITE_SLOTS
 # юзером имён. Last.fm засеян парой артист+название и отвечает именно на второй
 # вопрос — ему и доверяем в первую очередь.
 # Сколько курированных треков берём сидами за подгрузку (порядок в
-# profile["seed_tracks"] случайный — это ротация, а не фиксированный топ),
+# profile["seed_tracks"] ниже ротируется контекстным хэшем, а не фиксированным топом),
 # сколько похожих имён просим у Last.fm и сколько из них РАЗРЕШАЕМ у
 # провайдеров. Резолв — самая дорогая часть (один поиск на имя), поэтому он
 # ограничен жёстко, а результат кэшируется на сид.
@@ -227,7 +242,11 @@ _LASTFM_RESOLVE = 5
 # «похожее на трек» доходило до выдачи только на остатках. Эта доля берётся
 # ПЕРВОЙ, до каталога артистов, поэтому источник влияет на каждую подгрузку, а
 # не только на бедный пул.
-_LASTFM_SHARE = 0.34
+#
+# Размер доли задаёт САМ ЮЗЕР — ползунком «новые артисты / знакомые» в
+# настройках (User.discovery_ratio, семантика в app/discovery.py). Одна
+# настройка на оба движка и на оба размера порции: «столько-то процентов
+# новых имён» не должно значить разное в волне и в рекомендациях.
 # Список похожих на конкретный трек стабилен — держим сутки. Разрешённый пул
 # живёт меньше: у провайдера каталог меняется, да и ссылки стареют.
 _LASTFM_NAMES_TTL = 24 * 60 * 60
@@ -249,6 +268,25 @@ def _artist_cap(limit: int) -> int:
     Прежние max(4, limit // 2) давали 6 из 15, то есть три имени на всю порцию.
     """
     return min(_MAX_PER_ARTIST, max(2, (limit - 1) // _MIN_ARTIST_GAP + 1))
+
+
+def _standard_slots(ratio: float) -> tuple:
+    """Разбивка стандартной порции: (разведка, лайки, каталог знакомых).
+
+    Доля разведки — пользовательская настройка (ползунок «новые артисты /
+    знакомые»), остаток делится между двумя источниками ЗНАКОМОГО в прежнем
+    соотношении 5 лайков к 7 трекам точного каталога. При дефолтных 20%
+    получаются прежние 3/5/7, поэтому у юзера, который ползунок не трогал,
+    порция не меняется.
+    """
+    lastfm = discovery_slots(_STANDARD_FLOW_LIMIT, ratio)
+    familiar = _STANDARD_FLOW_LIMIT - lastfm
+    liked = round(
+        familiar
+        * _STANDARD_LIKED_SLOTS
+        / (_STANDARD_LIKED_SLOTS + _STANDARD_FAVORITE_SLOTS)
+    )
+    return lastfm, liked, familiar - liked
 
 
 def _balanced_quota(targets: dict, capacities: dict, total: int) -> dict:
@@ -572,8 +610,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Холодный старт: нет НИ сидов, НИ курированных артистов — берём популярные
     # ytmusic-треки сервиса. НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых
     # юзеров волна одинаковая — одни и те же сиды → один и тот же radio-пул), а
-    # случайная выборка из широкого пула популярного: у каждого юзера (и на
-    # каждую подгрузку) свой набор сидов → свой поток.
+    # стабильная выборка из широкого пула популярного: у каждого юзера свой
+    # набор сидов, при этом решение можно воспроизвести офлайн.
     #
     # Если курированные артисты ЕСТЬ, глобальный топ брать нельзя: это чужая
     # библиотека. Своих ytmusic-треков может не быть вовсе (вся коллекция в
@@ -595,14 +633,23 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             .all()
         )
         pool = [r[0] for r in popular_yt if r[0] not in skipped_video_ids]
-        seeds = random.sample(pool, min(5, len(pool)))
+        seeds = sorted(
+            pool,
+            key=lambda value: stable_jitter(user_id, f"cold-seed:{value}"),
+            reverse=True,
+        )[:5]
 
-    # Артисты вкуса — только с положительным итоговым весом. Порядок взвешенно
-    # СЛУЧАЙНЫЙ, а не фиксированный топ по весу: детерминированный топ-N
+    # Артисты вкуса — только с положительным итоговым весом. Порядок взвешенный,
+    # а не фиксированный топ по весу: endpoint дополнительно ротирует его по
+    # flow-history. Фиксированный top-N
     # означал, что каждая подгрузка волны собирает кандидатов вокруг одних и
     # тех же нескольких имён, а остальная библиотека юзера не доходит до
     # выдачи вообще. Берём шире (_FLOW_ARTISTS из всех положительных).
     positive_keys = [a for a, w in artist_weight.items() if w > 0]
+    # Keep the helper call's small public signature: callers/tests may provide
+    # a lightweight two-argument implementation. Flow applies its per-request
+    # context when selecting seeds below, so the profile itself remains a
+    # deterministic value object.
     topartist_keys = weighted_order(positive_keys, artist_weight)[:_FLOW_ARTISTS]
     top_artists = [artist_display.get(a, a) for a in topartist_keys]
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
@@ -783,7 +830,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         )
     )
 
-    # Ротация артистов этого запроса (взвешенно случайный порядок из профиля) —
+    # Ротация артистов этого запроса (контекстный порядок из профиля) —
     # ею и упорядочиваем кандидатов. Сортировка по artist_weight * play_count
     # давала строго один и тот же порядок при каждой подгрузке: несколько самых
     # тяжёлых артистов забирали все слоты, остальная библиотека не доходила.
@@ -793,7 +840,12 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         key = artist_key(t.artist)
         # Артист вне ротации (пришёл по жанру/тегу) — после ротационных, внутри
         # своей группы по популярности.
-        return (rotation.get(key, len(rotation)), -(t.play_count or 0))
+        return (
+            rotation.get(key, len(rotation)),
+            -(t.play_count or 0),
+            stable_jitter(profile["user_id"], f"local:{t.id}"),
+            t.id,
+        )
 
     candidates: List[Track] = []
     if filters:
@@ -809,12 +861,12 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         if exclude_ids:
             q = q.filter(~Track.id.in_(exclude_ids))
         q = q.filter(~Track.id.in_(played_ids))
-        # Случайная выборка окна, а не топ по play_count: иначе окно limit*8 —
+        # Широкое стабильное окно, а не top по play_count: иначе окно limit*8 —
         # это всегда самые заигранные треки нескольких артистов, и никакая
         # сортировка в Python уже не достанет остальных из библиотеки.
         # A large played catalog must not hide a single unseen track from the
-        # same trusted artist simply because the random window sampled old rows.
-        candidates = q.order_by(func.random()).limit(max(limit * 100, 500)).all()
+        # same trusted artist simply because a small candidate window hid old rows.
+        candidates = q.order_by(Track.id).limit(max(limit * 100, 500)).all()
         candidates = [t for t in candidates if _keep(t) and _media_available(t)]
         candidates.sort(key=_score)
         candidates = cap_per_artist(candidates, candidate_artist_cap)
@@ -849,13 +901,27 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             q = q.filter(~Track.id.in_(skip))
         q = q.filter(~Track.id.in_(played_ids))
         pool = [
-            t for t in q.order_by(func.random()).limit(limit * 20).all()
+            t for t in q.order_by(Track.id).limit(limit * 20).all()
             if _keep_strict(t) and _media_available(t)
         ]
         pool.sort(key=_score)
         candidates.extend(cap_per_artist(pool, candidate_artist_cap)[: limit * 2])
 
     return candidates
+
+
+def _local_candidates_on_bind(
+    bind,
+    profile: dict,
+    limit: int,
+    extra_exclude_ids: Optional[set] = None,
+) -> List[Track]:
+    """Run the blocking catalogue query in its own short-lived session."""
+    local_db = Session(bind=bind)
+    try:
+        return _local_candidates(local_db, profile, limit, extra_exclude_ids)
+    finally:
+        local_db.close()
 
 
 def _normalize_watch_item(item: dict) -> Optional[ExternalTrackResponse]:
@@ -1229,6 +1295,62 @@ def _parse_exclude(exclude: str) -> tuple:
     return numeric, yt_videos, external_ids
 
 
+def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
+    """Recover recent flow history when the shared cache is unavailable.
+
+    Redis is the normal fast path, but a cache outage must not turn a finite
+    flow into the same external tracks on every request. Delivery telemetry is
+    already durable, so it is a suitable bounded fallback for exclusion and
+    artist rotation. Fail closed if an older database has not run telemetry
+    migrations yet; the recommendation request itself should still work.
+    """
+    try:
+        # Telemetry is an optional durability layer during rolling deploys.
+        # Isolate the probe in a SAVEPOINT: a missing table (or a transient
+        # schema error) must not roll back unrelated work already pending in
+        # the request's outer transaction.
+        with db.begin_nested():
+            rows = db.execute(
+                select(
+                    recommendation_impressions.c.source,
+                    recommendation_impressions.c.external_id,
+                    recommendation_impressions.c.track_id,
+                    recommendation_impressions.c.title,
+                    recommendation_impressions.c.artist,
+                )
+                .where(
+                    recommendation_impressions.c.user_id == user_id,
+                    recommendation_impressions.c.surface == "flow",
+                )
+                .order_by(
+                    recommendation_impressions.c.shown_at.desc(),
+                    recommendation_impressions.c.id.desc(),
+                )
+                .limit(limit)
+            ).mappings().all()
+    except Exception:
+        logger.debug("durable flow history is unavailable", exc_info=True)
+        return {}
+
+    rows.reverse()
+    ids = []
+    keys = []
+    artists = []
+    for row in rows:
+        source = row.get("source")
+        external_id = row.get("external_id")
+        track_id = row.get("track_id")
+        if source and external_id:
+            ids.append(f"{source}:{external_id}")
+        elif track_id is not None:
+            ids.append(f"local:{track_id}")
+        artist = row.get("artist") or ""
+        title = row.get("title") or ""
+        keys.append(list(_norm_key(artist, title)))
+        artists.append(primary_artist_key(artist))
+    return {"ids": ids, "keys": keys, "artists": artists}
+
+
 @router.get("/flow")
 async def get_flow(
     request: Request,
@@ -1239,6 +1361,8 @@ async def get_flow(
     db: Session = Depends(get_db),
 ):
     """Порция персонального потока. exclude — id уже находящихся в очереди."""
+    request_id = new_request_id()
+    ranking_now = datetime.now(timezone.utc)
     # Ответ уникален для каждого запроса (ротация артистов + серверная история),
     # кэшировать его нельзя ни на секунду. Прокси это и так запрещает (см.
     # `location = /api/recommendations/flow` в nginx.conf и в
@@ -1258,11 +1382,17 @@ async def get_flow(
     # после нескольких запусков весь небольшой локальный пул оказывался исключён.
     history_key = f"flow:history:v2:{current_user.id}"
     history = await get_cache_async(history_key) or {}
+    if not any(history.get(name) for name in ("ids", "keys", "artists")):
+        history = _persisted_flow_history(db, current_user.id, _FLOW_HISTORY_LIMIT)
     history_ids = set(history.get("ids") or [])
     history_keys = {
         tuple(key) for key in (history.get("keys") or [])
         if isinstance(key, list) and len(key) == 2
     }
+    ranking_context = (
+        f"flow:{current_user.id}:"
+        + "|".join(str(value) for value in list(history.get("ids") or [])[-50:])
+    )
 
     profile = await asyncio.to_thread(_taste_profile, db, current_user.id)
     # Дальше идут секунды сетевых ожиданий (radio YT Music + поиск SoundCloud),
@@ -1272,7 +1402,61 @@ async def get_flow(
     # а _local_candidates ниже возьмёт из пула новое соединение (сессия
     # переоткрывает его лениво). current_user становится detached, но все его
     # загруженные поля (нужен только .id) остаются доступны.
+    telemetry_bind = db.get_bind()
     db.close()
+
+    score_by_item: dict[str, float] = {}
+
+    def _item_identity(item) -> str:
+        source = item.get("source") if isinstance(item, dict) else getattr(item, "source", None)
+        external_id = (
+            item.get("external_id")
+            if isinstance(item, dict)
+            else getattr(item, "external_id", None)
+        )
+        item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+        if source and external_id:
+            return f"{source}:{external_id}"
+        if item_id is not None:
+            return f"local:{item_id}"
+        artist = item.get("artist", "") if isinstance(item, dict) else getattr(item, "artist", "")
+        title = item.get("title", "") if isinstance(item, dict) else getattr(item, "title", "")
+        return ":".join(_norm_key(artist, title))
+
+    def _flow_score(item, *, content_bonus: float = 0.0) -> float:
+        identity = _item_identity(item)
+        score_key = f"{identity}:{content_bonus:.3f}"
+        if score_key in score_by_item:
+            return score_by_item[score_key]
+        artist = item.get("artist", "") if isinstance(item, dict) else getattr(item, "artist", "")
+        key = artist_key(artist)
+        score = score_track(
+            item,
+            user_id=current_user.id,
+            artist_affinity=(profile.get("artist_weight") or {}).get(key, 0.0),
+            genres=profile.get("genres") or (),
+            novelty=key not in (profile.get("artist_weight") or {}),
+            source=item.get("source") if isinstance(item, dict) else getattr(item, "source", None),
+            listener_count=(
+                item.get("unique_listener_count", 0)
+                if isinstance(item, dict)
+                else getattr(item, "unique_listener_count", 0)
+            ) or 0,
+            content_bonus=content_bonus,
+            now=ranking_now,
+        )
+        score_by_item[score_key] = score
+        return score
+
+    def _rank_pool(items, *, content_bonus: float, label: str):
+        return sorted(
+            list(items),
+            key=lambda item: (
+                -_flow_score(item, content_bonus=content_bonus),
+                stable_jitter(ranking_context, f"{label}:{_item_identity(item)}"),
+                _item_identity(item),
+            ),
+        )
     excl_ids |= profile["recent_ids"]
     excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
     for item_id in history_ids:
@@ -1330,6 +1514,28 @@ async def get_flow(
     # порции»: артист может встретиться в ней несколько раз, но не чаще, чем это
     # позволяет разнести (см. _artist_cap).
     artist_cap = _artist_cap(limit)
+    # --- баланс «новые артисты / знакомые» ---
+    # Пользовательская настройка (ползунок в настройках, семантика в
+    # app/discovery.py). Читается ЗДЕСЬ, до разведки, потому что от доли
+    # знакомого зависит, у скольких любимых артистов запрашивать точный каталог:
+    # в стандартной порции кап на такого артиста равен 1, поэтому N мест под
+    # каталог требуют N разных имён (это ещё и сетевые запросы на имя).
+    explore_ratio = discovery_ratio(current_user)
+    std_lastfm_slots, std_liked_slots, std_favorite_slots = _standard_slots(
+        explore_ratio
+    )
+    # Сколько мест порции обязаны занять НЕЗНАКОМЫЕ имена.
+    discovery_target = (
+        std_lastfm_slots
+        if limit == _STANDARD_FLOW_LIMIT
+        else discovery_slots(limit, explore_ratio)
+    )
+    # Может ли вторичная разведка (граф артистов / SoundCloud / теги) занимать
+    # места гарантированной доли. По умолчанию нет — она резерв; да, только если
+    # юзер попросил нового больше, чем проектный дефолт (см. discovery_pool).
+    reserve_fills_discovery = (
+        limit == _STANDARD_FLOW_LIMIT and discovery_target > _STANDARD_LASTFM_SLOTS
+    )
 
     def _add_explore(tracks, target: Optional[List[ExternalTrackResponse]] = None) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
@@ -1417,13 +1623,20 @@ async def get_flow(
     profile_seeds = list(dict.fromkeys(profile["playlist_seeds"]))
     if not profile_seeds:
         profile_seeds = list(dict.fromkeys(profile["seeds"]))
-    random.shuffle(profile_seeds)
+    profile_seeds.sort(
+        key=lambda value: stable_jitter(ranking_context, f"profile-seed:{value}"),
+        reverse=True,
+    )
     seeds = profile_seeds[:_PROFILE_SEEDS]
 
     # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
-    # profile["artists"] взвешенно случайный (weighted_order), поэтому это
-    # ротация, а не фиксированный топ.
-    similar_artists = list(profile["artists"])[:_SIMILAR_SEED_ARTISTS]
+    # profile["artists"] здесь ротируется хэшем текущей history, поэтому это
+    # не фиксированный top.
+    similar_artists = sorted(
+        list(profile["artists"]),
+        key=lambda value: stable_jitter(ranking_context, f"similar-artist:{value}"),
+        reverse=True,
+    )[:_SIMILAR_SEED_ARTISTS]
 
     # Своих ytmusic-сидов может не быть вовсе — вся коллекция в SoundCloud.
     # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
@@ -1456,7 +1669,16 @@ async def get_flow(
         enumerate(catalog_artists),
         key=lambda item: (artist_history[artist_key(item[1])], item[0]),
     )
-    favorite_artists = [artist for _, artist in favorite_artists][:_FAVORITE_EXPLORE_ARTISTS]
+    # Чем ниже доля разведки, тем больше мест под точный каталог знакомых — а в
+    # стандартной порции каждое место требует своего имени (кап 1 на артиста).
+    # Только РАСШИРЯЕМ базовые 7: при высокой доле разведки они остаются
+    # резервом на случай, когда пул похожих по треку окажется пустым.
+    favorite_explore_artists = (
+        max(_FAVORITE_EXPLORE_ARTISTS, std_favorite_slots)
+        if limit == _STANDARD_FLOW_LIMIT
+        else _FAVORITE_EXPLORE_ARTISTS
+    )
+    favorite_artists = [artist for _, artist in favorite_artists][:favorite_explore_artists]
     favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
 
     # Кап для точного каталога знакомых артистов мягче общего: у профиля с
@@ -1504,12 +1726,51 @@ async def get_flow(
                 fit += 1
         return fit
 
-    # Похожие по ТРЕКУ (Last.fm) идут в основной пачке и в СВОЙ пул: смешать их
-    # с разведкой по артистам нельзя, иначе гарантированная доля ниже достанется
-    # соседям по графу наравне с ними. Сиды перемешиваем — иначе каждая
-    # подгрузка ходила бы к одному и тому же самому свежему лайку.
+    def _discovery_capacity() -> int:
+        """Сколько мест закрывают уже собранные НЕЗНАКОМЫЕ имена.
+
+        Считается отдельно от _batch_capacity: та набирает порцию ЛЮБЫМИ
+        кандидатами, и у юзера с большим каталогом любимых артистов она
+        закрывается знакомым ещё до того, как проверяется пул разведки. Пока
+        доля разведки была захардкоженными 20%, это было терпимо; теперь её
+        задаёт юзер, и без этой проверки ползунок молча упирался бы в потолок
+        пула Last.fm — резервные источники (граф артистов, SoundCloud, теги)
+        просто не запрашивались.
+
+        Считаем ровно те пулы, из которых долю и наберут (см. discovery_pool):
+        резерв, который занять места не может, «достаточностью» не считается.
+        """
+        seen = Counter(artist_budget)
+        fit = 0
+        pools = (
+            (similar_explore, explore)
+            if reserve_fills_discovery or limit != _STANDARD_FLOW_LIMIT
+            else (similar_explore,)
+        )
+        for pool in pools:
+            for t in pool:
+                key = primary_artist_key(t.artist)
+                if seen[key] >= artist_cap:
+                    continue
+                seen[key] += 1
+                fit += 1
+        return fit
+
+    def _needs_more_pools() -> bool:
+        """Пора ли идти за резервными источниками разведки."""
+        return _batch_capacity() < limit or _discovery_capacity() < discovery_target
+
+    # Похожие по ТРЕКУ (Last.fm) идут в основной пачке и в СВОЙ пул: свалить их
+    # в один список с разведкой по артистам нельзя — общий shuffle отдал бы
+    # соседям по графу те же места наравне с ними. Отдельный пул сохраняет
+    # приоритет: в discovery_pool ниже он стоит ПЕРВЫМ, и добор по графу
+    # начинается только там, где похожего по треку не хватило. Сиды перемешиваем
+    # — иначе каждая подгрузка ходила бы к одному и тому же самому свежему лайку.
     seed_tracks = list(profile.get("seed_tracks") or [])
-    random.shuffle(seed_tracks)
+    seed_tracks.sort(
+        key=lambda pair: stable_jitter(ranking_context, f"lastfm-seed:{pair[0]}:{pair[1]}"),
+        reverse=True,
+    )
     seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
     lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
 
@@ -1553,7 +1814,7 @@ async def get_flow(
     # похожее на конкретный трек. Пока похожести по треку хватает на порцию, за
     # соседями по графу ходить не за чем — тем более что это ещё и сетевые
     # запросы на каждого артиста.
-    if similar_artists and _batch_capacity() < limit:
+    if similar_artists and _needs_more_pools():
         graph_pools = await asyncio.gather(*(_similar_pool(a) for a in similar_artists))
         _add_explore(
             t for pool in graph_pools for t in pool if _matches_related(t)
@@ -1575,7 +1836,7 @@ async def get_flow(
     # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT уже
     # дал полную порцию свежих кандидатов (считаем все внешние пулы: точный
     # каталог знакомых артистов тоже занимает слоты порции).
-    if sc_artists and _batch_capacity() < limit:
+    if sc_artists and _needs_more_pools():
         sc_pools = await asyncio.gather(
             *(_soundcloud_pool(request, a) for a in sc_artists)
         )
@@ -1595,11 +1856,14 @@ async def get_flow(
         # слова, и склейка двух ("phonk hip-hop") как поисковый запрос у
         # провайдера возвращает мусор. Дерево жанров beets разворачивает вкус в
         # НАСТОЯЩИЕ имена поджанров ("memphis rap", "witch house", "dark wave"),
-        # по которым у SoundCloud и YT Music есть каталог. Берём одно случайное
+        # по которым у SoundCloud и YT Music есть каталог. Берём одно контекстно
         # за подгрузку — это ротация разведки, а не фиксированный запрос.
         pool = beets_genre.subgenres(profile.get("genres") or [])
         if pool:
-            subgenre = random.choice(pool)
+            subgenre = max(
+                pool,
+                key=lambda value: stable_jitter(ranking_context, f"subgenre:{value}"),
+            )
             tag_words = [subgenre]
             # Имя поджанра добавляем в тематические слова ИМЕННО для этого пула:
             # запрос выведен из жанрового профиля юзера, поэтому трек, который
@@ -1619,7 +1883,7 @@ async def get_flow(
             tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
-    if tag_words and _batch_capacity() < limit:
+    if tag_words and _needs_more_pools():
         query = " ".join(tag_words[:2])
         _add_explore(
             t
@@ -1635,33 +1899,50 @@ async def get_flow(
         len(explore),
         len(external_exclude) + len(excl_videos),
     )
-    # Порядок внутри выдачи случайный, как и раньше (shuffle шёл по merged).
+    # Порядок внутри выдачи контекстный и воспроизводимый.
     # После shuffle РАЗНОСИМ по артистам внутри каждого пула: take_capped ниже
-    # берёт ПРЕФИКС списка, и на случайном порядке этот префикс достаётся тому,
+    # берёт ПРЕФИКС списка, и на контекстном порядке этот префикс достаётся тому,
     # у кого кандидатов больше всех (радио одного сида отдаёт пачку треков
     # одного исполнителя). Из-за этого доминирующий артист занимал половину
     # порции, и финальный interleave уже не мог его разнести.
-    random.shuffle(favorite_explore)
+    favorite_explore = _rank_pool(
+        favorite_explore,
+        content_bonus=0.12,
+        label="favorite",
+    )
     favorite_explore = interleave_artists(
         favorite_explore,
         artist_getter=lambda item: item.artist,
         min_gap=_MIN_ARTIST_GAP,
+        context=f"{ranking_context}:favorite",
     )
-    random.shuffle(similar_explore)
+    similar_explore = _rank_pool(
+        similar_explore,
+        content_bonus=0.08,
+        label="similar",
+    )
     similar_explore = interleave_artists(
         similar_explore,
         artist_getter=lambda item: item.artist,
         min_gap=_MIN_ARTIST_GAP,
+        context=f"{ranking_context}:similar",
     )
-    random.shuffle(explore)
+    explore = _rank_pool(explore, content_bonus=0.0, label="explore")
     explore = interleave_artists(
         explore,
         artist_getter=lambda item: item.artist,
         min_gap=_MIN_ARTIST_GAP,
+        context=f"{ranking_context}:explore",
     )
 
     # --- эксплуатация: локальная библиотека по вкусу ---
-    local = await asyncio.to_thread(_local_candidates, db, profile, limit, set(excl_ids))
+    local = await asyncio.to_thread(
+        _local_candidates_on_bind,
+        telemetry_bind,
+        profile,
+        limit,
+        set(excl_ids),
+    )
     # Для стандартной порции из 15 треков лайки — отдельный источник. Раньше
     # они добавлялись в начало общего ``exploit``-пула, а квота ``liked``
     # применялась уже к нему целиком. Если внешние источники были пусты,
@@ -1698,14 +1979,19 @@ async def get_flow(
         # but retain the remaining local tracks from the same trusted artists.
         # A curated playlist may contain only a seed per artist while the rest
         # of that artist's local catalog is still valid exploitation material.
-        liked_tracks = (
-            db.query(Track)
-            .filter(Track.id.in_(liked_ids))
-            .order_by(func.random())
-            .all()
-            if liked_ids
-            else []
-        )
+        if liked_ids:
+            liked_db = Session(bind=telemetry_bind)
+            try:
+                liked_tracks = (
+                    liked_db.query(Track)
+                    .filter(Track.id.in_(liked_ids))
+                    .order_by(Track.id)
+                    .all()
+                )
+            finally:
+                liked_db.close()
+        else:
+            liked_tracks = []
         valid_liked_tracks = [
             t for t in liked_tracks
             if (
@@ -1722,10 +2008,10 @@ async def get_flow(
     # genre_quota, artist_budget/artist_cap и favorite_cap посчитаны выше: от них
     # зависело, нужны ли резервные источники разведки (_batch_capacity).
     if limit == _STANDARD_FLOW_LIMIT:
-        random.shuffle(liked_source)
-        random.shuffle(exploit)
+        liked_source = _rank_pool(liked_source, content_bonus=0.2, label="liked")
+        exploit = _rank_pool(exploit, content_bonus=0.05, label="exploit")
     else:
-        random.shuffle(exploit)
+        exploit = _rank_pool(exploit, content_bonus=0.05, label="exploit")
 
     if limit == _STANDARD_FLOW_LIMIT:
         # The source contract is stronger than the cross-batch artist budget:
@@ -1743,22 +2029,44 @@ async def get_flow(
     # предотвращаются исключениями (история прослушиваний, очередь, история
     # порций), поэтому обязательная доля разведки для этого не нужна.
     explore_quota = min(len(explore), round(limit * _EXPLORE_SHARE))
+    # Пул разведки для стандартной порции. Похожее по ТРЕКУ (Last.fm) — источник
+    # гарантированной доли; вторичная разведка по артистам (граф YT Music /
+    # SoundCloud / теги) в неё сознательно НЕ входит: она резерв
+    # (_EXPLORE_SHARE = 0.0), и на богатом знакомом пуле её кандидаты не должны
+    # занимать места (см. test_flow_does_not_force_exploration_when_trusted_pool_is_rich).
+    #
+    # Исключение — юзер, который САМ попросил нового больше проектного дефолта.
+    # Пул Last.fm конечен (_LASTFM_SEED_TRACKS сидов × _LASTFM_RESOLVE имён) и на
+    # долю в 3 места из 15 и рассчитан, поэтому без резерва ползунок выше дефолта
+    # упирался бы в потолок пула и молча отдавал места знакомому. Квота на пул при
+    # этом одна, поэтому арифметика мест не меняется.
+    discovery_pool = (
+        similar_explore + explore if reserve_fills_discovery else similar_explore
+    )
     # Похожее по ТРЕКУ (Last.fm) — единственная разведка с гарантированной долей,
     # и берётся она ПЕРВОЙ. Все прочие внешние источники засеяны именем артиста и
     # потому крутятся вокруг уже выбранных юзером имён; доверяем им меньше.
+    # Размер доли — ползунок «новые артисты / знакомые» (см. _standard_slots и
+    # app/discovery.py); дефицит пустого пула разведки _balanced_quota всё так же
+    # отдаёт знакомому: короткая порция хуже, чем менее «новая».
     if limit == _STANDARD_FLOW_LIMIT:
         quotas = _balanced_quota(
             {
-                "lastfm": _STANDARD_LASTFM_SLOTS,
-                "liked": _STANDARD_LIKED_SLOTS,
-                "favorite": _STANDARD_FAVORITE_SLOTS,
+                "lastfm": std_lastfm_slots,
+                "liked": std_liked_slots,
+                "favorite": std_favorite_slots,
             },
             {
-                "lastfm": len(similar_explore),
+                # При НУЛЕВОЙ доле разведки её пул не участвует и в раздаче
+                # дефицита: «только знакомые» — это про всю порцию, а не только
+                # про гарантированную квоту, а _balanced_quota разливает недостачу
+                # по всем пулам, у которых есть запас, начиная с этого. Знакомого
+                # не хватило — добирает локальная библиотека (local_quota ниже).
+                "lastfm": len(discovery_pool) if std_lastfm_slots else 0,
                 # Keep the five-track liked target fixed. If discovery pools
                 # are empty, the deficit must go to new local tracks rather
                 # than expanding the liked prefix to the whole batch.
-                "liked": min(len(liked_source), _STANDARD_LIKED_SLOTS),
+                "liked": min(len(liked_source), std_liked_slots),
                 "favorite": len(favorite_explore),
             },
             _STANDARD_FLOW_LIMIT,
@@ -1771,14 +2079,16 @@ async def get_flow(
         )
         trusted_quota = quotas["liked"] + favorite_quota + local_quota
     else:
-        lastfm_quota = min(len(similar_explore), round(limit * _LASTFM_SHARE))
+        lastfm_quota = min(
+            len(discovery_pool), discovery_slots(limit, explore_ratio)
+        )
         liked_quota = 0
         local_quota = 0
         favorite_quota = max(0, genre_quota - explore_quota - lastfm_quota)
         trusted_quota = favorite_quota
 
     relevant_similar, similar_rest = take_capped(
-        similar_explore, lastfm_quota, artist_cap, _artist_of, artist_budget
+        discovery_pool, lastfm_quota, artist_cap, _artist_of, artist_budget
     )
     favorite_selection_cap = 1 if limit == _STANDARD_FLOW_LIMIT else favorite_cap
     relevant_favorite, favorite_rest = take_capped(
@@ -1800,8 +2110,13 @@ async def get_flow(
         if limit == _STANDARD_FLOW_LIMIT
         else ([], exploit_rest)
     )
-    relevant_external, explore_rest = take_capped(
-        explore, explore_quota, artist_cap, _artist_of, artist_budget
+    # В стандартной порции здесь брать нечего: у вторичной разведки нет
+    # гарантированной доли (_EXPLORE_SHARE = 0.0), а при поднятом ползунке её пул
+    # уже внутри discovery_pool — второй раз те же треки попали бы в mix дважды.
+    relevant_external, explore_rest = (
+        ([], explore)
+        if limit == _STANDARD_FLOW_LIMIT
+        else take_capped(explore, explore_quota, artist_cap, _artist_of, artist_budget)
     )
     used_external = (
         len(relevant_similar) + len(relevant_favorite) + len(relevant_external)
@@ -1931,7 +2246,13 @@ async def get_flow(
 
     n_explore = used_external
     n_exploit = len(mix) - n_explore
-    random.shuffle(mix)
+    mix.sort(
+        key=lambda item: (
+            -_flow_score(item),
+            stable_jitter(ranking_context, f"mix:{_item_identity(item)}"),
+            _item_identity(item),
+        )
+    )
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
     # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
     mix = interleave_artists(
@@ -1939,7 +2260,26 @@ async def get_flow(
         artist_getter=lambda item: item.get("artist"),
         min_gap=_MIN_ARTIST_GAP,
         previous_artists=history.get("artists") or [],
+        context=ranking_context,
     )
+
+    # Attach one stable attribution envelope to every delivered item. It is
+    # written before the response so the client can confirm a real impression
+    # and later feedback without materialising provider tracks first.
+    delivery_scores = {}
+    for position, item in enumerate(mix):
+        identity = _item_identity(item)
+        score = _flow_score(item)
+        item.update(
+            {
+                "recommendation_id": request_id,
+                "recommendation_surface": "flow",
+                "recommendation_position": position,
+                "recommendation_score": score,
+                "recommendation_model_version": ALGORITHM_VERSION,
+            }
+        )
+        delivery_scores[item.get("id")] = score
 
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
@@ -1975,6 +2315,26 @@ async def get_flow(
         },
         expire=_FLOW_HISTORY_TTL,
     )
+    # Network exploration is complete at this point. Use a fresh short-lived
+    # session for telemetry so the request never holds a DB connection while
+    # waiting on YT Music/SoundCloud.
+    telemetry_db = Session(bind=telemetry_bind)
+    try:
+        record_delivery(
+            telemetry_db,
+            user_id=current_user.id,
+            items=mix,
+            surface="flow",
+            request_id=request_id,
+            scores=delivery_scores,
+            algorithm_version=ALGORITHM_VERSION,
+        )
+        telemetry_db.commit()
+    except Exception:
+        telemetry_db.rollback()
+        logger.exception("flow delivery telemetry failed user=%s", current_user.id)
+    finally:
+        telemetry_db.close()
     logger.debug(
         "flow result user=%s explore=%d exploit=%d returned=%d",
         current_user.id,

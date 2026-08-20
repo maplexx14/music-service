@@ -32,6 +32,7 @@ from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
 from app.routers import soundcloud, spotify, ytdlp
 from app.routers.tracks import get_or_create_external_track
+from app.recommendation_telemetry import link_materialized_deliveries
 from app.schemas import (
     ExternalTrackImport,
     ImportPreviewResponse,
@@ -731,6 +732,13 @@ async def import_collection(
     seen: set = set()
     for imp in imports:
         track = get_or_create_external_track(db, imp)
+        link_materialized_deliveries(
+            db,
+            user_id=current_user.id,
+            source=imp.source,
+            external_id=imp.external_id,
+            track_id=track.id,
+        )
         if track.id in seen:
             continue  # дубли внутри коллекции (напр. матч в один и тот же трек)
         seen.add(track.id)

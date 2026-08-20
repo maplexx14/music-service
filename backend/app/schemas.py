@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -49,6 +49,7 @@ class UserResponse(UserBase):
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []
+    discovery_ratio: float = 0.2
     created_at: datetime
 
     class Config:
@@ -65,6 +66,10 @@ class UserPreferencesUpdate(BaseModel):
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []
+    # Доля незнакомых артистов в выдаче. None (поле не прислали) означает «не
+    # менять»: клиент, который сохраняет только жанры, не должен сбрасывать
+    # ползунок в дефолт.
+    discovery_ratio: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 class GenreOption(BaseModel):
@@ -258,6 +263,11 @@ class TrackResponse(TrackBase):
     source: str = "local"
     external_id: Optional[str] = None
     stream_url: Optional[str] = None
+    recommendation_id: Optional[str] = None
+    recommendation_surface: Optional[str] = None
+    recommendation_position: Optional[int] = None
+    recommendation_score: Optional[float] = None
+    recommendation_model_version: Optional[str] = None
 
     @field_validator("cover_url")
     @classmethod
@@ -376,6 +386,28 @@ class ExternalTrackResponse(BaseModel):
     download_url: Optional[str] = None
     download_allowed: bool = False
     genre: Optional[str] = None
+    recommendation_id: Optional[str] = None
+    recommendation_surface: Optional[str] = None
+    recommendation_position: Optional[int] = None
+    recommendation_score: Optional[float] = None
+    recommendation_model_version: Optional[str] = None
+
+
+class RecommendationEventPayload(BaseModel):
+    """Client feedback for local or provider-backed recommendation items."""
+    event_type: str = Field(..., min_length=2, max_length=32)
+    track_id: Optional[int] = Field(None, ge=1)
+    source: Optional[str] = Field(None, max_length=32)
+    external_id: Optional[str] = Field(None, max_length=512)
+    title: Optional[str] = Field(None, max_length=512)
+    artist: Optional[str] = Field(None, max_length=512)
+    value: Optional[float] = None
+    surface: Optional[str] = Field(None, max_length=64)
+    position: Optional[int] = Field(None, ge=0, le=10000)
+    request_id: Optional[str] = Field(None, max_length=128)
+    algorithm_version: Optional[str] = Field(None, max_length=64)
+    client_hour: Optional[int] = Field(None, ge=0, le=23)
+    metadata: Optional[dict] = None
 
 
 class ExternalPlaylistResponse(BaseModel):

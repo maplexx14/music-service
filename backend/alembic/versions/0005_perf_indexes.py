@@ -77,8 +77,11 @@ _INDEXES = [
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     bind = op.get_bind()
+    # pg_trgm is PostgreSQL-only.  Ordinary indexes below remain useful in
+    # SQLite test/development databases.
+    if bind.dialect.name == "postgresql":
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     insp = sa.inspect(bind)
     for name, table, columns, kwargs in _INDEXES:
         existing = {ix["name"] for ix in insp.get_indexes(table)}

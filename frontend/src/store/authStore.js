@@ -435,12 +435,23 @@ const useAuthStore = create((set, get) => ({
         }
       },
 
-      updatePreferences: async (preferredGenres, preferredArtists, excludedArtists) => {
+      // discoveryRatio (доля незнакомых артистов в выдаче, 0..1) необязателен:
+      // онбординг ползунок не показывает, а отсутствие поля бэкенд трактует как
+      // «не менять» — иначе экран регистрации сбрасывал бы настройку в дефолт.
+      updatePreferences: async (
+        preferredGenres,
+        preferredArtists,
+        excludedArtists,
+        discoveryRatio,
+      ) => {
         try {
           const response = await api.put('/users/me/preferences', {
             preferred_genres: preferredGenres || [],
             preferred_artists: preferredArtists || [],
             excluded_artists: excludedArtists || [],
+            ...(Number.isFinite(discoveryRatio)
+              ? { discovery_ratio: discoveryRatio }
+              : {}),
           })
           const newUser = response.data
           set({ user: newUser })

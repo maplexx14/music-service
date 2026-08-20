@@ -75,6 +75,52 @@ rec_impressions = Table(
     Column('last_shown', DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# Immutable delivery log.  ``rec_impressions`` remains the compact fatigue
+# aggregate; this table preserves position/source/algorithm for evaluation.
+recommendation_impressions = Table(
+    'recommendation_impressions',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
+    Column('source', String, nullable=True),
+    Column('external_id', String, nullable=True),
+    Column('title', String, nullable=True),
+    Column('artist', String, nullable=True),
+    Column('surface', String, nullable=False, server_default='library'),
+    Column('position', Integer, nullable=False),
+    Column('score', Float, nullable=True),
+    Column('algorithm_version', String, nullable=False, server_default='hybrid-v4'),
+    Column('request_id', String, nullable=True, index=True),
+    Column('session_id', String, nullable=True, index=True),
+    Column('shown_at', DateTime(timezone=True), server_default=func.now(), nullable=False, index=True),
+    Column('visible', Boolean, nullable=False, server_default='false', default=False),
+)
+
+# Feedback for both local and not-yet-materialized provider tracks.  Keeping
+# the provider identity here prevents a fast skip from disappearing before the
+# player has had time to import the item into ``tracks``.
+recommendation_events = Table(
+    'recommendation_events',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
+    Column('source', String, nullable=True),
+    Column('external_id', String, nullable=True),
+    Column('title', String, nullable=True),
+    Column('artist', String, nullable=True),
+    Column('event_type', String, nullable=False, index=True),
+    Column('value', Float, nullable=True),
+    Column('surface', String, nullable=True),
+    Column('position', Integer, nullable=True),
+    Column('algorithm_version', String, nullable=False, server_default='hybrid-v4'),
+    Column('request_id', String, nullable=True, index=True),
+    Column('client_hour', Integer, nullable=True),
+    Column('metadata', JSON, nullable=True),
+    Column('occurred_at', DateTime(timezone=True), server_default=func.now(), nullable=False, index=True),
+)
+
 # Предрассчитанная item-item похожесть (co-occurrence по сигналам всех
 # юзеров) — пересчитывается фоновой задачей (см. app/cooccurrence.py).
 track_cooccurrence = Table(
@@ -83,6 +129,7 @@ track_cooccurrence = Table(
     Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
     Column('other_track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
     Column('score', Float, nullable=False),
+    Column('common_users', Integer, nullable=False, server_default='0'),
     Column('updated_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
@@ -140,6 +187,15 @@ class User(Base):
     # Артисты, которых пользователь убрал из автоматически определённых
     # предпочтений. Это отдельный список: явные лайки и история не меняются.
     excluded_artists = Column(JSON, nullable=False, default=list, server_default="[]")
+    # Доля выдачи под НЕЗНАКОМЫХ артистов (0.0 — только знакомые, 1.0 — только
+    # новые имена). Баланс exploration/exploitation — вопрос вкуса, а не
+    # правильной настройки: одному нужен «только моё», другому — постоянные
+    # открытия. Дефолт 0.2 воспроизводит прежнее захардкоженное поведение
+    # (20% explore-слотов в recommendations.py и 3 из 15 мест под Last.fm в
+    # волне). Семантику читают оба движка через app/discovery.py.
+    discovery_ratio = Column(
+        Float, nullable=False, default=0.2, server_default="0.2"
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -165,6 +221,9 @@ class Track(Base):
     genre = Column(String, nullable=True, index=True)
     release_date = Column(DateTime(timezone=True), nullable=True)
     play_count = Column(Integer, default=0, index=True)
+    # Number of distinct users who have played the track at least once.
+    # ``play_count`` is retained for ranking recency/volume and old databases.
+    unique_listener_count = Column(Integer, nullable=False, default=0, server_default="0", index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

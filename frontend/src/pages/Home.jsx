@@ -1,7 +1,11 @@
-import { lazy, memo, Suspense, useEffect, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Play, Pause, Settings, Shield, LogOut, Home as HomeIcon, History } from 'lucide-react'
-import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
+import {
+  recordRecommendationImpression,
+  usePlayerStore,
+  trackIntentHandlers,
+} from '../store/playerStore'
 import { useAuthStore } from '../store/authStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
@@ -19,6 +23,7 @@ import './Home.css'
 const Grainient = lazy(() => import('../components/Grainient'))
 const SOUNDCLOUD_PLAYLIST_LIMIT = 12
 const SOUNDCLOUD_SEED_LIMIT = 3
+const homeRecommendationImpressions = new Set()
 
 function getSoundCloudPlaylistSeeds(user, tracks) {
   const candidates = [
@@ -50,8 +55,30 @@ function handlePlayTrack(track, queue) {
 // пересобираются. intent-префетч (hover/pointerdown) прогревает резолв
 // на бэке до клика — старт воспроизведения почти мгновенный.
 const TrackCard = memo(function TrackCard({ track, queue }) {
+  const cardRef = useRef(null)
+  useEffect(() => {
+    if (!track?.recommendation_id || typeof IntersectionObserver === 'undefined') return undefined
+    const key = `${track.recommendation_id}:${track.recommendation_position}:${track.id}`
+    if (homeRecommendationImpressions.has(key)) return undefined
+    const node = cardRef.current
+    if (!node) return undefined
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) return
+        if (homeRecommendationImpressions.has(key)) return
+        homeRecommendationImpressions.add(key)
+        recordRecommendationImpression(track, { trigger: 'intersection' })
+        observer.disconnect()
+      },
+      { threshold: [0.5] },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [track])
+
   return (
     <div
+      ref={cardRef}
       className="track-card"
       onClick={() => handlePlayTrack(track, queue)}
       {...trackIntentHandlers(track)}

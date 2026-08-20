@@ -22,6 +22,13 @@ function Settings() {
     artists: user?.preferred_artists || [],
     excludedArtists: user?.excluded_artists || [],
   })
+  // Доля незнакомых артистов в выдаче. На бэкенде это 0..1, в интерфейсе —
+  // проценты: ползунок «сколько нового / сколько знакомого». Отдельным
+  // состоянием, а не внутри prefs: PreferencePicker пересобирает свой объект из
+  // трёх известных ему полей и лишний ключ потерялся бы на первом же клике.
+  const [discovery, setDiscovery] = useState(
+    Math.round((user?.discovery_ratio ?? 0.2) * 100)
+  )
   const [savingPrefs, setSavingPrefs] = useState(false)
 
   // Профиль приходит асинхронно (checkAuth), и на первом рендере user ещё
@@ -33,6 +40,7 @@ function Settings() {
         artists: user.preferred_artists || [],
         excludedArtists: user.excluded_artists || [],
       })
+      setDiscovery(Math.round((user.discovery_ratio ?? 0.2) * 100))
     }
   }, [user])
 
@@ -42,6 +50,7 @@ function Settings() {
       prefs.genres,
       prefs.artists,
       prefs.excludedArtists,
+      discovery / 100,
     )
     setSavingPrefs(false)
     if (result.success) {
@@ -104,6 +113,39 @@ function Settings() {
           Влияют на рекомендации и ваш персональный поток
         </p>
         <PreferencePicker value={prefs} onChange={setPrefs} />
+
+        <div className="settings-balance">
+          <div className="settings-balance-head">
+            <div className="settings-label">Новые артисты в выдаче</div>
+            <div className="settings-hint">
+              Сколько мест в рекомендациях и в волне отдавать артистам, которых
+              вы ещё не слушали. Остальные достаются знакомым именам и их новым
+              трекам.
+            </div>
+          </div>
+          <div className="settings-balance-values">
+            <span className="settings-balance-new">{discovery}% новых</span>
+            <span className="settings-balance-known">
+              {100 - discovery}% знакомых
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={discovery}
+            onChange={(event) => setDiscovery(Number(event.target.value))}
+            className="settings-balance-slider"
+            style={{ '--balance-fill': `${discovery}%` }}
+            aria-label="Доля новых артистов в рекомендациях"
+          />
+          <div className="settings-balance-scale">
+            <span>Только знакомые</span>
+            <span>Только новые</span>
+          </div>
+        </div>
+
         <div className="settings-prefs-actions">
           <button
             type="button"
