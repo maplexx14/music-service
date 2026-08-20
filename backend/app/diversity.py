@@ -309,3 +309,35 @@ def cap_per_artist(
         counts[key] = n + 1
         result.append(item)
     return result
+
+
+def soft_artist_rerank(
+    items: List[T],
+    score_of: Callable[[T], float],
+    *,
+    artist_of: Callable[[T], str] = lambda t: t.artist,
+    repeat_penalties: tuple[float, ...] = (0.0, 0.15, 0.45, 1.0),
+) -> List[T]:
+    """Greedily rerank with a progressively stronger artist repeat penalty.
+
+    Unlike a hard cap this keeps a highly relevant repeat available when the
+    catalogue is sparse, while naturally preferring comparable alternatives.
+    """
+    remaining = list(items)
+    result: List[T] = []
+    counts: dict[str, int] = {}
+    while remaining:
+        best_index = 0
+        best_value = None
+        for index, item in enumerate(remaining):
+            key = primary_artist_key(artist_of(item))
+            count = counts.get(key, 0)
+            penalty = repeat_penalties[min(count, len(repeat_penalties) - 1)]
+            value = float(score_of(item)) - penalty
+            if best_value is None or value > best_value:
+                best_index, best_value = index, value
+        picked = remaining.pop(best_index)
+        key = primary_artist_key(artist_of(picked))
+        counts[key] = counts.get(key, 0) + 1
+        result.append(picked)
+    return result

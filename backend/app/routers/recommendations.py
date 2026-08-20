@@ -28,13 +28,15 @@ from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
 from app.discovery import discovery_ratio, discovery_slots
 from app.recommendation_cache import recommendation_cache_key
-from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key
+from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
 from app.artist_utils import artist_key
 from app.recommendation_scoring import (
     ALGORITHM_VERSION,
+    fatigue_score,
     score_track,
     stable_jitter,
 )
+from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import (
     ALLOWED_EVENT_TYPES,
     new_request_id,
@@ -42,6 +44,7 @@ from app.recommendation_telemetry import (
     record_event,
     record_impression,
 )
+from app.recommendation_evaluation import user_metrics
 
 router = APIRouter()
 
@@ -149,27 +152,8 @@ _IMPRESSION_FATIGUE_THRESHOLD = 4
 # Половина людей слушает разное утром и перед сном. События прослушивания в
 # том же временном интервале, что текущий запрос (client_hour с фронта),
 # дают артисту бонус — профиль мягко смещается к «вкусу этого времени дня».
-_TIME_BUCKET_BONUS = 0.5
-
-
 def _hour_bucket(hour: Optional[int]) -> Optional[str]:
-    if hour is None:
-        return None
-    if 5 <= hour < 11:
-        return "morning"
-    if 11 <= hour < 17:
-        return "day"
-    if 17 <= hour < 23:
-        return "evening"
-    return "night"
-
-
-_BUCKET_HOURS = {
-    "morning": list(range(5, 11)),
-    "day": list(range(11, 17)),
-    "evening": list(range(17, 23)),
-    "night": [23, 0, 1, 2, 3, 4],
-}
+    return hour_bucket(hour)
 
 
 def _varied_popular(
@@ -232,6 +216,44 @@ def _varied_popular(
         )
     )
     return cap_per_artist(pool, _MAX_PER_ARTIST, used=used)[:need]
+
+
+def _cold_start_candidates(
+    db: Session,
+    *,
+    preferred_genres: list[str],
+    preferred_artists: list[str],
+    excluded_artists: set[str],
+    exclude_ids: set[int],
+    limit: int,
+    user_id: int,
+) -> list[Track]:
+    """Build a personalized first page before behavioral history exists."""
+    if limit <= 0 or not (preferred_genres or preferred_artists):
+        return []
+    wanted_genres = {str(g).strip().lower() for g in preferred_genres if g}
+    wanted_artists = {artist_key(a) for a in preferred_artists if artist_key(a)}
+    filters = []
+    if wanted_genres:
+        filters.append(func.lower(Track.genre).in_(wanted_genres))
+    if wanted_artists:
+        filters.append(func.lower(Track.artist).in_(wanted_artists))
+    if not filters:
+        return []
+    query = db.query(Track).filter(or_(*filters))
+    if exclude_ids:
+        query = query.filter(~Track.id.in_(exclude_ids))
+    if excluded_artists:
+        query = query.filter(~func.lower(Track.artist).in_(excluded_artists))
+    pool = query.order_by(desc(Track.play_count), Track.id).limit(max(100, limit * 30)).all()
+    pool.sort(
+        key=lambda track: (
+            -score_track(track, user_id=user_id, genres=preferred_genres, novelty=True),
+            stable_jitter(user_id, track.id),
+            track.id,
+        )
+    )
+    return cap_per_artist(pool, _MAX_PER_ARTIST)[:limit]
 
 
 def _rank_public_playlists(
@@ -491,14 +513,22 @@ def get_recommendations(
 
     # «Уставшие» показы: трек показывался в рекомендациях >= порога раз и так
     # и не был сыгран (строка удаляется при /play) — больше не показываем.
-    fatigued_ids = set(
-        db.execute(
-            select(rec_impressions.c.track_id).where(
-                rec_impressions.c.user_id == current_user.id,
-                rec_impressions.c.shown_count >= _IMPRESSION_FATIGUE_THRESHOLD,
-            )
-        ).scalars()
-    )
+    fatigue_rows = db.execute(
+        select(
+            rec_impressions.c.track_id,
+            rec_impressions.c.shown_count,
+            rec_impressions.c.last_shown,
+        ).where(rec_impressions.c.user_id == current_user.id)
+    ).all()
+    fatigue_by_track = {
+        int(track_id): fatigue_score(shown_count, last_shown, now=ranking_now)
+        for track_id, shown_count, last_shown in fatigue_rows
+        if track_id is not None
+    }
+    fatigued_ids = {
+        track_id for track_id, level in fatigue_by_track.items()
+        if level >= 0.35
+    }
 
     # Combine liked, played and playlisted track IDs (всё это уже в коллекции
     # юзера — исключаем из выдачи и используем как сигнал вкуса).
@@ -527,6 +557,7 @@ def get_recommendations(
     artist_positive = {}
     genres = list(preferred_genres)
     score_by_track = {}
+    context_profile = build_context_profile(db, current_user.id, bucket, now=ranking_now)
 
     def _candidate_score(track: Track) -> float:
         row = skip_by_track.get(track.id)
@@ -540,9 +571,11 @@ def get_recommendations(
             skip_count=row[2] if row else 0,
             disliked=bool(row[4]) if row else False,
             fatigued=track.id in fatigued_ids,
+            fatigue_level=fatigue_by_track.get(track.id),
             novelty=artist_key(track.artist) not in known_artist_keys,
             source=getattr(track, "source", None),
             listener_count=getattr(track, "unique_listener_count", 0) or 0,
+            context_bonus=context_bonus(track, context_profile),
             now=ranking_now,
         )
         score_by_track[track.id] = score
@@ -654,26 +687,6 @@ def get_recommendations(
                 else 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
             )
             artist_skip_penalty[key] = artist_skip_penalty.get(key, 0) + penalty
-
-        # Контекст времени суток: артисты, которых юзер слушает в текущем
-        # временном интервале (по client_hour из лога событий), получают бонус
-        # — утренняя выдача тяготеет к «утреннему» вкусу, вечерняя к вечернему.
-        if bucket is not None:
-            time_rows = db.execute(
-                select(Track.artist, func.count().label("cnt"))
-                .select_from(
-                    user_play_events.join(Track, Track.id == user_play_events.c.track_id)
-                )
-                .where(
-                    user_play_events.c.user_id == current_user.id,
-                    user_play_events.c.client_hour.in_(_BUCKET_HOURS[bucket]),
-                )
-                .group_by(Track.artist)
-            ).all()
-            for artist, cnt in time_rows:
-                key = artist_key(artist)
-                if key in artist_positive:
-                    artist_positive[key] += _TIME_BUCKET_BONUS * math.log1p(cnt)
 
         # Доверенный артист: положительный сигнал сам по себе уверенный
         # (>= порога), ЛИБО юзер курировал 2+ его трека (лайк/плейлист —
@@ -864,7 +877,9 @@ def get_recommendations(
                 )
 
             pool.sort(key=_track_rank)
-            capped = cap_per_artist(pool, _MAX_PER_ARTIST)
+            # Soft repeat penalties preserve strong repeats when the catalogue
+            # is sparse, while avoiding a rigid per-artist cliff.
+            capped = soft_artist_rerank(pool, _candidate_score)[: max(limit * 6, limit)]
             # Разнообразие по АУДИТОРИИ, а не только по имени артиста: cap выше
             # не видит, когда артисты формально разные, но все из одной тусовки.
             # Похожесть берём из co-occurrence по кандидатам-финалистам (запас
@@ -987,13 +1002,24 @@ def get_recommendations(
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
         # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных
         # юзеров место релевантного занимали глобальные хиты — это и убрано.)
-        recommended_tracks = _varied_popular(
+        recommended_tracks = _cold_start_candidates(
             db,
-            skipped_track_ids | fatigued_ids,
-            limit,
+            preferred_genres=preferred_genres,
+            preferred_artists=preferred_artists,
             excluded_artists=excluded_artist_keys,
+            exclude_ids=skipped_track_ids | fatigued_ids,
+            limit=limit,
             user_id=current_user.id,
         )
+        if len(recommended_tracks) < limit:
+            recommended_tracks += _varied_popular(
+                db,
+                skipped_track_ids | fatigued_ids | {t.id for t in recommended_tracks},
+                limit - len(recommended_tracks),
+                excluded_artists=excluded_artist_keys,
+                used=Counter(primary_artist_key(t.artist) for t in recommended_tracks),
+                user_id=current_user.id,
+            )
 
     # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
     # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
@@ -1124,6 +1150,16 @@ def record_recommendation_event(
     )
     db.commit()
     return None
+
+
+@router.get("/metrics")
+def get_recommendation_metrics(
+    days: int = Query(30, ge=1, le=365),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Return recommendation funnel metrics for the current user."""
+    return user_metrics(db, current_user.id, days=days)
 
 
 @router.get("/tracks", response_model=List[TrackResponse])

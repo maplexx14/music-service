@@ -541,7 +541,10 @@ const usePlayerStore = create((set, get) => ({
     if (flowPreloadPromise) return
     const generation = flowPreloadGeneration
     flowPreloadPromise = api
-      .get('/recommendations/flow', { params: { limit: 15 }, skipErrorToast: true })
+      .get('/recommendations/flow', {
+        params: { limit: 15, hour: new Date().getHours() },
+        skipErrorToast: true,
+      })
       .then(({ data }) => {
         if (generation === flowPreloadGeneration && data && data.length > 0) {
           set({ flowPreload: { tracks: data, ts: Date.now() } })
@@ -588,7 +591,9 @@ const usePlayerStore = create((set, get) => ({
         return true
       }
 
-      const { data } = await api.get('/recommendations/flow', { params: { limit: 15 } })
+      const { data } = await api.get('/recommendations/flow', {
+        params: { limit: 15, hour: new Date().getHours() },
+      })
       if (!data || data.length === 0) return false
       get().playPlaylist(data, 0, 'flow')
       // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
@@ -616,7 +621,7 @@ const usePlayerStore = create((set, get) => ({
       // Исключаем то, что уже в очереди (хвост до 100 треков).
       const exclude = queue.slice(-100).map((t) => t.id).join(',')
       const { data } = await api.get('/recommendations/flow', {
-        params: { limit: 15, exclude },
+        params: { limit: 15, exclude, hour: new Date().getHours() },
       })
       const known = new Set(get().queue.map((t) => t.id))
       const fresh = (data || []).filter((t) => !known.has(t.id))

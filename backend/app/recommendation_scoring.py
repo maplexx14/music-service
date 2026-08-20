@@ -24,6 +24,8 @@ _AFFINITY_WEIGHT = 2.4
 _CONTENT_WEIGHT = 1.15
 _SOURCE_WEIGHT = 0.18
 _NOVELTY_WEIGHT = 0.16
+_FATIGUE_WEIGHT = 0.55
+_CONTEXT_WEIGHT = 0.65
 
 
 def _as_utc(value: Any) -> Optional[datetime]:
@@ -82,6 +84,26 @@ def stable_jitter(user_id: Any, item_key: Any) -> float:
     return int.from_bytes(digest, "big") / float(2**64)
 
 
+def fatigue_score(shown_count: Any = 0, last_shown: Any = None, now: Optional[datetime] = None) -> float:
+    """Return a time-decayed exposure score in ``[0, 1]``.
+
+    Repeated visible impressions should cool down naturally; an item shown
+    yesterday is not equivalent to one shown five minutes ago.  The logarithm
+    prevents a long session from making the penalty grow without bound.
+    """
+    try:
+        count = max(0.0, float(shown_count or 0))
+    except (TypeError, ValueError):
+        count = 0.0
+    timestamp = _as_utc(last_shown)
+    if timestamp is None or count <= 0:
+        return 0.0
+    now_utc = _as_utc(now) or datetime.now(timezone.utc)
+    age_hours = max(0.0, (now_utc - timestamp).total_seconds() / 3600.0)
+    recency = math.exp(-age_hours / 36.0)
+    return min(1.0, math.log1p(count) / math.log1p(6.0) * recency)
+
+
 def source_confidence(source: Optional[str]) -> float:
     return {
         "local": 1.0,
@@ -116,10 +138,12 @@ def score_track(
     skip_count: int = 0,
     disliked: bool = False,
     fatigued: bool = False,
+    fatigue_level: Optional[float] = None,
     novelty: bool = False,
     source: Optional[str] = None,
     listener_count: int = 0,
     content_bonus: float = 0.0,
+    context_bonus: float = 0.0,
     now: Optional[datetime] = None,
 ) -> float:
     """Compute a bounded, explainable score for one candidate.
@@ -139,8 +163,12 @@ def score_track(
     skip_penalty = min(1.5, math.log1p(max(0, int(skip_count or 0))) * 0.42)
     if disliked:
         skip_penalty += 1.5
-    fatigue_penalty = 0.25 if fatigued else 0.0
+    if fatigue_level is None:
+        fatigue_penalty = 0.25 if fatigued else 0.0
+    else:
+        fatigue_penalty = _FATIGUE_WEIGHT * max(0.0, min(1.0, float(fatigue_level)))
     novelty_bonus = _NOVELTY_WEIGHT if novelty else 0.0
+    context_fit = max(-1.0, min(1.0, float(context_bonus or 0.0)))
     score = (
         _AFFINITY_WEIGHT * affinity
         + _CONTENT_WEIGHT * match
@@ -148,6 +176,7 @@ def score_track(
         + _FRESHNESS_WEIGHT * freshness
         + _SOURCE_WEIGHT * source_fit
         + novelty_bonus
+        + _CONTEXT_WEIGHT * context_fit
         + completion_fit
         - skip_penalty
         - fatigue_penalty

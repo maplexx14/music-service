@@ -72,6 +72,7 @@ from app.diversity import (
     weighted_order,
 )
 from app.recommendation_scoring import ALGORITHM_VERSION, score_track, stable_jitter
+from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import artist_key, same_artist
 from app.models import (
@@ -1357,6 +1358,7 @@ async def get_flow(
     response: Response,
     limit: int = Query(8, ge=5, le=50),
     exclude: str = Query("", max_length=4000),
+    hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -1395,6 +1397,9 @@ async def get_flow(
     )
 
     profile = await asyncio.to_thread(_taste_profile, db, current_user.id)
+    contextual_profile = build_context_profile(
+        db, current_user.id, hour_bucket(hour), now=ranking_now
+    )
     # Дальше идут секунды сетевых ожиданий (radio YT Music + поиск SoundCloud),
     # а сессия всё это время держала бы соединение открытым в состоянии
     # `idle in transaction` — под нагрузкой пул исчерпывается на ожидании сети,
@@ -1443,6 +1448,7 @@ async def get_flow(
                 else getattr(item, "unique_listener_count", 0)
             ) or 0,
             content_bonus=content_bonus,
+            context_bonus=context_bonus(item, contextual_profile),
             now=ranking_now,
         )
         score_by_item[score_key] = score
