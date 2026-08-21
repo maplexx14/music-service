@@ -337,11 +337,6 @@ class SearchResponse(BaseModel):
     users: List[UserResponse] = []
 
 
-class RecommendationResponse(BaseModel):
-    tracks: List[TrackResponse] = []
-    playlists: List[PlaylistResponse] = []
-
-
 class ImportRequest(BaseModel):
     """Импорт коллекции/трека по ссылке из внешнего сервиса."""
     url: str
@@ -395,6 +390,14 @@ class ExternalTrackResponse(BaseModel):
     recommendation_position: Optional[int] = None
     recommendation_score: Optional[float] = None
     recommendation_model_version: Optional[str] = None
+
+
+class RecommendationResponse(BaseModel):
+    # The home recommender may return a local ORM-backed item or a provider
+    # candidate. Restricting this field to TrackResponse made the surface
+    # inherently bounded by the materialized database catalogue.
+    tracks: List[TrackResponse | ExternalTrackResponse] = []
+    playlists: List[PlaylistResponse] = []
 
 
 class RecommendationEventPayload(BaseModel):

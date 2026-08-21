@@ -22,7 +22,7 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "noreply@localhost")
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Music Streaming")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "bolt")
 SMTP_REPLY_TO = os.getenv("SMTP_REPLY_TO", "")
 SMTP_SECURITY = os.getenv("SMTP_SECURITY", "").strip().lower()
 if not SMTP_SECURITY:

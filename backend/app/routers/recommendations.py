@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_, select, union
 from typing import List, Optional
 from datetime import datetime, timezone
 from collections import Counter
+import asyncio
 import math
 import re
 from app.database import get_db
@@ -17,8 +18,15 @@ from app.models import (
     playlist_tracks,
     user_play_events,
     rec_impressions,
+    recommendation_events,
 )
-from app.schemas import RecommendationResponse, TrackResponse, PlaylistResponse, RecommendationEventPayload
+from app.schemas import (
+    ExternalTrackResponse,
+    RecommendationResponse,
+    TrackResponse,
+    PlaylistResponse,
+    RecommendationEventPayload,
+)
 from app.dependencies import get_current_active_user
 from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords
 from app.lang import dominant_is_cyrillic, is_foreign_script
@@ -27,7 +35,10 @@ from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
 from app.discovery import discovery_ratio
-from app.recommendation_cache import recommendation_cache_key
+from app.recommendation_cache import (
+    invalidate_recommendation_cache,
+    recommendation_cache_key,
+)
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
 from app.artist_utils import artist_key
 from app.recommendation_scoring import (
@@ -51,6 +62,7 @@ from app.recommendation_telemetry import (
     record_impression,
 )
 from app.recommendation_evaluation import user_metrics
+from app.routers import flow as flow_router
 
 router = APIRouter()
 
@@ -59,6 +71,17 @@ router = APIRouter()
 # Явные действия (лайк/скип) инвалидируют его сразу (см. tracks.py), TTL
 # остаётся для пассивных прослушиваний.
 _RECS_TTL = 300
+
+# The home carousel must not be bounded by the materialized Track table.  Its
+# external pool is intentionally smaller than Flow's because this endpoint is
+# fetched during first paint, but it uses the same provider-backed retrieval
+# primitives and caches. Acoustic data remains a reranking signal for local
+# rows; playlist/history seeds provide catalogue coverage.
+_EXTERNAL_SEED_TRACKS = 3
+_EXTERNAL_ARTISTS = 4
+_EXTERNAL_SIMILAR_ARTISTS = 2
+_EXTERNAL_GENRES = 1
+_EXTERNAL_POOL_FACTOR = 4
 
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого "топ-N" по позиции/play_count — иначе у активных
@@ -353,6 +376,132 @@ def _curation_decay(ts) -> float:
     return max(_CURATION_DECAY_FLOOR, _decay(ts, _CURATION_HALF_LIFE_DAYS))
 
 
+async def _external_recommendation_pool(
+    request: Request,
+    *,
+    liked: list,
+    playlisted: list,
+    played: list,
+    preferred_artists: list[str],
+    preferred_genres: list[str],
+    limit: int,
+    excluded_external: set[tuple[str, str]],
+    excluded_track_keys: Optional[set[tuple[str, str]]] = None,
+) -> list[ExternalTrackResponse]:
+    """Retrieve provider candidates from the user's actual collection signals.
+
+    This is deliberately a retrieval helper, not a second ranker.  Imported
+    playlists can contain thousands of tracks while the local DB may only
+    materialize a fraction of them; using their artist/title/genre seeds keeps
+    recommendations useful before any acoustic backfill is complete.
+    """
+    seed_tracks: list[tuple[str, str]] = []
+    seen_tracks: set[tuple[str, str]] = set()
+    for track, _added_at in liked:
+        seed_tracks.append((track.artist, track.title))
+    for track, _added_at, _origin in playlisted:
+        seed_tracks.append((track.artist, track.title))
+    for track, _play_count, _last_played in played:
+        seed_tracks.append((track.artist, track.title))
+
+    deduped_seeds = []
+    for artist, title in seed_tracks:
+        key = (artist_key(artist), str(title or "").strip().lower())
+        if not key[0] or not key[1] or key in seen_tracks:
+            continue
+        seen_tracks.add(key)
+        deduped_seeds.append((artist, title))
+        if len(deduped_seeds) >= _EXTERNAL_SEED_TRACKS:
+            break
+
+    artist_seeds = list(preferred_artists)
+    artist_seeds.extend(track.artist for track, _added_at in liked)
+    artist_seeds.extend(track.artist for track, _added_at, _origin in playlisted)
+    artist_seeds.extend(track.artist for track, _play_count, _last_played in played)
+    deduped_artists = []
+    seen_artists = set()
+    for artist in artist_seeds:
+        key = artist_key(artist)
+        if not key or key in seen_artists:
+            continue
+        seen_artists.add(key)
+        deduped_artists.append(artist)
+        if len(deduped_artists) >= _EXTERNAL_ARTISTS:
+            break
+
+    playlist_artist_counts = Counter(
+        artist_key(track.artist) for track, _added_at, _origin in playlisted
+    )
+    manual_playlist_artists = {
+        artist_key(track.artist)
+        for track, _added_at, origin in playlisted
+        if str(origin or "manual").lower() == "manual"
+    }
+    explicit_artist_keys = {artist_key(value) for value in preferred_artists}
+    liked_artist_keys = {artist_key(track.artist) for track, _added_at in liked}
+
+    # A manually curated playlist or a liked/preferred artist is an explicit
+    # enough signal to browse its provider catalogue immediately. Imported
+    # playlists are intentionally weaker: a single imported track gets only
+    # track-level similarity, while an artist catalogue/graph opens after
+    # three imported tracks.
+    catalog_artists = []
+    similar_artists = []
+    for artist in deduped_artists:
+        key = artist_key(artist)
+        is_curated = (
+            key in explicit_artist_keys
+            or key in liked_artist_keys
+            or key in manual_playlist_artists
+        )
+        if is_curated or playlist_artist_counts.get(key, 0) >= 3:
+            catalog_artists.append(artist)
+        if (
+            is_curated or playlist_artist_counts.get(key, 0) >= 3
+        ) and len(similar_artists) < _EXTERNAL_SIMILAR_ARTISTS:
+            similar_artists.append(artist)
+        if len(catalog_artists) >= _EXTERNAL_ARTISTS:
+            break
+
+    jobs = []
+    for artist, title in deduped_seeds:
+        jobs.append(flow_router._lastfm_pool(request, artist, title))
+    for artist in catalog_artists:
+        jobs.append(flow_router._favorite_artist_pool(request, artist))
+    for artist in similar_artists:
+        jobs.append(flow_router._similar_pool(artist))
+    for genre in list(dict.fromkeys(preferred_genres))[:_EXTERNAL_GENRES]:
+        jobs.append(flow_router._tag_pool(request, genre))
+    if not jobs:
+        return []
+
+    pools = await asyncio.gather(*jobs, return_exceptions=True)
+    result: list[ExternalTrackResponse] = []
+    seen: set[str] = set()
+    seen_track_keys = set(excluded_track_keys or ())
+    base_url = str(request.base_url).rstrip("/")
+    for pool in pools:
+        if isinstance(pool, Exception):
+            continue
+        for item in pool:
+            identity = f"{item.source}:{item.external_id}"
+            key = (item.source, item.external_id)
+            track_key = flow_router._norm_key(item.artist, item.title)
+            if identity in seen or key in excluded_external:
+                continue
+            if track_key in seen_track_keys and all(track_key):
+                continue
+            if item.source == "ytmusic" and item.external_id and not item.stream_url:
+                item.stream_url = f"{base_url}/api/ytdlp/stream/{item.external_id}"
+            seen.add(identity)
+            if all(track_key):
+                seen_track_keys.add(track_key)
+            result.append(item)
+            if len(result) >= max(limit * _EXTERNAL_POOL_FACTOR, limit):
+                return result
+    return result
+
+
 def _collection_exclude_select(user_id: int):
     """Вся коллекция юзера (плейлисты, включая «Понравившиеся», повторные
     прослушивания) плюс скипнутое — единым UNION-подзапросом.
@@ -378,7 +527,8 @@ def _collection_exclude_select(user_id: int):
 
 
 @router.get("/", response_model=RecommendationResponse)
-def get_recommendations(
+async def get_recommendations(
+    request: Request,
     limit: int = 20,
     hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
@@ -413,6 +563,15 @@ def get_recommendations(
                 }
             )
             cached_tracks.append(item)
+            if (
+                item.get("source") == "ytmusic"
+                and item.get("external_id")
+                and not item.get("stream_url")
+            ):
+                item["stream_url"] = (
+                    f"{str(request.base_url).rstrip('/')}/api/ytdlp/stream/"
+                    f"{item['external_id']}"
+                )
             if item.get("id") is not None and item.get("recommendation_score") is not None:
                 cached_scores[item["id"]] = item["recommendation_score"]
         cached_payload["tracks"] = cached_tracks
@@ -582,7 +741,71 @@ def get_recommendations(
         )
     acoustic_profile = weighted_centroid(profile_rows)
 
-    def _candidate_score(track: Track) -> float:
+    excluded_external: set[tuple[str, str]] = set()
+    excluded_track_keys: set[tuple[str, str]] = set()
+    for track, *_ in (*liked, *playlisted, *played):
+        source = getattr(track, "source", None)
+        external_id = getattr(track, "external_id", None)
+        if source and external_id:
+            excluded_external.add((source, external_id))
+        track_key = flow_router._norm_key(track.artist, track.title)
+        if all(track_key):
+            excluded_track_keys.add(track_key)
+    external_skip_rows = db.execute(
+        select(
+            recommendation_events.c.source,
+            recommendation_events.c.external_id,
+            recommendation_events.c.artist,
+            recommendation_events.c.title,
+        ).where(
+            recommendation_events.c.user_id == current_user.id,
+            recommendation_events.c.event_type.in_(("skip", "dislike")),
+            recommendation_events.c.source.isnot(None),
+            recommendation_events.c.external_id.isnot(None),
+        ).order_by(recommendation_events.c.occurred_at.desc()).limit(_TASTE_QUERY_LIMIT)
+    ).all()
+    for source, external_id, artist, title in external_skip_rows:
+        excluded_external.add((source, external_id))
+        track_key = flow_router._norm_key(artist, title)
+        if all(track_key):
+            excluded_track_keys.add(track_key)
+    materialized_external_skips = (
+        db.query(Track.source, Track.external_id, Track.artist, Track.title)
+        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
+        .filter(
+            user_track_skips.c.user_id == current_user.id,
+            Track.source != "local",
+            Track.external_id.isnot(None),
+        )
+        .order_by(user_track_skips.c.last_skipped.desc())
+        .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
+    for source, external_id, artist, title in materialized_external_skips:
+        excluded_external.add((source, external_id))
+        track_key = flow_router._norm_key(artist, title)
+        if all(track_key):
+            excluded_track_keys.add(track_key)
+    # Release the request's read connection while providers/Redis are queried.
+    # Keep loaded ORM attributes alive because the same session continues with
+    # local ranking and telemetry after retrieval completes.
+    db.expire_on_commit = False
+    db.commit()
+    external_candidates = await _external_recommendation_pool(
+        request,
+        liked=liked,
+        playlisted=playlisted,
+        played=played,
+        preferred_artists=preferred_artists,
+        preferred_genres=preferred_genres,
+        limit=limit,
+        excluded_external=excluded_external,
+        excluded_track_keys=excluded_track_keys,
+    )
+
+    def _candidate_score(track, content_bonus: Optional[float] = None) -> float:
+        if content_bonus is None:
+            content_bonus = 0.08 if not isinstance(getattr(track, "id", None), int) else 0.0
         row = skip_by_track.get(track.id)
         completion = completion_by_track.get(track.id)
         is_novel_artist = artist_key(track.artist) not in known_artist_keys
@@ -599,6 +822,7 @@ def get_recommendations(
             novelty=is_novel_artist,
             source=getattr(track, "source", None),
             listener_count=getattr(track, "unique_listener_count", 0) or 0,
+            content_bonus=content_bonus,
             context_bonus=context_bonus(track, context_profile),
             acoustic_profile=acoustic_profile,
             now=ranking_now,
@@ -842,7 +1066,7 @@ def get_recommendations(
         # повтор лучше нерелевантной новинки.
         exclude_ids = set(user_track_ids) | skipped_track_ids
         exclude_select = _collection_exclude_select(current_user.id)
-        candidate_pool: dict[int, Track] = {}
+        candidate_pool: dict[object, object] = {}
         if taste_filters:
             # Берём с запасом — после taste-фильтра и мягкой диверсификации
             # часть кандидатов опустится. Увеличиваем выборку, чтобы нишевые
@@ -999,6 +1223,15 @@ def get_recommendations(
                 if track.id not in candidate_pool:
                     candidate_pool[track.id] = track
 
+        # Provider candidates are retrieved from the user's actual taste
+        # seeds, so they are not subject to the local catalogue's artist scope.
+        # They still use the same score and hard negative/exclusion signals.
+        for track in external_candidates:
+            artist = artist_key(track.artist)
+            if artist in excluded_artist_keys:
+                continue
+            candidate_pool.setdefault(track.id, track)
+
         # Relevant popular tracks are only a fallback candidate source.  They
         # are ranked together with all personalized candidates, never appended
         # after a source quota has already consumed the page.
@@ -1019,7 +1252,11 @@ def get_recommendations(
             track
             for track in candidate_pool.values()
             if track.id not in exclude_ids
-            and (keep_track(track) or track.id in acoustic_candidate_ids)
+            and (
+                not isinstance(track.id, int)
+                or keep_track(track)
+                or track.id in acoustic_candidate_ids
+            )
         ]
         ranked_pool.sort(
             key=lambda track: (
@@ -1032,9 +1269,14 @@ def get_recommendations(
         # catalog is sparse, while allowing an acoustically close new artist to
         # win when it is genuinely a better match.
         ranked_pool = soft_artist_rerank(ranked_pool, _candidate_score)[: max(limit * 6, limit)]
+        local_ranked_ids = [
+            track.id
+            for track in ranked_pool[: max(limit * 3, limit)]
+            if isinstance(track.id, int)
+        ]
         recommended_tracks = mmr(
             ranked_pool[: max(limit * 3, limit)],
-            pair_scores(db, [track.id for track in ranked_pool[: max(limit * 3, limit)]]),
+            pair_scores(db, local_ranked_ids),
         )[:limit]
     else:
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
@@ -1058,6 +1300,26 @@ def get_recommendations(
                 used=Counter(primary_artist_key(t.artist) for t in recommended_tracks),
                 user_id=current_user.id,
             )
+        if external_candidates:
+            combined = []
+            seen_candidates = set()
+            for candidate in (*recommended_tracks, *external_candidates):
+                identity = (
+                    f"{candidate.source}:{candidate.external_id}"
+                    if not isinstance(candidate.id, int)
+                    else f"local:{candidate.id}"
+                )
+                if identity in seen_candidates:
+                    continue
+                seen_candidates.add(identity)
+                combined.append(candidate)
+            combined.sort(
+                key=lambda track: (
+                    -_candidate_score(track),
+                    stable_jitter(current_user.id, track.id),
+                )
+            )
+            recommended_tracks = combined[:limit]
 
     # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
     # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
@@ -1103,7 +1365,12 @@ def get_recommendations(
         score = score_by_track.get(track.id)
         if score is None:
             score = _candidate_score(track)
-        payload = TrackResponse.model_validate(track).model_copy(
+        response_model = (
+            TrackResponse
+            if isinstance(track.id, int)
+            else ExternalTrackResponse
+        )
+        payload = response_model.model_validate(track).model_copy(
             update={
                 "recommendation_id": request_id,
                 "recommendation_surface": "library",
@@ -1187,6 +1454,8 @@ def record_recommendation_event(
         algorithm_version=ALGORITHM_VERSION,
     )
     db.commit()
+    if payload.event_type != "impression":
+        invalidate_recommendation_cache(current_user.id)
     return None
 
 
@@ -1200,22 +1469,35 @@ def get_recommendation_metrics(
     return user_metrics(db, current_user.id, days=days)
 
 
-@router.get("/tracks", response_model=List[TrackResponse])
-def get_recommended_tracks(
+@router.get("/tracks", response_model=List[TrackResponse | ExternalTrackResponse])
+async def get_recommended_tracks(
+    request: Request,
     limit: int = 20,
     hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    recommendations = get_recommendations(limit=limit, hour=hour, current_user=current_user, db=db)
+    recommendations = await get_recommendations(
+        request=request,
+        limit=limit,
+        hour=hour,
+        current_user=current_user,
+        db=db,
+    )
     return recommendations.tracks
 
 
 @router.get("/playlists", response_model=List[PlaylistResponse])
-def get_recommended_playlists(
+async def get_recommended_playlists(
+    request: Request,
     limit: int = 10,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    recommendations = get_recommendations(limit=limit, current_user=current_user, db=db)
+    recommendations = await get_recommendations(
+        request=request,
+        limit=limit,
+        current_user=current_user,
+        db=db,
+    )
     return recommendations.playlists

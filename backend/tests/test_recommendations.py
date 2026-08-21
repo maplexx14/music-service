@@ -8,7 +8,15 @@
 import pytest
 
 from app.cache import clear_pattern
-from app.models import Track, Playlist, playlist_tracks, user_track_plays, user_track_skips
+from app.models import (
+    Track,
+    Playlist,
+    playlist_tracks,
+    user_track_plays,
+    user_track_skips,
+    recommendation_events,
+)
+from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
 
@@ -296,3 +304,123 @@ def test_recommendations_do_not_open_acoustic_pool_without_user_profile(client, 
     assert unrelated.id not in {
         track["id"] for track in response.json()["tracks"]
     }
+
+
+def test_recommendations_retrieve_provider_track_from_imported_playlist(
+    client, db, monkeypatch
+):
+    """Imported collection signals can reach beyond materialized local tracks."""
+    user = create_user(db, username="provider-recommendation-user")
+    imported = Playlist(
+        name="Imported",
+        description="Импортировано из Spotify",
+        origin="imported",
+        is_public=False,
+        owner_id=user.id,
+    )
+    seed = Track(
+        title="seed song",
+        artist="SeedArtist",
+        duration=180,
+        source="local",
+        file_path="minio://music/seed-song.mp3",
+    )
+    db.add_all([imported, seed])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=imported.id,
+            track_id=seed.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    favorite_calls = []
+    similar_calls = []
+
+    async def _lastfm(_request, artist, title):
+        assert artist == "SeedArtist"
+        assert title == "seed song"
+        return [
+            ExternalTrackResponse(
+                id="ytmusic:provider-blocked",
+                source="ytmusic",
+                external_id="provider-blocked",
+                title="blocked song",
+                artist="BlockedArtist",
+                duration=190,
+                stream_url="",
+            ),
+            ExternalTrackResponse(
+                id="ytmusic:provider-close",
+                source="ytmusic",
+                external_id="provider-close",
+                title="close provider song",
+                artist="RelatedArtist",
+                duration=190,
+                stream_url="",
+            ),
+            ExternalTrackResponse(
+                id="soundcloud:provider-close-sc",
+                source="soundcloud",
+                external_id="provider-close-sc",
+                title="close provider song",
+                artist="RelatedArtist",
+                duration=190,
+                stream_url="https://soundcloud.example/stream",
+            ),
+        ]
+
+    async def _favorite(_request, _artist):
+        favorite_calls.append(_artist)
+        return []
+
+    async def _tag(_request, _genre):
+        return []
+
+    async def _similar(_artist):
+        similar_calls.append(_artist)
+        return []
+
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+    monkeypatch.setattr("app.routers.flow._tag_pool", _tag)
+
+    db.execute(
+        recommendation_events.insert().values(
+            user_id=user.id,
+            source="ytmusic",
+            external_id="provider-blocked",
+            title="blocked song",
+            artist="BlockedArtist",
+            event_type="skip",
+            surface="library",
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/?limit=5",
+        headers=auth_headers(client, username="provider-recommendation-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    provider = [
+        track for track in response.json()["tracks"]
+        if track.get("external_id") == "provider-close"
+    ]
+    assert provider, response.json()
+    assert provider[0]["source"] == "ytmusic"
+    assert provider[0]["stream_url"].endswith("/api/ytdlp/stream/provider-close")
+    assert not [
+        track for track in response.json()["tracks"]
+        if track.get("external_id") == "provider-blocked"
+    ]
+    assert not [
+        track for track in response.json()["tracks"]
+        if track.get("external_id") == "provider-close-sc"
+    ]
+    assert favorite_calls == []
+    assert similar_calls == []
