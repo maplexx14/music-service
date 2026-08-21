@@ -1,6 +1,6 @@
 """indexes for recommendation quality feedback lookups
 
-Revision ID: 0018_recommendation_quality_indexes
+Revision ID: 0018_rec_quality_indexes
 Revises: 0017_recommendation_population
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0018_recommendation_quality_indexes"
+revision = "0018_rec_quality_indexes"
 down_revision = "0017_recommendation_population"
 branch_labels = None
 depends_on = None

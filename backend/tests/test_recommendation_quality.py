@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from starlette.requests import Request
 
 from app.models import recommendation_events
@@ -11,6 +14,28 @@ from app.routers.ytdlp import _normalize as normalize_ytmusic
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import create_user
+
+
+def test_alembic_revision_ids_fit_version_column():
+    versions = Path(__file__).parents[1] / "alembic" / "versions"
+    for migration in versions.glob("*.py"):
+        module = ast.parse(migration.read_text(encoding="utf-8"))
+        revision = next(
+            (
+                node.value.value
+                for node in module.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "revision"
+                    for target in node.targets
+                )
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ),
+            None,
+        )
+        assert revision is not None, migration.name
+        assert len(revision) <= 32, f"{migration.name}: {revision!r} exceeds VARCHAR(32)"
 
 
 def _request() -> Request:
