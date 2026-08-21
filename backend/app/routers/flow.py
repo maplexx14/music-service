@@ -1,16 +1,17 @@
 """Персональный бесконечный поток («Моя волна»).
 
 Локальный каталог, лайки, ручные и импортированные плейлисты, Last.fm,
-YouTube Music, SoundCloud и жанровые теги только генерируют кандидатов. Затем
-они конкурируют в одном скоринге по поведению пользователя, акустическому
-профилю beets/ffmpeg, жанру, контексту, качеству и свежести. Источники и классы
-«знакомый/незнакомый артист» не получают зарезервированных позиций;
-``discovery_ratio`` остаётся мягким приоритетом нового.
+YouTube Music, SoundCloud и жанровые теги генерируют кандидатов, которые
+ранжируются общей моделью по поведению пользователя, акустическому профилю
+beets/ffmpeg, жанру, контексту, качеству и свежести. Источники не получают
+фиксированных мест. ``discovery_ratio`` остаётся мягким приоритетом на
+дефолтном значении, а явно повышенный ползунок задаёт минимальную цель новых
+артистов с fallback на знакомые треки при дефиците внешнего пула.
 
 Last.fm, радио и граф YouTube Music, каталоги любимых артистов, SoundCloud и
-жанровые теги расширяют пул. Их происхождение даёт только небольшой confidence
-bonus; итоговый порядок всегда определяет общая модель. Генераторы могут быть
-пропущены, когда пул уже широк, чтобы не делать лишние сетевые запросы.
+жанровые теги расширяют пул. Их происхождение даёт небольшой confidence bonus;
+внутри знакомой и новой частей порядок определяет общая модель. Генераторы
+могут быть пропущены, когда пул уже широк и цель разведки выполнена.
 """
 
 import asyncio
@@ -31,7 +32,11 @@ from app import beets_genre, beets_similar, storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
-from app.discovery import discovery_ratio
+from app.discovery import (
+    DEFAULT_DISCOVERY_RATIO,
+    discovery_ratio,
+    discovery_slots,
+)
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -1552,7 +1557,9 @@ async def get_flow(
             now=ranking_now,
         )
         is_novel_artist = key not in (profile.get("artist_weight") or {})
-        # Discovery is a soft prior, never a source quota.
+        # Keep the score itself continuous. A higher discovery target is
+        # enforced after ranking, so relevance still decides which new tracks
+        # fill the requested new-artist portion.
         score += (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
         score_by_item[score_key] = score
         return score
@@ -1601,9 +1608,14 @@ async def get_flow(
     explore: List[ExternalTrackResponse] = []
     banned = profile["banned_artists"]
 
-    # Источники ниже только генерируют кандидатов. Никакой источник и никакой
-    # класс «знакомый/незнакомый артист» больше не получает зарезервированных
-    # мест: вся выдача будет собрана единым score после локального пула.
+    # Источники ниже только генерируют кандидатов. При дефолтном значении
+    # настройка остаётся мягким prior, но явно поднятый ползунок получает
+    # минимальную цель новых артистов на эту порцию.
+    discovery_target = (
+        discovery_slots(limit, explore_ratio)
+        if explore_ratio > DEFAULT_DISCOVERY_RATIO
+        else 0
+    )
 
     def _add_explore(tracks, target: Optional[List[ExternalTrackResponse]] = None) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
@@ -1758,7 +1770,29 @@ async def get_flow(
     def _needs_more_pools() -> bool:
         """Whether an additional provider call can still widen the ranker."""
         available = len(favorite_explore) + len(similar_explore) + len(explore)
-        return available < max(limit * 2, limit + 4)
+        if available < max(limit * 2, limit + 4):
+            return True
+        if not discovery_target:
+            return False
+
+        familiar_artists = set(profile.get("artist_weight") or {})
+        novel_tracks = []
+        novel_artists = set()
+        for candidate in (*similar_explore, *explore):
+            key = artist_key(candidate.artist)
+            if key in familiar_artists:
+                continue
+            novel_tracks.append(candidate)
+            novel_artists.add(key)
+
+        # Keep looking when a large pool is made up of one or two new names:
+        # the user asked for discovery, not merely a different provider copy of
+        # the same artist. A smaller artist target keeps network work bounded.
+        artist_target = min(
+            discovery_target,
+            max(1, math.ceil(discovery_target / 2)),
+        )
+        return len(novel_tracks) < discovery_target or len(novel_artists) < artist_target
 
     # Похожие по ТРЕКУ (Last.fm) держим отдельным списком только до общей
     # фильтрации и статистики качества. Никакого отдельного места в выдаче этот
@@ -1808,8 +1842,9 @@ async def get_flow(
         )
 
     # Граф артистов YT Music — дополнительный генератор кандидатов. Его можно
-    # пропустить, когда основной внешний пул уже достаточно широк: это только
-    # оптимизация сетевых вызовов, а не знакомая/незнакомая квота.
+    # пропустить, когда основной внешний пул уже достаточно широк и цель
+    # разведки выполнена; при повышенном ползунке он остаётся нужен, пока цель
+    # новых имён не закрыта.
     if similar_artists and _needs_more_pools():
         graph_pools = await asyncio.gather(*(_similar_pool(a) for a in similar_artists))
         _add_explore(
@@ -2024,13 +2059,75 @@ async def get_flow(
         ),
         repeat_penalties=(0.0, 0.18, 0.48, 1.0, 1.7, 2.6),
     )
+    familiar_artists = set(profile.get("artist_weight") or {})
+    liked_candidate_identities = {
+        _item_identity(candidate) for candidate in liked_source
+    }
+
+    def _is_novel(candidate) -> bool:
+        artist = (
+            candidate.get("artist", "")
+            if isinstance(candidate, dict)
+            else getattr(candidate, "artist", "")
+        )
+        return artist_key(artist) not in familiar_artists
+
+    selected_candidates = ranked_candidates[:limit]
+    if discovery_target:
+        novel_candidates = [
+            candidate for candidate in ranked_candidates if _is_novel(candidate)
+        ]
+        novel_selection = []
+        novel_artist_keys = set()
+
+        # Prefer one track per new artist first, then use additional tracks from
+        # those artists only when the requested target needs them.
+        for candidate in novel_candidates:
+            key = artist_key(
+                candidate.get("artist", "")
+                if isinstance(candidate, dict)
+                else getattr(candidate, "artist", "")
+            )
+            if key in novel_artist_keys:
+                continue
+            novel_artist_keys.add(key)
+            novel_selection.append(candidate)
+            if len(novel_selection) >= discovery_target:
+                break
+        if len(novel_selection) < discovery_target:
+            selected_ids = {id(candidate) for candidate in novel_selection}
+            novel_selection.extend(
+                candidate
+                for candidate in novel_candidates
+                if id(candidate) not in selected_ids
+            )
+            novel_selection = novel_selection[:discovery_target]
+
+        selected_ids = {id(candidate) for candidate in novel_selection}
+        remaining_candidates = [
+            candidate
+            for candidate in ranked_candidates
+            if id(candidate) not in selected_ids
+        ]
+        # When the provider cannot satisfy the requested discovery target,
+        # prefer unplayed local material over exact liked tracks before falling
+        # back to the user's library. This keeps a partial external result from
+        # turning the rest of a high-discovery page into a likes replay.
+        remaining_candidates.sort(
+            key=lambda candidate: (
+                _item_identity(candidate) in liked_candidate_identities,
+                -_flow_score(candidate),
+            )
+        )
+        selected_candidates = novel_selection + remaining_candidates
+        selected_candidates = selected_candidates[:limit]
+
     mix: List[dict] = [
-        _candidate_payload(candidate)
-        for candidate in ranked_candidates[:limit]
+        _candidate_payload(candidate) for candidate in selected_candidates
     ]
     selected_scores = {
         _item_identity(candidate): _flow_score(candidate)
-        for candidate in ranked_candidates[:limit]
+        for candidate in selected_candidates
     }
 
     n_explore = sum(

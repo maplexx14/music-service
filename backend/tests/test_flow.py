@@ -807,7 +807,7 @@ def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
 def test_flow_high_discovery_ratio_keeps_graph_as_a_candidate_source(
     client, db, monkeypatch
 ):
-    """Высокий prior не превращается в квоту, но граф может расширить пул."""
+    """Высокая цель продолжает расширять пул через граф артистов."""
     user = _rich_familiar_profile(db, "much-new-user")
     user.discovery_ratio = 0.6
     db.commit()
@@ -831,6 +831,129 @@ def test_flow_high_discovery_ratio_keeps_graph_as_a_candidate_source(
     artists = [t["artist"] for t in resp.json()]
     assert len(artists) == 15, artists
     assert graph_calls, "graph source should be allowed to widen the candidate pool"
+    assert sum(artist.startswith("NeighbourArtist") for artist in artists) == 6
+
+
+def test_flow_max_discovery_ratio_prioritizes_new_artists_over_likes(
+    client, db, monkeypatch
+):
+    """Максимальный приоритет не должен превращаться в выдачу из лайков."""
+    user = _rich_familiar_profile(db, "max-discovery-user")
+    user.discovery_ratio = 1.0
+    db.commit()
+
+    async def _similar(artist):
+        return [
+            _external(
+                f"NeighbourArtist-{artist}-{index}",
+                f"новый трек {artist}-{index}",
+                f"max-new-{artist}-{index}",
+            )
+            for index in range(10)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    def _score(item, **_kwargs):
+        artist = getattr(item, "artist", "")
+        return 100.0 if artist.startswith(("OwnArtist", "GoodArtist")) else 0.0
+
+    monkeypatch.setattr("app.routers.flow.score_track", _score)
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="max-discovery-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    familiar = {f"ownartist{i}" for i in range(10)} | {"goodartist"}
+    novel = [track for track in tracks if track["artist"].lower() not in familiar]
+    assert len(tracks) == 15
+    assert len(novel) == 15, tracks
+    assert len({track["artist"] for track in novel}) >= 8
+
+
+def test_flow_max_discovery_ratio_falls_back_to_familiar_tracks(client, db):
+    """Пустая разведка не должна укорачивать порцию на максимуме."""
+    user = _rich_familiar_profile(db, "max-discovery-fallback-user")
+    user.discovery_ratio = 1.0
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="max-discovery-fallback-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    assert len(tracks) == 15
+    assert all(
+        track["artist"].startswith(("OwnArtist", "GoodArtist"))
+        for track in tracks
+    )
+
+
+def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
+    client, db, monkeypatch
+):
+    """Частичный внешний пул не должен оставлять лайки единственным fallback."""
+    user = create_user(db, username="partial-discovery-user")
+    liked_playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(liked_playlist)
+    db.commit()
+    db.refresh(liked_playlist)
+
+    liked = [
+        Track(
+            title=f"liked-{index}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/liked-{index}.mp3",
+        )
+        for index in range(12)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{index}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/fresh-{index}.mp3",
+        )
+        for index in range(8)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": liked_playlist.id, "track_id": track.id, "position": index}
+            for index, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+    user.discovery_ratio = 0.6
+    db.commit()
+
+    async def _similar(_artist):
+        return [_external("NewArtist", "one new track", "partial-new")]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="partial-discovery-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    assert len(tracks) == 15
+    assert sum(track["title"].startswith("fresh-") for track in tracks) >= 8
+    assert sum(track["title"].startswith("liked-") for track in tracks) <= 6
 
 
 def test_flow_zero_discovery_ratio_softly_demotes_lastfm_candidates(

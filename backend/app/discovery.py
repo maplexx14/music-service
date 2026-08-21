@@ -1,9 +1,10 @@
-"""Мягкий prior на открытие новых артистов (``User.discovery_ratio``).
+"""Баланс открытия новых артистов (``User.discovery_ratio``).
 
-Оба рекомендательных endpoint используют одну шкалу, но она больше не делит
-ответ на знакомые и незнакомые слоты. Значение лишь сдвигает общий score
-кандидата: акустическая близость, плейлисты и поведение пользователя остаются
-важнее, поэтому релевантный трек не отбрасывается из-за класса артиста.
+Шкала остаётся общей для рекомендательных endpoint. Дефолтное значение
+сохраняет мягкий prior, а явно повышенное значение задаёт минимальную цель
+разведки для потока: это не ломает fallback, если у провайдеров нет новых
+кандидатов, но и не позволяет богатому пулу лайков поглотить запрос на новые
+имена.
 """
 from typing import Optional
 
@@ -24,3 +25,15 @@ def discovery_ratio(user) -> float:
     except (TypeError, ValueError):
         return DEFAULT_DISCOVERY_RATIO
     return min(1.0, max(0.0, value))
+
+
+def discovery_slots(limit: int, ratio: float) -> int:
+    """Return the requested number of new-artist slots for a batch.
+
+    A zero ratio explicitly disables the target. Any positive ratio gets at
+    least one slot when the batch is non-empty; the caller may still fall back
+    to familiar tracks when the discovery pool is exhausted.
+    """
+    if limit <= 0 or ratio <= 0:
+        return 0
+    return min(limit, max(1, round(limit * ratio)))

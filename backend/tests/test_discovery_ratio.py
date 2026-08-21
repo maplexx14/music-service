@@ -1,4 +1,4 @@
-"""Мягкий prior на открытие новых артистов (User.discovery_ratio)."""
+"""Баланс открытия новых артистов (User.discovery_ratio)."""
 
 import pytest
 
@@ -61,11 +61,14 @@ def test_discovery_ratio_clamps_and_falls_back():
     assert discovery_ratio(_FakeUser(discovery_ratio=-1.0)) == 0.0
 
 
-def test_discovery_ratio_is_not_a_slot_api():
-    """Настройка не создаёт отдельную арифметику размеров выдачи."""
+def test_discovery_ratio_slots_are_bounded():
+    """Положительный приоритет задаёт цель, но не ломает пустой fallback."""
     import app.discovery as discovery
 
-    assert not hasattr(discovery, "discovery_slots")
+    assert discovery.discovery_slots(15, 0.0) == 0
+    assert discovery.discovery_slots(15, 0.2) == 3
+    assert discovery.discovery_slots(15, 1.0) == 15
+    assert discovery.discovery_slots(0, 1.0) == 0
 
 
 # --- сохранение через API ---
