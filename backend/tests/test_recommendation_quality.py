@@ -1,12 +1,21 @@
 import ast
+import importlib.util
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from starlette.requests import Request
 
-from app.models import recommendation_events
+from app.acoustic_features import acoustic_similarity, weighted_centroid
+from app.models import Playlist, Track, playlist_tracks, recommendation_events
+from app.playlist_signals import aggregate_playlist_origin, imported_playlist_clause
 from app.recommendation_scoring import (
     population_quality_score,
     population_rejects,
+    score_track,
 )
 from app.routers.flow import _external_population_stats_on_bind, _taste_profile
 from app.routers.soundcloud import _normalize_api as normalize_soundcloud
@@ -14,6 +23,20 @@ from app.routers.ytdlp import _normalize as normalize_ytmusic
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import create_user
+
+
+def _features(**overrides):
+    vector = {
+        "tempo": 0.5,
+        "loudness": 0.5,
+        "dynamics": 0.5,
+        "brightness": 0.5,
+        "bass": 0.5,
+        "zero_crossing": 0.5,
+        "pulse_clarity": 0.5,
+    }
+    vector.update(overrides)
+    return {"vector": vector}
 
 
 def test_alembic_revision_ids_fit_version_column():
@@ -36,6 +59,168 @@ def test_alembic_revision_ids_fit_version_column():
         )
         assert revision is not None, migration.name
         assert len(revision) <= 32, f"{migration.name}: {revision!r} exceeds VARCHAR(32)"
+
+
+def test_content_profile_migration_upgrades_0019_schema_and_cleans_only_fake_plays():
+    """The data migration works on a real pre-origin schema and stays cautious."""
+    engine = sa.create_engine("sqlite://")
+    metadata = sa.MetaData()
+    tracks = sa.Table(
+        "tracks",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("play_count", sa.Integer, nullable=False, default=0),
+        sa.Column("unique_listener_count", sa.Integer, nullable=False, default=0),
+    )
+    playlists = sa.Table(
+        "playlists",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("owner_id", sa.Integer, nullable=False),
+        sa.Column("description", sa.String),
+        sa.Column("is_liked", sa.Boolean, nullable=False, default=False),
+    )
+    playlist_tracks_table = sa.Table(
+        "playlist_tracks",
+        metadata,
+        sa.Column("playlist_id", sa.Integer, nullable=False),
+        sa.Column("track_id", sa.Integer, nullable=False),
+        sa.Column("added_at", sa.DateTime(timezone=True)),
+    )
+    plays = sa.Table(
+        "user_track_plays",
+        metadata,
+        sa.Column("user_id", sa.Integer, primary_key=True),
+        sa.Column("track_id", sa.Integer, primary_key=True),
+        sa.Column("play_count", sa.Integer, nullable=False),
+        sa.Column("last_played", sa.DateTime(timezone=True)),
+    )
+    events = sa.Table(
+        "user_play_events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("user_id", sa.Integer, nullable=False),
+        sa.Column("track_id", sa.Integer, nullable=False),
+        sa.Column("played_at", sa.DateTime(timezone=True)),
+        sa.Column("completion", sa.Float),
+        sa.Column("client_hour", sa.Integer),
+    )
+    imported_at = datetime(2026, 7, 1, 12, tzinfo=timezone.utc)
+    later = imported_at + timedelta(hours=1)
+
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0020_recommendation_content_profile.py"
+    )
+    spec = importlib.util.spec_from_file_location("migration_0020_test", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    with engine.begin() as connection:
+        metadata.create_all(connection)
+        connection.execute(
+            tracks.insert(),
+            [
+                {"id": 1, "play_count": 5, "unique_listener_count": 3},
+                {"id": 2, "play_count": 8, "unique_listener_count": 4},
+            ],
+        )
+        connection.execute(
+            playlists.insert().values(
+                id=10,
+                owner_id=7,
+                description="Импортировано из Spotify",
+                is_liked=False,
+            )
+        )
+        connection.execute(
+            playlist_tracks_table.insert(),
+            [
+                {"playlist_id": 10, "track_id": 1, "added_at": imported_at},
+                {"playlist_id": 10, "track_id": 2, "added_at": imported_at},
+            ],
+        )
+        connection.execute(
+            plays.insert(),
+            [
+                {
+                    "user_id": 7,
+                    "track_id": 1,
+                    "play_count": 1,
+                    "last_played": imported_at,
+                },
+                {
+                    "user_id": 7,
+                    "track_id": 2,
+                    "play_count": 2,
+                    "last_played": later,
+                },
+            ],
+        )
+        connection.execute(
+            events.insert(),
+            [
+                {
+                    "id": 100,
+                    "user_id": 7,
+                    "track_id": 1,
+                    "played_at": imported_at,
+                    "completion": 1.0,
+                    "client_hour": None,
+                },
+                {
+                    "id": 101,
+                    "user_id": 7,
+                    "track_id": 2,
+                    "played_at": imported_at,
+                    "completion": 1.0,
+                    "client_hour": None,
+                },
+                {
+                    "id": 102,
+                    "user_id": 7,
+                    "track_id": 2,
+                    "played_at": later,
+                    "completion": 0.9,
+                    "client_hour": 13,
+                },
+            ],
+        )
+
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+
+        upgraded = sa.MetaData()
+        upgraded_tracks = sa.Table("tracks", upgraded, autoload_with=connection)
+        upgraded_playlists = sa.Table("playlists", upgraded, autoload_with=connection)
+        upgraded_plays = sa.Table("user_track_plays", upgraded, autoload_with=connection)
+        upgraded_events = sa.Table("user_play_events", upgraded, autoload_with=connection)
+
+        assert {
+            "acoustic_features",
+            "acoustic_analyzed_at",
+            "acoustic_analyzer_version",
+        } <= set(upgraded_tracks.c.keys())
+        assert connection.execute(
+            sa.select(upgraded_playlists.c.origin).where(upgraded_playlists.c.id == 10)
+        ).scalar_one() == "imported"
+        assert connection.execute(
+            sa.select(upgraded_plays.c.track_id).order_by(upgraded_plays.c.track_id)
+        ).scalars().all() == [2]
+        assert connection.execute(
+            sa.select(upgraded_events.c.id).order_by(upgraded_events.c.id)
+        ).scalars().all() == [101, 102]
+        counters = connection.execute(
+            sa.select(
+                upgraded_tracks.c.id,
+                upgraded_tracks.c.play_count,
+                upgraded_tracks.c.unique_listener_count,
+            ).order_by(upgraded_tracks.c.id)
+        ).all()
+        assert counters == [(1, 4, 2), (2, 8, 4)]
 
 
 def _request() -> Request:
@@ -83,6 +268,142 @@ def test_provider_popularity_is_normalized():
 
     assert youtube is not None and youtube.play_count == 1_200_000
     assert soundcloud is not None and soundcloud.play_count == 45_600
+
+
+def test_acoustic_similarity_and_weighted_centroid():
+    quiet = _features(tempo=0.2, brightness=0.2, bass=0.8)
+    energetic = _features(tempo=0.8, brightness=0.8, bass=0.2)
+    centroid = weighted_centroid([(quiet, 3.0), (energetic, 1.0)])
+
+    assert centroid["tempo"] == pytest.approx(0.35)
+    assert centroid["brightness"] == pytest.approx(0.35)
+    assert centroid["bass"] == pytest.approx(0.65)
+    assert acoustic_similarity(quiet, quiet) == 1.0
+    assert acoustic_similarity(quiet, centroid) > acoustic_similarity(
+        energetic, centroid
+    )
+    assert acoustic_similarity({}, centroid) == 0.0
+
+
+def test_score_track_rewards_acoustic_fit_for_a_new_artist():
+    profile = _features(tempo=0.25, brightness=0.2, bass=0.8)
+    close = {
+        "id": "close",
+        "artist": "New Artist",
+        "source": "local",
+        "acoustic_features": _features(tempo=0.28, brightness=0.22, bass=0.78),
+    }
+    far = {
+        "id": "far",
+        "artist": "Known Artist",
+        "source": "local",
+        "acoustic_features": _features(tempo=0.9, brightness=0.9, bass=0.1),
+    }
+
+    close_score = score_track(
+        close,
+        artist_affinity=0.0,
+        novelty=True,
+        acoustic_profile=profile,
+    )
+    far_score = score_track(
+        far,
+        artist_affinity=1.0,
+        novelty=False,
+        acoustic_profile=profile,
+    )
+
+    assert close_score > far_score
+
+
+def test_playlist_origin_aggregation_prefers_manual_and_detects_legacy(db):
+    user = create_user(db, username="playlist-origin-user")
+    track = Track(title="shared", artist="Artist", duration=120, source="local")
+    imported = Playlist(
+        name="Imported",
+        description="Импортировано из Spotify",
+        origin="manual",
+        is_public=False,
+        owner_id=user.id,
+    )
+    manual = Playlist(
+        name="Manual",
+        origin="manual",
+        is_public=False,
+        owner_id=user.id,
+    )
+    db.add_all([track, imported, manual])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": imported.id, "track_id": track.id, "position": 0},
+            {"playlist_id": manual.id, "track_id": track.id, "position": 0},
+        ],
+    )
+    db.commit()
+
+    legacy_ids = {
+        playlist_id
+        for (playlist_id,) in db.query(Playlist.id)
+        .filter(imported_playlist_clause())
+        .all()
+    }
+    origin = (
+        db.query(aggregate_playlist_origin())
+        .select_from(Track)
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Track.id == track.id)
+        .scalar()
+    )
+
+    assert imported.id in legacy_ids
+    assert origin == "manual"
+
+
+def test_manual_playlist_builds_stronger_flow_profile_than_imported(db):
+    user = create_user(db, username="playlist-weight-user")
+    manual_track = Track(
+        title="manual",
+        artist="ManualArtist",
+        duration=120,
+        source="local",
+        acoustic_features=_features(tempo=0.1, brightness=0.1, bass=0.9),
+    )
+    imported_track = Track(
+        title="imported",
+        artist="ImportedArtist",
+        duration=120,
+        source="local",
+        acoustic_features=_features(tempo=0.9, brightness=0.9, bass=0.1),
+    )
+    manual = Playlist(
+        name="Manual", origin="manual", is_public=False, owner_id=user.id
+    )
+    imported = Playlist(
+        name="Imported", origin="imported", is_public=False, owner_id=user.id
+    )
+    db.add_all([manual_track, imported_track, manual, imported])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": manual.id, "track_id": manual_track.id, "position": 0},
+            {
+                "playlist_id": imported.id,
+                "track_id": imported_track.id,
+                "position": 0,
+            },
+        ],
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)["acoustic_profile"]
+
+    assert profile["tempo"] == pytest.approx(0.3)
+    assert profile["brightness"] == pytest.approx(0.3)
+    assert profile["bass"] == pytest.approx(0.7)
 
 
 def test_external_skip_is_part_of_personal_flow_exclusions(db):

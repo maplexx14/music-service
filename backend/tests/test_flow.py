@@ -8,7 +8,6 @@ _local_candidates и к current_user.id — если закрытие что-т�
 падает на пустой выдаче или на DetachedInstanceError.
 """
 
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -22,13 +21,7 @@ from app.models import (
     recommendation_impressions,
     user_track_plays,
 )
-from app.routers.flow import (
-    _MAX_PER_ARTIST,
-    _MIN_ARTIST_GAP,
-    _artist_cap,
-    _balanced_quota,
-    _persisted_flow_history,
-)
+from app.routers.flow import _persisted_flow_history
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -105,70 +98,39 @@ def test_persisted_flow_history_missing_table_preserves_outer_transaction(db):
     assert user.full_name == "must survive probe"
 
 
-def test_balanced_quota_uses_requested_distribution():
-    assert _balanced_quota(
-        {"lastfm": 3, "liked": 5, "favorite": 7},
-        {"lastfm": 20, "liked": 20, "favorite": 20},
-        15,
-    ) == {"lastfm": 3, "liked": 5, "favorite": 7}
-
-
-def test_balanced_quota_spreads_missing_slots_evenly():
-    assert _balanced_quota(
-        {"lastfm": 3, "liked": 5, "favorite": 7},
-        {"lastfm": 0, "liked": 20, "favorite": 20},
-        15,
-    ) == {"lastfm": 0, "liked": 7, "favorite": 8}
-
-
-def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
-    client, db, monkeypatch
-):
+def test_flow_uses_one_score_instead_of_source_slots(client, db, monkeypatch):
     user = create_user(db, username="quota-user")
-    playlist = Playlist(
-        name="Liked",
-        is_public=False,
-        is_liked=True,
-        owner_id=user.id,
-    )
-    db.add(playlist)
-    db.commit()
-    liked = [
-        Track(
-            title=f"liked-{i}",
-            artist="LovedArtist",
-            duration=100,
-            source="local",
-            file_path=f"minio://music/liked-{i}.mp3",
-        )
-        for i in range(5)
-    ]
-    db.add_all(liked)
-    db.commit()
-    db.execute(
-        playlist_tracks.insert(),
-        [
-            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
-            for i, track in enumerate(liked)
-        ],
-    )
-    db.commit()
+    _liked(db, user, artist="LovedArtist")
 
     async def _lastfm(request, artist, title):
-        lastfm_calls.append((artist, title))
-        suffix = title.rsplit("-", 1)[-1]
-        return [_external(f"Explore{suffix}", f"explore-{suffix}", f"lfm{suffix}")]
+        return [
+            _external(f"Similar{i}", f"similar-{i}", f"lfm{i}")
+            for i in range(20)
+        ]
 
     async def _favorite(request, artist):
         assert artist == "LovedArtist"
         return [
-            _external("LovedArtist", f"new-{i}", f"favorite{i}")
-            for i in range(7)
+            _external(f"Catalog{i}", f"catalog-{i}", f"favorite{i}")
+            for i in range(20)
         ]
 
-    lastfm_calls = []
+    bonuses = {}
+
+    def _score(item, **kwargs):
+        external_id = getattr(item, "external_id", None)
+        bonuses[external_id or getattr(item, "title", "")] = kwargs.get(
+            "content_bonus"
+        )
+        if external_id and external_id.startswith("favorite"):
+            return 100.0 - int(external_id.removeprefix("favorite"))
+        if external_id and external_id.startswith("lfm"):
+            return 0.0
+        return -10.0
+
     monkeypatch.setattr("app.routers.flow._lastfm_pool", _lastfm)
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", _score)
 
     resp = client.get(
         "/api/recommendations/flow?limit=15",
@@ -177,19 +139,18 @@ def test_flow_uses_3_5_7_distribution_for_fifteen_tracks(
     assert resp.status_code == 200, resp.text
     tracks = resp.json()
     assert len(tracks) == 15
-    assert sum(isinstance(track["id"], int) for track in tracks) == 5
-    assert sum(
-        str(track.get("external_id") or "").startswith("lfm") for track in tracks
-    ) == 3
-    assert sum(
+    assert all(
         str(track.get("external_id") or "").startswith("favorite")
         for track in tracks
-    ) == 7
-    assert len(lastfm_calls) == 3
+    ), tracks
+    assert bonuses["favorite0"] == pytest.approx(0.12)
+    assert bonuses["lfm0"] == pytest.approx(0.08)
 
 
-def test_flow_spreads_favorite_quota_across_artists(client, db, monkeypatch):
-    """Семь favorite-слотов сначала берут по одному треку разных артистов."""
+def test_flow_spreads_comparable_catalog_candidates_across_artists(
+    client, db, monkeypatch
+):
+    """Мягкая диверсификация сохраняет разные имена при близком score."""
     user = create_user(db, username="diverse-favorites-user")
     playlist = Playlist(
         name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id
@@ -236,7 +197,7 @@ def test_flow_spreads_favorite_quota_across_artists(client, db, monkeypatch):
 
 
 def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
-    """Большая коллекция лайков не должна вытеснять новые локальные треки."""
+    """Источник лайков больше не ограничен фиксированными пятью местами."""
     user = create_user(db, username="likes-and-new-user")
     playlist = Playlist(
         name="Понравившиеся",
@@ -286,8 +247,7 @@ def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
     assert response.status_code == 200, response.text
     tracks = response.json()
     assert len(tracks) == 15
-    assert sum(track["title"].startswith("liked-") for track in tracks) == 5
-    assert sum(track["title"].startswith("fresh-") for track in tracks) == 10
+    assert sum(track["title"].startswith("liked-") for track in tracks) > 5
 
 
 def test_flow_returns_local_tracks_after_session_close(client, db):
@@ -502,13 +462,7 @@ def test_flow_includes_lastfm_similar_tracks(client, db, monkeypatch):
 
 
 def test_flow_trusts_lastfm_more_than_artist_graph(client, db, monkeypatch):
-    """Похожесть по ТРЕКУ важнее разведки по артистам.
-
-    Граф артистов отвечает на другой вопрос — «кто похож на этого исполнителя»,
-    — и раз за разом приводит дискографии вокруг уже выбранных юзером имён.
-    Пока похожести по треку хватает на порцию, за соседями по графу вообще не
-    ходим (это ещё и сетевой запрос на каждого артиста).
-    """
+    """Track-similar provenance даёт больший score при равных кандидатах."""
     user = create_user(db)
     _liked(db, user)
 
@@ -532,7 +486,7 @@ def test_flow_trusts_lastfm_more_than_artist_graph(client, db, monkeypatch):
     artists = {t["artist"] for t in resp.json()}
     assert artists, "выдача пуста"
     assert "GraphNeighbour" not in artists, f"граф артистов вытеснил похожие треки: {artists}"
-    assert graph_calls == [], "граф опрошен, хотя похожести по треку хватило на порцию"
+    assert graph_calls, "граф может расширять общий пул без отдельной квоты"
 
 
 def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
@@ -560,7 +514,8 @@ def test_flow_prefers_new_tracks_from_loved_artists(client, db, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     artists = [t["artist"] for t in resp.json()]
-    assert artists.count("LovedArtist") >= 5, artists
+    assert "LovedArtist" in artists, artists
+    assert any(artist.startswith("RandomNeighbour") for artist in artists), artists
 
 
 def test_flow_prioritizes_loved_artist_over_merely_played(client, db, monkeypatch):
@@ -601,7 +556,8 @@ def test_flow_prioritizes_loved_artist_over_merely_played(client, db, monkeypatc
     resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
     assert resp.status_code == 200, resp.text
     artists = [track["artist"] for track in resp.json()]
-    assert artists.count("LovedArtist") >= 4, artists
+    assert artists[0] == "LovedArtist", artists
+    assert artists.count("LovedArtist") > artists.count("MerelyPlayed"), artists
 
 
 def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
@@ -635,14 +591,8 @@ def test_flow_rotates_loved_artists_between_batches(client, db, monkeypatch):
     assert first_ids.isdisjoint(second_ids), (first_ids, second_ids)
     # Ротация дошла до имён, которых в первой порции не было.
     assert second_artists - first_artists, (first_artists, second_artists)
-    # Бюджет мест на артиста переносится между подгрузками (history["artists"]),
-    # поэтому за две порции ни одно имя не набирает больше своего капа. Проверять
-    # конкретные Loved6/Loved7 нельзя: сколько имён поместится в порцию, решает
-    # кап, а какие именно — контекстный порядок внутри пула.
-    across_batches = Counter(
-        track["artist"] for track in first.json() + second.json()
-    )
-    assert max(across_batches.values()) <= _artist_cap(6), across_batches
+    assert len(first_artists) >= 2
+    assert len(second_artists) >= 2
 
 
 def test_flow_spreads_dominant_artist(client, db, monkeypatch):
@@ -854,19 +804,18 @@ def test_flow_does_not_force_exploration_when_trusted_pool_is_rich(
     )
 
 
-def test_flow_high_discovery_ratio_uses_artist_graph_reserve(client, db, monkeypatch):
-    """Ползунок выше дефолта поднимает резерв разведки.
-
-    Пул похожих по ТРЕКУ (Last.fm) рассчитан на дефолтные 3 места из 15, и когда
-    юзер просит больше, граф артистов перестаёт быть только резервом — иначе
-    настройка упиралась бы в потолок пула и молча отдавала места знакомому.
-    Обратный контракт (на дефолте граф мест не занимает) — в тесте выше.
-    """
+def test_flow_high_discovery_ratio_keeps_graph_as_a_candidate_source(
+    client, db, monkeypatch
+):
+    """Высокий prior не превращается в квоту, но граф может расширить пул."""
     user = _rich_familiar_profile(db, "much-new-user")
     user.discovery_ratio = 0.6
     db.commit()
 
+    graph_calls = []
+
     async def _similar(artist):
+        graph_calls.append(artist)
         return [
             _external(f"NeighbourArtist{i}", f"новый трек {i}", f"ext{i}")
             for i in range(6)
@@ -881,12 +830,13 @@ def test_flow_high_discovery_ratio_uses_artist_graph_reserve(client, db, monkeyp
     assert resp.status_code == 200, resp.text
     artists = [t["artist"] for t in resp.json()]
     assert len(artists) == 15, artists
-    new_names = [a for a in artists if a.startswith("NeighbourArtist")]
-    assert len(new_names) >= 3, f"ползунок не поднял долю нового: {artists}"
+    assert graph_calls, "graph source should be allowed to widen the candidate pool"
 
 
-def test_flow_zero_discovery_ratio_drops_the_lastfm_quota(client, db, monkeypatch):
-    """Ползунок в нуле снимает гарантированную долю разведки целиком."""
+def test_flow_zero_discovery_ratio_softly_demotes_lastfm_candidates(
+    client, db, monkeypatch
+):
+    """Нулевой prior не резервирует места и опускает менее точную разведку."""
     user = _rich_familiar_profile(db, "no-new-flow-user")
     user.discovery_ratio = 0.0
     db.commit()
@@ -906,7 +856,7 @@ def test_flow_zero_discovery_ratio_drops_the_lastfm_quota(client, db, monkeypatc
     artists = [t["artist"] for t in resp.json()]
     assert len(artists) == 15, artists
     assert all(a.startswith("OwnArtist") for a in artists), (
-        f"разведка попала в выдачу при нулевой доле: {artists}"
+        f"менее точная разведка вытеснила богатый знакомый пул: {artists}"
     )
 
 
@@ -1056,7 +1006,7 @@ def test_flow_needs_three_playlist_tracks_to_call_an_artist_favorite(db):
 
     Импорт приводит сотни имён одним движением, и каждое становилось любимым с
     первого же трека: любимый проходит вкусовой фильтр в обход всех проверок и
-    забирает гарантированную квоту разведки. Порог — по числу треков артиста в
+    открывает внешний каталог этого имени. Порог — по числу треков артиста в
     собственных плейлистах (_PLAYLIST_ARTIST_MIN_TRACKS).
     """
     from app.routers.flow import _taste_profile
@@ -1073,7 +1023,7 @@ def test_flow_needs_three_playlist_tracks_to_call_an_artist_favorite(db):
     curated = set(profile["curated_artist_keys"])
     assert "realfavorite" in curated
     assert curated.isdisjoint({"passingby", "alsopassing"}), curated
-    # Гарантированная квота SC-разведки — тоже только любимым.
+    # Каталог провайдера открываем только для достаточно подтверждённых имён.
     assert [a.lower() for a in profile["playlist_artists"]] == ["realfavorite"]
     # Но их треки остаются СВОЕЙ библиотекой: артист не выпадает из скоупа,
     # иначе локальный пул перестал бы видеть остальной каталог этих имён.
@@ -1167,8 +1117,8 @@ def test_flow_searches_explicit_genres(client, db, monkeypatch):
     assert all("phonk" in track["title"].lower() for track in mix), mix
 
 
-def test_flow_discovery_never_overflows_artist_cap(client, db, monkeypatch):
-    """Бедный discovery-пул не заполняет порцию одним незнакомым артистом."""
+def test_flow_sparse_pool_keeps_relevant_repeats(client, db, monkeypatch):
+    """Мягкая диверсификация не делает бедный пул искусственно коротким."""
     user = create_user(db, username="discovery-cap-user")
     _liked(db, user)
 
@@ -1183,22 +1133,8 @@ def test_flow_discovery_never_overflows_artist_cap(client, db, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     artists = [track["artist"] for track in resp.json()]
-    assert artists.count("Solo") <= 4, artists
-
-
-def test_artist_cap_allows_only_what_the_gap_can_spread():
-    """Кап на артиста и разнос — одно требование с двух сторон.
-
-    Повторы имени в порции разрешены, но k треков одного артиста укладываются в
-    limit позиций с зазором _MIN_ARTIST_GAP только при (k - 1) * gap < limit.
-    Прежний кап (6 из 15) это условие нарушал, и одно имя возвращалось каждые
-    два-три трека — разнести его было уже физически нечем.
-    """
-    for limit in (5, 8, 15, 20, 30, 50):
-        cap = _artist_cap(limit)
-        assert (cap - 1) * _MIN_ARTIST_GAP < limit or cap == 2, (limit, cap)
-        assert cap <= _MAX_PER_ARTIST, (limit, cap)
-    assert _artist_cap(15) == 4, "порция из 15 должна допускать 4 трека одного имени"
+    assert len(artists) == 8, artists
+    assert artists.count("Solo") > 4, artists
 
 
 def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):

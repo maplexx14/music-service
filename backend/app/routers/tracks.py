@@ -25,7 +25,10 @@ from starlette.background import BackgroundTask
 from app import storage
 from app import external_archive
 import mimetypes
+import asyncio
+from datetime import datetime, timezone
 from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
+from app.acoustic_features import ANALYZER_VERSION, analyze_file
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +325,13 @@ def _link_archived_object(db: Session, track: Track) -> None:
     file_path = storage.find_music_object(f"external/{track.source}/{track.external_id}")
     if file_path:
         track.file_path = file_path
+        acoustic_features = get_cache(
+            f"archive:acoustic:{track.source}/{track.external_id}"
+        )
+        if acoustic_features:
+            track.acoustic_features = acoustic_features
+            track.acoustic_analyzed_at = datetime.now(timezone.utc)
+            track.acoustic_analyzer_version = ANALYZER_VERSION
         db.commit()
 
 
@@ -361,8 +371,9 @@ def get_or_create_external_track(db: Session, payload: ExternalTrackImport) -> T
         )
         if track is None:
             raise
-        return track
-    db.refresh(track)
+    else:
+        db.refresh(track)
+    _link_archived_object(db, track)
     return track
 
 
@@ -438,6 +449,10 @@ async def upload_track(
         file_ext = AAC_EXT
         filename = f"{file_id}{file_ext}"
 
+    # Analyze the final audio representation before it is optionally uploaded
+    # to MinIO and the temporary local file is removed.
+    acoustic_features = await asyncio.to_thread(analyze_file, file_path)
+
     # Save cover if provided
     cover_url = None
     cover_path = None
@@ -483,7 +498,12 @@ async def upload_track(
         genre=genre,
         duration=duration,
         file_path=relative_path,
-        cover_url=cover_url
+        cover_url=cover_url,
+        acoustic_features=acoustic_features,
+        acoustic_analyzed_at=(
+            datetime.now(timezone.utc) if acoustic_features else None
+        ),
+        acoustic_analyzer_version=ANALYZER_VERSION if acoustic_features else None,
     )
     db.add(db_track)
     db.commit()
@@ -666,6 +686,8 @@ async def complete_chunked_upload(
         file_ext = AAC_EXT
         filename = f"{file_id}{file_ext}"
 
+    acoustic_features = await asyncio.to_thread(analyze_file, assembled_path)
+
     relative_path = f"/music_files/{filename}"
 
     if storage.is_minio_backend():
@@ -685,6 +707,11 @@ async def complete_chunked_upload(
         duration=duration,
         file_path=relative_path,
         cover_url=None,
+        acoustic_features=acoustic_features,
+        acoustic_analyzed_at=(
+            datetime.now(timezone.utc) if acoustic_features else None
+        ),
+        acoustic_analyzer_version=ANALYZER_VERSION if acoustic_features else None,
     )
     db.add(db_track)
     db.commit()

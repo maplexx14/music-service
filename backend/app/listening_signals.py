@@ -1,4 +1,9 @@
-"""Shared helpers for turning library actions into listening signals."""
+"""Legacy listening-signal helper kept for compatibility.
+
+Imports no longer call this function: playlist membership is represented as a
+curation signal with explicit provenance instead of a synthetic listen.  The
+function remains available to older integrations during the migration window.
+"""
 
 from datetime import datetime, timezone
 from typing import Iterable
@@ -15,15 +20,7 @@ def record_imported_track_plays(
     user_id: int,
     track_ids: Iterable[int],
 ) -> int:
-    """Record imported tracks as one completed listen per user and track.
-
-    Importing the same track again is idempotent: an existing real or imported
-    play is kept as-is, so imports cannot repeatedly inflate taste or global
-    popularity counters.
-
-    The caller owns the transaction and must commit after creating the
-    playlist and its associations.
-    """
+    """Legacy idempotent backfill helper; new imports must not call it."""
     unique_track_ids = list(dict.fromkeys(int(track_id) for track_id in track_ids))
     if not unique_track_ids:
         return 0

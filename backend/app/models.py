@@ -187,12 +187,9 @@ class User(Base):
     # Артисты, которых пользователь убрал из автоматически определённых
     # предпочтений. Это отдельный список: явные лайки и история не меняются.
     excluded_artists = Column(JSON, nullable=False, default=list, server_default="[]")
-    # Доля выдачи под НЕЗНАКОМЫХ артистов (0.0 — только знакомые, 1.0 — только
-    # новые имена). Баланс exploration/exploitation — вопрос вкуса, а не
-    # правильной настройки: одному нужен «только моё», другому — постоянные
-    # открытия. Дефолт 0.2 воспроизводит прежнее захардкоженное поведение
-    # (20% explore-слотов в recommendations.py и 3 из 15 мест под Last.fm в
-    # волне). Семантику читают оба движка через app/discovery.py.
+    # Мягкий prior на открытие новых артистов. Он меняет общий score, но не
+    # резервирует позиции и не отбрасывает релевантный контент по имени автора.
+    # Семантику читают оба движка через app/discovery.py.
     discovery_ratio = Column(
         Float, nullable=False, default=0.2, server_default="0.2"
     )
@@ -224,6 +221,11 @@ class Track(Base):
     # Number of distinct users who have played the track at least once.
     # ``play_count`` is retained for ranking recency/volume and old databases.
     unique_listener_count = Column(Integer, nullable=False, default=0, server_default="0", index=True)
+    # Versioned content profile produced from the local audio file.  External
+    # provider rows normally remain NULL until they are archived locally.
+    acoustic_features = Column(JSON, nullable=True)
+    acoustic_analyzed_at = Column(DateTime(timezone=True), nullable=True)
+    acoustic_analyzer_version = Column(String(32), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -241,6 +243,11 @@ class Playlist(Base):
     cover_url = Column(String, nullable=True)
     is_public = Column(Boolean, default=True, index=True)
     is_liked = Column(Boolean, default=False, nullable=False, server_default="false", index=True)
+    # ``manual`` is a playlist explicitly curated in this service; ``imported``
+    # is a source collection brought in from another provider.  Keeping this
+    # semantic separate from description prevents imported tracks becoming fake
+    # play history and lets ranking apply a deliberately smaller signal.
+    origin = Column(String(16), nullable=False, default="manual", server_default="manual", index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -22,8 +22,8 @@ function Settings() {
     artists: user?.preferred_artists || [],
     excludedArtists: user?.excluded_artists || [],
   })
-  // Доля незнакомых артистов в выдаче. На бэкенде это 0..1, в интерфейсе —
-  // проценты: ползунок «сколько нового / сколько знакомого». Отдельным
+  // Мягкий приоритет открытия новых артистов. На бэкенде это 0..1, в
+  // интерфейсе — проценты уверенности. Отдельным
   // состоянием, а не внутри prefs: PreferencePicker пересобирает свой объект из
   // трёх известных ему полей и лишний ключ потерялся бы на первом же клике.
   const [discovery, setDiscovery] = useState(
@@ -116,17 +116,17 @@ function Settings() {
 
         <div className="settings-balance">
           <div className="settings-balance-head">
-            <div className="settings-label">Новые артисты в выдаче</div>
+            <div className="settings-label">Приоритет новых артистов</div>
             <div className="settings-hint">
-              Сколько мест в рекомендациях и в волне отдавать артистам, которых
-              вы ещё не слушали. Остальные достаются знакомым именам и их новым
-              трекам.
+              Насколько активно поднимать релевантные треки артистов, которых
+              вы ещё не слушали. Фиксированных мест нет: итог всегда решает
+              общая релевантность.
             </div>
           </div>
           <div className="settings-balance-values">
-            <span className="settings-balance-new">{discovery}% новых</span>
+            <span className="settings-balance-new">{discovery}% приоритета</span>
             <span className="settings-balance-known">
-              {100 - discovery}% знакомых
+              {discovery < 50 ? 'Больше знакомого' : 'Больше открытий'}
             </span>
           </div>
           <input
@@ -138,11 +138,11 @@ function Settings() {
             onChange={(event) => setDiscovery(Number(event.target.value))}
             className="settings-balance-slider"
             style={{ '--balance-fill': `${discovery}%` }}
-            aria-label="Доля новых артистов в рекомендациях"
+            aria-label="Приоритет новых артистов в рекомендациях"
           />
           <div className="settings-balance-scale">
-            <span>Только знакомые</span>
-            <span>Только новые</span>
+            <span>Точнее по знакомому</span>
+            <span>Смелее открывать новое</span>
           </div>
         </div>
 

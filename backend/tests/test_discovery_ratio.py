@@ -1,23 +1,11 @@
-"""Ползунок «новые артисты / знакомые» (User.discovery_ratio).
-
-Настройка задаёт долю выдачи под НЕЗНАКОМЫХ артистов и читается обоими
-движками — /recommendations и волной (см. app/discovery.py). Здесь проверяются
-три вещи: арифметика долей, сохранение настройки через API и то, что она реально
-меняет выдачу рекомендаций.
-"""
+"""Мягкий prior на открытие новых артистов (User.discovery_ratio)."""
 
 import pytest
 
 from app.cache import clear_pattern
-from app.discovery import DEFAULT_DISCOVERY_RATIO, discovery_ratio, discovery_slots
+from app.discovery import DEFAULT_DISCOVERY_RATIO, discovery_ratio
 from app.models import Playlist, Track, playlist_tracks, track_cooccurrence
-from app.routers.flow import (
-    _STANDARD_FLOW_LIMIT,
-    _STANDARD_FAVORITE_SLOTS,
-    _STANDARD_LASTFM_SLOTS,
-    _STANDARD_LIKED_SLOTS,
-    _standard_slots,
-)
+from app.recommendation_scoring import score_track
 
 from tests.conftest import auth_headers, create_user
 
@@ -34,7 +22,7 @@ def _clear_recs_cache():
 def _track(db, title, artist, play_count=0, genre="rock"):
     # Жанр проставлен намеренно: у безжанрового кандидата от НЕЗНАКОМОГО артиста
     # проверка вкуса (taste.make_relevance_check) не находит ни одного сигнала и
-    # отбраковывает его до всяких квот. В тесте про доли нужен сосед, который
+    # отбраковывает его ещё до общего ранжирования. В тесте про prior нужен сосед, который
     # проверку проходит, — иначе он не появится ни при какой настройке.
     t = Track(
         title=title,
@@ -51,7 +39,7 @@ def _track(db, title, artist, play_count=0, genre="rock"):
     return t
 
 
-# --- арифметика долей ---
+# --- нормализация настройки ---
 
 
 class _FakeUser:
@@ -68,42 +56,16 @@ def test_discovery_ratio_clamps_and_falls_back():
     assert discovery_ratio(_FakeUser(discovery_ratio=None)) == DEFAULT_DISCOVERY_RATIO
     assert discovery_ratio(_FakeUser()) == DEFAULT_DISCOVERY_RATIO
     assert discovery_ratio(_FakeUser(discovery_ratio="nonsense")) == DEFAULT_DISCOVERY_RATIO
-    # Границы: за пределы 0..1 выходить нельзя, иначе квота съест всю порцию.
+    # Границы: prior всегда остаётся в диапазоне 0..1.
     assert discovery_ratio(_FakeUser(discovery_ratio=2.5)) == 1.0
     assert discovery_ratio(_FakeUser(discovery_ratio=-1.0)) == 0.0
 
 
-def test_discovery_slots_edges():
-    # Ноль означает именно ноль: выключивший разведку не должен её получать.
-    assert discovery_slots(15, 0.0) == 0
-    # ...а ненулевая доля всегда даёт хотя бы одно место, даже если округление
-    # съело бы её целиком.
-    assert discovery_slots(8, 0.01) == 1
-    assert discovery_slots(15, DEFAULT_DISCOVERY_RATIO) == 3
-    assert discovery_slots(15, 1.0) == 15
-    assert discovery_slots(0, 1.0) == 0
+def test_discovery_ratio_is_not_a_slot_api():
+    """Настройка не создаёт отдельную арифметику размеров выдачи."""
+    import app.discovery as discovery
 
-
-def test_standard_slots_default_keeps_previous_split():
-    """У юзера, который ползунок не трогал, порция волны не меняется."""
-    assert _standard_slots(DEFAULT_DISCOVERY_RATIO) == (
-        _STANDARD_LASTFM_SLOTS,
-        _STANDARD_LIKED_SLOTS,
-        _STANDARD_FAVORITE_SLOTS,
-    )
-
-
-@pytest.mark.parametrize("ratio", [0.0, 0.1, 0.2, 0.34, 0.5, 0.75, 1.0])
-def test_standard_slots_always_fill_the_batch(ratio):
-    lastfm, liked, favorite = _standard_slots(ratio)
-    assert lastfm + liked + favorite == _STANDARD_FLOW_LIMIT
-    assert min(lastfm, liked, favorite) >= 0
-    assert lastfm == discovery_slots(_STANDARD_FLOW_LIMIT, ratio)
-
-
-def test_standard_slots_extremes():
-    assert _standard_slots(0.0) == (0, 6, 9)
-    assert _standard_slots(1.0) == (15, 0, 0)
+    assert not hasattr(discovery, "discovery_slots")
 
 
 # --- сохранение через API ---
@@ -209,8 +171,8 @@ def _artists(resp):
     return [t["artist"] for t in resp.json()["tracks"]]
 
 
-def test_recommendations_zero_ratio_keeps_only_familiar(client, db, monkeypatch):
-    """Ползунок в нуле — незнакомых имён в выдаче нет."""
+def test_recommendations_ratio_is_soft_prior(client, db, monkeypatch):
+    """Ползунок меняет ranking, но не резервирует позиции."""
     from app.routers import recommendations as recommendations_router
 
     # SQLite не умеет Postgres-оператор ~* из build_keyword_filters (см.
@@ -219,35 +181,34 @@ def test_recommendations_zero_ratio_keeps_only_familiar(client, db, monkeypatch)
         recommendations_router, "build_keyword_filters", lambda *_a, **_kw: []
     )
 
-    user, _stranger = _taste_with_stranger_neighbour(db, "no-new-user")
-    user.discovery_ratio = 0.0
+    captured = []
+
+    def _base_score(track, **kwargs):
+        captured.append((track.artist, kwargs.get("novelty")))
+        return score_track(track, **kwargs)
+
+    monkeypatch.setattr(recommendations_router, "score_track", _base_score)
+
+    low_user, _ = _taste_with_stranger_neighbour(db, "low-prior-user")
+    low_user.discovery_ratio = 0.0
     db.commit()
-
-    resp = client.get(
+    low = client.get(
         "/api/recommendations/?limit=3",
-        headers=auth_headers(client, username="no-new-user"),
+        headers=auth_headers(client, username="low-prior-user"),
     )
-    assert resp.status_code == 200, resp.text
-    artists = _artists(resp)
-    assert len(artists) == 3, f"знакомого материала хватало на порцию: {artists}"
-    assert "StrangerBand" not in artists, artists
+    assert low.status_code == 200, low.text
 
-
-def test_recommendations_full_ratio_brings_new_artists(client, db, monkeypatch):
-    """Тот же профиль с ползунком на максимуме — незнакомец в выдаче."""
-    from app.routers import recommendations as recommendations_router
-
-    monkeypatch.setattr(
-        recommendations_router, "build_keyword_filters", lambda *_a, **_kw: []
-    )
-
-    user, _stranger = _taste_with_stranger_neighbour(db, "all-new-user")
-    user.discovery_ratio = 1.0
+    clear_pattern("recs:*")
+    high_user, _ = _taste_with_stranger_neighbour(db, "high-prior-user")
+    high_user.discovery_ratio = 1.0
     db.commit()
-
-    resp = client.get(
+    high = client.get(
         "/api/recommendations/?limit=3",
-        headers=auth_headers(client, username="all-new-user"),
+        headers=auth_headers(client, username="high-prior-user"),
     )
-    assert resp.status_code == 200, resp.text
-    assert "StrangerBand" in _artists(resp), _artists(resp)
+    assert high.status_code == 200, high.text
+
+    low_artists = _artists(low)
+    high_artists = _artists(high)
+    assert low_artists.count("StrangerBand") <= high_artists.count("StrangerBand")
+    assert {novelty for _artist, novelty in captured} == {False, True}

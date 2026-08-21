@@ -58,6 +58,7 @@ def _paginated_playlist_response(
         cover_url=playlist.cover_url,
         is_public=playlist.is_public,
         is_liked=playlist.is_liked,
+        origin=playlist.origin,
         created_at=playlist.created_at,
         updated_at=playlist.updated_at,
         track_count=total,
@@ -139,7 +140,9 @@ def create_playlist(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    db_playlist = Playlist(**playlist.dict(), owner_id=current_user.id)
+    # Playlist provenance is server-owned.  Public playlist creation is always
+    # manual; importer.py is the only path allowed to create ``imported``.
+    db_playlist = Playlist(**playlist.dict(), origin="manual", owner_id=current_user.id)
     db.add(db_playlist)
     db.commit()
     db.refresh(db_playlist)

@@ -31,6 +31,20 @@ def _track(db, title, artist, play_count=0, genre=None):
     return t
 
 
+def _features(**overrides):
+    vector = {
+        "tempo": 0.5,
+        "loudness": 0.5,
+        "dynamics": 0.5,
+        "brightness": 0.5,
+        "bass": 0.5,
+        "zero_crossing": 0.5,
+        "pulse_clarity": 0.5,
+    }
+    vector.update(overrides)
+    return {"vector": vector}
+
+
 def test_recommendations_respect_taste_and_skips(client, db):
     user = create_user(db)
 
@@ -181,3 +195,104 @@ def test_recommendations_ignore_other_users_library(client, db):
     assert own_more.id in {t["id"] for t in tracks}, (
         "свой трек любимого артиста должен остаться в выдаче"
     )
+
+
+def test_recommendations_include_acoustically_close_new_artist(client, db):
+    """Акустически близкий новый артист конкурирует в общем endpoint-score."""
+    user = create_user(db, username="acoustic-endpoint-user")
+    liked_pl = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    seed = Track(
+        title="seed",
+        artist="KnownArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/seed.mp3",
+        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
+    )
+    close = Track(
+        title="close",
+        artist="NewArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/close.mp3",
+        acoustic_features=_features(tempo=0.22, brightness=0.21, bass=0.79),
+    )
+    far = Track(
+        title="far",
+        artist="OtherArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/far.mp3",
+        acoustic_features=_features(tempo=0.95, brightness=0.9, bass=0.05),
+    )
+    db.add_all([liked_pl, seed, close, far])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=liked_pl.id,
+            track_id=seed.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/?limit=20",
+        headers=auth_headers(client, username="acoustic-endpoint-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    ids = {track["id"] for track in response.json()["tracks"]}
+    assert close.id in ids
+    assert far.id not in ids
+
+
+def test_recommendations_do_not_open_acoustic_pool_without_user_profile(client, db):
+    """Сам факт анализа чужого трека не является пользовательским сигналом."""
+    user = create_user(db, username="no-acoustic-profile-user")
+    liked_pl = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    seed = Track(
+        title="seed without analysis",
+        artist="KnownArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/unprofiled-seed.mp3",
+    )
+    unrelated = Track(
+        title="globally analyzed",
+        artist="UnrelatedArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/unrelated.mp3",
+        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
+    )
+    db.add_all([liked_pl, seed, unrelated])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=liked_pl.id,
+            track_id=seed.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="no-acoustic-profile-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert unrelated.id not in {
+        track["id"] for track in response.json()["tracks"]
+    }

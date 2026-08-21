@@ -535,6 +535,7 @@ def test_import_spotify_matches_tracks_in_ytmusic(client, db, monkeypatch):
     assert body["skipped"] == 1
     assert body["playlist"]["name"] == "My Mix"
     assert body["playlist"]["description"] == "Импортировано из Spotify"
+    assert body["playlist"]["origin"] == "imported"
     imported_track_id = (
         body["playlist"]["tracks"][0]["id"]
         if body["playlist"].get("tracks")
@@ -547,23 +548,23 @@ def test_import_spotify_matches_tracks_in_ytmusic(client, db, monkeypatch):
 
     from app.models import Track, user_play_events, user_track_plays
 
-    play = db.execute(
+    plays = db.execute(
         user_track_plays.select().where(user_track_plays.c.track_id == imported_track_id)
-    ).mappings().one()
-    listen = db.execute(
+    ).mappings().all()
+    listens = db.execute(
         user_play_events.select().where(user_play_events.c.track_id == imported_track_id)
-    ).mappings().one()
+    ).mappings().all()
     imported_track = db.get(Track, imported_track_id)
 
-    assert play["play_count"] == 1
-    assert listen["completion"] == 1.0
-    assert imported_track.play_count == 1
-    assert imported_track.unique_listener_count == 1
+    assert plays == []
+    assert listens == []
+    assert imported_track.play_count == 0
+    assert imported_track.unique_listener_count == 0
     # Матчим по основному артисту и очищенному от «(Remix)» названию.
     assert queries[0] == "A One"
 
 
-def test_reimport_does_not_duplicate_listening_signals(client, db, monkeypatch):
+def test_reimport_never_creates_listening_signals(client, db, monkeypatch):
     create_user(db)
     headers = auth_headers(client)
 
@@ -595,13 +596,14 @@ def test_reimport_does_not_duplicate_listening_signals(client, db, monkeypatch):
             headers=headers,
         )
         assert response.status_code == 200, response.text
+        assert response.json()["playlist"]["origin"] == "imported"
 
     from app.models import Track, user_play_events, user_track_plays
 
     track = db.query(Track).filter(Track.external_id == "yt1").one()
-    play = db.execute(
+    play_count = db.execute(
         user_track_plays.select().where(user_track_plays.c.track_id == track.id)
-    ).mappings().one()
+    ).mappings().all()
     from sqlalchemy import func, select
 
     listen_count = db.execute(
@@ -610,7 +612,7 @@ def test_reimport_does_not_duplicate_listening_signals(client, db, monkeypatch):
         )
     ).scalar_one()
 
-    assert play["play_count"] == 1
-    assert listen_count == 1
-    assert track.play_count == 1
-    assert track.unique_listener_count == 1
+    assert play_count == []
+    assert listen_count == 0
+    assert track.play_count == 0
+    assert track.unique_listener_count == 0

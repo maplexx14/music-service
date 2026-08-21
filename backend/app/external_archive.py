@@ -27,6 +27,7 @@ import logging
 import mimetypes
 import os
 import tempfile
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlsplit
 
@@ -38,6 +39,7 @@ from app.cache import record_proxy_traffic, set_cache_async
 from app.database import SessionLocal
 from app.models import Track
 from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
+from app.acoustic_features import ANALYZER_VERSION, analyze_file
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,18 @@ async def _note_archived(source: str, external_id: str, file_path: str) -> None:
     await set_cache_async(f"archive:path:{source}/{external_id}", file_path, expire=24 * 3600)
 
 
+async def _note_acoustic_features(
+    source: str, external_id: str, features: Optional[dict]
+) -> None:
+    """Retain analysis until an archived provider item is materialized."""
+    if features:
+        await set_cache_async(
+            f"archive:acoustic:{source}/{external_id}",
+            features,
+            expire=24 * 3600,
+        )
+
+
 async def adopt_local_file(source: str, external_id: str, local_path: str) -> Optional[str]:
     """Кладёт уже готовый локальный файл в MinIO как архивную копию трека.
 
@@ -167,6 +181,7 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
 
     ext = os.path.splitext(local_path)[1].lower() or ".m4a"
     key = f"external/{source}/{external_id}{ext}"
+    acoustic_features = await asyncio.to_thread(analyze_file, local_path)
     try:
         storage.ensure_buckets()
         file_path = await asyncio.to_thread(
@@ -177,6 +192,7 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
         return None
 
     await _note_archived(source, external_id, file_path)
+    await _note_acoustic_features(source, external_id, acoustic_features)
 
     # Привязываем объект к записи в БД, чтобы /tracks/{id}/stream отдавал трек
     # прямо из MinIO, а ленивая архивация больше не бралась за него.
@@ -189,6 +205,10 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
         )
         if track is not None and not storage.is_minio_path(track.file_path):
             track.file_path = file_path
+            if acoustic_features:
+                track.acoustic_features = acoustic_features
+                track.acoustic_analyzed_at = datetime.now(timezone.utc)
+                track.acoustic_analyzer_version = ANALYZER_VERSION
             db.commit()
     except Exception:  # noqa: BLE001
         db.rollback()
@@ -571,6 +591,8 @@ async def archive_track(
             ext = AAC_EXT
             key = f"external/{track.source}/{track.external_id}{ext}"
 
+        acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
+
         try:
             file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
         finally:
@@ -581,6 +603,9 @@ async def archive_track(
                     pass
 
         await _note_archived(track.source, track.external_id, file_path)
+        await _note_acoustic_features(
+            track.source, track.external_id, acoustic_features
+        )
 
         # Обложку архивируем отдельно и best-effort: её отсутствие не должно
         # ронять архивацию аудио.
@@ -588,6 +613,10 @@ async def archive_track(
 
         # Обновляем запись атомарно: file_path → MinIO, source сохраняем.
         track.file_path = file_path
+        if acoustic_features:
+            track.acoustic_features = acoustic_features
+            track.acoustic_analyzed_at = datetime.now(timezone.utc)
+            track.acoustic_analyzer_version = ANALYZER_VERSION
         if new_cover:
             track.cover_url = new_cover
         db.commit()
@@ -743,6 +772,11 @@ async def _archive_external_core(
             ext = AAC_EXT
             key = f"external/{source}/{external_id}{ext}"
 
+        # Compute the content profile while the downloaded bytes are still
+        # local.  The archive path may later be linked to a Track row; retain
+        # the result there when one is already materialized.
+        acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
+
         try:
             file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
         finally:
@@ -753,12 +787,17 @@ async def _archive_external_core(
                     pass
 
         await _note_archived(source, external_id, file_path)
+        await _note_acoustic_features(source, external_id, acoustic_features)
 
         # Если трек уже материализован — привязываем объект к записи и архивируем
         # обложку. Если записи нет (трек играется из поиска/потока) — объект
         # просто лежит в MinIO и будет подхвачен при последующем импорте (find_music_object).
         if track is not None and not storage.is_minio_path(track.file_path):
             track.file_path = file_path
+            if acoustic_features:
+                track.acoustic_features = acoustic_features
+                track.acoustic_analyzed_at = datetime.now(timezone.utc)
+                track.acoustic_analyzer_version = ANALYZER_VERSION
             new_cover = await _archive_cover(track, f"{source}/{external_id}", client)
             if new_cover:
                 track.cover_url = new_cover

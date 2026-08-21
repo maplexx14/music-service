@@ -14,7 +14,9 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
-ALGORITHM_VERSION = "hybrid-v5"
+from app.acoustic_features import acoustic_similarity
+
+ALGORITHM_VERSION = "hybrid-v6"
 
 # Keep popularity deliberately small.  A global counter must never overpower a
 # user's explicit signal or a content match.
@@ -22,6 +24,7 @@ _POPULARITY_WEIGHT = 0.28
 _FRESHNESS_WEIGHT = 0.22
 _AFFINITY_WEIGHT = 2.4
 _CONTENT_WEIGHT = 1.15
+_ACOUSTIC_WEIGHT = 1.55
 _SOURCE_WEIGHT = 0.18
 _NOVELTY_WEIGHT = 0.16
 _FATIGUE_WEIGHT = 0.55
@@ -188,6 +191,8 @@ def score_track(
     play_count: Optional[int] = None,
     listener_count: int = 0,
     content_bonus: float = 0.0,
+    acoustic_profile: Any = None,
+    acoustic_bonus: float = 0.0,
     context_bonus: float = 0.0,
     population_quality: float = 0.0,
     now: Optional[datetime] = None,
@@ -199,6 +204,14 @@ def score_track(
     """
     affinity = math.tanh(float(artist_affinity or 0.0) / 8.0)
     match = max(0.0, min(1.0, content_match(track, genres) + float(content_bonus or 0.0)))
+    acoustic_fit = max(
+        0.0,
+        min(
+            1.0,
+            acoustic_similarity(_field(track, "acoustic_features"), acoustic_profile)
+            + float(acoustic_bonus or 0.0),
+        ),
+    )
     popularity = popularity_score(
         _field(track, "play_count", 0) if play_count is None else play_count,
         listener_count or _field(track, "unique_listener_count", 0),
@@ -219,6 +232,7 @@ def score_track(
     score = (
         _AFFINITY_WEIGHT * affinity
         + _CONTENT_WEIGHT * match
+        + _ACOUSTIC_WEIGHT * acoustic_fit
         + _POPULARITY_WEIGHT * popularity
         + _FRESHNESS_WEIGHT * freshness
         + _SOURCE_WEIGHT * source_fit

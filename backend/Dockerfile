@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONPATH=/app
 
-# Install system dependencies (ffmpeg needed for AAC transcoding).
+# Install system dependencies (ffmpeg is used for AAC transcoding and acoustic analysis).
 # nodejs — JS-рантайм для yt-dlp: без него расшифровка n-sig/cipher
 # googlevideo-ссылок невозможна, все JS-клиенты YouTube (web*, tv*, mweb)
 # отдают 0 пригодных форматов, и yt-dlp пишет "No supported JavaScript runtime

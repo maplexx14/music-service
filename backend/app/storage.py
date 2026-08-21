@@ -263,6 +263,12 @@ def upload_music_file(local_path: str, key: str, content_type: str) -> str:
     return make_object_path(MUSIC_BUCKET, key)
 
 
+def download_music_file(file_path: str, local_path: str) -> None:
+    """Download one ``minio://`` audio object to a local analysis path."""
+    bucket, key = parse_object_path(file_path)
+    _get_internal_client().fget_object(bucket, key, local_path)
+
+
 def upload_cover_file(local_path: str, key: str, content_type: str) -> str:
     """Заливает обложку в бакет обложек. Возвращает относительный прокси-URL."""
     ensure_buckets()

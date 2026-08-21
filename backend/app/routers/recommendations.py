@@ -26,7 +26,7 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
-from app.discovery import discovery_ratio, discovery_slots
+from app.discovery import discovery_ratio
 from app.recommendation_cache import recommendation_cache_key
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
 from app.artist_utils import artist_key
@@ -36,6 +36,12 @@ from app.recommendation_scoring import (
     score_track,
     stable_jitter,
 )
+from app.acoustic_features import (
+    MIN_RECOMMENDATION_SIMILARITY,
+    acoustic_similarity,
+    weighted_centroid,
+)
+from app.playlist_signals import aggregate_playlist_origin
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import (
     ALLOWED_EVENT_TYPES,
@@ -98,9 +104,9 @@ _MAX_PER_ARTIST = 2
 # больше не режут весь каталог (см. ниже) — только сам скипнутый трек, и он и
 # так исключается из выдачи. У ещё НЕ доверенного скипы сильно влияют: он
 # попадает в сид, только если положительный сигнал перевешивает скипы.
-# Плейлистные треки (вес +4.0) достигают порога ещё быстрее — но только у
-# артиста, набравшего _PLAYLIST_ARTIST_MIN_TRACKS: иначе один трек из импорта
-# сам по себе перекрывал порог и объявлял постороннее имя доверенным.
+# Ручные плейлистные треки достигают порога быстрее — но только у артиста,
+# набравшего _PLAYLIST_ARTIST_MIN_TRACKS: иначе один трек из импорта сам по
+# себе перекрывал порог и объявлял постороннее имя доверенным.
 _ARTIST_TRUST_THRESHOLD = 3.0
 
 # Насколько положительный сигнал должен ПЕРЕВЕШИВАТЬ скипы, чтобы недоверенный
@@ -126,14 +132,8 @@ _COMPLETION_LO_ARTIST_PENALTY = 0.75
 # flow.py: движка два, шкала весов у них общая.
 _DISLIKE_ARTIST_PENALTY = 3.5
 
-# --- Exploration / exploitation ---
-# Доля слотов выдачи под «исследование»: co-occurrence-соседи любимых треков
-# (коллаборативный сигнал), в приоритете — артисты, которых юзер ещё не
-# слушал. Остальная выдача — «эксплуатация» известного вкуса.
-#
-# Саму долю задаёт юзер ползунком в настройках (User.discovery_ratio); её
-# семантика и дефолт живут в app/discovery.py — там же, откуда её читает волна,
-# чтобы у двух движков не разъезжался смысл одной настройки.
+# ``User.discovery_ratio`` — мягкий prior в общем score. Он не резервирует
+# позиции, а помогает близкому по релевантности новому артисту подняться.
 
 # Доля от score самого похожего соседа, ниже которой co-occurrence-сосед
 # считается шумом. Матрица строится с _MIN_COMMON=1 (иначе на малой базе она
@@ -444,12 +444,16 @@ def get_recommendations(
         )
     liked_track_ids = [t.id for t, _added_at in liked]
 
-    # Треки из СОБСТВЕННЫХ (не is_liked) плейлистов юзера — он их сам курировал,
-    # это самый сильный положительный сигнал вкуса (весомее лайков). Учитываем
-    # и исключаем из выдачи (уже в коллекции). Трек может быть в нескольких
+    # Треки из СОБСТВЕННЫХ (не is_liked) плейлистов учитываем как сигнал вкуса:
+    # ручное курирование весит сильнее импорта. Их также исключаем из выдачи,
+    # поскольку они уже в коллекции. Трек может быть в нескольких
     # плейлистах — дедуп по Track.id, берём самое свежее добавление.
     playlisted = (
-        db.query(Track, func.max(playlist_tracks.c.added_at).label("added_at"))
+        db.query(
+            Track,
+            func.max(playlist_tracks.c.added_at).label("added_at"),
+            aggregate_playlist_origin().label("playlist_origin"),
+        )
         .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
         .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
         .filter(Playlist.owner_id == current_user.id, Playlist.is_liked == False)
@@ -458,7 +462,7 @@ def get_recommendations(
         .limit(_TASTE_QUERY_LIMIT)
         .all()
     )
-    playlisted_track_ids = [t.id for t, _ in playlisted]
+    playlisted_track_ids = [t.id for t, *_ in playlisted]
 
     # Часто играемые: только с реальным весом (>=2 проигрываний), иначе разовые
     # клики из поиска засоряют сид и тянут в выдачу случайных артистов.
@@ -559,9 +563,29 @@ def get_recommendations(
     score_by_track = {}
     context_profile = build_context_profile(db, current_user.id, bucket, now=ranking_now)
 
+    # Curated local playlists are the strongest content signal, imported
+    # collections remain useful but deliberately carry less confidence.
+    profile_rows = []
+    for track, added_at in liked:
+        profile_rows.append((track.acoustic_features, 3.0 * _curation_decay(added_at)))
+    for track, added_at, origin in playlisted:
+        playlist_weight = 3.0 if str(origin or "manual").lower() == "manual" else 1.0
+        profile_rows.append(
+            (track.acoustic_features, playlist_weight * _curation_decay(added_at))
+        )
+    for track, play_count, last_played in played:
+        profile_rows.append(
+            (
+                track.acoustic_features,
+                (1.0 + math.log1p(play_count or 1)) * _decay(last_played),
+            )
+        )
+    acoustic_profile = weighted_centroid(profile_rows)
+
     def _candidate_score(track: Track) -> float:
         row = skip_by_track.get(track.id)
         completion = completion_by_track.get(track.id)
+        is_novel_artist = artist_key(track.artist) not in known_artist_keys
         score = score_track(
             track,
             user_id=current_user.id,
@@ -572,11 +596,18 @@ def get_recommendations(
             disliked=bool(row[4]) if row else False,
             fatigued=track.id in fatigued_ids,
             fatigue_level=fatigue_by_track.get(track.id),
-            novelty=artist_key(track.artist) not in known_artist_keys,
+            novelty=is_novel_artist,
             source=getattr(track, "source", None),
             listener_count=getattr(track, "unique_listener_count", 0) or 0,
             context_bonus=context_bonus(track, context_profile),
+            acoustic_profile=acoustic_profile,
             now=ranking_now,
+        )
+        # ``discovery_ratio`` is a soft prior only.  It nudges the common
+        # ranking toward or away from new names, but never reserves positions
+        # for either familiar or unfamiliar artists.
+        score += (discovery_ratio(current_user) - 0.2) * (
+            1.8 if is_novel_artist else -0.2
         )
         score_by_track[track.id] = score
         return score
@@ -594,7 +625,8 @@ def get_recommendations(
         # Интенсивность учитывается симметрично лог-масштабом (иначе любимый,
         # но мемно-«пролистываемый» артист уходил в минус: play_count раньше
         # игнорировался, а скип вычитал полный skip_count). Веса как во flow.py:
-        # лайк +3, плейлист +4, прослушивание 1+log1p(play_count), скип
+        # лайк +3, ручной плейлист +4, импорт +1.6, прослушивание
+        # 1+log1p(play_count), скип
         # −1.5·log1p(skip_count).
         artist_positive: dict = {}
         artist_skip_penalty: dict = {}
@@ -611,7 +643,7 @@ def get_recommendations(
         # Сколько треков артиста лежит в собственных плейлистах — по этому
         # счётчику работает порог _PLAYLIST_ARTIST_MIN_TRACKS.
         playlist_artist_totals: Counter = Counter(
-            artist_key(t.artist) for t, _added_at in playlisted
+            artist_key(t.artist) for t, _added_at, _origin in playlisted
         )
 
         # Выбранные при регистрации артисты — такой же осознанный сигнал, как
@@ -635,14 +667,13 @@ def get_recommendations(
             if genre:
                 genres.append(genre)
             weighted_titles.append((t.title, 3.0 * _curation_decay(added_at)))
-        for t, added_at in playlisted:
+        for t, added_at, playlist_origin in playlisted:
             key = artist_key(t.artist)
             # Плейлист курирует АРТИСТА только с _PLAYLIST_ARTIST_MIN_TRACKS
             # треков: одиночное имя из импорта осознанным выбором не является.
             favorite = playlist_artist_totals[key] >= _PLAYLIST_ARTIST_MIN_TRACKS
-            weight = (
-                4.0 if favorite else _PLAYLIST_WEAK_WEIGHT
-            ) * _curation_decay(added_at)
+            origin_weight = 4.0 if str(playlist_origin or "manual").lower() == "manual" else 1.6
+            weight = (origin_weight if favorite else _PLAYLIST_WEAK_WEIGHT) * _curation_decay(added_at)
             artist_positive[key] = artist_positive.get(key, 0) + weight
             if favorite:
                 artist_curated_count[key] = artist_curated_count.get(key, 0) + 1
@@ -811,9 +842,10 @@ def get_recommendations(
         # повтор лучше нерелевантной новинки.
         exclude_ids = set(user_track_ids) | skipped_track_ids
         exclude_select = _collection_exclude_select(current_user.id)
+        candidate_pool: dict[int, Track] = {}
         if taste_filters:
-            # Берём с запасом — после genre-фильтра и cap_per_artist
-            # часть кандидатов отсеется. Увеличиваем выборку, чтобы нишевые
+            # Берём с запасом — после taste-фильтра и мягкой диверсификации
+            # часть кандидатов опустится. Увеличиваем выборку, чтобы нишевые
             # артисты из плейлистов (play_count=1-6) не вытеснялись
             # глобально популярными треками из лайкнутого.
             q = db.query(Track).filter(or_(*taste_filters)).filter(
@@ -876,34 +908,62 @@ def get_recommendations(
                     t.id,
                 )
 
-            pool.sort(key=_track_rank)
-            # Soft repeat penalties preserve strong repeats when the catalogue
-            # is sparse, while avoiding a rigid per-artist cliff.
-            capped = soft_artist_rerank(pool, _candidate_score)[: max(limit * 6, limit)]
-            # Разнообразие по АУДИТОРИИ, а не только по имени артиста: cap выше
-            # не видит, когда артисты формально разные, но все из одной тусовки.
-            # Похожесть берём из co-occurrence по кандидатам-финалистам (запас
-            # limit*3, чтобы MMR было из чего выбирать, но запрос остался мелким).
-            shortlist = capped[: limit * 3]
-            recommended_tracks = mmr(
-                shortlist, pair_scores(db, [t.id for t in shortlist])
-            )[:limit]
+            for track in pool:
+                candidate_pool[track.id] = track
 
-        # Exploration-слоты: co-occurrence-соседи любимых треков («слушавшие X
-        # слушают и Y»). Единственный сигнал, открывающий юзеру НОВЫХ артистов:
-        # контентные фильтры выше рекомендуют в основном каталог уже знакомых.
-        # Приоритет — треки артистов вне artist_keys.
-        # Плейлистные треки — strongest signal (+4.0), их сиды должны
-        # питать co-occurrence, иначе нишевые артисты из плейлистов
-        # не открывают похожих (см. баг: playlist 30 → user 11 пусто).
-        #
-        # Размер квоты задаёт САМ ЮЗЕР ползунком в настройках (0% — только
-        # знакомые, 100% — только новые имена), дефолт — прежние 20%. Соседей
-        # считаем и при квоте 0: ниже они идут в добор, когда знакомого пула не
-        # хватило на limit.
-        explore_ratio = discovery_ratio(current_user)
-        n_explore = discovery_slots(limit, explore_ratio)
-        got_ids = {t.id for t in recommended_tracks}
+        # Acoustic content is an independent candidate source.  Unlike the
+        # artist/genre pool it is intentionally not restricted to the user's
+        # known artists: a close signal in the audio vector is itself evidence
+        # of relevance.  Keep tracks from another user's private collection
+        # out of this global content pool; unowned catalog rows and the current
+        # user's own playlists remain eligible.
+        acoustic_candidate_ids: set[int] = set()
+        if acoustic_profile:
+            acoustic_keep = track_check(
+                make_relevance_check(
+                    trusted_artist_keys=set(),
+                    user_genres=set(genres),
+                    prefer_cyrillic=None,
+                    provenance_trusted=True,
+                )
+            )
+            other_owner_tracks = (
+                select(playlist_tracks.c.track_id)
+                .select_from(
+                    playlist_tracks.join(
+                        Playlist, Playlist.id == playlist_tracks.c.playlist_id
+                    )
+                )
+                .where(Playlist.owner_id != current_user.id)
+            )
+            acoustic_query = (
+                db.query(Track)
+                .filter(
+                    Track.acoustic_features.isnot(None),
+                    ~Track.id.in_(exclude_select),
+                    ~Track.id.in_(other_owner_tracks),
+                )
+            )
+            acoustic_pool = acoustic_query.order_by(Track.id).limit(
+                max(limit * 100, 500)
+            ).all()
+            for track in acoustic_pool:
+                if (
+                    track.id in candidate_pool
+                    or not acoustic_keep(track)
+                    or acoustic_similarity(
+                        track.acoustic_features, acoustic_profile
+                    )
+                    < MIN_RECOMMENDATION_SIMILARITY
+                ):
+                    continue
+                candidate_pool[track.id] = track
+                acoustic_candidate_ids.add(track.id)
+
+        # Collaborative neighbours remain useful, but compete in the same
+        # ranking as acoustic and library candidates instead of consuming a
+        # preallocated exploration slice.
+        got_ids = set(candidate_pool)
         seeds = (liked_track_ids + played_track_ids + playlisted_track_ids)[:80]
         scored_neighbors = similar_track_ids(db, seeds, limit=300)
         # Абсолютный score co-occurrence зависит от того, сколько у юзера
@@ -935,69 +995,47 @@ def get_recommendations(
             ]
             # «Уставшие» показы не исключаем, но ставим после свежих.
             ordered.sort(key=lambda t: 1 if t.id in fatigued_ids else 0)
-            fresh = [t for t in ordered if artist_key(t.artist) not in artist_keys]
-            known = [t for t in ordered if artist_key(t.artist) in artist_keys]
-            # 1 трек на артиста: exploration должен максимизировать охват
-            # нового, а не заполнять слоты одним новым артистом. Лимит считаем
-            # с учётом уже отобранного основного пула — иначе артист, у
-            # которого там уже 2 трека, получал сверху ещё и explore-слот.
-            #
-            # Ползунок в нуле («только знакомые») переворачивает порядок:
-            # соседи всё ещё идут в добор, когда знакомого пула не хватило,
-            # но начинается он с уже знакомых артистов, а не с новых имён.
-            neighbors = cap_per_artist(
-                fresh + known if explore_ratio > 0 else known + fresh,
-                1,
-                used=Counter(
-                    primary_artist_key(t.artist) for t in recommended_tracks
-                ),
-            )
-        explore_tracks = neighbors[:n_explore]
-        if explore_tracks:
-            n_keep = limit - len(explore_tracks)
-            recommended_tracks = recommended_tracks[:n_keep] + explore_tracks
+            for track in ordered:
+                if track.id not in candidate_pool:
+                    candidate_pool[track.id] = track
 
-        # Добор, когда вкусовых кандидатов нашлось мало ИЛИ фильтры вообще не
-        # набрались (напр. единственный played-трек, чей артист ушёл в минус по
-        # скипам) — иначе такие юзеры видели ПУСТУЮ выдачу.
-        #
-        # Сначала — ОСТАЛЬНЫЕ co-occurrence-соседи (сверх explore-квоты): это
-        # всё ещё «слушавшие ваше слушают и это», т.е. персональный сигнал.
-        # Раньше добор шёл сразу глобальным популярным, и на небольшом локальном
-        # каталоге он забирал БОЛЬШИНСТВО слотов: у слушателя русского рэпа
-        # 11 из 18 позиций занимали Hell March, Rick Astley и AC/DC, хотя
-        # непоказанных релевантных соседей оставалось больше сотни.
-        if len(recommended_tracks) < limit:
-            got = {t.id for t in recommended_tracks}
-            # Через тот же лимит на артиста, что и основной пул: добор шёл
-            # сырым срезом соседей, и один артист добирал здесь сверх своих
-            # двух мест.
-            used = Counter(primary_artist_key(t.artist) for t in recommended_tracks)
-            recommended_tracks += cap_per_artist(
-                [t for t in neighbors if t.id not in got],
-                _MAX_PER_ARTIST,
-                used=used,
-            )[: limit - len(recommended_tracks)]
-        # Глобально популярное — последний резерв: только если персональных
-        # кандидатов не хватило даже вместе с соседями.
-        if len(recommended_tracks) < limit:
-            got = {t.id for t in recommended_tracks}
-            recommended_tracks += _varied_popular(
+        # Relevant popular tracks are only a fallback candidate source.  They
+        # are ranked together with all personalized candidates, never appended
+        # after a source quota has already consumed the page.
+        if len(candidate_pool) < max(limit * 2, limit):
+            popular = _varied_popular(
                 db,
-                exclude_ids | got,
-                limit - len(recommended_tracks),
+                exclude_ids | set(candidate_pool),
+                max(limit * 4, limit),
                 keep=keep_unrelated,
-                used=Counter(
-                    primary_artist_key(t.artist) for t in recommended_tracks
-                ),
                 restrict_artists=scope_artist_keys or None,
                 excluded_artists=excluded_artist_keys,
                 user_id=current_user.id,
             )
-            # Пул вкуса исчерпан (у активного юзера почти весь релевантный
-            # каталог уже в коллекции/показах) — отдаём КОРОТКУЮ выдачу вместо
-            # добивки посторонним. Раньше именно здесь слушателю русского рэпа
-            # прилетали поп и ретро.
+            for track in popular:
+                candidate_pool.setdefault(track.id, track)
+
+        ranked_pool = [
+            track
+            for track in candidate_pool.values()
+            if track.id not in exclude_ids
+            and (keep_track(track) or track.id in acoustic_candidate_ids)
+        ]
+        ranked_pool.sort(
+            key=lambda track: (
+                -_candidate_score(track),
+                stable_jitter(current_user.id, track.id),
+                track.id,
+            )
+        )
+        # Soft repeat penalties preserve a highly relevant repeat when the
+        # catalog is sparse, while allowing an acoustically close new artist to
+        # win when it is genuinely a better match.
+        ranked_pool = soft_artist_rerank(ranked_pool, _candidate_score)[: max(limit * 6, limit)]
+        recommended_tracks = mmr(
+            ranked_pool[: max(limit * 3, limit)],
+            pair_scores(db, [track.id for track in ranked_pool[: max(limit * 3, limit)]]),
+        )[:limit]
     else:
         # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
         # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных

@@ -66,9 +66,8 @@ class UserPreferencesUpdate(BaseModel):
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []
-    # Доля незнакомых артистов в выдаче. None (поле не прислали) означает «не
-    # менять»: клиент, который сохраняет только жанры, не должен сбрасывать
-    # ползунок в дефолт.
+    # Мягкий prior на открытие новых артистов. None (поле не прислали) означает
+    # «не менять»: клиент, который сохраняет только жанры, не сбрасывает его.
     discovery_ratio: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
@@ -312,6 +311,7 @@ class PlaylistSummaryResponse(PlaylistBase):
     id: int
     owner_id: int
     is_liked: bool = False
+    origin: str = "manual"
     created_at: datetime
     updated_at: Optional[datetime] = None
     track_count: int = 0
