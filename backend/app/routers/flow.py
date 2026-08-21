@@ -1809,7 +1809,16 @@ async def get_flow(
     # every imported name.
     catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
     if limit == _STANDARD_FLOW_LIMIT:
-        catalog_artists = list(dict.fromkeys(profile.get("liked_artists") or []))
+        # The fixed-size flow also needs the trusted artists from curated
+        # playlists.  `_taste_profile` only exposes artists that reached the
+        # playlist threshold here, so a one-track import still cannot open a
+        # provider catalog on its own.
+        catalog_artists = list(
+            dict.fromkeys(
+                (profile.get("liked_artists") or [])
+                + (profile.get("playlist_artists") or [])
+            )
+        )
     artist_history = Counter(history.get("artists") or [])
     favorite_artists = sorted(
         enumerate(catalog_artists),

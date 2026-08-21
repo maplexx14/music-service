@@ -993,6 +993,34 @@ def test_flow_does_not_treat_imported_playlist_as_favorite_artists(
     assert requested_artists == [], requested_artists
 
 
+def test_standard_flow_uses_imported_playlist_artists(client, db, monkeypatch):
+    """Trusted imported playlist artists contribute to the main flow."""
+    user = create_user(db, username="imported-standard-flow-user")
+    _imported_playlist(
+        db,
+        user,
+        [("ImportedArtist", f"imported song {i}") for i in range(3)],
+    )
+
+    requested_artists = []
+
+    async def _favorite(request, artist):
+        requested_artists.append(artist)
+        return [_external(artist, "fresh catalog song", "imported-favorite")]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="imported-standard-flow-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert "ImportedArtist" in requested_artists
+    assert any(
+        track.get("external_id") == "imported-favorite" for track in resp.json()
+    )
+
+
 def _imported_playlist(db, user, tracks, name="Imported"):
     """Импортированный плейлист: (артист, название) → треки в коллекции юзера."""
     playlist = Playlist(
