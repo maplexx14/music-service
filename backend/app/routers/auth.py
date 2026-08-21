@@ -277,7 +277,15 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    # OAuth2PasswordRequestForm always calls the login field ``username``.
+    # Keep that wire format for existing clients, but accept either the actual
+    # username or the account email. Username lookup goes first so an existing
+    # username that happens to look like an email keeps working as before.
     user = db.query(User).filter(User.username == form_data.username).first()
+    if not user:
+        user = db.query(User).filter(
+            func.lower(User.email) == form_data.username.lower()
+        ).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

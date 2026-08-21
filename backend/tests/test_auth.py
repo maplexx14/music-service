@@ -54,5 +54,16 @@ def test_login_wrong_password(client, db):
     assert resp.status_code == 401
 
 
+def test_login_by_email(client, db):
+    user = create_user(db, "bob")
+    resp = client.post(
+        "/api/auth/login",
+        data={"username": "BOB@EXAMPLE.COM", "password": "password123"},
+        headers={DEVICE_TOKEN_HEADER: trust_device(db, user.id)},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_token"]
+
+
 def test_me_requires_auth(client):
     assert client.get("/api/auth/me").status_code == 401

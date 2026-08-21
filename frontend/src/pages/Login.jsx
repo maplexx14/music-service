@@ -232,7 +232,7 @@ function Login() {
             )}
 
             <div className="form-group">
-              <label htmlFor="username">Имя пользователя</label>
+              <label htmlFor="username">Имя пользователя или email</label>
               <input
                 id="username"
                 type="text"
