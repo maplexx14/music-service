@@ -29,23 +29,38 @@ def main() -> None:
     skipped = 0
     failed = 0
     try:
-        query = db.query(Track).filter(Track.file_path.isnot(None)).order_by(Track.id)
-        if not args.force:
-            query = query.filter(
-                (Track.acoustic_analyzer_version.is_(None))
-                | (Track.acoustic_analyzer_version != ANALYZER_VERSION)
+        # Do not combine ``yield_per()`` with commits. PostgreSQL implements
+        # that iterator with a server-side named cursor, and COMMIT closes the
+        # cursor before SQLAlchemy can fetch the next page. Keyset pagination
+        # gives every committed batch its own ordinary SELECT instead.
+        batch_size = max(1, args.commit_every)
+        last_id = 0
+        while args.limit <= 0 or analyzed + failed < args.limit:
+            remaining = (
+                batch_size
+                if args.limit <= 0
+                else min(batch_size, args.limit - analyzed - failed)
             )
-        if args.limit > 0:
-            query = query.limit(args.limit)
+            query = db.query(Track).filter(
+                Track.id > last_id,
+                Track.file_path.isnot(None),
+            )
+            if not args.force:
+                query = query.filter(
+                    (Track.acoustic_analyzer_version.is_(None))
+                    | (Track.acoustic_analyzer_version != ANALYZER_VERSION)
+                )
+            batch = query.order_by(Track.id).limit(remaining).all()
+            if not batch:
+                break
 
-        for track in query.yield_per(25):
-            if analyze_track(track):
-                analyzed += 1
-            else:
-                failed += 1
-            if (analyzed + failed) % max(1, args.commit_every) == 0:
-                db.commit()
-        db.commit()
+            for track in batch:
+                last_id = track.id
+                if analyze_track(track):
+                    analyzed += 1
+                else:
+                    failed += 1
+            db.commit()
     except KeyboardInterrupt:
         db.commit()
         skipped += 1
