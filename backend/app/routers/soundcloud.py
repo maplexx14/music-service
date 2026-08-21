@@ -36,6 +36,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _metric_count(value) -> int:
+    if isinstance(value, str):
+        raw = value.strip().lower().replace(",", "")
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([kmb])?", raw)
+        if match:
+            try:
+                multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(
+                    match.group(2), 1
+                )
+                return max(0, int(float(match.group(1)) * multiplier))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
 # Резолв SoundCloud идёт через yt-dlp (тот же движок, что и YouTube Music).
 # Отдельного SDK/ключа не нужно — yt-dlp сам добывает client_id.
 
@@ -124,6 +142,9 @@ def _normalize(request: Request, entry: dict) -> Optional[ExternalTrackResponse]
         download_url=None,
         download_allowed=False,
         genre=entry.get("genre") or None,
+        play_count=_metric_count(
+            entry.get("playback_count") or entry.get("view_count")
+        ),
     )
 
 
@@ -202,6 +223,9 @@ def _normalize_api(request: Request, item: dict) -> Optional[ExternalTrackRespon
         download_url=None,
         download_allowed=False,
         genre=item.get("genre") or None,
+        play_count=_metric_count(
+            item.get("playback_count") or item.get("view_count")
+        ),
     )
 
 

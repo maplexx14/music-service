@@ -14,7 +14,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
-ALGORITHM_VERSION = "hybrid-v4"
+ALGORITHM_VERSION = "hybrid-v5"
 
 # Keep popularity deliberately small.  A global counter must never overpower a
 # user's explicit signal or a content match.
@@ -26,6 +26,7 @@ _SOURCE_WEIGHT = 0.18
 _NOVELTY_WEIGHT = 0.16
 _FATIGUE_WEIGHT = 0.55
 _CONTEXT_WEIGHT = 0.65
+_POPULATION_QUALITY_WEIGHT = 1.0
 
 
 def _as_utc(value: Any) -> Optional[datetime]:
@@ -62,6 +63,49 @@ def popularity_score(play_count: Any = 0, listener_count: Any = 0) -> float:
     # is capped so a very popular item cannot dominate affinity.
     raw = math.log1p(plays) * 0.65 + math.log1p(listeners) * 0.35
     return math.tanh(raw / 5.0)
+
+
+def population_quality_score(positive_users: Any = 0, negative_users: Any = 0) -> float:
+    """Return a conservative population feedback signal in ``[-1, 1]``.
+
+    Distinct users are used by the query layer, so one active listener cannot
+    sink an item alone.  A 25% negative-rate prior prevents cold candidates
+    from being punished before there is evidence.  Negative evidence is more
+    actionable than positive evidence: popularity already rewards accepted
+    tracks, while this signal exists mainly to suppress broadly skipped ones.
+    """
+    try:
+        positive = max(0.0, float(positive_users or 0))
+    except (TypeError, ValueError):
+        positive = 0.0
+    try:
+        negative = max(0.0, float(negative_users or 0))
+    except (TypeError, ValueError):
+        negative = 0.0
+    evidence = positive + negative
+    if evidence < 2.0:
+        return 0.0
+
+    negative_rate = (negative + 1.0) / (evidence + 4.0)
+    if negative_rate >= 0.25:
+        deviation = -(negative_rate - 0.25) / 0.25
+    else:
+        deviation = (0.25 - negative_rate) / 0.75
+    confidence = min(1.0, evidence / 8.0)
+    return max(-1.0, min(1.0, deviation)) * confidence
+
+
+def population_rejects(positive_users: Any = 0, negative_users: Any = 0) -> bool:
+    """Whether discovery evidence is strong enough for a hard quality gate."""
+    try:
+        positive = max(0, int(positive_users or 0))
+    except (TypeError, ValueError):
+        positive = 0
+    try:
+        negative = max(0, int(negative_users or 0))
+    except (TypeError, ValueError):
+        negative = 0
+    return negative >= max(3, positive * 2 + 1)
 
 
 def freshness_score(track: Any, now: Optional[datetime] = None) -> float:
@@ -141,9 +185,11 @@ def score_track(
     fatigue_level: Optional[float] = None,
     novelty: bool = False,
     source: Optional[str] = None,
+    play_count: Optional[int] = None,
     listener_count: int = 0,
     content_bonus: float = 0.0,
     context_bonus: float = 0.0,
+    population_quality: float = 0.0,
     now: Optional[datetime] = None,
 ) -> float:
     """Compute a bounded, explainable score for one candidate.
@@ -154,7 +200,7 @@ def score_track(
     affinity = math.tanh(float(artist_affinity or 0.0) / 8.0)
     match = max(0.0, min(1.0, content_match(track, genres) + float(content_bonus or 0.0)))
     popularity = popularity_score(
-        _field(track, "play_count", 0),
+        _field(track, "play_count", 0) if play_count is None else play_count,
         listener_count or _field(track, "unique_listener_count", 0),
     )
     freshness = freshness_score(track, now=now)
@@ -169,6 +215,7 @@ def score_track(
         fatigue_penalty = _FATIGUE_WEIGHT * max(0.0, min(1.0, float(fatigue_level)))
     novelty_bonus = _NOVELTY_WEIGHT if novelty else 0.0
     context_fit = max(-1.0, min(1.0, float(context_bonus or 0.0)))
+    population_fit = max(-1.0, min(1.0, float(population_quality or 0.0)))
     score = (
         _AFFINITY_WEIGHT * affinity
         + _CONTENT_WEIGHT * match
@@ -177,6 +224,7 @@ def score_track(
         + _SOURCE_WEIGHT * source_fit
         + novelty_bonus
         + _CONTEXT_WEIGHT * context_fit
+        + _POPULATION_QUALITY_WEIGHT * population_fit
         + completion_fit
         - skip_penalty
         - fatigue_penalty

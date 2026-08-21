@@ -41,12 +41,12 @@ import math
 import os
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app import beets_genre, beets_similar, storage
@@ -71,7 +71,13 @@ from app.diversity import (
     take_overflow,
     weighted_order,
 )
-from app.recommendation_scoring import ALGORITHM_VERSION, score_track, stable_jitter
+from app.recommendation_scoring import (
+    ALGORITHM_VERSION,
+    population_quality_score,
+    population_rejects,
+    score_track,
+    stable_jitter,
+)
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import artist_key, same_artist
@@ -82,6 +88,7 @@ from app.models import (
     playlist_tracks,
     user_track_plays,
     user_track_skips,
+    recommendation_events,
     recommendation_impressions,
 )
 from app.routers import soundcloud, ytdlp
@@ -335,6 +342,92 @@ def _norm_key(artist: str, title: str) -> tuple:
     return (norm(artist), norm(title))
 
 
+def _external_population_stats_on_bind(bind, items, now=None) -> dict:
+    """Batch-load service popularity and cross-user feedback for candidates."""
+    identities = sorted({
+        (getattr(item, "source", None), getattr(item, "external_id", None))
+        for item in items
+        if getattr(item, "source", None) and getattr(item, "external_id", None)
+    })
+    if not identities:
+        return {}
+
+    local_db = Session(bind=bind)
+    try:
+        stats = {
+            f"{source}:{external_id}": {
+                "play_count": 0,
+                "listener_count": 0,
+                "positive_users": 0,
+                "negative_users": 0,
+                "quality": 0.0,
+            }
+            for source, external_id in identities
+        }
+        track_rows = local_db.execute(
+            select(
+                Track.source,
+                Track.external_id,
+                Track.play_count,
+                Track.unique_listener_count,
+            ).where(tuple_(Track.source, Track.external_id).in_(identities))
+        ).all()
+        for source, external_id, play_count, listeners in track_rows:
+            row = stats.get(f"{source}:{external_id}")
+            if row is None:
+                continue
+            row["play_count"] = max(row["play_count"], int(play_count or 0))
+            row["listener_count"] = max(
+                row["listener_count"], int(listeners or 0)
+            )
+
+        since = (now or datetime.now(timezone.utc)) - timedelta(days=90)
+        positive_user = case(
+            (
+                recommendation_events.c.event_type.in_(("play", "listen", "like")),
+                recommendation_events.c.user_id,
+            ),
+            else_=None,
+        )
+        negative_user = case(
+            (
+                recommendation_events.c.event_type.in_(("skip", "dislike")),
+                recommendation_events.c.user_id,
+            ),
+            else_=None,
+        )
+        feedback_rows = local_db.execute(
+            select(
+                recommendation_events.c.source,
+                recommendation_events.c.external_id,
+                func.count(func.distinct(positive_user)).label("positive_users"),
+                func.count(func.distinct(negative_user)).label("negative_users"),
+            ).where(
+                recommendation_events.c.surface == "flow",
+                recommendation_events.c.occurred_at >= since,
+                tuple_(
+                    recommendation_events.c.source,
+                    recommendation_events.c.external_id,
+                ).in_(identities),
+            ).group_by(
+                recommendation_events.c.source,
+                recommendation_events.c.external_id,
+            )
+        ).all()
+        for source, external_id, positive_users, negative_users in feedback_rows:
+            row = stats.get(f"{source}:{external_id}")
+            if row is None:
+                continue
+            row["positive_users"] = int(positive_users or 0)
+            row["negative_users"] = int(negative_users or 0)
+            row["quality"] = population_quality_score(
+                row["positive_users"], row["negative_users"]
+            )
+        return stats
+    finally:
+        local_db.close()
+
+
 def _taste_profile(db: Session, user_id: int) -> dict:
     """Собирает профиль вкуса пользователя из лайков и истории (блокирующая)."""
     liked_playlist_id = db.query(Playlist.id).filter(
@@ -518,6 +611,32 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         )
         artist_weight[key] = artist_weight.get(key, 0) - penalty
         artist_display.setdefault(key, track.artist)
+
+    # A fast external skip is recorded before materialisation.  The durable
+    # telemetry identity must therefore exclude the provider item directly;
+    # otherwise a failed/slow import loses the user's strongest negative signal.
+    external_skip_rows = db.execute(
+        select(
+            recommendation_events.c.source,
+            recommendation_events.c.external_id,
+            recommendation_events.c.artist,
+            recommendation_events.c.title,
+        ).where(
+            recommendation_events.c.user_id == user_id,
+            recommendation_events.c.surface == "flow",
+            recommendation_events.c.event_type == "skip",
+        ).order_by(recommendation_events.c.occurred_at.desc()).limit(
+            _TASTE_QUERY_LIMIT
+        )
+    ).all()
+    skipped_external_ids = set()
+    for source, external_id, artist, title in external_skip_rows:
+        if source and external_id:
+            skipped_external_ids.add(f"{source}:{external_id}")
+            if source == "ytmusic":
+                skipped_video_ids.add(external_id)
+        if artist and title:
+            skipped_keys.add(_norm_key(artist, title))
 
     # --- Явные предпочтения пользователя (онбординг/настройки) ---
     # Встраиваем ПЕРЕД финализацией профиля как сильный позитивный
@@ -717,6 +836,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "recent_ids": recent_ids,
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
+        "skipped_external_ids": skipped_external_ids,
     }
 
 
@@ -959,6 +1079,7 @@ def _normalize_watch_item(item: dict) -> Optional[ExternalTrackResponse]:
         stream_url="",  # заполняется в эндпоинте
         download_url=None,
         download_allowed=False,
+        play_count=ytdlp._metric_count(item.get("views")),
     )
 
 
@@ -1411,6 +1532,7 @@ async def get_flow(
     db.close()
 
     score_by_item: dict[str, float] = {}
+    external_population: dict[str, dict] = {}
 
     def _item_identity(item) -> str:
         source = item.get("source") if isinstance(item, dict) else getattr(item, "source", None)
@@ -1435,6 +1557,17 @@ async def get_flow(
             return score_by_item[score_key]
         artist = item.get("artist", "") if isinstance(item, dict) else getattr(item, "artist", "")
         key = artist_key(artist)
+        population = external_population.get(identity) or {}
+        item_play_count = (
+            item.get("play_count", 0)
+            if isinstance(item, dict)
+            else getattr(item, "play_count", 0)
+        ) or 0
+        item_listener_count = (
+            item.get("unique_listener_count", 0)
+            if isinstance(item, dict)
+            else getattr(item, "unique_listener_count", 0)
+        ) or 0
         score = score_track(
             item,
             user_id=current_user.id,
@@ -1442,29 +1575,36 @@ async def get_flow(
             genres=profile.get("genres") or (),
             novelty=key not in (profile.get("artist_weight") or {}),
             source=item.get("source") if isinstance(item, dict) else getattr(item, "source", None),
-            listener_count=(
-                item.get("unique_listener_count", 0)
-                if isinstance(item, dict)
-                else getattr(item, "unique_listener_count", 0)
-            ) or 0,
+            play_count=max(item_play_count, population.get("play_count", 0)),
+            listener_count=max(
+                item_listener_count, population.get("listener_count", 0)
+            ),
             content_bonus=content_bonus,
             context_bonus=context_bonus(item, contextual_profile),
+            population_quality=population.get("quality", 0.0),
             now=ranking_now,
         )
         score_by_item[score_key] = score
         return score
 
     def _rank_pool(items, *, content_bonus: float, label: str):
-        return sorted(
-            list(items),
-            key=lambda item: (
-                -_flow_score(item, content_bonus=content_bonus),
-                stable_jitter(ranking_context, f"{label}:{_item_identity(item)}"),
-                _item_identity(item),
-            ),
+        indexed = list(enumerate(items))
+        indexed.sort(
+            key=lambda pair: (
+                -_flow_score(pair[1], content_bonus=content_bonus),
+                # Provider order is a relevance/popularity signal.  Keep it for
+                # score ties instead of promoting a deep result by random hash.
+                pair[0],
+                stable_jitter(
+                    ranking_context, f"{label}:{_item_identity(pair[1])}"
+                ),
+                _item_identity(pair[1]),
+            )
         )
+        return [item for _index, item in indexed]
     excl_ids |= profile["recent_ids"]
     excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
+    external_exclude |= set(profile.get("skipped_external_ids") or [])
     for item_id in history_ids:
         # Локальный каталог конечен: не блокируем его на 6 часов. Уже стоящие в
         # очереди id всё равно приходят в exclude, а recent_ids защищает от
@@ -1905,6 +2045,24 @@ async def get_flow(
         len(explore),
         len(external_exclude) + len(excl_videos),
     )
+    external_population = await asyncio.to_thread(
+        _external_population_stats_on_bind,
+        telemetry_bind,
+        favorite_explore + similar_explore + explore,
+        ranking_now,
+    )
+
+    def _population_allows_discovery(item) -> bool:
+        stats = external_population.get(_item_identity(item)) or {}
+        return not population_rejects(
+            stats.get("positive_users", 0), stats.get("negative_users", 0)
+        )
+
+    # Strong cross-user evidence may remove a discovery candidate. Exact
+    # catalogs of explicitly liked artists are only down-ranked: a niche track
+    # should not be globally banned from a listener who asked for that artist.
+    similar_explore = [t for t in similar_explore if _population_allows_discovery(t)]
+    explore = [t for t in explore if _population_allows_discovery(t)]
     # Порядок внутри выдачи контекстный и воспроизводимый.
     # После shuffle РАЗНОСИМ по артистам внутри каждого пула: take_capped ниже
     # берёт ПРЕФИКС списка, и на контекстном порядке этот префикс достаётся тому,
@@ -2252,13 +2410,9 @@ async def get_flow(
 
     n_explore = used_external
     n_exploit = len(mix) - n_explore
-    mix.sort(
-        key=lambda item: (
-            -_flow_score(item),
-            stable_jitter(ranking_context, f"mix:{_item_identity(item)}"),
-            _item_identity(item),
-        )
-    )
+    # Python's sort is stable, so a score tie keeps the provider/pool order
+    # established above instead of reshuffling it with a hash at the last step.
+    mix.sort(key=lambda item: -_flow_score(item))
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
     # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
     mix = interleave_artists(

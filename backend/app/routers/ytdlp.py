@@ -143,6 +143,24 @@ def _duration_seconds(item: dict) -> int:
     return total
 
 
+def _metric_count(value) -> int:
+    if isinstance(value, str):
+        raw = value.strip().lower().replace(",", "")
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([kmb])?", raw)
+        if match:
+            try:
+                multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(
+                    match.group(2), 1
+                )
+                return max(0, int(float(match.group(1)) * multiplier))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize(item: dict) -> Optional[ExternalTrackResponse]:
     video_id = item.get("videoId")
     if not video_id:
@@ -171,6 +189,7 @@ def _normalize(item: dict) -> Optional[ExternalTrackResponse]:
         stream_url="",  # заполняется ниже, где доступен Request
         download_url=None,
         download_allowed=False,
+        play_count=_metric_count(item.get("views")),
     )
 
 

@@ -386,6 +386,10 @@ class ExternalTrackResponse(BaseModel):
     download_url: Optional[str] = None
     download_allowed: bool = False
     genre: Optional[str] = None
+    # Provider-side popularity when the source exposes it (YT views,
+    # SoundCloud playback_count).  Defaults keep older cached payloads valid.
+    play_count: int = 0
+    unique_listener_count: int = 0
     recommendation_id: Optional[str] = None
     recommendation_surface: Optional[str] = None
     recommendation_position: Optional[int] = None
