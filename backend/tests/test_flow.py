@@ -196,8 +196,8 @@ def test_flow_spreads_comparable_catalog_candidates_across_artists(
     assert len({track["artist"] for track in favorite}) == 7
 
 
-def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
-    """Источник лайков больше не ограничен фиксированными пятью местами."""
+def test_flow_excludes_liked_tracks_but_keeps_unplayed_library_tracks(client, db):
+    """Лайки задают вкус, но точные записи не должны повторяться в потоке."""
     user = create_user(db, username="likes-and-new-user")
     playlist = Playlist(
         name="Понравившиеся",
@@ -227,7 +227,7 @@ def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
             source="local",
             file_path=f"minio://music/fresh-{i}.mp3",
         )
-        for i in range(10)
+        for i in range(20)
     ]
     db.add_all([*liked, *fresh])
     db.commit()
@@ -247,7 +247,57 @@ def test_flow_does_not_fill_fifteen_track_batch_with_likes_only(client, db):
     assert response.status_code == 200, response.text
     tracks = response.json()
     assert len(tracks) == 15
-    assert sum(track["title"].startswith("liked-") for track in tracks) > 5
+    assert not any(track["title"].startswith("liked-") for track in tracks)
+    assert sum(track["title"].startswith("fresh-") for track in tracks) == 15
+
+
+def test_flow_excludes_imported_tracks_but_keeps_their_artist_signal(client, db):
+    """Imported tracks shape the scope without being replayed verbatim."""
+    user = create_user(db, username="imported-exclusion-user")
+    imported = Playlist(
+        name="Imported",
+        description="Импортировано из SoundCloud",
+        origin="imported",
+        is_public=False,
+        owner_id=user.id,
+    )
+    imported_track = Track(
+        title="imported-song",
+        artist="ImportedArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/imported-song.mp3",
+    )
+    fresh = [
+        Track(
+            title=f"fresh-imported-{index}",
+            artist="ImportedArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/fresh-imported-{index}.mp3",
+        )
+        for index in range(6)
+    ]
+    db.add_all([imported, imported_track, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=imported.id,
+            track_id=imported_track.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="imported-exclusion-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    assert tracks
+    assert all(track["title"] != "imported-song" for track in tracks)
+    assert any(track["artist"] == "ImportedArtist" for track in tracks)
 
 
 def test_flow_returns_local_tracks_after_session_close(client, db):
@@ -895,7 +945,7 @@ def test_flow_max_discovery_ratio_falls_back_to_familiar_tracks(client, db):
 def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     client, db, monkeypatch
 ):
-    """Частичный внешний пул не должен оставлять лайки единственным fallback."""
+    """Частичный внешний пул не должен возвращать точные лайки fallback-ом."""
     user = create_user(db, username="partial-discovery-user")
     liked_playlist = Playlist(
         name="Понравившиеся",
@@ -951,9 +1001,12 @@ def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     )
     assert response.status_code == 200, response.text
     tracks = response.json()
-    assert len(tracks) == 15
+    # There are only eight unplayed local tracks plus one fresh external
+    # candidate. The flow must end the page rather than replaying exact likes
+    # just to manufacture the requested page size.
+    assert len(tracks) == 9
     assert sum(track["title"].startswith("fresh-") for track in tracks) >= 8
-    assert sum(track["title"].startswith("liked-") for track in tracks) <= 6
+    assert not any(track["title"].startswith("liked-") for track in tracks)
 
 
 def test_flow_zero_discovery_ratio_softly_demotes_lastfm_candidates(

@@ -67,7 +67,12 @@ from app.acoustic_features import (
 from app.playlist_signals import aggregate_playlist_origin
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
-from app.artist_utils import artist_key, same_artist
+from app.artist_utils import (
+    artist_key,
+    effective_artist_title,
+    effective_track_artist_title,
+    same_artist,
+)
 from app.models import (
     Track,
     User,
@@ -109,12 +114,12 @@ _PLAYED_ARTIST_MIN_PLAYS = 2
 # попутный груз импорта. Ниже порога трек остаётся положительным сигналом (жанр,
 # язык, скоуп своей библиотеки), но любимым артиста не делает.
 _PLAYLIST_ARTIST_MIN_TRACKS = 3
-# Вес плейлистного трека артиста, который порог ещё не набрал. Полный
-# кураторский +4.0 сам по себе выше порога доверия (recommendations.py,
-# _ARTIST_TRUST_THRESHOLD = 3.0), т.е. одного трека хватало, чтобы имя из
-# импорта встало в топ вкуса наравне с любимыми. Меньший вес оставляет артиста
-# в скоупе своей библиотеки, но не выдаёт его за любимого.
-_PLAYLIST_WEAK_WEIGHT = 1.0
+# Imported collections are an intentional taste signal. Keep their per-track
+# weight at the same level as a like. The separate artist-count threshold below
+# controls catalogue trust, so one noisy import still cannot open an entire
+# provider catalogue.
+_PLAYLIST_IMPORTED_WEIGHT = 3.0
+_PLAYLIST_WEAK_WEIGHT = _PLAYLIST_IMPORTED_WEIGHT
 # Кэш радио-пула на сид: радио YT Music стабильно на коротком горизонте,
 # нет смысла дёргать его на каждую подгрузку.
 _RADIO_TTL = 1800
@@ -349,6 +354,38 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         .limit(_TASTE_QUERY_LIMIT)
         .all()
     )
+    # Taste features are intentionally bounded, but collection exclusions are
+    # not. A large likes/import playlist can push an old track past the taste
+    # window; it must still never re-enter the flow by id, provider id, or the
+    # normalized artist/title pair.
+    collection_rows = (
+        db.query(
+            Track.id,
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.external_id,
+            Track.album,
+        )
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user_id)
+        .all()
+    )
+    collection_keys = set()
+    collection_external_ids = set()
+    for _track_id, artist, title, source, external_id, album in collection_rows:
+        effective_artist, effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        key = _norm_key(effective_artist, effective_title)
+        if all(key):
+            collection_keys.add(key)
+        if external_id:
+            collection_external_ids.add(external_id)
     # Часто играемые: порог применяем к АРТИСТУ ниже (artist_play_totals), а не
     # к треку в самом запросе. Условие `play_count >= 2` прямо здесь означало,
     # что у юзера, слушающего каждый трек по одному разу, история не попадала в
@@ -366,11 +403,13 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # одному разу.
     artist_play_totals: Counter = Counter()
     for track, play_count, _last_played in played:
-        artist_play_totals[artist_key(track.artist)] += play_count or 1
+        effective_artist, _effective_title = effective_track_artist_title(track)
+        artist_play_totals[artist_key(effective_artist)] += play_count or 1
     # Сколько треков артиста лежит в собственных плейлистах — по этому счётчику
     # работает порог «любимого» (_PLAYLIST_ARTIST_MIN_TRACKS).
     playlist_artist_totals: Counter = Counter(
-        artist_key(track.artist) for track, _added_at, _origin in playlisted
+        artist_key(effective_track_artist_title(track)[0])
+        for track, _added_at, _origin in playlisted
     )
 
     # Скипы — негативный сигнал (фронт шлёт их только при <25% прослушивания).
@@ -394,6 +433,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # источники (SoundCloud/YT Music) отдают имя одного артиста в разном
     # регистре/формате, из-за чего вес и матчинг иначе расходятся по source.
     artist_display: dict = {}
+    imported_playlist_artist_keys: set[str] = set()
+    non_imported_artist_keys: set[str] = set()
     genres: list = []  # с повторами — нужна частота для приоритезации ключевых слов
     weighted_titles: list = []  # (title, decay_weight) — для build_title_tag_profile
     seeds: List[str] = []  # video_id ytmusic-треков, свежие первыми
@@ -417,10 +458,12 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     lang_texts: List[str] = []
 
     for track, added_at in liked:
-        lang_texts.append(f"{track.title} {track.artist}")
-        key = artist_key(track.artist)
+        effective_artist, effective_title = effective_track_artist_title(track)
+        lang_texts.append(f"{effective_title} {effective_artist}")
+        key = artist_key(effective_artist)
+        non_imported_artist_keys.add(key)
         artist_weight[key] = artist_weight.get(key, 0) + 3.0 * _decay(added_at)
-        artist_display.setdefault(key, track.artist)
+        artist_display.setdefault(key, effective_artist)
         if key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
@@ -429,33 +472,42 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             seen_catalog_artist.add(key)
         # Genre почти всегда пуст у внешних треков — как дополнительный сигнал
         # разбираем ключевые слова прямо в названии ("... Phonk Remix" и т.п.).
-        genre = track.genre or infer_genre_from_text(track.title, track.artist)
+        genre = track.genre or infer_genre_from_text(effective_title, effective_artist)
         if genre:
             genres.append(genre)
-        weighted_titles.append((track.title, 3.0 * _decay(added_at)))
+        weighted_titles.append((effective_title, 3.0 * _decay(added_at)))
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
 
     # Ручной плейлист — сильный сигнал вкуса (вес выше лайка), импортированный
-    # — более слабое свидетельство. В обоих случаях артист получает статус
+    # — почти такой же сильный сигнал. В обоих случаях артист получает статус
     # любимого только начиная с _PLAYLIST_ARTIST_MIN_TRACKS треков: одиночное
     # имя из импорта осознанным выбором не является.
     for track, added_at, playlist_origin in playlisted:
-        lang_texts.append(f"{track.title} {track.artist}")
-        key = artist_key(track.artist)
+        effective_artist, effective_title = effective_track_artist_title(track)
+        lang_texts.append(f"{effective_title} {effective_artist}")
+        key = artist_key(effective_artist)
+        if str(playlist_origin or "manual").lower() == "manual":
+            non_imported_artist_keys.add(key)
+        else:
+            imported_playlist_artist_keys.add(key)
         favorite = playlist_artist_totals[key] >= _PLAYLIST_ARTIST_MIN_TRACKS
-        origin_weight = 4.0 if str(playlist_origin or "manual").lower() == "manual" else 1.6
+        origin_weight = (
+            4.0
+            if str(playlist_origin or "manual").lower() == "manual"
+            else _PLAYLIST_IMPORTED_WEIGHT
+        )
         weight = (origin_weight if favorite else _PLAYLIST_WEAK_WEIGHT) * _decay(added_at)
         artist_weight[key] = artist_weight.get(key, 0) + weight
-        artist_display.setdefault(key, track.artist)
+        artist_display.setdefault(key, effective_artist)
         if favorite and key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
-        genre = track.genre or infer_genre_from_text(track.title, track.artist)
+        genre = track.genre or infer_genre_from_text(effective_title, effective_artist)
         if genre:
             genres.append(genre)
-        weighted_titles.append((track.title, weight))
+        weighted_titles.append((effective_title, weight))
         if favorite and key not in seen_pl_artist:
             playlist_artist_keys.append(key)
             seen_pl_artist.add(key)
@@ -466,18 +518,20 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             playlist_seeds.append(track.external_id)
 
     for track, play_count, last_played in played:
-        key = artist_key(track.artist)
+        effective_artist, effective_title = effective_track_artist_title(track)
+        key = artist_key(effective_artist)
         # Разовое прослушивание артиста сигналом вкуса не считается.
         if artist_play_totals[key] < _PLAYED_ARTIST_MIN_PLAYS:
             continue
-        lang_texts.append(f"{track.title} {track.artist}")
+        non_imported_artist_keys.add(key)
+        lang_texts.append(f"{effective_title} {effective_artist}")
         w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
         artist_weight[key] = artist_weight.get(key, 0) + w
-        artist_display.setdefault(key, track.artist)
-        genre = track.genre or infer_genre_from_text(track.title, track.artist)
+        artist_display.setdefault(key, effective_artist)
+        genre = track.genre or infer_genre_from_text(effective_title, effective_artist)
         if genre:
             genres.append(genre)
-        weighted_titles.append((track.title, w))
+        weighted_titles.append((effective_title, w))
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
@@ -488,11 +542,12 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     skipped_keys: set = set()
     skipped_video_ids: set = set()
     for track, skip_count, last_skipped, disliked in skipped:
+        effective_artist, effective_title = effective_track_artist_title(track)
         skipped_ids.add(track.id)
-        skipped_keys.add(_norm_key(track.artist, track.title))
+        skipped_keys.add(_norm_key(effective_artist, effective_title))
         if track.external_id:
             skipped_video_ids.add(track.external_id)
-        key = artist_key(track.artist)
+        key = artist_key(effective_artist)
         # Явный дизлайк весомее случайного скипа и не затухает: пользователь
         # сказал «не хочу» осознанно. Вес подобран так, чтобы один дизлайк
         # перебивал один лайк (+3.0) и уводил артиста в banned_artists.
@@ -502,7 +557,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             else 1.5 * math.log1p(skip_count or 1) * _decay(last_skipped)
         )
         artist_weight[key] = artist_weight.get(key, 0) - penalty
-        artist_display.setdefault(key, track.artist)
+        artist_display.setdefault(key, effective_artist)
 
     # A fast external skip is recorded before materialisation.  The durable
     # telemetry identity must therefore exclude the provider item directly;
@@ -528,7 +583,12 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             if source == "ytmusic":
                 skipped_video_ids.add(external_id)
         if artist and title:
-            skipped_keys.add(_norm_key(artist, title))
+            skipped_artist, skipped_title = effective_artist_title(
+                title,
+                artist,
+                source=source or "",
+            )
+            skipped_keys.add(_norm_key(skipped_artist, skipped_title))
 
     # --- Явные предпочтения пользователя (онбординг/настройки) ---
     # Встраиваем ПЕРЕД финализацией профиля как сильный позитивный
@@ -552,6 +612,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = artist_key(name)
         if not key:
             continue
+        non_imported_artist_keys.add(key)
         # Вес сопоставим с курированием (плейлист=2.0); не затухает по
         # времени — это осознанный устойчивый выбор пользователя.
         artist_weight[key] = artist_weight.get(key, 0) + 2.5
@@ -609,9 +670,15 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     pl_tracks = [t for t, *_ in playlisted]
     recent_ids = {t.id for t in recent} | skipped_ids | {t.id for t in pl_tracks}
     recent_keys = (
-        {_norm_key(t.artist, t.title) for t in recent}
+        {
+            _norm_key(*effective_track_artist_title(t))
+            for t in recent
+        }
         | skipped_keys
-        | {_norm_key(t.artist, t.title) for t in pl_tracks}
+        | {
+            _norm_key(*effective_track_artist_title(t))
+            for t in pl_tracks
+        }
     )
     recent_video_ids = (
         {t.external_id for t in recent if t.external_id}
@@ -694,27 +761,29 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     seed_tracks: List[tuple] = []
     seen_seed_track = set()
     for track, _added_at in liked:
-        key = _norm_key(track.artist, track.title)
+        effective_artist, effective_title = effective_track_artist_title(track)
+        key = _norm_key(effective_artist, effective_title)
         if key in skipped_keys or key in seen_seed_track:
             continue
-        if not track.artist or not track.title:
+        if not effective_artist or not effective_title:
             continue
-        if artist_key(track.artist) in excluded_artists:
+        if artist_key(effective_artist) in excluded_artists:
             continue
         seen_seed_track.add(key)
-        seed_tracks.append((track.artist, track.title))
+        seed_tracks.append((effective_artist, effective_title))
         if len(seed_tracks) >= _SEED_TRACK_LIMIT:
             break
     for track, _added_at, _origin in playlisted:
-        key = _norm_key(track.artist, track.title)
+        effective_artist, effective_title = effective_track_artist_title(track)
+        key = _norm_key(effective_artist, effective_title)
         if key in skipped_keys or key in seen_seed_track:
             continue
-        if not track.artist or not track.title:
+        if not effective_artist or not effective_title:
             continue
-        if artist_key(track.artist) in excluded_artists:
+        if artist_key(effective_artist) in excluded_artists:
             continue
         seen_seed_track.add(key)
-        seed_tracks.append((track.artist, track.title))
+        seed_tracks.append((effective_artist, effective_title))
         if len(seed_tracks) >= _SEED_TRACK_LIMIT:
             break
 
@@ -722,7 +791,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     for track, added_at in liked:
         acoustic_rows.append((track.acoustic_features, 3.0 * _decay(added_at)))
     for track, added_at, origin in playlisted:
-        playlist_weight = 3.0 if str(origin or "manual").lower() == "manual" else 1.0
+        playlist_weight = (
+            3.0
+            if str(origin or "manual").lower() == "manual"
+            else _PLAYLIST_IMPORTED_WEIGHT
+        )
         acoustic_rows.append(
             (track.acoustic_features, playlist_weight * _decay(added_at))
         )
@@ -737,14 +810,36 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     return {
         "user_id": user_id,
         "liked_track_ids": [track.id for track, _added_at in liked],
-        "liked_artists": list(dict.fromkeys(track.artist for track, _added_at in liked)),
-        "liked_keys": [_norm_key(track.artist, track.title) for track, _added_at in liked],
+        "liked_artists": list(
+            dict.fromkeys(
+                effective_track_artist_title(track)[0]
+                for track, _added_at in liked
+            )
+        ),
+        "liked_keys": [
+            _norm_key(*effective_track_artist_title(track))
+            for track, _added_at in liked
+        ],
         "seeds": seeds,
         "seed_tracks": seed_tracks,
         "playlist_artists": playlist_artists,
         "playlist_seeds": playlist_seeds,
         "artists": top_artists,
         "artist_keys": topartist_keys,
+        # ``artist_keys`` is the broad positive scope used to keep a user's
+        # imported library visible.  Only an imported-only artist below the
+        # corroboration threshold is excluded from the trusted bypass; likes,
+        # playback history, preferences, and confirmed imports retain the
+        # previous behavior.
+        "trusted_artist_keys": [
+            key
+            for key in topartist_keys
+            if not (
+                key in imported_playlist_artist_keys
+                and key not in non_imported_artist_keys
+                and playlist_artist_totals[key] < _PLAYLIST_ARTIST_MIN_TRACKS
+            )
+        ],
         "artist_weight": {k: v for k, v in artist_weight.items() if v > 0},
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
@@ -757,6 +852,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
         "skipped_external_ids": skipped_external_ids,
+        "collection_keys": collection_keys,
+        "collection_external_ids": collection_external_ids,
         "acoustic_profile": weighted_centroid(acoustic_rows),
     }
 
@@ -788,8 +885,9 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
-    # Liked tracks are loaded explicitly below so they can compete in the
-    # common ranker without consuming the local candidate query window.
+    # Liked tracks are part of the taste profile, not recommendation items.
+    # Keep them out of the catalogue query so the returned page contains only
+    # uncollected material while the artist signal still opens its catalogue.
     exclude_ids.update(profile.get("liked_track_ids") or [])
     # Уже прослушанные треки исключаем ВСЕ, а не только последние
     # _RECENT_PLAYS_EXCLUDE: recent_ids — окно из 100 записей, и на истории
@@ -799,6 +897,15 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # другие, ещё не сыгранные композиции.
     played_ids = select(user_track_plays.c.track_id).where(
         user_track_plays.c.user_id == profile["user_id"]
+    )
+    collection_track_ids = (
+        select(playlist_tracks.c.track_id)
+        .select_from(
+            playlist_tracks.join(
+                Playlist, Playlist.id == playlist_tracks.c.playlist_id
+            )
+        )
+        .where(Playlist.owner_id == profile["user_id"])
     )
     aw = profile.get("artist_weight") or {}
     # Артисты, по которым у ЭТОГО юзера есть собственный сигнал (плей, лайк,
@@ -814,7 +921,15 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # Регистронезависимо: SoundCloud и YT Music отдают имя одного и того же
         # артиста в разном написании (регистр/пробелы), точное сравнение их
         # разводило по разным "артистам".
-        filters.append(func.lower(Track.artist).in_(profile["artist_keys"]))
+        # Старые SoundCloud-строки могут хранить uploader в Track.artist, а
+        # реального исполнителя — в начале заголовка. Их отфильтруем в Python
+        # после эффективной нормализации.
+        filters.append(
+            or_(
+                func.lower(Track.artist).in_(profile["artist_keys"]),
+                Track.source == "soundcloud",
+            )
+        )
     if profile["genres"]:
         filters.append(Track.genre.in_(profile["genres"]))
         # Ключевые слова из фиксированного жанрового словаря — ловит внешние
@@ -853,7 +968,12 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         restrict_artists=scope or None,
     )
     if genreartist_keys:
-        filters.append(func.lower(Track.artist).in_(genreartist_keys))
+        filters.append(
+            or_(
+                func.lower(Track.artist).in_(genreartist_keys),
+                Track.source == "soundcloud",
+            )
+        )
 
     # Доверяем только артистам, которых юзер сам добавил в лайки/плейлисты, либо
     # совместимому по жанру/языку треку. Обычная история могла загрязниться
@@ -861,7 +981,11 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # «жанром пользователя» нельзя. Проверка общая с recommendations.py (taste.py).
     _keep = track_check(
         make_relevance_check(
-            trusted_artist_keys=set(profile.get("artist_keys") or []),
+            trusted_artist_keys=set(
+                profile.get("trusted_artist_keys")
+                or profile.get("curated_artist_keys")
+                or []
+            ),
             user_genres=set(profile.get("genres") or []),
             prefer_cyrillic=profile.get("prefer_cyrillic"),
         )
@@ -874,7 +998,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     rotation = {k: i for i, k in enumerate(profile["artist_keys"])}
 
     def _score(t: Track) -> tuple:
-        key = artist_key(t.artist)
+        key = artist_key(effective_track_artist_title(t)[0])
         # Артист вне ротации (пришёл по жанру/тегу) — после ротационных, внутри
         # своей группы по популярности.
         return (
@@ -894,9 +1018,12 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # там не до чего, и глобальная выборка остаётся осознанным поведением
         # (см. _taste_profile).
         if scope:
-            q = q.filter(func.lower(Track.artist).in_(scope))
+            q = q.filter(
+                or_(func.lower(Track.artist).in_(scope), Track.source == "soundcloud")
+            )
         if exclude_ids:
             q = q.filter(~Track.id.in_(exclude_ids))
+        q = q.filter(~Track.id.in_(collection_track_ids))
         q = q.filter(~Track.id.in_(played_ids))
         # Широкое стабильное окно, а не top по play_count: иначе окно limit*8 —
         # это всегда самые заигранные треки нескольких артистов, и никакая
@@ -905,7 +1032,12 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # same trusted artist simply because a small candidate window hid old rows.
         candidates = q.order_by(Track.id).limit(max(limit * 100, 500)).all()
         for track in candidates:
-            if _keep(track) and _media_available(track):
+            effective_artist, _effective_title = effective_track_artist_title(track)
+            if (
+                (not scope or artist_key(effective_artist) in scope)
+                and _keep(track)
+                and _media_available(track)
+            ):
                 candidates_by_id[track.id] = track
 
     # Добор разрешён только совместимыми со вкусом треками. Раньше сюда без
@@ -933,13 +1065,21 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         # добор раз за разом отдавал ОДНУ И ТУ ЖЕ пачку треков — второй, помимо
         # кэша браузера, источник «одной и той же цепочки».
         if scope:
-            q = q.filter(func.lower(Track.artist).in_(scope))
+            q = q.filter(
+                or_(func.lower(Track.artist).in_(scope), Track.source == "soundcloud")
+            )
         if skip:
             q = q.filter(~Track.id.in_(skip))
+        q = q.filter(~Track.id.in_(collection_track_ids))
         q = q.filter(~Track.id.in_(played_ids))
         pool = [
-            t for t in q.order_by(Track.id).limit(limit * 20).all()
-            if _keep_strict(t) and _media_available(t)
+            t
+            for t in q.order_by(Track.id).limit(limit * 20).all()
+            if (
+                (not scope or artist_key(effective_track_artist_title(t)[0]) in scope)
+                and _keep_strict(t)
+                and _media_available(t)
+            )
         ]
         pool.sort(key=_score)
         for track in pool:
@@ -972,6 +1112,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             .filter(
                 Track.acoustic_features.isnot(None),
                 ~Track.id.in_(exclude_ids),
+                ~Track.id.in_(collection_track_ids),
                 ~Track.id.in_(played_ids),
                 ~Track.id.in_(other_owner_tracks),
             )
@@ -1121,7 +1262,8 @@ def _is_same_track(artist: str, title: str, found: ExternalTrackResponse) -> boo
     сокращение.
     """
     want_artist, want_title = _norm_key(artist, title)
-    got_artist, got_title = _norm_key(found.artist, found.title)
+    found_artist, found_title = effective_track_artist_title(found)
+    got_artist, got_title = _norm_key(found_artist, found_title)
     if not want_artist or not want_title or not got_artist or not got_title:
         return False
     artist_ok = (
@@ -1243,7 +1385,12 @@ async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
 
     pools = await asyncio.gather(*(_artist_songs_pool(b) for b in browse_ids))
     own = artist_key(artist)
-    return [t for pool in pools for t in pool if artist_key(t.artist) != own]
+    return [
+        t
+        for pool in pools
+        for t in pool
+        if artist_key(effective_track_artist_title(t)[0]) != own
+    ]
 
 
 async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
@@ -1257,7 +1404,11 @@ async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalT
         logger.warning("flow favorite artist search failed for %s", artist)
         tracks = []
     own = artist_key(artist)
-    tracks = [t for t in tracks if own and own in artist_key(t.artist)]
+    tracks = [
+        t
+        for t in tracks
+        if own and own in artist_key(effective_track_artist_title(t)[0])
+    ]
     await set_cache_async(key, [t.model_dump() for t in tracks], expire=_SC_EXPLORE_TTL if tracks else 600)
     return tracks
 
@@ -1282,7 +1433,10 @@ async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
     videos = [
         t.external_id
         for t in found
-        if t.external_id and own in artist_key(t.artist)
+        if (
+            t.external_id
+            and own in artist_key(effective_track_artist_title(t)[0])
+        )
     ][:_ARTIST_SEED_LIMIT]
     await set_cache_async(key, videos, expire=_SIMILAR_TTL if videos else 600)
     return videos
@@ -1321,8 +1475,8 @@ async def _soundcloud_pool(
         pool = [
             t
             for t in pool
-            if query_key in _norm_key(t.artist, "")[0]
-            or _norm_key(t.artist, "")[0] in query_key
+            if query_key in _norm_key(effective_track_artist_title(t)[0], "")[0]
+            or _norm_key(effective_track_artist_title(t)[0], "")[0] in query_key
         ]
 
     await set_cache_async(key, [t.model_dump() for t in pool], expire=_SC_EXPLORE_TTL)
@@ -1431,8 +1585,11 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
             ids.append(f"{source}:{external_id}")
         elif track_id is not None:
             ids.append(f"local:{track_id}")
-        artist = row.get("artist") or ""
-        title = row.get("title") or ""
+        artist, title = effective_artist_title(
+            row.get("title") or "",
+            row.get("artist") or "",
+            source=source or "",
+        )
         keys.append(list(_norm_key(artist, title)))
         artists.append(primary_artist_key(artist))
     return {"ids": ids, "keys": keys, "artists": artists}
@@ -1503,6 +1660,16 @@ async def get_flow(
     content_bonus_by_identity: dict[str, float] = {}
     external_population: dict[str, dict] = {}
 
+    def _item_artist_title(item) -> tuple[str, str]:
+        if isinstance(item, dict):
+            return effective_artist_title(
+                item.get("title", ""),
+                item.get("artist", ""),
+                source=item.get("source", ""),
+                album=item.get("album", ""),
+            )
+        return effective_track_artist_title(item)
+
     def _item_identity(item) -> str:
         source = item.get("source") if isinstance(item, dict) else getattr(item, "source", None)
         external_id = (
@@ -1515,8 +1682,7 @@ async def get_flow(
             return f"{source}:{external_id}"
         if item_id is not None:
             return f"local:{item_id}"
-        artist = item.get("artist", "") if isinstance(item, dict) else getattr(item, "artist", "")
-        title = item.get("title", "") if isinstance(item, dict) else getattr(item, "title", "")
+        artist, title = _item_artist_title(item)
         return ":".join(_norm_key(artist, title))
 
     def _flow_score(item, *, content_bonus: Optional[float] = None) -> float:
@@ -1526,7 +1692,7 @@ async def get_flow(
         score_key = f"{identity}:{content_bonus:.3f}"
         if score_key in score_by_item:
             return score_by_item[score_key]
-        artist = item.get("artist", "") if isinstance(item, dict) else getattr(item, "artist", "")
+        artist, _title = _item_artist_title(item)
         key = artist_key(artist)
         population = external_population.get(identity) or {}
         item_play_count = (
@@ -1580,7 +1746,11 @@ async def get_flow(
         )
         return [item for _index, item in indexed]
     excl_ids |= profile["recent_ids"]
-    excl_videos = set(client_yt_videos) | profile["recent_video_ids"]
+    excl_videos = (
+        set(client_yt_videos)
+        | set(profile["recent_video_ids"])
+        | set(profile.get("collection_external_ids") or [])
+    )
     external_exclude |= set(profile.get("skipped_external_ids") or [])
     for item_id in history_ids:
         # Локальный каталог конечен: не блокируем его на 6 часов. Уже стоящие в
@@ -1597,6 +1767,7 @@ async def get_flow(
     # Library tracks already selected by the user must not re-enter through a
     # provider's artist search, regardless of the requested page size.
     seen_keys.update(tuple(key) for key in profile.get("liked_keys") or [])
+    seen_keys.update(profile.get("collection_keys") or set())
 
     # --- разведка: радио YT Music от сидов + поиск SoundCloud по любимым артистам ---
     # Не у каждого videoId есть радио, поэтому перебираем сиды волнами по 2,
@@ -1625,7 +1796,8 @@ async def get_flow(
         # кэшированный радио-пул (TTL 30 мин) целиком оказывался уже в очереди,
         # explore выходил пустым, и волна «замирала» на первых ~15 треках.
         for t in tracks:
-            key = _norm_key(t.artist, t.title)
+            effective_artist, effective_title = effective_track_artist_title(t)
+            key = _norm_key(effective_artist, effective_title)
             external_key = f"{t.source}:{t.external_id}"
             if (
                 t.external_id in excl_videos
@@ -1634,7 +1806,9 @@ async def get_flow(
             ):
                 continue
             # Артист, заскипанный в минус, не попадает в волну и из радио.
-            if banned and any(a.strip().lower() in banned for a in t.artist.split(",")):
+            if banned and any(
+                artist_key(a) in banned for a in effective_artist.split(",")
+            ):
                 continue
             # Треки без рабочего источника не добавляем: ytmusic без external_id
             # или soundcloud без stream_url не смогут играться.
@@ -1712,8 +1886,13 @@ async def get_flow(
     # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
     # profile["artists"] здесь ротируется хэшем текущей history, поэтому это
     # не фиксированный top.
+    trusted_artist_keys = set(profile.get("trusted_artist_keys") or [])
     similar_artists = sorted(
-        list(profile["artists"]),
+        [
+            artist
+            for artist in profile["artists"]
+            if artist_key(artist) in trusted_artist_keys
+        ],
         key=lambda value: stable_jitter(ranking_context, f"similar-artist:{value}"),
         reverse=True,
     )[:_SIMILAR_SEED_ARTISTS]
@@ -1779,7 +1958,7 @@ async def get_flow(
         novel_tracks = []
         novel_artists = set()
         for candidate in (*similar_explore, *explore):
-            key = artist_key(candidate.artist)
+            key = artist_key(effective_track_artist_title(candidate)[0])
             if key in familiar_artists:
                 continue
             novel_tracks.append(candidate)
@@ -1859,7 +2038,14 @@ async def get_flow(
     # Плейлистные артисты идут первыми среди SC-запросов, но полученные треки
     # затем ранжируются вместе со всеми остальными источниками.
     sc_artists = list(
-        dict.fromkeys(profile["playlist_artists"] + profile["artists"])
+        dict.fromkeys(
+            profile["playlist_artists"]
+            + [
+                artist
+                for artist in profile["artists"]
+                if artist_key(artist) in trusted_artist_keys
+            ]
+        )
     )[:_SC_EXPLORE_ARTISTS]
     # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT уже
     # дал достаточно широкий свежий пул.
@@ -1953,47 +2139,18 @@ async def get_flow(
         set(excl_ids),
     )
     local_candidates: List[Track] = []
-    liked_ids = set(profile.get("liked_track_ids") or [])
-    blocked_local_ids = set(excl_ids)
-    blocked_local_keys = set(seen_keys) - {
-        tuple(key) for key in profile.get("liked_keys") or []
-    }
     for t in local:
-        if t.id in liked_ids:
-            continue
-        key = _norm_key(t.artist, t.title)
+        effective_artist, effective_title = effective_track_artist_title(t)
+        key = _norm_key(effective_artist, effective_title)
         if t.id in excl_ids or key in seen_keys:
             continue
         if t.external_id and t.external_id in excl_videos:
             continue
-        if profile["banned_artists"] and t.artist.strip().lower() in profile["banned_artists"]:
+        if profile["banned_artists"] and artist_key(effective_artist) in profile["banned_artists"]:
             continue
         seen_keys.add(key)
         excl_ids.add(t.id)
         local_candidates.append(t)
-
-    liked_source: List[Track] = []
-    if liked_ids:
-        liked_db = Session(bind=telemetry_bind)
-        try:
-            liked_tracks = (
-                liked_db.query(Track)
-                .filter(Track.id.in_(liked_ids))
-                .order_by(Track.id)
-                .all()
-            )
-        finally:
-            liked_db.close()
-        liked_source = [
-            track
-            for track in liked_tracks
-            if (
-                track.id not in blocked_local_ids
-                and _norm_key(track.artist, track.title) not in blocked_local_keys
-                and artist_key(track.artist) not in banned
-                and _media_available(track)
-            )
-        ]
 
     def _candidate_payload(candidate) -> dict:
         if isinstance(candidate, dict):
@@ -2005,36 +2162,25 @@ async def get_flow(
     # Дедуп по нормализованной паре artist/title тоже важен: один трек может
     # прийти локально, через YT Music и SoundCloud с разными provider id. При
     # совпадении оставляем первый источник: локальный файл, затем точный каталог,
-    # затем похожесть и прочую разведку.
+    # затем похожесть и прочую разведку. Треки из лайков и собственных
+    # плейлистов сюда намеренно не добавляются: они уже отфильтрованы выше и
+    # должны влиять на вкус, но не повторяться в потоке.
     unified_candidates = []
     unified_identities = set()
     unified_keys = set()
     for candidate in (
-        *liked_source,
         *local_candidates,
         *favorite_explore,
         *similar_explore,
         *explore,
     ):
         identity = _item_identity(candidate)
-        artist = (
-            candidate.get("artist", "")
-            if isinstance(candidate, dict)
-            else getattr(candidate, "artist", "")
-        )
-        title = (
-            candidate.get("title", "")
-            if isinstance(candidate, dict)
-            else getattr(candidate, "title", "")
-        )
-        key = _norm_key(artist, title)
+        key = _norm_key(*_item_artist_title(candidate))
         if identity in unified_identities or key in unified_keys:
             continue
         unified_identities.add(identity)
         unified_keys.add(key)
         unified_candidates.append(candidate)
-    for candidate in liked_source:
-        content_bonus_by_identity[_item_identity(candidate)] = 0.20
     for candidate in local_candidates:
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.05)
     for candidate in favorite_explore:
@@ -2052,24 +2198,13 @@ async def get_flow(
     ranked_candidates = soft_artist_rerank(
         ranked_candidates,
         _flow_score,
-        artist_of=lambda item: (
-            item.get("artist", "")
-            if isinstance(item, dict)
-            else getattr(item, "artist", "")
-        ),
+        artist_of=lambda item: _item_artist_title(item)[0],
         repeat_penalties=(0.0, 0.18, 0.48, 1.0, 1.7, 2.6),
     )
     familiar_artists = set(profile.get("artist_weight") or {})
-    liked_candidate_identities = {
-        _item_identity(candidate) for candidate in liked_source
-    }
 
     def _is_novel(candidate) -> bool:
-        artist = (
-            candidate.get("artist", "")
-            if isinstance(candidate, dict)
-            else getattr(candidate, "artist", "")
-        )
+        artist, _title = _item_artist_title(candidate)
         return artist_key(artist) not in familiar_artists
 
     selected_candidates = ranked_candidates[:limit]
@@ -2083,11 +2218,7 @@ async def get_flow(
         # Prefer one track per new artist first, then use additional tracks from
         # those artists only when the requested target needs them.
         for candidate in novel_candidates:
-            key = artist_key(
-                candidate.get("artist", "")
-                if isinstance(candidate, dict)
-                else getattr(candidate, "artist", "")
-            )
+            key = artist_key(_item_artist_title(candidate)[0])
             if key in novel_artist_keys:
                 continue
             novel_artist_keys.add(key)
@@ -2109,16 +2240,6 @@ async def get_flow(
             for candidate in ranked_candidates
             if id(candidate) not in selected_ids
         ]
-        # When the provider cannot satisfy the requested discovery target,
-        # prefer unplayed local material over exact liked tracks before falling
-        # back to the user's library. This keeps a partial external result from
-        # turning the rest of a high-discovery page into a likes replay.
-        remaining_candidates.sort(
-            key=lambda candidate: (
-                _item_identity(candidate) in liked_candidate_identities,
-                -_flow_score(candidate),
-            )
-        )
         selected_candidates = novel_selection + remaining_candidates
         selected_candidates = selected_candidates[:limit]
 
@@ -2131,15 +2252,17 @@ async def get_flow(
     }
 
     n_explore = sum(
-        1 for item in mix
-        if artist_key(item.get("artist", "")) not in (profile.get("artist_weight") or {})
+        1
+        for item in mix
+        if artist_key(_item_artist_title(item)[0])
+        not in (profile.get("artist_weight") or {})
     )
     n_exploit = len(mix) - n_explore
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
     # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
     mix = interleave_artists(
         mix,
-        artist_getter=lambda item: item.get("artist"),
+        artist_getter=lambda item: _item_artist_title(item)[0],
         min_gap=_MIN_ARTIST_GAP,
         previous_artists=history.get("artists") or [],
         context=ranking_context,
@@ -2174,7 +2297,7 @@ async def get_flow(
             returned_ids.append(f"{source}:{external_id}")
         elif item.get("id") is not None:
             returned_ids.append(f"local:{item['id']}")
-        returned_keys.append(list(_norm_key(item.get("artist", ""), item.get("title", ""))))
+        returned_keys.append(list(_norm_key(*_item_artist_title(item))))
 
     old_ids = list(history.get("ids") or [])
     old_keys = list(history.get("keys") or [])
@@ -2190,7 +2313,7 @@ async def get_flow(
             # стыке подгрузок; source/familiarity budgets здесь больше нет.
             "artists": (
                 [a for a in (history.get("artists") or []) if isinstance(a, str)]
-                + [primary_artist_key(item.get("artist", "")) for item in mix]
+                + [primary_artist_key(_item_artist_title(item)[0]) for item in mix]
             )[-_ARTIST_HISTORY:],
         },
         expire=_FLOW_HISTORY_TTL,

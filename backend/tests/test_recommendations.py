@@ -424,3 +424,76 @@ def test_recommendations_retrieve_provider_track_from_imported_playlist(
     ]
     assert favorite_calls == []
     assert similar_calls == []
+
+
+def test_recommendations_use_real_artist_for_legacy_soundcloud_scope(
+    client, db, monkeypatch
+):
+    """Legacy SoundCloud uploaders must not become the recommendation artist."""
+    user = create_user(db, username="legacy-soundcloud-recommendation-user")
+    imported = Playlist(
+        name="Imported SoundCloud",
+        description="Импортировано из SoundCloud",
+        origin="imported",
+        is_public=False,
+        owner_id=user.id,
+    )
+    legacy_tracks = [
+        Track(
+            title=f"Kordhell - Imported {index}",
+            artist="TrapNation",
+            duration=180,
+            source="soundcloud",
+            external_id=f"legacy-kordhell-{index}",
+            stream_url=f"https://soundcloud.test/legacy-{index}",
+        )
+        for index in range(3)
+    ]
+    candidate = Track(
+        title="Murder In My Mind (another upload)",
+        artist="Kordhell",
+        duration=180,
+        source="soundcloud",
+        external_id="kordhell-candidate",
+        stream_url="https://soundcloud.test/kordhell-candidate",
+    )
+    uploader_catalog = Track(
+        title="TrapNation original",
+        artist="TrapNation",
+        duration=180,
+        source="soundcloud",
+        external_id="trapnation-candidate",
+        stream_url="https://soundcloud.test/trapnation-candidate",
+    )
+    db.add_all([imported, *legacy_tracks, candidate, uploader_catalog])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {
+                "playlist_id": imported.id,
+                "track_id": track.id,
+                "position": index,
+            }
+            for index, track in enumerate(legacy_tracks)
+        ],
+    )
+    db.commit()
+
+    async def _empty_external(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "app.routers.recommendations._external_recommendation_pool",
+        _empty_external,
+    )
+
+    response = client.get(
+        "/api/recommendations/?limit=10",
+        headers=auth_headers(client, username="legacy-soundcloud-recommendation-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    ids = {track["id"] for track in response.json()["tracks"]}
+    assert candidate.id in ids
+    assert uploader_catalog.id not in ids

@@ -19,6 +19,7 @@ import pytest
 from app import beets_similar
 from app.cache import clear_pattern
 from app.routers import flow
+from app.schemas import ExternalTrackResponse
 
 from tests.test_flow import _external, _liked
 from tests.conftest import create_user
@@ -255,6 +256,45 @@ def test_lastfm_pool_falls_back_to_soundcloud(monkeypatch):
 
     pool = asyncio.run(flow._lastfm_pool(None, "A", "B"))
     assert [t.external_id for t in pool] == ["sc1"]
+
+
+def test_soundcloud_pool_matches_legacy_uploader_by_effective_artist(monkeypatch):
+    """Legacy uploader metadata must not hide a real artist's SoundCloud track."""
+    async def _empty_cache(_key):
+        return None
+
+    async def _set_cache(*_args, **_kwargs):
+        return None
+
+    async def _search(_request, _artist, limit=10):
+        return [
+            ExternalTrackResponse(
+                id="soundcloud:legacy-kordhell",
+                source="soundcloud",
+                external_id="legacy-kordhell",
+                title="Kordhell - Murder In My Mind",
+                artist="TrapNation",
+                duration=180,
+                stream_url="https://soundcloud.test/legacy-kordhell",
+            ),
+            ExternalTrackResponse(
+                id="soundcloud:unrelated",
+                source="soundcloud",
+                external_id="unrelated",
+                title="Kordhell mix",
+                artist="OtherUploader",
+                duration=180,
+                stream_url="https://soundcloud.test/unrelated",
+            ),
+        ]
+
+    monkeypatch.setattr(flow, "get_cache_async", _empty_cache)
+    monkeypatch.setattr(flow, "set_cache_async", _set_cache)
+    monkeypatch.setattr(flow.soundcloud, "search_soundcloud", _search)
+
+    pool = asyncio.run(flow._soundcloud_pool(None, "Kordhell"))
+
+    assert [track.external_id for track in pool] == ["legacy-kordhell"]
 
 
 def test_lastfm_pool_survives_provider_errors(monkeypatch):

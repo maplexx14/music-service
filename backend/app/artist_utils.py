@@ -252,3 +252,40 @@ def resolve_track_artist(
     if split:
         return split
     return (uploader or "").strip() or "Unknown Artist", title
+
+
+def effective_artist_title(
+    title: str,
+    artist: str,
+    *,
+    source: str = "",
+    album: str = "",
+) -> tuple[str, str]:
+    """Resolve the artist/title pair used by recommendation signals.
+
+    The parser is deliberately scoped to SoundCloud: on other providers a
+    hyphen in a title is much more likely to be part of the actual title.
+    """
+    artist = str(artist or "").strip()
+    title = str(title or "").strip()
+    if str(source or "").strip().lower() != "soundcloud":
+        return artist, title
+    return resolve_track_artist(title, uploader=artist, album=str(album or ""))
+
+
+def effective_track_artist_title(track) -> tuple[str, str]:
+    """Return recommendation metadata without rewriting the stored track.
+
+    Older SoundCloud imports may have persisted the uploader account in
+    ``Track.artist`` while keeping the real artist in a title such as
+    ``Artist - Track``.  New imports are already normalized, so this helper is
+    intentionally idempotent and only applies the title parser to SoundCloud
+    rows.  The raw ORM/provider object remains untouched for display and
+    playback metadata.
+    """
+    return effective_artist_title(
+        getattr(track, "title", "") or "",
+        getattr(track, "artist", "") or "",
+        source=getattr(track, "source", "") or "",
+        album=getattr(track, "album", "") or "",
+    )

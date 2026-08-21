@@ -362,7 +362,7 @@ def test_playlist_origin_aggregation_prefers_manual_and_detects_legacy(db):
     assert origin == "manual"
 
 
-def test_manual_playlist_builds_stronger_flow_profile_than_imported(db):
+def test_manual_and_imported_playlist_build_equal_acoustic_profile_weight(db):
     user = create_user(db, username="playlist-weight-user")
     manual_track = Track(
         title="manual",
@@ -401,9 +401,50 @@ def test_manual_playlist_builds_stronger_flow_profile_than_imported(db):
 
     profile = _taste_profile(db, user.id)["acoustic_profile"]
 
-    assert profile["tempo"] == pytest.approx(0.3)
-    assert profile["brightness"] == pytest.approx(0.3)
-    assert profile["bass"] == pytest.approx(0.7)
+    # A single imported track is now an intentional taste signal, close to a
+    # like. Manual curation remains stronger for artist/catalogue trust, but
+    # the acoustic centroid gives both tracks the same per-track weight.
+    assert profile["tempo"] == pytest.approx(0.5)
+    assert profile["brightness"] == pytest.approx(0.5)
+    assert profile["bass"] == pytest.approx(0.5)
+
+
+def test_old_soundcloud_reupload_uses_artist_from_title_in_profile(db):
+    user = create_user(db, username="soundcloud-profile-user")
+    playlist = Playlist(
+        name="Imported SoundCloud",
+        origin="imported",
+        description="Импортировано из SoundCloud",
+        is_public=False,
+        owner_id=user.id,
+    )
+    track = Track(
+        title="Kordhell - Murder In My Mind",
+        artist="TrapNation",
+        duration=180,
+        source="soundcloud",
+        external_id="legacy-reupload",
+        stream_url="https://soundcloud.test/stream",
+        acoustic_features=_features(tempo=0.8),
+    )
+    db.add_all([playlist, track])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=playlist.id,
+            track_id=track.id,
+            position=0,
+        )
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+
+    assert profile["artist_weight"]["kordhell"] == pytest.approx(3.0)
+    assert "trapnation" not in profile["artist_weight"]
+    assert ("Kordhell", "Murder In My Mind") in profile["seed_tracks"]
+    assert profile["playlist_artists"] == []
+    assert profile["trusted_artist_keys"] == []
 
 
 def test_external_skip_is_part_of_personal_flow_exclusions(db):

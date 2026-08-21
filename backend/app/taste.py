@@ -31,7 +31,7 @@ _keep и _matches_taste в flow.py), и каждое чинилось отдел
 import re
 from typing import Optional
 
-from app.artist_utils import artist_key
+from app.artist_utils import artist_key, effective_track_artist_title
 from app.genre_keywords import genre_is_compatible, infer_genre_from_text
 from app.lang import is_cyrillic, is_foreign_script
 
@@ -117,6 +117,7 @@ def track_check(keep):
     """Тот же предикат, но принимающий ORM-Track/ExternalTrackResponse."""
 
     def keep_track(t) -> bool:
-        return keep(t.artist, t.title, getattr(t, "genre", None))
+        artist, title = effective_track_artist_title(t)
+        return keep(artist, title, getattr(t, "genre", None))
 
     return keep_track

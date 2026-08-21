@@ -40,7 +40,11 @@ from app.recommendation_cache import (
     recommendation_cache_key,
 )
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
-from app.artist_utils import artist_key
+from app.artist_utils import (
+    artist_key,
+    effective_artist_title,
+    effective_track_artist_title,
+)
 from app.recommendation_scoring import (
     ALGORITHM_VERSION,
     fatigue_score,
@@ -113,7 +117,10 @@ _CURATED_TRUST_COUNT = 2
 # трека. Ниже порога трек остаётся положительным сигналом (и держит артиста в
 # scope_artist_keys), но кураторского веса и приоритета не даёт.
 _PLAYLIST_ARTIST_MIN_TRACKS = 3
-_PLAYLIST_WEAK_WEIGHT = 1.0
+# Imported playlists are nearly as intentional as likes at the track level.
+# Artist catalogue/trust expansion still uses the separate three-track gate.
+_PLAYLIST_IMPORTED_WEIGHT = 3.0
+_PLAYLIST_WEAK_WEIGHT = _PLAYLIST_IMPORTED_WEIGHT
 
 # Сколько треков одного артиста максимум допускать подряд в выдаче — без
 # этого сортировка по play_count раз за разом выдаёт одних и тех же
@@ -214,9 +221,16 @@ def _varied_popular(
         return []
     q = db.query(Track)
     if restrict_artists:
-        q = q.filter(func.lower(Track.artist).in_(restrict_artists))
+        q = q.filter(
+            or_(func.lower(Track.artist).in_(restrict_artists), Track.source == "soundcloud")
+        )
     if excluded_artists:
-        q = q.filter(~func.lower(Track.artist).in_(excluded_artists))
+        q = q.filter(
+            or_(
+                ~func.lower(Track.artist).in_(excluded_artists),
+                Track.source == "soundcloud",
+            )
+        )
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
     # С предикатом вкуса отсев жёстче, поэтому берём пул с большим запасом.
@@ -226,7 +240,12 @@ def _varied_popular(
         for t in q.order_by(desc(Track.play_count)).limit(window).all()
         # Фильтр иностранного здесь и обещан docstring'ом, и нужен: холодный
         # старт не должен подсовывать стабильно скипаемые CJK/вьетнамские хиты.
-        if not is_foreign_script(t.title) and (keep is None or keep(t))
+        if (
+            (not restrict_artists or artist_key(effective_track_artist_title(t)[0]) in restrict_artists)
+            and (not excluded_artists or artist_key(effective_track_artist_title(t)[0]) not in excluded_artists)
+            and not is_foreign_script(effective_track_artist_title(t)[1])
+            and (keep is None or keep(t))
+        )
     ]
     # Popularity is a bounded feature, not the ranking itself.  Freshness and
     # deterministic jitter keep a single global counter from monopolising the
@@ -260,15 +279,37 @@ def _cold_start_candidates(
     if wanted_genres:
         filters.append(func.lower(Track.genre).in_(wanted_genres))
     if wanted_artists:
-        filters.append(func.lower(Track.artist).in_(wanted_artists))
+        filters.append(
+            or_(func.lower(Track.artist).in_(wanted_artists), Track.source == "soundcloud")
+        )
     if not filters:
         return []
     query = db.query(Track).filter(or_(*filters))
     if exclude_ids:
         query = query.filter(~Track.id.in_(exclude_ids))
     if excluded_artists:
-        query = query.filter(~func.lower(Track.artist).in_(excluded_artists))
+        query = query.filter(
+            or_(
+                ~func.lower(Track.artist).in_(excluded_artists),
+                Track.source == "soundcloud",
+            )
+        )
     pool = query.order_by(desc(Track.play_count), Track.id).limit(max(100, limit * 30)).all()
+    filtered_pool = []
+    for track in pool:
+        effective_key = artist_key(effective_track_artist_title(track)[0])
+        if effective_key in excluded_artists:
+            continue
+        genre_key = str(track.genre or "").strip().lower()
+        if (
+            track.source == "soundcloud"
+            and wanted_artists
+            and effective_key not in wanted_artists
+            and genre_key not in wanted_genres
+        ):
+            continue
+        filtered_pool.append(track)
+    pool = filtered_pool
     pool.sort(
         key=lambda track: (
             -score_track(track, user_id=user_id, genres=preferred_genres, novelty=True),
@@ -318,6 +359,9 @@ def _rank_public_playlists(
         db.query(
             playlist_tracks.c.playlist_id,
             Track.artist,
+            Track.title,
+            Track.album,
+            Track.source,
             Track.genre,
         )
         .join(Track, Track.id == playlist_tracks.c.track_id)
@@ -325,8 +369,14 @@ def _rank_public_playlists(
         .all()
     )
     by_playlist: dict[int, list[tuple[str, str | None]]] = {}
-    for playlist_id, artist, genre in details:
-        by_playlist.setdefault(playlist_id, []).append((artist or "", genre))
+    for playlist_id, artist, title, album, source, genre in details:
+        effective_artist, _effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        by_playlist.setdefault(playlist_id, []).append((effective_artist, genre))
 
     wanted_genres = {str(value).strip().lower() for value in (preferred_genres or []) if value}
     wanted_artists = set(preferred_artist_keys or ())
@@ -398,11 +448,11 @@ async def _external_recommendation_pool(
     seed_tracks: list[tuple[str, str]] = []
     seen_tracks: set[tuple[str, str]] = set()
     for track, _added_at in liked:
-        seed_tracks.append((track.artist, track.title))
+        seed_tracks.append(effective_track_artist_title(track))
     for track, _added_at, _origin in playlisted:
-        seed_tracks.append((track.artist, track.title))
+        seed_tracks.append(effective_track_artist_title(track))
     for track, _play_count, _last_played in played:
-        seed_tracks.append((track.artist, track.title))
+        seed_tracks.append(effective_track_artist_title(track))
 
     deduped_seeds = []
     for artist, title in seed_tracks:
@@ -415,9 +465,17 @@ async def _external_recommendation_pool(
             break
 
     artist_seeds = list(preferred_artists)
-    artist_seeds.extend(track.artist for track, _added_at in liked)
-    artist_seeds.extend(track.artist for track, _added_at, _origin in playlisted)
-    artist_seeds.extend(track.artist for track, _play_count, _last_played in played)
+    artist_seeds.extend(
+        effective_track_artist_title(track)[0] for track, _added_at in liked
+    )
+    artist_seeds.extend(
+        effective_track_artist_title(track)[0]
+        for track, _added_at, _origin in playlisted
+    )
+    artist_seeds.extend(
+        effective_track_artist_title(track)[0]
+        for track, _play_count, _last_played in played
+    )
     deduped_artists = []
     seen_artists = set()
     for artist in artist_seeds:
@@ -430,21 +488,25 @@ async def _external_recommendation_pool(
             break
 
     playlist_artist_counts = Counter(
-        artist_key(track.artist) for track, _added_at, _origin in playlisted
+        artist_key(effective_track_artist_title(track)[0])
+        for track, _added_at, _origin in playlisted
     )
     manual_playlist_artists = {
-        artist_key(track.artist)
+        artist_key(effective_track_artist_title(track)[0])
         for track, _added_at, origin in playlisted
         if str(origin or "manual").lower() == "manual"
     }
     explicit_artist_keys = {artist_key(value) for value in preferred_artists}
-    liked_artist_keys = {artist_key(track.artist) for track, _added_at in liked}
+    liked_artist_keys = {
+        artist_key(effective_track_artist_title(track)[0])
+        for track, _added_at in liked
+    }
 
     # A manually curated playlist or a liked/preferred artist is an explicit
     # enough signal to browse its provider catalogue immediately. Imported
-    # playlists are intentionally weaker: a single imported track gets only
-    # track-level similarity, while an artist catalogue/graph opens after
-    # three imported tracks.
+    # tracks carry the same track-level weight, but a single imported track gets
+    # only track-level similarity; an artist catalogue/graph opens after three
+    # imported tracks.
     catalog_artists = []
     similar_artists = []
     for artist in deduped_artists:
@@ -486,7 +548,9 @@ async def _external_recommendation_pool(
         for item in pool:
             identity = f"{item.source}:{item.external_id}"
             key = (item.source, item.external_id)
-            track_key = flow_router._norm_key(item.artist, item.title)
+            track_key = flow_router._norm_key(
+                *effective_track_artist_title(item)
+            )
             if identity in seen or key in excluded_external:
                 continue
             if track_key in seen_track_keys and all(track_key):
@@ -656,6 +720,16 @@ async def get_recommendations(
     )
     skipped_track_ids = {row[0] for row in skipped}
     skip_by_track = {row[0]: row for row in skipped}
+    skipped_meta = {
+        track_id: effective_artist_title(title, artist, source=source, album=album)
+        for track_id, artist, title, source, album in db.query(
+            Track.id,
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.album,
+        ).filter(Track.id.in_(skipped_track_ids)).all()
+    }
 
     # Средняя доля дослушивания по трекам юзера (из лога событий) — уточняет
     # бинарный play/skip: см. комментарий у _COMPLETION_*.
@@ -728,7 +802,11 @@ async def get_recommendations(
     for track, added_at in liked:
         profile_rows.append((track.acoustic_features, 3.0 * _curation_decay(added_at)))
     for track, added_at, origin in playlisted:
-        playlist_weight = 3.0 if str(origin or "manual").lower() == "manual" else 1.0
+        playlist_weight = (
+            3.0
+            if str(origin or "manual").lower() == "manual"
+            else _PLAYLIST_IMPORTED_WEIGHT
+        )
         profile_rows.append(
             (track.acoustic_features, playlist_weight * _curation_decay(added_at))
         )
@@ -748,7 +826,7 @@ async def get_recommendations(
         external_id = getattr(track, "external_id", None)
         if source and external_id:
             excluded_external.add((source, external_id))
-        track_key = flow_router._norm_key(track.artist, track.title)
+        track_key = flow_router._norm_key(*effective_track_artist_title(track))
         if all(track_key):
             excluded_track_keys.add(track_key)
     external_skip_rows = db.execute(
@@ -766,7 +844,12 @@ async def get_recommendations(
     ).all()
     for source, external_id, artist, title in external_skip_rows:
         excluded_external.add((source, external_id))
-        track_key = flow_router._norm_key(artist, title)
+        effective_artist, effective_title = effective_artist_title(
+            title,
+            artist,
+            source=source or "",
+        )
+        track_key = flow_router._norm_key(effective_artist, effective_title)
         if all(track_key):
             excluded_track_keys.add(track_key)
     materialized_external_skips = (
@@ -783,7 +866,12 @@ async def get_recommendations(
     )
     for source, external_id, artist, title in materialized_external_skips:
         excluded_external.add((source, external_id))
-        track_key = flow_router._norm_key(artist, title)
+        effective_artist, effective_title = effective_artist_title(
+            title,
+            artist,
+            source=source or "",
+        )
+        track_key = flow_router._norm_key(effective_artist, effective_title)
         if all(track_key):
             excluded_track_keys.add(track_key)
     # Release the request's read connection while providers/Redis are queried.
@@ -808,11 +896,13 @@ async def get_recommendations(
             content_bonus = 0.08 if not isinstance(getattr(track, "id", None), int) else 0.0
         row = skip_by_track.get(track.id)
         completion = completion_by_track.get(track.id)
-        is_novel_artist = artist_key(track.artist) not in known_artist_keys
+        effective_artist, _effective_title = effective_track_artist_title(track)
+        effective_key = artist_key(effective_artist)
+        is_novel_artist = effective_key not in known_artist_keys
         score = score_track(
             track,
             user_id=current_user.id,
-            artist_affinity=artist_positive.get(artist_key(track.artist), 0.0),
+            artist_affinity=artist_positive.get(effective_key, 0.0),
             genres=genres,
             completion=completion[0] if completion else None,
             skip_count=row[2] if row else 0,
@@ -849,7 +939,7 @@ async def get_recommendations(
         # Интенсивность учитывается симметрично лог-масштабом (иначе любимый,
         # но мемно-«пролистываемый» артист уходил в минус: play_count раньше
         # игнорировался, а скип вычитал полный skip_count). Веса как во flow.py:
-        # лайк +3, ручной плейлист +4, импорт +1.6, прослушивание
+        # лайк +3, ручной плейлист +4, импорт +3, прослушивание
         # 1+log1p(play_count), скип
         # −1.5·log1p(skip_count).
         artist_positive: dict = {}
@@ -864,10 +954,18 @@ async def get_recommendations(
         # Курируемые артисты (собственные плейлисты и явный выбор) — strongest
         # signal. Их треки получают приоритет, даже если play_count низкий.
         priority_artist_keys: set = set()
+        # Keep the near-like imported weight separate from catalogue trust:
+        # one imported SoundCloud track should influence ranking, but should
+        # not by itself make a possibly noisy uploader's entire catalogue
+        # trusted. Any additional explicit/behavioural signal removes the
+        # imported-only guard; three imported tracks pass via curated_count.
+        imported_artist_keys: set = set()
+        non_imported_artist_keys: set = set()
         # Сколько треков артиста лежит в собственных плейлистах — по этому
         # счётчику работает порог _PLAYLIST_ARTIST_MIN_TRACKS.
         playlist_artist_totals: Counter = Counter(
-            artist_key(t.artist) for t, _added_at, _origin in playlisted
+            artist_key(effective_track_artist_title(t)[0])
+            for t, _added_at, _origin in playlisted
         )
 
         # Выбранные при регистрации артисты — такой же осознанный сигнал, как
@@ -879,33 +977,45 @@ async def get_recommendations(
             artist_positive[key] = artist_positive.get(key, 0) + _ARTIST_TRUST_THRESHOLD
             artist_curated_count[key] = max(artist_curated_count.get(key, 0), 1)
             priority_artist_keys.add(key)
+            non_imported_artist_keys.add(key)
         # Лайки и треки из собственных плейлистов — сигнал курирования; плейлист
         # весомее лайков (юзер осознанно подбирал композиции). Затухание — медленное
         # кураторское (_curation_decay), НЕ 14-дневное поведенческое: иначе
         # плейлисты месячной давности почти не влияли на рекомендации.
         for t, added_at in liked:
-            key = artist_key(t.artist)
+            effective_artist, effective_title = effective_track_artist_title(t)
+            key = artist_key(effective_artist)
+            non_imported_artist_keys.add(key)
             artist_positive[key] = artist_positive.get(key, 0) + 3.0 * _curation_decay(added_at)
             artist_curated_count[key] = artist_curated_count.get(key, 0) + 1
-            genre = t.genre or infer_genre_from_text(t.title, t.artist)
+            genre = t.genre or infer_genre_from_text(effective_title, effective_artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, 3.0 * _curation_decay(added_at)))
+            weighted_titles.append((effective_title, 3.0 * _curation_decay(added_at)))
         for t, added_at, playlist_origin in playlisted:
-            key = artist_key(t.artist)
+            effective_artist, effective_title = effective_track_artist_title(t)
+            key = artist_key(effective_artist)
+            if str(playlist_origin or "manual").lower() == "manual":
+                non_imported_artist_keys.add(key)
+            else:
+                imported_artist_keys.add(key)
             # Плейлист курирует АРТИСТА только с _PLAYLIST_ARTIST_MIN_TRACKS
             # треков: одиночное имя из импорта осознанным выбором не является.
             favorite = playlist_artist_totals[key] >= _PLAYLIST_ARTIST_MIN_TRACKS
-            origin_weight = 4.0 if str(playlist_origin or "manual").lower() == "manual" else 1.6
+            origin_weight = (
+                4.0
+                if str(playlist_origin or "manual").lower() == "manual"
+                else _PLAYLIST_IMPORTED_WEIGHT
+            )
             weight = (origin_weight if favorite else _PLAYLIST_WEAK_WEIGHT) * _curation_decay(added_at)
             artist_positive[key] = artist_positive.get(key, 0) + weight
             if favorite:
                 artist_curated_count[key] = artist_curated_count.get(key, 0) + 1
                 priority_artist_keys.add(key)
-            genre = t.genre or infer_genre_from_text(t.title, t.artist)
+            genre = t.genre or infer_genre_from_text(effective_title, effective_artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, weight))
+            weighted_titles.append((effective_title, weight))
         for t, play_count, last_played in played:
             w = (1.0 + math.log1p(play_count or 1)) * _decay(last_played)
             # Доля дослушивания модулирует вес прослушиваний: стабильно
@@ -919,19 +1029,21 @@ async def get_recommendations(
                 elif avg_c <= _COMPLETION_LO:
                     w *= _COMPLETION_LO_DAMP
                     if cnt >= 2:
-                        key = artist_key(t.artist)
+                        key = artist_key(effective_track_artist_title(t)[0])
                         artist_skip_penalty[key] = (
                             artist_skip_penalty.get(key, 0)
                             + _COMPLETION_LO_ARTIST_PENALTY * _decay(last_played)
                         )
-            key = artist_key(t.artist)
+            effective_artist, effective_title = effective_track_artist_title(t)
+            key = artist_key(effective_artist)
+            non_imported_artist_keys.add(key)
             artist_positive[key] = artist_positive.get(key, 0) + w
-            genre = t.genre or infer_genre_from_text(t.title, t.artist)
+            genre = t.genre or infer_genre_from_text(effective_title, effective_artist)
             if genre:
                 genres.append(genre)
-            weighted_titles.append((t.title, w))
+            weighted_titles.append((effective_title, w))
         for _tid, artist, skip_count, last_skipped, disliked in skipped:
-            key = artist_key(artist)
+            key = artist_key(skipped_meta.get(_tid, (artist, ""))[0])
             # Явный дизлайк — осознанный отказ: штраф тяжелее случайного скипа
             # и не затухает со временем (см. _DISLIKE_ARTIST_PENALTY во flow.py).
             # Порог доверия по курированию (2+ лайка/плейлиста) он не отменяет:
@@ -949,13 +1061,18 @@ async def get_recommendations(
         # НЕ бьют по всему каталогу, работают только на уровне скипнутого
         # трека (он и так в exclude_ids). Ещё НЕ доверенный — скипы влияют
         # сильно: пускаем в сид, только если плюс перевешивает штраф за скипы.
-        artist_keys = [
-            key
-            for key, pos in artist_positive.items()
-            if pos >= _ARTIST_TRUST_THRESHOLD
-            or artist_curated_count.get(key, 0) >= _CURATED_TRUST_COUNT
-            or pos - artist_skip_penalty.get(key, 0) >= _NET_TRUST_MARGIN
-        ]
+        artist_keys = []
+        for key, pos in artist_positive.items():
+            imported_only = (
+                key in imported_artist_keys and key not in non_imported_artist_keys
+            )
+            curated = artist_curated_count.get(key, 0) >= _CURATED_TRUST_COUNT
+            confident_by_weight = not imported_only and (
+                pos >= _ARTIST_TRUST_THRESHOLD
+                or pos - artist_skip_penalty.get(key, 0) >= _NET_TRUST_MARGIN
+            )
+            if curated or confident_by_weight:
+                artist_keys.append(key)
         artist_keys = [key for key in artist_keys if key not in excluded_artist_keys]
         known_artist_keys = set(artist_keys)
 
@@ -975,9 +1092,21 @@ async def get_recommendations(
         # co-occurrence-соседи, добор популярным). Раньше каждый путь фильтровал
         # по-своему, и постороннее протекало через тот, что чинили последним.
         _prefer_cyrillic = dominant_is_cyrillic(
-            [f"{t.title} {t.artist}" for t, *_ in liked]
-            + [f"{t.title} {t.artist}" for t, *_ in playlisted]
-            + [f"{t.title} {t.artist}" for t, *_ in played]
+            [
+                f"{title} {artist}"
+                for t, *_ in liked
+                for artist, title in [effective_track_artist_title(t)]
+            ]
+            + [
+                f"{title} {artist}"
+                for t, *_ in playlisted
+                for artist, title in [effective_track_artist_title(t)]
+            ]
+            + [
+                f"{title} {artist}"
+                for t, *_ in played
+                for artist, title in [effective_track_artist_title(t)]
+            ]
         )
         _keep_track_base = track_check(
             make_relevance_check(
@@ -987,7 +1116,8 @@ async def get_recommendations(
             )
         )
         keep_track = lambda track: (
-            artist_key(track.artist) not in excluded_artist_keys
+            artist_key(effective_track_artist_title(track)[0])
+            not in excluded_artist_keys
             and _keep_track_base(track)
         )
         # Для добора глобально популярным — строгий вариант: там кандидат не
@@ -1001,7 +1131,8 @@ async def get_recommendations(
             )
         )
         keep_unrelated = lambda track: (
-            artist_key(track.artist) not in excluded_artist_keys
+            artist_key(effective_track_artist_title(track)[0])
+            not in excluded_artist_keys
             and _keep_unrelated_base(track)
         )
 
@@ -1032,7 +1163,9 @@ async def get_recommendations(
         if tag_conditions:
             taste_filters.append(or_(*tag_conditions))
         if artist_keys:
-            taste_filters.append(func.lower(Track.artist).in_(artist_keys))
+            taste_filters.append(
+                or_(func.lower(Track.artist).in_(artist_keys), Track.source == "soundcloud")
+            )
 
         # Привязка жанра/темы к артисту целиком: если хотя бы часть каталога
         # артиста в базе матчит нужные слова, подтягиваем ВСЕ его треки — не
@@ -1055,7 +1188,12 @@ async def get_recommendations(
             restrict_artists=scope_artist_keys or None,
         )
         if genreartist_keys:
-            taste_filters.append(func.lower(Track.artist).in_(genreartist_keys))
+            taste_filters.append(
+                or_(
+                    func.lower(Track.artist).in_(genreartist_keys),
+                    Track.source == "soundcloud",
+                )
+            )
 
         # Python-set — для фильтрации в памяти (exploration и т.п.); SQL-
         # исключение коллекции идёт подзапросом (см. _collection_exclude_select).
@@ -1079,7 +1217,12 @@ async def get_recommendations(
             # scope_artist_keys). Скоуп пуст только при холодном старте — сужать
             # там не до чего.
             if scope_artist_keys:
-                q = q.filter(func.lower(Track.artist).in_(scope_artist_keys))
+                q = q.filter(
+                    or_(
+                        func.lower(Track.artist).in_(scope_artist_keys),
+                        Track.source == "soundcloud",
+                    )
+                )
             # Окно берём СЛУЧАЙНО, а не топом по play_count: топ окна — это
             # всегда самые заигранные треки нескольких артистов, поэтому выдача
             # крутила одних и тех же, хотя вкусовых артистов в библиотеке сотни.
@@ -1098,16 +1241,24 @@ async def get_recommendations(
             # по каждому артисту из плейлистов или явных предпочтений, т.к. общий
             # `.in_(artist_keys)` с 97+ элементами (кириллица/юникод) может
             # молча не матчить отдельных артистов.
-            _played_liked_keys = {artist_key(t.artist) for t, _ in liked}
-            _played_liked_keys |= {artist_key(t.artist) for t, _, _ in played}
+            _played_liked_keys = {
+                artist_key(effective_track_artist_title(t)[0]) for t, _ in liked
+            }
+            _played_liked_keys |= {
+                artist_key(effective_track_artist_title(t)[0])
+                for t, _, _ in played
+            }
             _new_priority_keys = priority_artist_keys - _played_liked_keys
             for pk in _new_priority_keys:
                 extra = db.query(Track).filter(
-                    func.lower(Track.artist) == pk,
+                    or_(func.lower(Track.artist) == pk, Track.source == "soundcloud"),
                     ~Track.id.in_(exclude_select),
                 ).order_by(desc(Track.play_count)).all()
                 for t in extra:
-                    if t.id not in curated_in_pool:
+                    if (
+                        t.id not in curated_in_pool
+                        and artist_key(effective_track_artist_title(t)[0]) == pk
+                    ):
                         pool.append(t)
                         curated_in_pool.add(t.id)
             # Кураторские треки (из кастомных плейлистов) — strongest signal (+4.0).
@@ -1124,7 +1275,16 @@ async def get_recommendations(
             # заголовке, будучи из совсем другого жанра (плюс отсев иностранного
             # и, при одноязычной библиотеке, чужого языка). Артисты, которых
             # юзер реально слушает, проходят проверку сами по себе.
-            pool = [t for t in pool if keep_track(t)]
+            pool = [
+                t
+                for t in pool
+                if (
+                    not scope_artist_keys
+                    or artist_key(effective_track_artist_title(t)[0])
+                    in scope_artist_keys
+                )
+                and keep_track(t)
+            ]
             def _track_rank(t: Track) -> tuple:
                 return (
                     -_candidate_score(t),
@@ -1227,7 +1387,7 @@ async def get_recommendations(
         # seeds, so they are not subject to the local catalogue's artist scope.
         # They still use the same score and hard negative/exclusion signals.
         for track in external_candidates:
-            artist = artist_key(track.artist)
+            artist = artist_key(effective_track_artist_title(track)[0])
             if artist in excluded_artist_keys:
                 continue
             candidate_pool.setdefault(track.id, track)
@@ -1268,7 +1428,11 @@ async def get_recommendations(
         # Soft repeat penalties preserve a highly relevant repeat when the
         # catalog is sparse, while allowing an acoustically close new artist to
         # win when it is genuinely a better match.
-        ranked_pool = soft_artist_rerank(ranked_pool, _candidate_score)[: max(limit * 6, limit)]
+        ranked_pool = soft_artist_rerank(
+            ranked_pool,
+            _candidate_score,
+            artist_of=lambda track: effective_track_artist_title(track)[0],
+        )[: max(limit * 6, limit)]
         local_ranked_ids = [
             track.id
             for track in ranked_pool[: max(limit * 3, limit)]
@@ -1297,7 +1461,10 @@ async def get_recommendations(
                 skipped_track_ids | fatigued_ids | {t.id for t in recommended_tracks},
                 limit - len(recommended_tracks),
                 excluded_artists=excluded_artist_keys,
-                used=Counter(primary_artist_key(t.artist) for t in recommended_tracks),
+                used=Counter(
+                    primary_artist_key(effective_track_artist_title(t)[0])
+                    for t in recommended_tracks
+                ),
                 user_id=current_user.id,
             )
         if external_candidates:
