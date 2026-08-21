@@ -30,6 +30,8 @@ from app.artist_utils import split_title_artist
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
+from app.listening_signals import record_imported_track_plays
+from app.recommendation_cache import invalidate_recommendation_cache
 from app.routers import soundcloud, spotify, ytdlp
 from app.routers.tracks import get_or_create_external_track
 from app.recommendation_telemetry import link_materialized_deliveries
@@ -766,8 +768,18 @@ async def import_collection(
             )
         )
 
+    # An imported collection represents listening history from another
+    # service. Feed it through the same per-user play/completion signals as a
+    # fully listened Wave track. The helper is idempotent, so importing the
+    # same song again does not inflate counters.
+    record_imported_track_plays(
+        db,
+        user_id=current_user.id,
+        track_ids=track_ids,
+    )
     db.commit()
     db.refresh(new_playlist)
+    invalidate_recommendation_cache(current_user.id)
     position = len(track_ids)
 
     return ImportResult(

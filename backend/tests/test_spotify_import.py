@@ -535,5 +535,82 @@ def test_import_spotify_matches_tracks_in_ytmusic(client, db, monkeypatch):
     assert body["skipped"] == 1
     assert body["playlist"]["name"] == "My Mix"
     assert body["playlist"]["description"] == "Импортировано из Spotify"
+    imported_track_id = (
+        body["playlist"]["tracks"][0]["id"]
+        if body["playlist"].get("tracks")
+        else None
+    )
+    if imported_track_id is None:
+        from app.models import Track
+
+        imported_track_id = db.query(Track.id).filter(Track.external_id == "yt1").scalar()
+
+    from app.models import Track, user_play_events, user_track_plays
+
+    play = db.execute(
+        user_track_plays.select().where(user_track_plays.c.track_id == imported_track_id)
+    ).mappings().one()
+    listen = db.execute(
+        user_play_events.select().where(user_play_events.c.track_id == imported_track_id)
+    ).mappings().one()
+    imported_track = db.get(Track, imported_track_id)
+
+    assert play["play_count"] == 1
+    assert listen["completion"] == 1.0
+    assert imported_track.play_count == 1
+    assert imported_track.unique_listener_count == 1
     # Матчим по основному артисту и очищенному от «(Remix)» названию.
     assert queries[0] == "A One"
+
+
+def test_reimport_does_not_duplicate_listening_signals(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+
+    async def fake_fetch(_url):
+        return (
+            "My Mix",
+            None,
+            [spotify.SpotifyTrack(id="t1", title="One", artist="A", duration=200)],
+        )
+
+    async def fake_search(_request, _query, limit=3):
+        return [
+            importer.ExternalTrackImport(
+                source="ytmusic",
+                external_id="yt1",
+                title="One",
+                artist="A",
+                duration=200,
+            )
+        ]
+
+    monkeypatch.setattr(spotify, "fetch_by_url", fake_fetch)
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", fake_search)
+
+    for _ in range(2):
+        response = client.post(
+            "/api/import",
+            json={"url": "https://open.spotify.com/playlist/pl1"},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    from app.models import Track, user_play_events, user_track_plays
+
+    track = db.query(Track).filter(Track.external_id == "yt1").one()
+    play = db.execute(
+        user_track_plays.select().where(user_track_plays.c.track_id == track.id)
+    ).mappings().one()
+    from sqlalchemy import func, select
+
+    listen_count = db.execute(
+        select(func.count()).select_from(user_play_events).where(
+            user_play_events.c.track_id == track.id
+        )
+    ).scalar_one()
+
+    assert play["play_count"] == 1
+    assert listen_count == 1
+    assert track.play_count == 1
+    assert track.unique_listener_count == 1
