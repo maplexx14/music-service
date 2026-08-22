@@ -631,6 +631,93 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             )
             skipped_keys.add(_norm_key(skipped_artist, skipped_title))
 
+    # Дизлайк — не вкусовой признак, а запрет («не нравится, больше не
+    # показывать»), поэтому окном _TASTE_QUERY_LIMIT он НЕ ограничен: тот же
+    # довод, что у collection_rows выше. Скипы пишутся автоматически (фронт шлёт
+    # их при <25% прослушивания) и набегают сотнями, так что редкое ручное
+    # «не хочу» вытеснялось из окна свежими скипами — и дизлайкнутый трек
+    # возвращался в волну как ни в чём не бывало. Штраф артисту по-прежнему
+    # считается только внутри окна (выше): один старый дизлайк не должен
+    # навсегда банить артиста, которого пользователь в остальном слушает.
+    disliked_rows = (
+        db.query(
+            Track.id,
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.external_id,
+            Track.album,
+        )
+        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
+        .filter(
+            user_track_skips.c.user_id == user_id,
+            user_track_skips.c.disliked.is_(True),
+        )
+        .all()
+    )
+    for track_id, artist, title, source, external_id, album in disliked_rows:
+        disliked_artist, disliked_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        skipped_ids.add(track_id)
+        key = _norm_key(disliked_artist, disliked_title)
+        if all(key):
+            skipped_keys.add(key)
+        if external_id:
+            # Провайдерский id исключает трек и до материализации: тот же трек
+            # приходит из радио/каталога снова именно под ним.
+            skipped_video_ids.add(external_id)
+            if source:
+                skipped_external_ids.add(f"{source}:{external_id}")
+
+    # Дизлайк внешнего трека доходит и телеметрией: материализация могла не
+    # успеть или упасть (см. handleDislike во фронте — событие уходит ДО неё),
+    # и тогда строки в user_track_skips нет вовсе, а пользователь уже сказал
+    # «не хочу». Поверхность здесь не фильтруем, в отличие от скипов выше:
+    # «больше не показывать» относится к треку, а не к экрану, где нажали
+    # кнопку. Зато учитываем более позднее undislike — снятый дизлайк не должен
+    # банить трек навсегда (в user_track_skips его снятие удаляет строку целиком,
+    # а журнал событий помнит оба нажатия).
+    dislike_event_rows = db.execute(
+        select(
+            recommendation_events.c.source,
+            recommendation_events.c.external_id,
+            recommendation_events.c.artist,
+            recommendation_events.c.title,
+            recommendation_events.c.event_type,
+        ).where(
+            recommendation_events.c.user_id == user_id,
+            recommendation_events.c.event_type.in_(("dislike", "undislike")),
+            recommendation_events.c.source.isnot(None),
+            recommendation_events.c.external_id.isnot(None),
+        ).order_by(recommendation_events.c.occurred_at.desc())
+    ).all()
+    dislike_verdicts: dict = {}
+    for source, external_id, artist, title, event_type in dislike_event_rows:
+        # Строки идут от свежих к старым, поэтому первое встреченное решение по
+        # треку и есть актуальное.
+        dislike_verdicts.setdefault(
+            f"{source}:{external_id}", (event_type, source, external_id, artist, title)
+        )
+    for identity, (event_type, source, external_id, artist, title) in dislike_verdicts.items():
+        if event_type != "dislike":
+            continue
+        skipped_external_ids.add(identity)
+        if source == "ytmusic":
+            skipped_video_ids.add(external_id)
+        if artist and title:
+            disliked_artist, disliked_title = effective_artist_title(
+                title,
+                artist,
+                source=source or "",
+            )
+            key = _norm_key(disliked_artist, disliked_title)
+            if all(key):
+                skipped_keys.add(key)
+
     # --- Явные предпочтения пользователя (онбординг/настройки) ---
     # Встраиваем ПЕРЕД финализацией профиля как сильный позитивный
     # сигнал. Ключевой смысл — «холодный старт»: у нового юзера нет
@@ -1915,14 +2002,27 @@ async def get_flow(
         else 0
     )
 
-    def _add_explore(tracks, target: Optional[List[ExternalTrackResponse]] = None) -> None:
+    def _add_explore(
+        tracks,
+        target: Optional[List[ExternalTrackResponse]] = None,
+        *,
+        accept_limit: Optional[int] = None,
+    ) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
         # ещё волна радио» должно приниматься по числу свежих кандидатов.
         # Раньше волны останавливались на первом непустом СЫРОМ пуле, а
         # фильтрация исключений шла в самом конце — при подгрузке продолжения
         # кэшированный радио-пул (TTL 30 мин) целиком оказывался уже в очереди,
         # explore выходил пустым, и волна «замирала» на первых ~15 треках.
+        #
+        # accept_limit считает ПРИНЯТЫЕ треки, а не просмотренные. Обрезать пул
+        # заранее нельзя: у знакомого артиста его популярное — это ровно то, что
+        # уже лежит в коллекции пользователя, и предварительно обрезанное окно
+        # целиком уходило в исключения, а артист исчезал из потока.
+        accepted = 0
         for t in tracks:
+            if accept_limit is not None and accepted >= accept_limit:
+                break
             effective_artist, effective_title = effective_track_artist_title(t)
             key = _norm_key(effective_artist, effective_title)
             external_key = f"{t.source}:{t.external_id}"
@@ -1950,6 +2050,7 @@ async def get_flow(
             if t.source == "ytmusic":
                 t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
             (explore if target is None else target).append(t)
+            accepted += 1
 
     # YT Music радио — это чужой алгоритм "похожести" от YouTube, никак не
     # завязанный на наши жанр/тег-фильтры. Когда у пользователя уже есть
@@ -2057,9 +2158,10 @@ async def get_flow(
         key=lambda item: (artist_history[artist_key(item[1])], item[0]),
     )
     # Здесь ограничивается только стоимость сетевой генерации. Сколько треков
-    # выбранного артиста дойдёт до ранкера, решает _favorite_order ниже, а места
-    # в ответе по-прежнему не закреплены ни за одним источником: каталог каждого
-    # артиста конкурирует со всеми остальными кандидатами в общей модели.
+    # выбранного артиста дойдёт до ранкера, решает accept_limit ниже (считая уже
+    # прошедшие исключения), а места в ответе по-прежнему не закреплены ни за
+    # одним источником: каталог каждого артиста конкурирует со всеми остальными
+    # кандидатами в общей модели.
     favorite_explore_artists = max(
         _FAVORITE_EXPLORE_ARTISTS,
         min(len(catalog_artists), limit),
@@ -2070,23 +2172,26 @@ async def get_flow(
     favorite_window = max(limit, _FAVORITE_ARTIST_WINDOW)
 
     def _favorite_order(artist: str, pool) -> List[ExternalTrackResponse]:
-        """Какие треки любимого артиста доходят до ранкера этой подгрузкой.
+        """В каком порядке любимый артист предлагает свой каталог ранкеру.
 
-        Доказавший «любимость» артист отдаёт ЛЮБОЙ свой трек: окно выбирается
-        стабильно-псевдослучайно по контексту подгрузки, поэтому от запроса к
+        Доказавший «любимость» артист отдаёт ЛЮБОЙ свой трек: порядок
+        стабильно-псевдослучайный по контексту подгрузки, поэтому от запроса к
         запросу всплывают разные вещи из глубины каталога, а внутри одного
-        ответа порядок детерминирован. Непроверенный артист отдаёт только
+        ответа выдача детерминирована. Непроверенный артист предлагает сначала
         популярное на своей площадке — его ещё представляют слушателю.
+
+        Здесь только ПОРЯДОК: сколько треков артиста дойдёт до ранкера, решает
+        accept_limit в _add_explore, уже после исключений.
         """
         if artist_weights.get(artist_key(artist), 0.0) < _ARTIST_PROVEN_WEIGHT:
-            return _by_service_popularity(pool)[:favorite_window]
+            return _by_service_popularity(pool)
         return sorted(
             pool,
             key=lambda t: stable_jitter(
                 ranking_context, f"favorite-any:{artist}:{_item_identity(t)}"
             ),
             reverse=True,
-        )[:favorite_window]
+        )
 
     def _needs_more_pools() -> bool:
         """Whether an additional provider call can still widen the ranker."""
@@ -2135,14 +2240,15 @@ async def get_flow(
         pools = await asyncio.gather(*favorite_jobs, *lastfm_jobs, *discovery)
         favorite_count = len(favorite_jobs)
         lastfm_count = len(lastfm_jobs)
-        _add_explore(
-            (
-                t
-                for artist, pool in zip(favorite_artists, pools[:favorite_count])
-                for t in _favorite_order(artist, pool)
-            ),
-            favorite_explore,
-        )
+        # По артисту отдельным вызовом: бюджет favorite_window должен считаться
+        # на каждого, иначе первый же артист с глубоким каталогом съедает его
+        # целиком и остальные знакомые имена до ранкера не доходят.
+        for artist, pool in zip(favorite_artists, pools[:favorite_count]):
+            _add_explore(
+                _favorite_order(artist, pool),
+                favorite_explore,
+                accept_limit=favorite_window,
+            )
         _add_explore(
             (
                 t for t in _interleave(

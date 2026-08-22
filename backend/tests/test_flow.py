@@ -18,8 +18,10 @@ from app.models import (
     Track,
     Playlist,
     playlist_tracks,
+    recommendation_events,
     recommendation_impressions,
     user_track_plays,
+    user_track_skips,
 )
 from app.routers.flow import _persisted_flow_history, _taste_profile
 from app.schemas import ExternalTrackResponse
@@ -1541,3 +1543,196 @@ def test_service_popularity_falls_back_to_provider_order():
         "cat0",
         "cat1",
     ]
+
+
+def _long_ago_liked(db, user, artist, titles):
+    """Лайки давностью в три месяца: артист знакомый, но вес почти истлел.
+
+    Именно такой артист самый частый в реальной библиотеке — лайкнут когда-то,
+    его хиты давно в коллекции, а из потока он не должен исчезать.
+    """
+    playlist = Playlist(
+        name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    added_at = datetime.now(timezone.utc) - timedelta(days=90)
+    for position, title in enumerate(titles):
+        track = Track(title=title, artist=artist, duration=100, source="local")
+        db.add(track)
+        db.commit()
+        db.execute(
+            playlist_tracks.insert().values(
+                playlist_id=playlist.id,
+                track_id=track.id,
+                position=position,
+                added_at=added_at,
+            )
+        )
+    db.commit()
+    return playlist
+
+
+def test_favorite_artist_survives_a_collection_full_of_his_hits(client, db, monkeypatch):
+    """Знакомый артист доходит до выдачи, когда его хиты уже в коллекции.
+
+    Треки коллекции из волны исключаются, а «популярное» у знакомого артиста —
+    ровно то, что пользователь когда-то лайкнул. Окно «что артист отдаёт
+    ранкеру» поэтому нельзя обрезать ДО исключений: иначе от такого артиста не
+    остаётся ничего, и лайкнутые имена пропадают из потока целиком.
+    """
+    user = create_user(db, username="hits-already-liked-user")
+    hit_titles = [f"хит {i}" for i in range(10)]
+    _long_ago_liked(db, user, "FavArtist", hit_titles)
+
+    # Пул артиста: сверху его хиты (они же в коллекции), глубже — незнакомое.
+    hits = [
+        _popular("FavArtist", i, 1000 - i) for i in range(10)
+    ]
+    for track, title in zip(hits, hit_titles):
+        track.title = title
+    deep = [_popular("FavArtist", 100 + i, 10 - i) for i in range(10)]
+
+    async def _favorite(request, artist):
+        return hits + deep
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="hits-already-liked-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["external_id"] for track in resp.json()}
+    assert delivered, "знакомый артист исчез из выдачи целиком"
+    assert delivered <= {track.external_id for track in deep}, delivered
+
+
+def _dislike_event(db, user, external_id, *, event_type="dislike", surface="flow",
+                   artist="SeedArtist", title=None, minutes_ago=0):
+    """Событие дизлайка/снятия из плеера — путь ДО материализации трека."""
+    db.execute(
+        recommendation_events.insert().values(
+            user_id=user.id,
+            source="ytmusic",
+            external_id=external_id,
+            artist=artist,
+            title=title if title is not None else f"трек {external_id}",
+            event_type=event_type,
+            surface=surface,
+            request_id=f"req-{external_id}-{event_type}",
+            occurred_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+        )
+    )
+    db.commit()
+
+
+def test_dislike_is_not_squeezed_out_of_the_taste_window(db):
+    """Дизлайк исключает трек и после сотен свежих скипов.
+
+    Скипы пишутся автоматически (фронт шлёт их при <25% прослушивания) и
+    набегают сотнями, а вкусовые сигналы читаются окном _TASTE_QUERY_LIMIT.
+    Дизлайк сидел в том же окне — и через _TASTE_QUERY_LIMIT скипов трек,
+    которому пользователь сказал «больше не показывать», возвращался в волну.
+    """
+    from app.routers.flow import _TASTE_QUERY_LIMIT
+
+    user = create_user(db, username="dislike-window-user")
+    hated = Track(
+        title="ненавистный", artist="HatedArtist", duration=100, source="local"
+    )
+    db.add(hated)
+    db.commit()
+    db.refresh(hated)
+    db.execute(
+        user_track_skips.insert().values(
+            user_id=user.id,
+            track_id=hated.id,
+            skip_count=1,
+            disliked=True,
+            last_skipped=datetime.now(timezone.utc) - timedelta(days=30),
+        )
+    )
+
+    # Окно вкусовых сигналов забиваем доверху более свежими скипами.
+    filler = [
+        Track(title=f"скип {i}", artist=f"SkipArtist{i}", duration=100, source="local")
+        for i in range(_TASTE_QUERY_LIMIT)
+    ]
+    db.add_all(filler)
+    db.commit()
+    db.execute(
+        user_track_skips.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": track.id,
+                "skip_count": 1,
+                "disliked": False,
+                "last_skipped": datetime.now(timezone.utc),
+            }
+            for track in filler
+        ],
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert hated.id in profile["recent_ids"], "дизлайкнутый трек обязан быть исключён"
+
+
+def test_external_dislike_keeps_the_track_out_of_the_flow(client, db, monkeypatch):
+    """Дизлайк внешнего трека действует и без материализации.
+
+    Фронт отправляет событие ДО импорта трека в каталог, и импорт может не
+    успеть или упасть — тогда строки в user_track_skips нет вовсе. Поверхность
+    события не важна: «не показывать» относится к треку, а не к экрану.
+    """
+    user = create_user(db, username="external-dislike-user")
+    _liked(db, user, artist="SeedArtist")
+    catalog = [_popular("SeedArtist", 0, 900), _popular("SeedArtist", 1, 800)]
+    _dislike_event(db, user, "cat0", surface="recommendations")
+
+    async def _favorite(request, artist):
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="external-dislike-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["external_id"] for track in resp.json()}
+    assert "cat0" not in delivered, delivered
+    assert "cat1" in delivered, delivered
+
+
+def test_undislike_lets_the_track_back_into_the_flow(client, db, monkeypatch):
+    """Снятый дизлайк не банит трек навсегда.
+
+    В user_track_skips снятие удаляет строку целиком, а журнал событий помнит
+    оба нажатия — поэтому решает более позднее.
+    """
+    user = create_user(db, username="undislike-user")
+    _liked(db, user, artist="SeedArtist")
+    catalog = [_popular("SeedArtist", 0, 900)]
+    _dislike_event(db, user, "cat0", minutes_ago=10)
+    _dislike_event(db, user, "cat0", event_type="undislike", minutes_ago=1)
+
+    async def _favorite(request, artist):
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="undislike-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["external_id"] for track in resp.json()}
+    assert "cat0" in delivered, delivered
+
