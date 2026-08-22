@@ -1405,3 +1405,139 @@ def test_preferences_persist_detected_artist_exclusion_and_explicit_override(cli
     assert explicit.status_code == 200, explicit.text
     assert explicit.json()["preferred_artists"] == ["AutoArtist"]
     assert explicit.json()["excluded_artists"] == []
+
+
+def _popular(artist, index, play_count):
+    """Внешний трек с метрикой прослушиваний СВОЕЙ площадки."""
+    track = _external(artist, f"трек {index}", f"cat{index}")
+    track.play_count = play_count
+    return track
+
+
+def test_unproven_artist_contributes_only_his_popular_tracks(client, db, monkeypatch):
+    """Артист, ещё не доказавший «любимость», представлен популярным.
+
+    Популярность — метрика площадки, с которой трек подтянулся (play_count у
+    ExternalTrackResponse), а не порядок выдачи провайдера: один лайк открывает
+    каталог, но выбирать из него глубину рано.
+    """
+    user = create_user(db, username="unproven-artist-user")
+    _liked(db, user, artist="OneLikeArtist")
+
+    catalog = [_popular("OneLikeArtist", i, count) for i, count in enumerate(
+        [3, 40, 900, 7, 700, 0, 800, 12, 500, 1, 600, 25]
+    )]
+
+    async def _favorite(request, artist):
+        assert artist == "OneLikeArtist"
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    # Порядок пула должен решать сам: общая модель иначе перебивает выбор
+    # источника своими признаками (свежесть, акустика, контекст).
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="unproven-artist-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["external_id"] for track in resp.json()}
+    top_five = {
+        track.external_id
+        for track in sorted(catalog, key=lambda t: -t.play_count)[:5]
+    }
+    assert delivered == top_five, delivered
+
+
+def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkeypatch):
+    """Доказавший «любимость» артист отдаёт любой трек, а не свой хит-парад.
+
+    Три импортированных трека — вес выше порога _ARTIST_PROVEN_WEIGHT, поэтому
+    выбор идёт по всей глубине каталога: иначе волна крутит одну и ту же
+    верхушку, сколько бы артист ни был любим.
+    """
+    user = create_user(db, username="proven-artist-user")
+    _imported_playlist(
+        db, user, [("ProvenArtist", f"импорт {i}") for i in range(3)]
+    )
+
+    # Монотонная метрика: популярный хвост каталога отличить от головы легко.
+    catalog = [_popular("ProvenArtist", i, 1000 - i * 10) for i in range(20)]
+
+    async def _favorite(request, artist):
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="proven-artist-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = [track["external_id"] for track in resp.json()]
+    assert delivered, resp.text
+    assert set(delivered) <= {track.external_id for track in catalog}, delivered
+    top_five = [track.external_id for track in catalog[:5]]
+    assert set(delivered) != set(top_five), delivered
+    # Хотя бы один трек — из глубины каталога, а не из его популярной половины.
+    assert any(
+        int(external_id.removeprefix("cat")) >= 10 for external_id in delivered
+    ), delivered
+
+
+def test_similar_artist_pool_leads_with_popular_tracks():
+    """От похожего артиста в очередь идёт его популярный трек.
+
+    И соседи обходятся по кругу: иначе «следующим» всегда оказывался бы весь
+    каталог первого похожего имени.
+    """
+    from app.routers.flow import _neighbour_popular_mix
+
+    pools = [
+        [
+            _popular("NeighbourA", 0, 10),
+            _popular("NeighbourA", 1, 900),
+            _popular("NeighbourA", 2, 50),
+        ],
+        [
+            _popular("NeighbourB", 3, 5),
+            _popular("NeighbourB", 4, 700),
+        ],
+    ]
+
+    result = _neighbour_popular_mix(pools, "seedartist")
+    assert [track.external_id for track in result] == [
+        "cat1",  # самый популярный у A
+        "cat4",  # самый популярный у B
+        "cat2",
+        "cat3",
+        "cat0",
+    ], [track.external_id for track in result]
+
+
+def test_similar_pool_drops_the_seed_artist_own_tracks():
+    """Свои треки сид-артиста в «похожее» не попадают даже после сортировки."""
+    from app.routers.flow import _neighbour_popular_mix
+
+    pools = [[_popular("SeedArtist", 0, 900), _popular("Neighbour", 1, 10)]]
+
+    result = _neighbour_popular_mix(pools, "seedartist")
+    assert [track.external_id for track in result] == ["cat1"]
+
+
+def test_service_popularity_falls_back_to_provider_order():
+    """Провайдер прислал не всё: без метрики порядок остаётся его."""
+    from app.routers.flow import _by_service_popularity
+
+    pool = [
+        _popular("Artist", 0, 0),
+        _popular("Artist", 1, 0),
+        _popular("Artist", 2, 5),
+    ]
+    assert [t.external_id for t in _by_service_popularity(pool)] == [
+        "cat2",
+        "cat0",
+        "cat1",
+    ]

@@ -12,6 +12,14 @@ Last.fm, радио и граф YouTube Music, каталоги любимых �
 жанровые теги расширяют пул. Их происхождение даёт небольшой confidence bonus;
 внутри знакомой и новой частей порядок определяет общая модель. Генераторы
 могут быть пропущены, когда пул уже широк и цель разведки выполнена.
+
+Какой именно трек артист отдаёт в пул, зависит от того, доказал ли он
+«любимость» (порог ``_ARTIST_PROVEN_WEIGHT`` по накопленному весу вкуса):
+доказанный отдаёт любой трек из глубины каталога, ещё не проверенный — только
+популярное, как и артист, найденный «похожим» на знакомое имя. Популярность
+здесь — метрика ПЛОЩАДКИ, с которой трек подтянулся (views у YouTube Music,
+playback_count у SoundCloud), а не наши внутренние счётчики: у только что
+найденного трека их ещё нет.
 """
 
 import asyncio
@@ -195,6 +203,20 @@ _CONTINUATION_SEEDS = 6
 _PROFILE_SEEDS = 4
 _FAVORITE_ARTIST_LIMIT = 15
 _FAVORITE_EXPLORE_ARTISTS = 12
+# Артист «доказал любимость», когда накопленный положительный вес больше, чем
+# даёт один сигнал (лайк 3.0, свой плейлист 4.0, явное предпочтение 2.5): два
+# лайка, лайк плюс повторные прослушивания, курированный плейлист с историей.
+# Доказанному артисту волна берёт ЛЮБОЙ трек каталога, непроверенному — только
+# из его популярного: знакомство с новым именем начинается с того, чем оно
+# известно, а не со случайного би-сайда.
+_ARTIST_PROVEN_WEIGHT = 6.0
+# Каталог доказанного артиста должен быть глубже верхушки поиска, иначе «любой
+# случайный трек» вырождается в те же пятнадцать популярных.
+_FAVORITE_CATALOG_LIMIT = 40
+# Сколько треков одного любимого артиста доходит до ранкера за подгрузку. Окно
+# не меньше запрошенной порции — иначе у пользователя с одним-двумя артистами
+# выдача станет короче, чем он просил.
+_FAVORITE_ARTIST_WINDOW = 10
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
 # beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
 # засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
@@ -1397,12 +1419,72 @@ async def _artist_songs_pool(browse_id: str) -> List[ExternalTrackResponse]:
     return songs
 
 
+def _service_play_count(item) -> int:
+    """Прослушивания трека на площадке, с которой он подтянулся.
+
+    Популярность внешнего кандидата — это метрика ПРОВАЙДЕРА (views у YT Music,
+    playback_count у SoundCloud; см. _normalize в соответствующих роутерах), а не
+    наши собственные счётчики: у только что найденного трека их ещё нет. Ноль
+    означает «провайдер метрику не прислал» — тогда порядок остаётся его.
+    """
+    try:
+        return max(0, int(getattr(item, "play_count", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _by_service_popularity(pool) -> List[ExternalTrackResponse]:
+    """Пул артиста в порядке популярности на его площадке.
+
+    При равной (в том числе неизвестной) метрике сохраняется порядок провайдера:
+    выдача страницы артиста и так отсортирована его популярным вперёд.
+    """
+    return [
+        item
+        for _rank, item in sorted(
+            enumerate(pool),
+            key=lambda pair: (-_service_play_count(pair[1]), pair[0]),
+        )
+    ]
+
+
+def _interleave(pools):
+    """Круговой обход пулов: сначала головы каждого, а не весь первый целиком."""
+    pools = [list(pool) for pool in pools]
+    for index in range(max((len(pool) for pool in pools), default=0)):
+        for pool in pools:
+            if index < len(pool):
+                yield pool[index]
+
+
+def _neighbour_popular_mix(pools, own: str) -> List[ExternalTrackResponse]:
+    """Пулы похожих артистов → очередь, где от каждого сначала популярное.
+
+    Треки самого сид-артиста отбрасываются: «похожее» на него — это другие имена.
+    """
+    return list(
+        _interleave(
+            _by_service_popularity(
+                t
+                for t in pool
+                if artist_key(effective_track_artist_title(t)[0]) != own
+            )
+            for pool in pools
+        )
+    )
+
+
 async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
     """Треки артистов, ПОХОЖИХ на переданного (его собственные не отдаём).
 
     Это единственный источник похожести, не завязанный на конкретный videoId:
     radio требует ytmusic-трека в профиле, а SoundCloud-разведка — это по сути
     дискография самого артиста (см. _soundcloud_pool), новых имён она не даёт.
+
+    От похожего артиста следующим в очереди должен идти его ПОПУЛЯРНЫЙ трек:
+    незнакомое имя представляют тем, чем оно известно. Поэтому каждый сосед
+    сначала упорядочивается по прослушиваниям на площадке, а затем соседи
+    обходятся по кругу — иначе вся выдача была бы дискографией первого из них.
     """
     related = await _similar_artist_names(artist)
     browse_ids = [r["browse_id"] for r in related if r.get("browse_id")]
@@ -1410,25 +1492,37 @@ async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
         return []
 
     pools = await asyncio.gather(*(_artist_songs_pool(b) for b in browse_ids))
-    own = artist_key(artist)
-    return [
-        t
-        for pool in pools
-        for t in pool
-        if artist_key(effective_track_artist_title(t)[0]) != own
-    ]
+    return _neighbour_popular_mix(pools, artist_key(artist))
 
 
 async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
+    """Каталог любимого/знакомого артиста — как можно глубже.
+
+    Порядок выдачи здесь НЕ решается: его выбирает вызывающий по тому, доказал
+    ли артист «любимость» (см. _ARTIST_PROVEN_WEIGHT), поэтому пул кэшируется
+    один на артиста и переиспользуется всеми пользователями.
+    """
     key = f"flow:favorite:{artist_key(artist)}"
     cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
+    # Страница артиста — его собственная выдача во всю глубину. Она нужна именно
+    # доказанному артисту: «любой случайный трек» по верхушке поиска — это всё
+    # тот же его хит. search остаётся фолбэком: карточки артиста у провайдера
+    # может не быть вовсе (ремиксеры, локальные ники), а каталог тогда пуст.
     try:
-        tracks = await ytdlp.search_ytmusic(request, artist, limit=_FAVORITE_ARTIST_LIMIT)
+        tracks = await ytdlp.ytmusic_artist_catalog(
+            request, artist, limit=_FAVORITE_CATALOG_LIMIT
+        )
     except Exception:  # noqa: BLE001
-        logger.warning("flow favorite artist search failed for %s", artist)
+        logger.warning("flow favorite artist catalog failed for %s", artist)
         tracks = []
+    if not tracks:
+        try:
+            tracks = await ytdlp.search_ytmusic(request, artist, limit=_FAVORITE_ARTIST_LIMIT)
+        except Exception:  # noqa: BLE001
+            logger.warning("flow favorite artist search failed for %s", artist)
+            tracks = []
     own = artist_key(artist)
     # Сверяем имя ПО СЛОВАМ, а не подстрокой. Подстрока по нормализованному
     # ключу склеивает разных артистов на коротких именах: "sky" совпадало с
@@ -1962,15 +2056,37 @@ async def get_flow(
         enumerate(catalog_artists),
         key=lambda item: (artist_history[artist_key(item[1])], item[0]),
     )
-    # Ограничиваем только стоимость сетевой генерации, не число позиций в
-    # ответе. Точный каталог каждого выбранного артиста затем конкурирует со
-    # всеми остальными кандидатами в общей модели.
+    # Здесь ограничивается только стоимость сетевой генерации. Сколько треков
+    # выбранного артиста дойдёт до ранкера, решает _favorite_order ниже, а места
+    # в ответе по-прежнему не закреплены ни за одним источником: каталог каждого
+    # артиста конкурирует со всеми остальными кандидатами в общей модели.
     favorite_explore_artists = max(
         _FAVORITE_EXPLORE_ARTISTS,
         min(len(catalog_artists), limit),
     )
     favorite_artists = [artist for _, artist in favorite_artists][:favorite_explore_artists]
     favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
+    artist_weights = profile.get("artist_weight") or {}
+    favorite_window = max(limit, _FAVORITE_ARTIST_WINDOW)
+
+    def _favorite_order(artist: str, pool) -> List[ExternalTrackResponse]:
+        """Какие треки любимого артиста доходят до ранкера этой подгрузкой.
+
+        Доказавший «любимость» артист отдаёт ЛЮБОЙ свой трек: окно выбирается
+        стабильно-псевдослучайно по контексту подгрузки, поэтому от запроса к
+        запросу всплывают разные вещи из глубины каталога, а внутри одного
+        ответа порядок детерминирован. Непроверенный артист отдаёт только
+        популярное на своей площадке — его ещё представляют слушателю.
+        """
+        if artist_weights.get(artist_key(artist), 0.0) < _ARTIST_PROVEN_WEIGHT:
+            return _by_service_popularity(pool)[:favorite_window]
+        return sorted(
+            pool,
+            key=lambda t: stable_jitter(
+                ranking_context, f"favorite-any:{artist}:{_item_identity(t)}"
+            ),
+            reverse=True,
+        )[:favorite_window]
 
     def _needs_more_pools() -> bool:
         """Whether an additional provider call can still widen the ranker."""
@@ -2011,14 +2127,6 @@ async def get_flow(
     seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
     lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
 
-    def _round_robin(pools):
-        """Interleave Last.fm pools so the first slots use different seeds."""
-        pools = [list(pool) for pool in pools]
-        for index in range(max((len(pool) for pool in pools), default=0)):
-            for pool in pools:
-                if index < len(pool):
-                    yield pool[index]
-
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
     # волнами по два: при большом exclude каждая пустая волна добавляла полный
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
@@ -2028,11 +2136,16 @@ async def get_flow(
         favorite_count = len(favorite_jobs)
         lastfm_count = len(lastfm_jobs)
         _add_explore(
-            (t for pool in pools[:favorite_count] for t in pool), favorite_explore
+            (
+                t
+                for artist, pool in zip(favorite_artists, pools[:favorite_count])
+                for t in _favorite_order(artist, pool)
+            ),
+            favorite_explore,
         )
         _add_explore(
             (
-                t for t in _round_robin(
+                t for t in _interleave(
                     pools[favorite_count : favorite_count + lastfm_count]
                 )
                 if _matches_related(t)
