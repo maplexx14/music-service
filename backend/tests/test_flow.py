@@ -21,7 +21,7 @@ from app.models import (
     recommendation_impressions,
     user_track_plays,
 )
-from app.routers.flow import _persisted_flow_history
+from app.routers.flow import _persisted_flow_history, _taste_profile
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -1074,40 +1074,26 @@ def test_flow_does_not_open_artist_catalog_after_one_play(client, db, monkeypatc
     assert requested_artists == [], requested_artists
 
 
-def test_flow_does_not_treat_imported_playlist_as_favorite_artists(
+def test_imported_playlist_artist_is_reachable_but_not_trusted(
     client, db, monkeypatch
 ):
-    """Импорт каталога не открывает внешний каталог каждого импортированного имени."""
+    """Импорт открывает КАТАЛОГ артиста, но не доверие к нему.
+
+    Порог _PLAYLIST_ARTIST_MIN_TRACKS раньше закрывал и то и другое разом, и
+    артист с одним импортированным треком не доходил до потока ни одним
+    генератором: в catalog_artists его нет, в trusted_artist_keys нет, его
+    собственные треки исключены как «уже в коллекции», а в artist_weight он есть
+    — поэтому и новым не считается. Каталог доступен с первого трека; вкусовой
+    байпас (curated / trusted) — по-прежнему только начиная с порога.
+    """
     user = create_user(db, username="imported-playlist-user")
-    playlist = Playlist(
-        name="Imported",
-        description="Импортировано из SoundCloud",
-        is_public=False,
-        owner_id=user.id,
-    )
-    track = Track(
-        title="imported song",
-        artist="ImportedArtist",
-        duration=100,
-        source="local",
-        file_path="minio://music/imported.mp3",
-    )
-    db.add_all([playlist, track])
-    db.commit()
-    db.execute(
-        playlist_tracks.insert().values(
-            playlist_id=playlist.id,
-            track_id=track.id,
-            position=0,
-        )
-    )
-    db.commit()
+    _imported_playlist(db, user, [("ImportedArtist", "imported song")])
 
     requested_artists = []
 
     async def _favorite(request, artist):
         requested_artists.append(artist)
-        return []
+        return [_external(artist, "трек из каталога", "imported-one-track")]
 
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
 
@@ -1116,7 +1102,15 @@ def test_flow_does_not_treat_imported_playlist_as_favorite_artists(
         headers=auth_headers(client, username="imported-playlist-user"),
     )
     assert resp.status_code == 200, resp.text
-    assert requested_artists == [], requested_artists
+    assert "ImportedArtist" in requested_artists, requested_artists
+    delivered = {track.get("external_id") for track in resp.json()}
+    assert "imported-one-track" in delivered, delivered
+
+    profile = _taste_profile(db, user.id)
+    key = "importedartist"
+    assert profile["artist_weight"].get(key), profile["artist_weight"]
+    assert key not in profile["curated_artist_keys"], profile["curated_artist_keys"]
+    assert key not in profile["trusted_artist_keys"], profile["trusted_artist_keys"]
 
 
 def test_standard_flow_uses_imported_playlist_artists(client, db, monkeypatch):
@@ -1291,6 +1285,45 @@ def test_flow_searches_explicit_genres(client, db, monkeypatch):
     mix = resp.json()
     assert len(mix) == 5, mix
     assert all("phonk" in track["title"].lower() for track in mix), mix
+
+
+def test_tag_search_requires_the_searched_words_not_just_the_language(
+    client, db, monkeypatch
+):
+    """Теговый поиск — единственный пул без родословной, и язык ему не сигнал.
+
+    make_relevance_check доходит до языкового прокси раньше ключевых слов (жанр
+    у внешнего трека пуст), поэтому у юзера с кириллической библиотекой ЛЮБОЙ
+    русскоязычный трек из сырого полнотекстового поиска проходил как «в духе
+    вкуса», а найденное строго по теме, но латиницей — отбраковывалось. Именно
+    так в поток попадали новые артисты, не имеющие к вкусу отношения.
+    """
+    user = create_user(db, username="tag-leak-user")
+    _liked(db, user, artist="Кровосток", title="Дно")
+    user.preferred_genres = ["phonk"]
+    db.commit()
+
+    captured = []
+
+    async def _tag(request, query):
+        captured.append(query)
+        word = query.split()[0]
+        return [
+            _external("Тематический", f"{word} трек", "tag-on-topic"),
+            _external("Посторонний", "случайная русская песня", "tag-off-topic"),
+        ]
+
+    monkeypatch.setattr("app.routers.flow._tag_pool", _tag)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="tag-leak-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured, "теговая разведка не запускалась"
+    delivered = {track.get("external_id") for track in resp.json()}
+    assert "tag-on-topic" in delivered, delivered
+    assert "tag-off-topic" not in delivered, delivered
 
 
 def test_flow_sparse_pool_keeps_relevant_repeats(client, db, monkeypatch):

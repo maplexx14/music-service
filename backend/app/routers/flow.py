@@ -71,6 +71,7 @@ from app.artist_utils import (
     artist_key,
     effective_artist_title,
     effective_track_artist_title,
+    query_names_artist,
     same_artist,
 )
 from app.models import (
@@ -105,14 +106,17 @@ _PLAYED_ARTIST_MIN_PLAYS = 2
 # Минимум треков АРТИСТА в собственных плейлистах, с которого он считается
 # любимым (курированным). Импорт приводит сотни имён одним движением, и каждое
 # становилось любимым с первого же трека: любимый артист проходит вкусовой
-# фильтр в обход всех проверок (taste.py — trusted_artist_keys), открывает свой
-# каталог у провайдера. Так один
+# фильтр в обход всех проверок (taste.py — trusted_artist_keys). Так один
 # попутный трек из импортированного плейлиста размывал профиль до «подходит всё»
 # — особенно с SoundCloud, где артистом трека часто оказывается не исполнитель, а
 # перезаливщик (см. artist_utils.resolve_track_artist).
 # Порог по артисту, а не по плейлисту: три трека в коллекции — это выбор, один —
 # попутный груз импорта. Ниже порога трек остаётся положительным сигналом (жанр,
 # язык, скоуп своей библиотеки), но любимым артиста не делает.
+# Порог управляет ТОЛЬКО доверием. Доступ к собственному каталогу артиста у
+# провайдера он не закрывает (catalog_artist_keys наполняется с первого трека):
+# иначе артист с одним-двумя треками не доходил до потока вообще — см. комментарий
+# у catalog_artist_keys в _taste_profile.
 _PLAYLIST_ARTIST_MIN_TRACKS = 3
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
@@ -504,6 +508,21 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if favorite and key and key not in seen_curated_artist:
             curated_artist_keys.append(key)
             seen_curated_artist.add(key)
+        # Собственный каталог артиста разрешаем запрашивать у провайдера с
+        # ПЕРВОГО трека в коллекции. Порог _PLAYLIST_ARTIST_MIN_TRACKS решал
+        # сразу два разных вопроса — «доверять ли артисту настолько, чтобы
+        # пускать его в обход вкусового фильтра» и «можно ли вообще спросить у
+        # провайдера его треки», — и второй ответ делал первый фатальным:
+        # импортированный артист с одним-двумя треками не попадал в поток НИ
+        # ОДНИМ генератором (в catalog_artists его нет, в trusted_artist_keys
+        # нет, а его собственные треки исключены как «уже в коллекции»), при
+        # этом оставался в artist_weight и потому не считался и новым. Доступ к
+        # каталогу порогом больше не управляется: пользователь сам положил этот
+        # трек в свой плейлист и ждёт артиста в потоке. Доверием (curated /
+        # trusted выше) порог управляет по-прежнему.
+        if key and key not in seen_catalog_artist:
+            catalog_artist_keys.append(key)
+            seen_catalog_artist.add(key)
         genre = track.genre or infer_genre_from_text(effective_title, effective_artist)
         if genre:
             genres.append(genre)
@@ -760,32 +779,39 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # сигнал именно про ЭТОТ трек, а плейлист бывает и импортированным.
     seed_tracks: List[tuple] = []
     seen_seed_track = set()
-    for track, _added_at in liked:
-        effective_artist, effective_title = effective_track_artist_title(track)
-        key = _norm_key(effective_artist, effective_title)
-        if key in skipped_keys or key in seen_seed_track:
-            continue
-        if not effective_artist or not effective_title:
-            continue
-        if artist_key(effective_artist) in excluded_artists:
-            continue
-        seen_seed_track.add(key)
-        seed_tracks.append((effective_artist, effective_title))
-        if len(seed_tracks) >= _SEED_TRACK_LIMIT:
-            break
-    for track, _added_at, _origin in playlisted:
-        effective_artist, effective_title = effective_track_artist_title(track)
-        key = _norm_key(effective_artist, effective_title)
-        if key in skipped_keys or key in seen_seed_track:
-            continue
-        if not effective_artist or not effective_title:
-            continue
-        if artist_key(effective_artist) in excluded_artists:
-            continue
-        seen_seed_track.add(key)
-        seed_tracks.append((effective_artist, effective_title))
-        if len(seed_tracks) >= _SEED_TRACK_LIMIT:
-            break
+
+    def _seed_pairs(rows) -> List[tuple]:
+        """Пары (артист, название), годные в сиды похожести; свежие первыми.
+
+        Ключи помечаются в общем seen_seed_track, поэтому вызванный первым
+        источник забирает пересечение себе.
+        """
+        pairs: List[tuple] = []
+        for row in rows:
+            effective_artist, effective_title = effective_track_artist_title(row[0])
+            key = _norm_key(effective_artist, effective_title)
+            if key in skipped_keys or key in seen_seed_track:
+                continue
+            if not effective_artist or not effective_title:
+                continue
+            if artist_key(effective_artist) in excluded_artists:
+                continue
+            seen_seed_track.add(key)
+            pairs.append((effective_artist, effective_title))
+        return pairs
+
+    # Лайки и плейлисты ЧЕРЕДУЕМ, а не дозаполняем одним после другого. Раньше
+    # цикл по лайкам добирал _SEED_TRACK_LIMIT первым, и до плейлистов дело не
+    # доходило вовсе: у юзера с 20+ лайками импортированная коллекция не давала
+    # ни одного сида похожести. Лайк остаётся раньше плейлиста внутри каждого
+    # круга — он по-прежнему более адресный сигнал про КОНКРЕТНЫЙ трек.
+    liked_pairs = _seed_pairs(liked)
+    playlisted_pairs = _seed_pairs(playlisted)
+    for index in range(max(len(liked_pairs), len(playlisted_pairs))):
+        for pairs in (liked_pairs, playlisted_pairs):
+            if index < len(pairs):
+                seed_tracks.append(pairs[index])
+    seed_tracks = seed_tracks[:_SEED_TRACK_LIMIT]
 
     acoustic_rows = []
     for track, added_at in liked:
@@ -1404,10 +1430,17 @@ async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalT
         logger.warning("flow favorite artist search failed for %s", artist)
         tracks = []
     own = artist_key(artist)
+    # Сверяем имя ПО СЛОВАМ, а не подстрокой. Подстрока по нормализованному
+    # ключу склеивает разных артистов на коротких именах: "sky" совпадало с
+    # "skylar grey", "yung" — с "yungblud", и такой трек шёл в выдачу без
+    # вкусовой проверки вообще (favorite_explore её не проходит — это по замыслу
+    # точный каталог своего артиста). query_names_artist требует, чтобы каждое
+    # слово запроса было словом имени, и при этом снимает разницу алфавита и
+    # допускает фичеринг ("A, B") — ровно то, что нужно от поиска у провайдера.
     tracks = [
         t
         for t in tracks
-        if own and own in artist_key(effective_track_artist_title(t)[0])
+        if own and query_names_artist(artist, effective_track_artist_title(t)[0])
     ]
     await set_cache_async(key, [t.model_dump() for t in tracks], expire=_SC_EXPLORE_TTL if tracks else 600)
     return tracks
@@ -1840,24 +1873,14 @@ async def get_flow(
         )
     ]
 
-    # Та же проверка, что и для локальных кандидатов и для /recommendations
-    # (taste.py). У внешних треков genre всегда пуст, поэтому решает жанр по
-    # названию, а если он неопределим — язык библиотеки, и лишь затем
-    # тематические слова.
-    _matches_taste = track_check(
-        make_relevance_check(
-            trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
-            user_genres=set(profile.get("genres") or []),
-            prefer_cyrillic=profile.get("prefer_cyrillic"),
-            keywords=taste_keywords,
-        )
-    )
     # Кандидаты, добытые расширением курированного артиста (радио от его трека,
     # сосед по графу артистов, его же дискография в SoundCloud). Их родословная
     # — уже сигнал вкуса, поэтому неопределимый жанр им не в укор: у похожего
     # артиста нет ни genre в метаданных, ни слова «рэп» в названии, и обычная
     # проверка отбраковывала ПОХОЖИХ подчистую, оставляя в волне ровно тех
     # артистов, которых пользователь и так уже выбрал сам.
+    # Пропуск по родословной действует ТОЛЬКО на пулы, засеянные вкусом.
+    # Теговый поиск ниже строит свою проверку: у него родословной нет.
     _matches_related = track_check(
         make_relevance_check(
             trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
@@ -1917,13 +1940,16 @@ async def get_flow(
     # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
     # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
     # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
-    # Artist catalog lookup is reserved for explicit/liked taste artists. Imported
-    # playlists are useful local signals, but must not open a provider catalog for
-    # every imported name.
+    # Каталог запрашиваем для любого артиста из СОБСТВЕННОЙ коллекции юзера —
+    # лайки, свои плейлисты, импорт, явные предпочтения. Это не разведка: пул
+    # возвращает треки именно запрошенного артиста (_favorite_artist_pool
+    # сверяет имя), поэтому «чужого» в поток он привести не может, а вот без
+    # него импортированный артист не попадал в выдачу ни одним путём.
     catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
-    # Curated/liked artists are useful catalog seeds at every page size. A
-    # one-track imported playlist is deliberately absent from these profile
-    # fields, so imports do not fan out into provider searches by themselves.
+    # Порядок: сначала лайки, затем курированные плейлистные имена, затем
+    # остальная коллекция. Число сетевых запросов ограничено ниже, а очередь
+    # ротируется по artist_history — не сыгранные имена (в том числе только что
+    # импортированные) поднимаются вперёд сами.
     catalog_artists = list(
         dict.fromkeys(
             (profile.get("liked_artists") or [])
@@ -2063,7 +2089,6 @@ async def get_flow(
     # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
     # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
     tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
-    tag_check = _matches_taste
     if not tag_words:
         # Своих слов у юзера нет — остаются жанры, но наши 12 ключей это общие
         # слова, и склейка двух ("phonk hip-hop") как поисковый запрос у
@@ -2073,31 +2098,38 @@ async def get_flow(
         # за подгрузку — это ротация разведки, а не фиксированный запрос.
         pool = beets_genre.subgenres(profile.get("genres") or [])
         if pool:
-            subgenre = max(
-                pool,
-                key=lambda value: stable_jitter(ranking_context, f"subgenre:{value}"),
-            )
-            tag_words = [subgenre]
-            # Имя поджанра добавляем в тематические слова ИМЕННО для этого пула:
-            # запрос выведен из жанрового профиля юзера, поэтому трек, который
-            # сам называет этот поджанр в заголовке, — подтверждённый вкусом
-            # кандидат. Без этого треки, найденные по "memphis rap", у юзера с
-            # кириллической библиотекой отбраковывались языковым прокси все до
-            # одного, и разведка по жанрам не давала ничего.
-            tag_check = track_check(
-                make_relevance_check(
-                    trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
-                    user_genres=set(profile.get("genres") or []),
-                    prefer_cyrillic=profile.get("prefer_cyrillic"),
-                    keywords=taste_keywords + subgenre.split(),
+            tag_words = [
+                max(
+                    pool,
+                    key=lambda value: stable_jitter(
+                        ranking_context, f"subgenre:{value}"
+                    ),
                 )
-            )
+            ]
         else:
             tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
     if tag_words and _needs_more_pools():
         query = " ".join(tag_words[:2])
+        # Это ЕДИНСТВЕННЫЙ генератор без родословной: сырой полнотекстовый поиск
+        # у провайдера, который на запрос из пары слов охотно отдаёт что угодно.
+        # Требуем, чтобы кандидат сам называл искомые слова, и намеренно НЕ
+        # передаём prefer_cyrillic. Языковой прокси здесь работал ровно наоборот:
+        # у юзера с кириллической библиотекой make_relevance_check доходит до
+        # языка раньше ключевых слов (жанр у внешнего трека пуст) и там
+        # возвращает ответ, поэтому по запросу "memphis rap" отбраковывались все
+        # найденные по теме треки, а любой посторонний русскоязычный трек
+        # проходил. Именно этим путём в поток попадали новые артисты, не имеющие
+        # к вкусу отношения.
+        tag_check = track_check(
+            make_relevance_check(
+                trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
+                user_genres=set(profile.get("genres") or []),
+                prefer_cyrillic=None,
+                keywords=list(dict.fromkeys(query.split())),
+            )
+        )
         _add_explore(
             t
             for t in await _tag_pool(request, query)
