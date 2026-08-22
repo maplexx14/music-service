@@ -432,11 +432,48 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         effective_artist, _effective_title = effective_track_artist_title(track)
         artist_play_totals[artist_key(effective_artist)] += play_count or 1
     # Сколько треков артиста лежит в собственных плейлистах — по этому счётчику
-    # работает порог «любимого» (_PLAYLIST_ARTIST_MIN_TRACKS).
-    playlist_artist_totals: Counter = Counter(
-        artist_key(effective_track_artist_title(track)[0])
-        for track, _added_at, _origin in playlisted
+    # работает порог «любимого» (_PLAYLIST_ARTIST_MIN_TRACKS). Считаем по ВСЕЙ
+    # коллекции, а не по окну свежих сигналов: импорт приносит сотни треков
+    # разом, поэтому в окно _TASTE_QUERY_LIMIT попадает произвольная его часть, и
+    # артист с пятью треками в плейлисте мог не встретиться там ни разу — порог
+    # не брал НИКТО из импорта, хотя именно число треков и есть мера любимости.
+    # Тот же довод, что у collection_rows выше: исключения и пороги окном не
+    # ограничены, окном ограничены только затухающие веса.
+    #
+    # group_by(Track.id) — трек может лежать в нескольких плейлистах, но в
+    # счётчик артиста он должен попасть один раз. Эффективное имя артиста
+    # считается в Python: у SoundCloud исполнитель часто сидит в названии
+    # ("Artist - Title"), и GROUP BY по Track.artist собрал бы не тех.
+    playlist_artist_rows = (
+        db.query(
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.album,
+            aggregate_playlist_origin().label("playlist_origin"),
+        )
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user_id, Playlist.is_liked == False)
+        .group_by(Track.id)
+        .all()
     )
+    playlist_artist_totals: Counter = Counter()
+    playlist_artist_display: dict = {}
+    # Ручная курация сильнее импорта, поэтому для артиста она и побеждает.
+    playlist_artist_manual: set[str] = set()
+    for artist, title, source, album, playlist_origin in playlist_artist_rows:
+        effective_artist, _effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        key = artist_key(effective_artist)
+        playlist_artist_totals[key] += 1
+        playlist_artist_display.setdefault(key, effective_artist)
+        if str(playlist_origin or "manual").lower() == "manual":
+            playlist_artist_manual.add(key)
 
     # Скипы — негативный сигнал (фронт шлёт их только при <25% прослушивания).
     # disliked — явный дизлайк из плеера: штраф тяжелее и без затухания.
@@ -557,6 +594,35 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             seen_seed.add(track.external_id)
         if track.source == "ytmusic" and track.external_id:
             playlist_seeds.append(track.external_id)
+
+    # Артист, чьи треки в окно свежих сигналов не попали, всё равно любимый, если
+    # их в плейлистах достаточно: у большого импорта (сотни треков с одним
+    # added_at) иначе не оказывалось ни одного любимого имени вообще — цикл выше
+    # его просто не видел, а значит артист не получал ни веса, ни доступа к
+    # собственному каталогу у провайдера, ни места в сидах.
+    for key, total in playlist_artist_totals.items():
+        if not key or total < _PLAYLIST_ARTIST_MIN_TRACKS:
+            continue
+        manual = key in playlist_artist_manual
+        if manual:
+            non_imported_artist_keys.add(key)
+        else:
+            imported_playlist_artist_keys.add(key)
+        artist_display.setdefault(key, playlist_artist_display.get(key, key))
+        # Вес начисляем только тем, кого цикл выше не посчитал: иначе один и тот
+        # же трек учтётся дважды. Затухания здесь нет — added_at этих треков
+        # остался за окном, а членство в плейлисте это состояние, а не событие.
+        if key not in artist_weight:
+            artist_weight[key] = 4.0 if manual else _PLAYLIST_IMPORTED_WEIGHT
+        if key not in seen_curated_artist:
+            curated_artist_keys.append(key)
+            seen_curated_artist.add(key)
+        if key not in seen_catalog_artist:
+            catalog_artist_keys.append(key)
+            seen_catalog_artist.add(key)
+        if key not in seen_pl_artist:
+            playlist_artist_keys.append(key)
+            seen_pl_artist.add(key)
 
     for track, play_count, last_played in played:
         effective_artist, effective_title = effective_track_artist_title(track)

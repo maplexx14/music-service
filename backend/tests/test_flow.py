@@ -1545,6 +1545,74 @@ def test_service_popularity_falls_back_to_provider_order():
     ]
 
 
+def _bulk_imported_playlist(db, user, tracks, name="Imported"):
+    """Импортированный плейлист с явными added_at: (артист, название, added_at)."""
+    playlist = Playlist(
+        name=name,
+        description="Импортировано из SoundCloud",
+        origin="imported",
+        is_public=False,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    rows = [
+        Track(title=title, artist=artist, duration=100, source="local")
+        for artist, title, _added_at in tracks
+    ]
+    db.add_all(rows)
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {
+                "playlist_id": playlist.id,
+                "track_id": row.id,
+                "position": position,
+                "added_at": added_at,
+            }
+            for position, (row, (_artist, _title, added_at)) in enumerate(
+                zip(rows, tracks)
+            )
+        ],
+    )
+    db.commit()
+    return playlist
+
+
+def test_imported_playlist_makes_an_artist_favorite_outside_the_taste_window(db):
+    """Импорт определяет любимых артистов числом треков, а не попаданием в окно.
+
+    Импорт приносит сотни треков разом, а вкусовые сигналы читаются окном
+    _TASTE_QUERY_LIMIT по свежести. Счётчик треков артиста собирался из этого же
+    окна — поэтому у большой импортированной коллекции порог
+    _PLAYLIST_ARTIST_MIN_TRACKS не брал никто: в окно попадала произвольная её
+    часть, и артист с пятью треками в плейлисте не встречался там ни разу.
+    """
+    from app.artist_utils import artist_key
+    from app.routers.flow import _TASTE_QUERY_LIMIT
+
+    user = create_user(db, username="imported-window-user")
+    fresh = datetime.now(timezone.utc)
+    old = fresh - timedelta(days=1)
+    # Свежая часть импорта забивает окно целиком, каждый артист по одному треку.
+    rows = [
+        (f"FillerArtist{i}", f"филлер {i}", fresh) for i in range(_TASTE_QUERY_LIMIT)
+    ]
+    # Более старая часть в окно уже не попадает — но треков артиста в ней пять.
+    rows += [("ImportedFav", f"импорт {i}", old) for i in range(5)]
+    _bulk_imported_playlist(db, user, rows)
+
+    profile = _taste_profile(db, user.id)
+    key = artist_key("ImportedFav")
+    assert key in profile["curated_artist_keys"], "импортированный артист не любимый"
+    assert "ImportedFav" in profile["playlist_artists"], profile["playlist_artists"][:5]
+    assert "ImportedFav" in profile["catalog_artists"], profile["catalog_artists"][:5]
+    # Артисты с одним треком в импорте любимыми не становятся — порог тот же.
+    assert artist_key("FillerArtist0") not in profile["curated_artist_keys"]
+
+
 def _long_ago_liked(db, user, artist, titles):
     """Лайки давностью в три месяца: артист знакомый, но вес почти истлел.
 
