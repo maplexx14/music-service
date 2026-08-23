@@ -271,6 +271,78 @@ def test_flow_gives_liked_tracks_their_share_next_to_unplayed_library(client, db
     assert fresh_count == 15 - expected_liked, tracks
 
 
+def test_flow_spreads_liked_tracks_across_the_page(client, db):
+    """Понравившееся идёт интервалами по всей порции, а не пачкой в начале.
+
+    Квота отбирается ДО порядка, поэтому в отобранном списке она лежит блоком —
+    и волна открывалась несколькими уже знакомыми треками подряд. Позиции здесь
+    считаются на ответе endpoint, то есть после разноса по артистам: важно
+    именно то, что слышит пользователь.
+    """
+    user = create_user(db, username="liked-spread-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/spread-liked-{i}.mp3",
+        )
+        for i in range(10)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/spread-fresh-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="liked-spread-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    assert len(tracks) == 15
+    positions = [
+        index
+        for index, track in enumerate(tracks)
+        if track["title"].startswith("liked-")
+    ]
+    assert len(positions) == liked_slots(15, DEFAULT_DISCOVERY_RATIO), positions
+    # Открывает волну неслышанное: старт — худшее место для знакомого.
+    assert positions[0] >= 1, positions
+    # Ни одной пары подряд и дотягиваемся до конца порции — то есть это разнос,
+    # а не сдвинутый на один трек блок.
+    assert all(
+        later - earlier >= 3 for earlier, later in zip(positions, positions[1:])
+    ), positions
+    assert positions[-1] >= 10, positions
+
+
 def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
     """Доля лайков растёт к «знакомому» краю плавно, а не появляется в крайнем.
 

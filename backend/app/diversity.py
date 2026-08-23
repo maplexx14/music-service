@@ -5,6 +5,11 @@
 и раз за разом занимают большую часть выдачи. cap_per_artist сохраняет
 порядок (важные/популярные треки остаются впереди), но не даёт одному
 артисту занять больше max_per_artist мест.
+
+Здесь же ``spread_into`` — про позиции, а не про артистов: часть выдачи бывает
+отобрана КВОТОЙ (например, квота лайков в потоке), и такая часть приходит
+блоком, потому что набрана до того, как определён порядок. Её нужно разнести по
+всей выдаче, не сломав уже сделанный разнос по артистам.
 """
 import re
 from collections import Counter
@@ -76,6 +81,93 @@ def _gap_weight(gap: int, min_gap: int) -> float:
     if gap <= 1:
         return 0.0  # подряд — никогда, пока остаётся хоть один другой артист
     return (gap / min_gap) ** 2
+
+
+def _spread_targets(total: int, count: int) -> List[int]:
+    """Позиции для ``count`` элементов, равномерно разнесённые по ``total``.
+
+    Центры равных отрезков, а не первые ``count`` мест: при 4 элементах на 15
+    позиций это 1, 5, 9, 13. Пока доля меньше половины, нулевая позиция не
+    занимается вовсе — и для волны это как раз то, что нужно: открывать её
+    знакомым хуже всего, а дальше знакомое работает опорными точками.
+    """
+    if total <= 0 or count <= 0:
+        return []
+    count = min(count, total)
+    step = total / count
+    targets: List[int] = []
+    for index in range(count):
+        target = min(total - 1, int(step * (index + 0.5)))
+        if targets and target <= targets[-1]:
+            # Плотная доля: держим строго возрастающий порядок, иначе два
+            # элемента схлопнулись бы в одну позицию.
+            target = targets[-1] + 1
+        if target > total - 1:
+            break
+        targets.append(target)
+    return targets
+
+
+def _artist_fits(items, position: int, key: str, min_gap: int, artist_getter) -> bool:
+    """Не окажется ли вставка на ``position`` ближе ``min_gap`` к тому же артисту."""
+    left = max(0, position - (min_gap - 1))
+    right = min(len(items), position + min_gap - 1)
+    return all(
+        primary_artist_key(artist_getter(items[index])) != key
+        for index in range(left, right)
+    )
+
+
+def spread_into(
+    ordered,
+    extra,
+    artist_getter=lambda item: getattr(item, "artist", None),
+    min_gap: int = 3,
+):
+    """Вставить ``extra`` равными интервалами в уже упорядоченный ``ordered``.
+
+    Нужно там, где часть порции отобрана по КВОТЕ, а не по общему рейтингу:
+    квота набирается до того, как определён порядок, и поэтому лежит в списке
+    блоком. Для потока это слышно — волна открывалась пачкой уже знакомого (см.
+    ``routers.flow`` и квоту лайков), хотя смысл квоты в том, чтобы знакомое
+    встречалось по ходу волны, а не в том, чтобы стоять первым.
+
+    Порядок ``ordered`` сохраняется: он уже разнесён по артистам
+    (``interleave_artists``), и вставка не должна ломать этот разнос. Поэтому
+    элемент садится не строго в свою позицию, а в ближайшую к ней, где не
+    встанет ближе ``min_gap`` к своему же артисту; если такой нет — в свою, как
+    и ``interleave_artists``, который тоже ослабляет кулдаун, когда выполнить его
+    нечем.
+    """
+    result = list(ordered)
+    extra = list(extra)
+    if not extra:
+        return result
+    if not result:
+        return extra
+    targets = _spread_targets(len(result) + len(extra), len(extra))
+    floor = 0
+    for target, item in zip(targets, extra):
+        key = primary_artist_key(artist_getter(item))
+        position = max(target, floor)
+        for offset in (0, 1, -1, 2, -2):
+            probe = target + offset
+            if probe < floor or probe > len(result):
+                continue
+            if _artist_fits(result, probe, key, min_gap, artist_getter):
+                position = probe
+                break
+        position = min(position, len(result))
+        result.insert(position, item)
+        # Следующий вставляемый — строго правее: иначе разнесённая по порции
+        # квота снова собралась бы в пачку из-за поиска места.
+        floor = position + 1
+    # Позиций меньше, чем элементов, бывает только при ``extra`` длиннее самой
+    # выдачи, то есть никогда при квоте меньше порции. Если всё же случится —
+    # сохранить треки важнее, чем разнос.
+    for item in extra[len(targets):]:
+        result.append(item)
+    return result
 
 
 def interleave_artists(

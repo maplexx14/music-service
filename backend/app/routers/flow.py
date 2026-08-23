@@ -71,6 +71,7 @@ from app.diversity import (
     interleave_artists,
     primary_artist_key,
     soft_artist_rerank,
+    spread_into,
     weighted_order,
 )
 from app.recommendation_scoring import (
@@ -2809,12 +2810,27 @@ async def get_flow(
     n_exploit = len(mix) - n_explore
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
     # выдачи, и на стыке подгрузок артист снова шёл почти подряд.
-    mix = interleave_artists(
-        mix,
+    #
+    # Понравившееся разносим ОТДЕЛЬНО и после: его отобрала квота, то есть
+    # порядок общего рейтинга к нему не применим, и в mix оно лежит блоком в
+    # начале — волна открывалась пачкой уже знакомого. interleave_artists
+    # раскладывает остальное, spread_into ставит лайки равными интервалами по
+    # всей порции. Именно в таком порядке: убрать лайки из готовой раскладки
+    # значило бы склеить соседей, которых лайк собой разделял.
+    liked_items = [
+        item for item in mix if _item_identity(item) in liked_identities
+    ]
+    mix = spread_into(
+        interleave_artists(
+            [item for item in mix if _item_identity(item) not in liked_identities],
+            artist_getter=lambda item: _item_artist_title(item)[0],
+            min_gap=_MIN_ARTIST_GAP,
+            previous_artists=history.get("artists") or [],
+            context=ranking_context,
+        ),
+        liked_items,
         artist_getter=lambda item: _item_artist_title(item)[0],
         min_gap=_MIN_ARTIST_GAP,
-        previous_artists=history.get("artists") or [],
-        context=ranking_context,
     )
 
     # Attach one stable attribution envelope to every delivered item. It is

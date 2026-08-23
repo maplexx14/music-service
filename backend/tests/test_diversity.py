@@ -20,6 +20,7 @@ from app.diversity import (
     cap_per_artist,
     interleave_artists,
     mmr,
+    spread_into,
     take_capped,
     take_overflow,
     weighted_order,
@@ -152,6 +153,72 @@ def test_collab_separators_beyond_comma():
     # один и тот же исполнитель шёл в выдаче двумя треками ПОДРЯД.
     items = _items("ONOKAMI", "ONOKAMI & Гущина Анастасия", "Artist feat. Other", "Artist")
     assert len(cap_per_artist(items, 1, lambda i: i["artist"])) == 2
+
+
+# --- spread_into: квота, разнесённая по всей выдаче ---
+
+
+def _spread(ordered_artists, extra_artists, min_gap=4):
+    ordered = [{"artist": a, "title": f"o{i}"} for i, a in enumerate(ordered_artists)]
+    extra = [{"artist": a, "title": f"x{i}"} for i, a in enumerate(extra_artists)]
+    result = spread_into(
+        ordered, extra, artist_getter=lambda i: i["artist"], min_gap=min_gap
+    )
+    return result, {id(item) for item in extra}
+
+
+def test_spread_into_places_extra_at_even_intervals():
+    """Вставленные элементы стоят интервалами, а не блоком в начале.
+
+    Ровно то, зачем функция и нужна: квота отбирается до порядка и лежит в
+    начале списка, а слушателю знакомое должно попадаться по ходу волны.
+    """
+    result, extra_ids = _spread([f"A{i}" for i in range(11)], ["X1", "X2", "X3", "X4"])
+    positions = [i for i, item in enumerate(result) if id(item) in extra_ids]
+    assert len(result) == 15
+    assert positions == [1, 5, 9, 13], positions
+
+
+def test_spread_into_keeps_the_given_order_of_both_lists():
+    """Порядок внутри каждого списка сохраняется: он уже чем-то обоснован."""
+    result, extra_ids = _spread([f"A{i}" for i in range(8)], ["X1", "X2"])
+    assert [item["title"] for item in result if id(item) not in extra_ids] == [
+        f"o{i}" for i in range(8)
+    ]
+    assert [item["title"] for item in result if id(item) in extra_ids] == ["x0", "x1"]
+
+
+def test_spread_into_avoids_landing_next_to_the_same_artist():
+    """Разнос по артистам, уже сделанный для ordered, вставка не ломает.
+
+    Позиция 1 «своя» для единственного вставляемого, но там сосед — тот же
+    артист, поэтому элемент обязан сдвинуться, а не встать вплотную.
+    """
+    result, extra_ids = _spread(["Same", "B", "C", "Same2"], ["Same"], min_gap=3)
+    position = next(i for i, item in enumerate(result) if id(item) in extra_ids)
+    assert position >= 2, [item["artist"] for item in result]
+    neighbours = [
+        result[i]["artist"]
+        for i in (position - 1, position + 1)
+        if 0 <= i < len(result)
+    ]
+    assert "Same" not in neighbours, [item["artist"] for item in result]
+
+
+def test_spread_into_degrades_to_its_own_slot_without_alternatives():
+    """Один артист на всю выдачу — разносить нечем, но и терять нечего."""
+    result, extra_ids = _spread(["A"] * 8, ["A", "A"])
+    assert len(result) == 10
+    positions = [i for i, item in enumerate(result) if id(item) in extra_ids]
+    assert positions == [2, 7], positions
+
+
+def test_spread_into_handles_empty_sides():
+    assert spread_into([], [], lambda i: i["artist"]) == []
+    only_extra = _items("A", "B")
+    assert spread_into([], only_extra, lambda i: i["artist"]) == only_extra
+    only_ordered = _items("A", "B")
+    assert spread_into(only_ordered, [], lambda i: i["artist"]) == only_ordered
 
 
 def test_weighted_order_is_stable_and_context_rotates_with_weight():
