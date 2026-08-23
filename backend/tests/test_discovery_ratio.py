@@ -71,6 +71,26 @@ def test_discovery_ratio_slots_are_bounded():
     assert discovery.discovery_slots(0, 1.0) == 0
 
 
+def test_liked_slots_shrink_as_the_slider_moves_to_new():
+    """Квота понравившегося — зеркало разведки, и на её максимуме она ноль.
+
+    Числа зафиксированы здесь, а не в тестах потока: там важно, что квота
+    соблюдается ровно, а не чему именно равна LIKED_MAX_SHARE.
+    """
+    import app.discovery as discovery
+
+    assert discovery.liked_slots(15, 0.0) == 5
+    assert discovery.liked_slots(15, DEFAULT_DISCOVERY_RATIO) == 4
+    assert discovery.liked_slots(15, 0.6) == 2
+    # Попросил только новое — своих лайков в порции не будет вообще.
+    assert discovery.liked_slots(15, 1.0) == 0
+    assert discovery.liked_slots(8, DEFAULT_DISCOVERY_RATIO) == 2
+    assert discovery.liked_slots(0, 0.0) == 0
+    # Значение вне диапазона зажимается так же, как в discovery_ratio.
+    assert discovery.liked_slots(15, 2.0) == 0
+    assert discovery.liked_slots(15, -1.0) == 5
+
+
 # --- сохранение через API ---
 
 

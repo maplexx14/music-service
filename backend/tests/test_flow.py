@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import text
 
 from app.cache import clear_pattern
+from app.discovery import DEFAULT_DISCOVERY_RATIO, discovery_slots, liked_slots
 from app.models import (
     Track,
     Playlist,
@@ -23,7 +24,12 @@ from app.models import (
     user_track_plays,
     user_track_skips,
 )
-from app.routers.flow import _persisted_flow_history, _taste_profile
+from app.routers.flow import (
+    _LIKED_REPLAY_COOLDOWN_DAYS,
+    _liked_candidates,
+    _persisted_flow_history,
+    _taste_profile,
+)
 from app.schemas import ExternalTrackResponse
 
 from tests.conftest import auth_headers, create_user
@@ -198,8 +204,16 @@ def test_flow_spreads_comparable_catalog_candidates_across_artists(
     assert len({track["artist"] for track in favorite}) == 7
 
 
-def test_flow_excludes_liked_tracks_but_keeps_unplayed_library_tracks(client, db):
-    """Лайки задают вкус, но точные записи не должны повторяться в потоке."""
+def test_flow_gives_liked_tracks_their_share_next_to_unplayed_library(client, db):
+    """Понравившееся попадает в поток по своей квоте, остальное — неслышанное.
+
+    Регрессия, которую ловим: лайк исключался из потока тремя способами сразу
+    (по id в каталожной выборке, как трек плейлиста и по нормализованному ключу
+    от провайдеров), поэтому в волне не появлялся НИ ПРИ КАКОМ положении
+    ползунка — пользователь не слышал в ней ничего из того, что сам отметил.
+    Ровно liked_slots штук, не больше: волна остаётся волной, а не повтором
+    плейлиста лайков.
+    """
     user = create_user(db, username="likes-and-new-user")
     playlist = Playlist(
         name="Понравившиеся",
@@ -248,9 +262,388 @@ def test_flow_excludes_liked_tracks_but_keeps_unplayed_library_tracks(client, db
     )
     assert response.status_code == 200, response.text
     tracks = response.json()
+    expected_liked = liked_slots(15, DEFAULT_DISCOVERY_RATIO)
+    assert expected_liked, "на дефолтном ползунке квота лайков не может быть нулевой"
+    liked_count = sum(track["title"].startswith("liked-") for track in tracks)
+    fresh_count = sum(track["title"].startswith("fresh-") for track in tracks)
     assert len(tracks) == 15
-    assert not any(track["title"].startswith("liked-") for track in tracks)
-    assert sum(track["title"].startswith("fresh-") for track in tracks) == 15
+    assert liked_count == expected_liked, tracks
+    assert fresh_count == 15 - expected_liked, tracks
+
+
+def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
+    """Доля лайков растёт к «знакомому» краю плавно, а не появляется в крайнем.
+
+    Ровно та жалоба, из-за которой квота и появилась: понравившееся не
+    попадалось в поток, пока ползунок не выкручен полностью в знакомое. Здесь
+    один и тот же пул опрашивается на трёх положениях, и лайки обязаны быть
+    и на дефолтном — а на максимуме разведки обязаны исчезнуть совсем.
+    """
+    user = create_user(db, username="slider-share-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/slider-liked-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/slider-fresh-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    headers = auth_headers(client, username="slider-share-user")
+    counted = {}
+    for ratio in (0.0, DEFAULT_DISCOVERY_RATIO, 1.0):
+        # Через API, а не мутацией ORM-объекта: flow закрывает сессию внутри
+        # запроса, после чего user становится detached, и db.commit() уже ничего
+        # не сохраняет — ползунок молча оставался бы прежним на всех итерациях.
+        saved = client.put(
+            "/api/users/me/preferences",
+            headers=headers,
+            json={"discovery_ratio": ratio},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["discovery_ratio"] == ratio
+        # История потока живёт в Redis и между запросами одного теста
+        # сохраняется; локальные id она не исключает, но чистим ради
+        # независимости трёх замеров друг от друга.
+        clear_pattern("flow:*")
+        response = client.get(
+            "/api/recommendations/flow?limit=15",
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        tracks = response.json()
+        assert len(tracks) == 15, (ratio, tracks)
+        counted[ratio] = sum(
+            track["title"].startswith("liked-") for track in tracks
+        )
+
+    assert counted[0.0] > counted[DEFAULT_DISCOVERY_RATIO] > counted[1.0]
+    assert counted[DEFAULT_DISCOVERY_RATIO] > 0, counted
+    assert counted[1.0] == 0, counted
+
+
+def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
+    """Квота лайков не возвращает отвергнутое и не крутит только что сыгранное.
+
+    Лайк «разрешён» в потоке в обход played_ids/collection_track_ids, и легко
+    было бы вместе с ними обойти и отрицательные сигналы. Проверяем прямо на
+    выборке: дизлайкнутый не проходит совсем, сыгранный внутри кулдауна — пока
+    нет, а остывший — да, причём ни разу не игранный идёт впереди.
+    """
+    user = create_user(db, username="liked-negatives-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    tracks = {
+        name: Track(
+            title=name,
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/{name}.mp3",
+        )
+        for name in ("hated", "inside-cooldown", "cooled-down", "never-played")
+    }
+    db.add_all(tracks.values())
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": position}
+            for position, track in enumerate(tracks.values())
+        ],
+    )
+    now = datetime.now(timezone.utc)
+    db.execute(
+        user_track_skips.insert().values(
+            user_id=user.id,
+            track_id=tracks["hated"].id,
+            skip_count=1,
+            disliked=True,
+            last_skipped=now,
+        )
+    )
+    db.execute(
+        user_track_plays.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": tracks["inside-cooldown"].id,
+                "play_count": 1,
+                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS - 1),
+            },
+            {
+                "user_id": user.id,
+                "track_id": tracks["cooled-down"].id,
+                "play_count": 1,
+                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS + 1),
+            },
+        ],
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    # Четыре лайка перевешивают один дизлайк, иначе артист ушёл бы в
+    # banned_artists и выборка была бы пустой по постороннему поводу.
+    assert "knownartist" not in profile["banned_artists"]
+    titles = [track.title for track in _liked_candidates(db, profile, 10)]
+    assert "hated" not in titles, titles
+    assert "inside-cooldown" not in titles, titles
+    # Ни разу не игранный лайк — впереди остывшего.
+    assert titles == ["never-played", "cooled-down"], titles
+
+
+def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
+    """Остывший лайк возвращается в поток, даже если он весь в recent_ids.
+
+    Вторая половина той же регрессии, и в жизни она и есть основной случай:
+    лайк ставят ПОСЛЕ прослушивания, поэтому почти каждый лайк лежит в
+    recent_ids — «последние 100 прослушиваний ∪ скипы ∪ треки плейлистов». Пока
+    квота лайков получала тот же список исключений, что и каталожный запрос,
+    услышанный однажды лайк не возвращался, пока его не вытеснит сотня чужих
+    прослушиваний, — а у юзера с короткой историей не возвращался никогда. Здесь
+    сыграно всё понравившееся и давно (кулдаун пройден), история короче окна.
+    """
+    user = create_user(db, username="liked-replay-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/replay-liked-{i}.mp3",
+        )
+        for i in range(8)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/replay-fresh-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    played_at = datetime.now(timezone.utc) - timedelta(
+        days=_LIKED_REPLAY_COOLDOWN_DAYS + 30
+    )
+    db.execute(
+        user_track_plays.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": track.id,
+                "play_count": 2,
+                "last_played": played_at,
+            }
+            for track in liked
+        ],
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    # Смысл теста держится на этом: все лайки действительно лежат в recent_ids,
+    # то есть путь, по которому их раньше отсекало, реально задействован.
+    assert {track.id for track in liked} <= set(profile["recent_ids"])
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="liked-replay-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    expected_liked = liked_slots(15, DEFAULT_DISCOVERY_RATIO)
+    assert len(tracks) == 15
+    assert (
+        sum(track["title"].startswith("liked-") for track in tracks) == expected_liked
+    ), tracks
+
+
+def test_flow_liked_quota_still_respects_the_client_queue(client, db):
+    """Стоящий в очереди лайк квота не выдаёт второй раз.
+
+    Из исключений для лайков остался ровно один список — клиентский exclude, и
+    он обязан работать: иначе трек, уже стоящий в очереди у фронта, пришёл бы в
+    той же волне ещё раз.
+    """
+    user = create_user(db, username="liked-queue-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = [
+        Track(
+            title=f"liked-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/queued-liked-{i}.mp3",
+        )
+        for i in range(6)
+    ]
+    fresh = [
+        Track(
+            title=f"fresh-{i}",
+            artist="KnownArtist",
+            duration=100,
+            source="local",
+            file_path=f"minio://music/queued-fresh-{i}.mp3",
+        )
+        for i in range(20)
+    ]
+    db.add_all([*liked, *fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert(),
+        [
+            {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+            for i, track in enumerate(liked)
+        ],
+    )
+    db.commit()
+
+    headers = auth_headers(client, username="liked-queue-user")
+    first = client.get("/api/recommendations/flow?limit=15", headers=headers)
+    assert first.status_code == 200, first.text
+    queued = [
+        track for track in first.json() if track["title"].startswith("liked-")
+    ]
+    assert queued, first.json()
+
+    exclude = ",".join(str(track["id"]) for track in queued)
+    second = client.get(
+        f"/api/recommendations/flow?limit=15&exclude={exclude}",
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    returned_titles = {track["title"] for track in second.json()}
+    assert not returned_titles & {track["title"] for track in queued}, returned_titles
+
+
+def test_flow_returns_liked_provider_tracks_not_only_local_files(client, db):
+    """Лайк из YT Music/SoundCloud доходит до потока так же, как локальный файл.
+
+    Ловушка, на которую квота лайков натыкалась: excl_videos держит
+    collection_external_ids — provider id ВСЕГО, что лежит в плейлистах юзера,
+    лайки в том числе. На локальных файлах (external_id пуст) это незаметно, а
+    у лайка из провайдера отсекало бы каждый — то есть подавляющее большинство
+    реальных лайков в этом сервисе.
+    """
+    user = create_user(db, username="liked-provider-user")
+    playlist = Playlist(
+        name="Понравившиеся",
+        is_public=False,
+        is_liked=True,
+        owner_id=user.id,
+    )
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    liked = Track(
+        title="лайк из ютуба",
+        artist="ProviderArtist",
+        duration=100,
+        source="ytmusic",
+        external_id="liked-video-id",
+    )
+    # Второй трек того же артиста, не лайкнутый: иначе выдача состояла бы из
+    # одного лайка и тест прошёл бы даже при сломанном каталожном пути.
+    fresh = Track(
+        title="ещё трек того же артиста",
+        artist="ProviderArtist",
+        duration=100,
+        source="ytmusic",
+        external_id="fresh-video-id",
+    )
+    db.add_all([liked, fresh])
+    db.commit()
+    db.execute(
+        playlist_tracks.insert().values(
+            playlist_id=playlist.id, track_id=liked.id, position=0
+        )
+    )
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="liked-provider-user"),
+    )
+    assert response.status_code == 200, response.text
+    external_ids = {track.get("external_id") for track in response.json()}
+    assert "liked-video-id" in external_ids, external_ids
+
+    # Обратная сторона того же вычитания: provider id лайка лежит и в коллекции,
+    # и в клиентском exclude, поэтому «вычесть коллекцию» нельзя так, чтобы
+    # заодно потерялась очередь фронта. Иначе стоящая в очереди копия от
+    # провайдера и лайкнутая строка пришли бы в волне как два трека.
+    queued = client.get(
+        "/api/recommendations/flow?limit=5&exclude=ytmusic:liked-video-id",
+        headers=auth_headers(client, username="liked-provider-user"),
+    )
+    assert queued.status_code == 200, queued.text
+    queued_ids = {track.get("external_id") for track in queued.json()}
+    assert "liked-video-id" not in queued_ids, queued_ids
 
 
 def test_flow_excludes_imported_tracks_but_keeps_their_artist_signal(client, db):
@@ -947,7 +1340,7 @@ def test_flow_max_discovery_ratio_falls_back_to_familiar_tracks(client, db):
 def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     client, db, monkeypatch
 ):
-    """Частичный внешний пул не должен возвращать точные лайки fallback-ом."""
+    """Частичный внешний пул не добирает порцию лайками сверх их квоты."""
     user = create_user(db, username="partial-discovery-user")
     liked_playlist = Playlist(
         name="Понравившиеся",
@@ -1003,12 +1396,14 @@ def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     )
     assert response.status_code == 200, response.text
     tracks = response.json()
-    # There are only eight unplayed local tracks plus one fresh external
-    # candidate. The flow must end the page rather than replaying exact likes
-    # just to manufacture the requested page size.
-    assert len(tracks) == 9
-    assert sum(track["title"].startswith("fresh-") for track in tracks) >= 8
-    assert not any(track["title"].startswith("liked-") for track in tracks)
+    # Неслышанных локальных треков всего восемь плюс один свежий внешний
+    # кандидат. Порция обрывается на них и на квоте лайков — добивать её до
+    # запрошенных пятнадцати повтором понравившегося поток не должен.
+    expected_liked = min(liked_slots(15, 0.6), 15 - discovery_slots(15, 0.6))
+    assert expected_liked, "на 0.6 квота лайков ещё не должна обнуляться"
+    assert len(tracks) == 8 + 1 + expected_liked, tracks
+    assert sum(track["title"].startswith("fresh-") for track in tracks) == 8
+    assert sum(track["title"].startswith("liked-") for track in tracks) == expected_liked
 
 
 def test_flow_zero_discovery_ratio_softly_demotes_lastfm_candidates(

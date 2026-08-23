@@ -8,6 +8,18 @@ beets/ffmpeg, жанру, контексту, качеству и свежест
 дефолтном значении, а явно повышенный ползунок задаёт минимальную цель новых
 артистов с fallback на знакомые треки при дефиците внешнего пула.
 
+Два исключения из «никаких фиксированных мест» — обе стороны этого ползунка, и
+обе заданы явной целью, а не веса́ми. Новые артисты получают ``discovery_slots``
+при поднятом ползунке, понравившиеся треки — ``liked_slots``, которая наоборот
+растёт к «знакомому» краю и обнуляется на максимуме разведки. Лайкам квота нужна
+как пол, и сразу по двум причинам. Своего пути в поток у них не было вовсе:
+каталожная выборка отсекала их и по id, и как треки плейлиста, и по
+нормализованному ключу от провайдеров, — а на общем ранжировании уже слышанный
+трек проигрывает свежему кандидату при прочих равных, так что и открытая дорога
+сама по себе их бы не привела. Квота же и потолок: сверх неё лайки вытесняли бы
+из порции то новое, за чем в поток и приходят (см. ``_liked_candidates`` и отбор
+в ``get_flow``).
+
 Last.fm, радио и граф YouTube Music, каталоги любимых артистов, SoundCloud и
 жанровые теги расширяют пул. Их происхождение даёт небольшой confidence bonus;
 внутри знакомой и новой частей порядок определяет общая модель. Генераторы
@@ -33,7 +45,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import case, desc, func, or_, select, tuple_
+from sqlalchemy import and_, case, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app import beets_genre, beets_similar, storage
@@ -44,6 +56,7 @@ from app.discovery import (
     DEFAULT_DISCOVERY_RATIO,
     discovery_ratio,
     discovery_slots,
+    liked_slots,
 )
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
@@ -217,6 +230,16 @@ _FAVORITE_CATALOG_LIMIT = 40
 # не меньше запрошенной порции — иначе у пользователя с одним-двумя артистами
 # выдача станет короче, чем он просил.
 _FAVORITE_ARTIST_WINDOW = 10
+# Сколько понравившихся треков доходит до ранкера за подгрузку (см.
+# _liked_candidates). Заметно больше квоты liked_slots: у ранкера должен быть
+# выбор, какой именно лайк уместен сейчас по жанру, акустике и контексту, —
+# иначе квота каждый раз заполнялась бы одними и теми же треками.
+_LIKED_WINDOW = 24
+# Сколько трек «остывает» после прослушивания, прежде чем квота лайков может
+# отдать его снова. Именно время, а не recent_ids: тот держит последние 100
+# прослушиваний, то есть у юзера с короткой историей — вообще всё сыгранное, и
+# ни один лайк сквозь него не проходил бы.
+_LIKED_REPLAY_COOLDOWN_DAYS = 3
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
 # beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
 # засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
@@ -1050,6 +1073,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "banned_artists": banned_artists,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         "recent_ids": recent_ids,
+        # Отдельно от recent_ids: тот склеивает скипы с «последними 100
+        # прослушиваниями», а квоте лайков нужны именно отрицательные сигналы —
+        # у юзера с историей короче окна в recent_ids лежат ВСЕ его сыгранные
+        # треки, и лайки не прошли бы вовсе (см. _liked_candidates).
+        "skipped_ids": skipped_ids,
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
         "skipped_external_ids": skipped_external_ids,
@@ -1086,9 +1114,9 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # уже ПОСЛЕ запроса, и подгрузка потока возвращает пусто («волна замирает
     # на первых 15 треках»).
     exclude_ids = set(profile["recent_ids"]) | (extra_exclude_ids or set())
-    # Liked tracks are part of the taste profile, not recommendation items.
-    # Keep them out of the catalogue query so the returned page contains only
-    # uncollected material while the artist signal still opens its catalogue.
+    # Лайки из КАТАЛОЖНОЙ выборки исключаем: сюда они попадали бы вперемешку с
+    # неслышанным и по общему рейтингу всегда ему проигрывали. В поток они идут
+    # отдельным путём и по своей квоте — см. _liked_candidates.
     exclude_ids.update(profile.get("liked_track_ids") or [])
     # Уже прослушанные треки исключаем ВСЕ, а не только последние
     # _RECENT_PLAYS_EXCLUDE: recent_ids — окно из 100 записей, и на истории
@@ -1338,16 +1366,128 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     return candidates
 
 
-def _local_candidates_on_bind(
-    bind,
+def _liked_candidates(
+    db: Session,
     profile: dict,
     limit: int,
     extra_exclude_ids: Optional[set] = None,
 ) -> List[Track]:
-    """Run the blocking catalogue query in its own short-lived session."""
+    """Понравившиеся треки как кандидаты потока (блокирующая).
+
+    Отдельным запросом, а не через ``_local_candidates``: тот исключает всё
+    когда-либо сыгранное (``played_ids``) и всё, что лежит в плейлистах юзера
+    (``collection_track_ids``), а лайк по определению и сыгран, и лежит в
+    плейлисте «Понравившиеся» — под этими двумя условиями он не мог попасть в
+    поток НИКОГДА, ни на каком положении ползунка. Здесь задача обратная:
+    достать именно их, оставив в силе только те исключения, которые к лайкам
+    применимы, — скипы и дизлайки, очередь фронта, забаненные артисты и
+    кулдаун ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания.
+
+    Кулдаун по времени, а НЕ ``recent_ids``: тот склеивает скипы с последними
+    ``_RECENT_PLAYS_EXCLUDE`` прослушиваниями, и у юзера с историей короче этого
+    окна в нём лежат все его сыгранные треки — квота осталась бы пустой у всех,
+    кроме слушателей с огромной историей.
+
+    Порядок — от давно не игранного: заново услышать лайк, до которого волна не
+    доходила месяц, ценнее, чем тот, что играл вчера. Никогда не игранный
+    (лайкнут из чужого плейлиста и не открыт) идёт самым первым.
+    """
+    liked_ids = profile.get("liked_track_ids") or []
+    if not liked_ids:
+        return []
+    exclude_ids = set(profile.get("skipped_ids") or ()) | (extra_exclude_ids or set())
+    wanted = [track_id for track_id in liked_ids if track_id not in exclude_ids]
+    if not wanted:
+        return []
+    rows = (
+        db.query(Track, user_track_plays.c.last_played)
+        .outerjoin(
+            user_track_plays,
+            and_(
+                user_track_plays.c.track_id == Track.id,
+                user_track_plays.c.user_id == profile["user_id"],
+            ),
+        )
+        .filter(Track.id.in_(wanted))
+        .all()
+    )
+
+    def _played_seconds(last_played) -> float:
+        # Числом, а не самим datetime: last_played приходит из БД то наивным, то
+        # с таймзоной, и сортировка смешанного списка падала бы на сравнении
+        # aware с naive. Наивное считаем UTC — та же конвенция, что в _decay.
+        # Ни разу не игранный — впереди всех.
+        if last_played is None:
+            return float("-inf")
+        if last_played.tzinfo is None:
+            last_played = last_played.replace(tzinfo=timezone.utc)
+        return last_played.timestamp()
+
+    cooldown_before = (
+        datetime.now(timezone.utc) - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS)
+    ).timestamp()
+    banned = profile["banned_artists"]
+    ordered: List[tuple] = []
+    for track, last_played in rows:
+        effective_artist, _effective_title = effective_track_artist_title(track)
+        if banned and artist_key(effective_artist) in banned:
+            continue
+        if not _media_available(track):
+            continue
+        played_at = _played_seconds(last_played)
+        if played_at > cooldown_before:
+            continue
+        ordered.append(
+            (
+                played_at,
+                stable_jitter(profile["user_id"], f"liked:{track.id}"),
+                track.id,
+                track,
+            )
+        )
+    ordered.sort(key=lambda row: row[:3])
+    return [row[3] for row in ordered][: max(limit, _LIKED_WINDOW)]
+
+
+def _familiar_candidates_on_bind(
+    bind,
+    profile: dict,
+    limit: int,
+    extra_exclude_ids: Optional[set] = None,
+    liked_exclude_ids: Optional[set] = None,
+    liked_limit: Optional[int] = None,
+) -> tuple[List[Track], List[Track]]:
+    """Каталог и понравившееся одной короткой сессией: (local, liked).
+
+    Обе выборки блокирующие и обе нужны в один момент, поэтому они делят одну
+    сессию и один поток — второй Session ради второго запроса брал бы из пула
+    лишнее соединение на то же самое время.
+
+    Исключения у выборок РАЗНЫЕ, и это главное, зачем здесь два параметра.
+    Каталогу передают полный ``extra_exclude_ids`` (очередь фронта плюс
+    ``recent_ids``), а квоте лайков — только ``liked_exclude_ids``, то есть
+    очередь. Дай лайкам полный набор — и ``recent_ids`` («последние 100
+    прослушиваний ∪ скипы ∪ треки плейлистов») перекрыл бы им путь ровно так же,
+    как это делал каталожный запрос: лайк по определению уже слушали. Когда
+    лайку возвращаться, решает ``_LIKED_REPLAY_COOLDOWN_DAYS``.
+
+    ``liked_limit`` — квота этой порции (``None`` = как ``limit``). Нулевая
+    квота, то есть ползунок на максимуме разведки, пропускает выборку лайков
+    целиком: её результат всё равно был бы отброшен при отборе.
+    """
     local_db = Session(bind=bind)
     try:
-        return _local_candidates(local_db, profile, limit, extra_exclude_ids)
+        if liked_limit is None:
+            liked_limit = limit
+        liked = (
+            _liked_candidates(local_db, profile, liked_limit, liked_exclude_ids)
+            if liked_limit > 0
+            else []
+        )
+        return (
+            _local_candidates(local_db, profile, limit, extra_exclude_ids),
+            liked,
+        )
     finally:
         local_db.close()
 
@@ -2031,6 +2171,15 @@ async def get_flow(
             )
         )
         return [item for _index, item in indexed]
+    # Клиентский exclude запоминаем ДО объединения с историей: это id треков,
+    # уже стоящих в очереди у фронта, и для квоты лайков применимы только они.
+    # Всё остальное, что попадает в excl_ids, — это recent_ids, то есть
+    # «последние 100 прослушиваний ∪ скипы ∪ треки плейлистов»; для лайка это
+    # значило бы «услышал однажды — не вернётся, пока его не вытеснит сотня
+    # чужих прослушиваний», а у юзера с короткой историей — «не вернётся
+    # никогда». Когда лайк можно услышать снова, решает кулдаун по времени
+    # (_LIKED_REPLAY_COOLDOWN_DAYS), скипы и дизлайки — profile["skipped_ids"].
+    queued_ids = set(excl_ids)
     excl_ids |= profile["recent_ids"]
     excl_videos = (
         set(client_yt_videos)
@@ -2051,7 +2200,10 @@ async def get_flow(
     # client exclude, а от немедленных повторов защищает недавняя история БД.
     seen_keys = set(profile["recent_keys"])
     # Library tracks already selected by the user must not re-enter through a
-    # provider's artist search, regardless of the requested page size.
+    # provider's artist search, regardless of the requested page size. Это про
+    # ПРОВАЙДЕРОВ: сам лайк в поток попадает, но своей строкой из библиотеки, а
+    # не найденной у YT Music копией. Поэтому разбор liked_candidates ниже
+    # seen_keys не проверяет — иначе отсеял бы каждый лайк до единого.
     seen_keys.update(tuple(key) for key in profile.get("liked_keys") or [])
     seen_keys.update(profile.get("collection_keys") or set())
 
@@ -2072,6 +2224,15 @@ async def get_flow(
         discovery_slots(limit, explore_ratio)
         if explore_ratio > DEFAULT_DISCOVERY_RATIO
         else 0
+    )
+    # Квота понравившегося — И пол, И потолок (см. отбор ниже). Пол нужен
+    # потому, что без него лайки не попадали в поток вообще: они проигрывали
+    # общему ранжированию свежим кандидатам всегда. Потолок — потому, что
+    # волна должна оставаться волной, а не повтором плейлиста лайков.
+    # Зажимаем целью разведки: две квоты не должны вместе съесть всю порцию,
+    # и приоритет у явно попрошенных новых имён.
+    liked_target = min(
+        liked_slots(limit, explore_ratio), max(0, limit - discovery_target)
     )
 
     def _add_explore(
@@ -2453,14 +2614,52 @@ async def get_flow(
     # should not be globally banned from a listener who asked for that artist.
     similar_explore = [t for t in similar_explore if _population_allows_discovery(t)]
     explore = [t for t in explore if _population_allows_discovery(t)]
-    # --- локальная библиотека и единый пул ---
-    local = await asyncio.to_thread(
-        _local_candidates_on_bind,
+    # --- локальная библиотека, понравившееся и единый пул ---
+    local, liked_pool = await asyncio.to_thread(
+        _familiar_candidates_on_bind,
         telemetry_bind,
         profile,
         limit,
         set(excl_ids),
+        queued_ids,
+        liked_target,
     )
+    # Понравившееся разбираем ПЕРВЫМ: при совпадении нормализованного ключа с
+    # другой строкой каталога в единый пул должна попасть именно лайкнутая.
+    #
+    # seen_keys здесь намеренно не проверяется: ключи всех лайков лежат в нём
+    # изначально (выше, чтобы провайдеры не отдавали копию уже собранного
+    # трека), и такая проверка отсекла бы каждый лайк до единого. Так же и по
+    # id: сверяемся с queued_ids (очередь фронта), а не с excl_ids — в тот уже
+    # влиты recent_ids, где лайк оказывается от одного прослушивания. Остальные
+    # исключения — скипы, дизлайки, баны, кулдаун — учтены внутри
+    # _liked_candidates.
+    #
+    # Из excl_videos по той же причине вычитаем collection_external_ids: там
+    # provider id ВСЕГО, что лежит в плейлистах юзера, лайки в том числе. Для
+    # лайка из YT Music или SoundCloud (а таких большинство) проверка «уже в
+    # коллекции» отсекала бы ровно то, что мы здесь и отдаём. А вот клиентский
+    # exclude возвращаем обратно поверх вычитания: provider id лайка лежит и в
+    # коллекции, и в очереди одновременно, и без этого шага одна и та же песня
+    # пришла бы в волне дважды — своей лайкнутой строкой и уже стоящей в очереди
+    # копией от провайдера. Недавно сыгранное (recent_video_ids) в вычитании
+    # остаётся: когда лайку можно вернуться, решает кулдаун.
+    liked_excl_videos = (
+        excl_videos - set(profile.get("collection_external_ids") or [])
+    ) | set(client_yt_videos)
+    liked_candidates: List[Track] = []
+    liked_identities: set[str] = set()
+    for t in liked_pool:
+        effective_artist, _effective_title = effective_track_artist_title(t)
+        if t.id in queued_ids:
+            continue
+        if t.external_id and t.external_id in liked_excl_videos:
+            continue
+        if profile["banned_artists"] and artist_key(effective_artist) in profile["banned_artists"]:
+            continue
+        excl_ids.add(t.id)
+        liked_candidates.append(t)
+        liked_identities.add(_item_identity(t))
     local_candidates: List[Track] = []
     for t in local:
         effective_artist, effective_title = effective_track_artist_title(t)
@@ -2484,14 +2683,15 @@ async def get_flow(
 
     # Дедуп по нормализованной паре artist/title тоже важен: один трек может
     # прийти локально, через YT Music и SoundCloud с разными provider id. При
-    # совпадении оставляем первый источник: локальный файл, затем точный каталог,
-    # затем похожесть и прочую разведку. Треки из лайков и собственных
-    # плейлистов сюда намеренно не добавляются: они уже отфильтрованы выше и
-    # должны влиять на вкус, но не повторяться в потоке.
+    # совпадении оставляем первый источник: понравившееся, локальный файл, затем
+    # точный каталог, затем похожесть и прочую разведку. Треки из собственных
+    # (не «Понравившиеся») плейлистов сюда намеренно не добавляются: они уже
+    # отфильтрованы выше и должны влиять на вкус, но не повторяться в потоке.
     unified_candidates = []
     unified_identities = set()
     unified_keys = set()
     for candidate in (
+        *liked_candidates,
         *local_candidates,
         *favorite_explore,
         *similar_explore,
@@ -2504,6 +2704,12 @@ async def get_flow(
         unified_identities.add(identity)
         unified_keys.add(key)
         unified_candidates.append(candidate)
+    # Явный лайк — самый сильный первичный сигнал, какой у нас есть про
+    # КОНКРЕТНЫЙ трек, поэтому bonus выше, чем у точного каталога любимого
+    # артиста. На попадание в порцию это влияет только внутри своей квоты (см.
+    # отбор ниже), а вот на место внутри неё — да.
+    for candidate in liked_candidates:
+        content_bonus_by_identity.setdefault(_item_identity(candidate), 0.15)
     for candidate in local_candidates:
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.05)
     for candidate in favorite_explore:
@@ -2530,12 +2736,11 @@ async def get_flow(
         artist, _title = _item_artist_title(candidate)
         return artist_key(artist) not in familiar_artists
 
-    selected_candidates = ranked_candidates[:limit]
+    novel_selection: List = []
     if discovery_target:
         novel_candidates = [
             candidate for candidate in ranked_candidates if _is_novel(candidate)
         ]
-        novel_selection = []
         novel_artist_keys = set()
 
         # Prefer one track per new artist first, then use additional tracks from
@@ -2557,14 +2762,35 @@ async def get_flow(
             )
             novel_selection = novel_selection[:discovery_target]
 
-        selected_ids = {id(candidate) for candidate in novel_selection}
-        remaining_candidates = [
-            candidate
-            for candidate in ranked_candidates
-            if id(candidate) not in selected_ids
-        ]
-        selected_candidates = novel_selection + remaining_candidates
-        selected_candidates = selected_candidates[:limit]
+    # Понравившееся берём в порядке общего рейтинга, но ровно liked_target штук.
+    # Лайк — трек знакомого артиста, так что с novel_selection пересечений нет;
+    # дедуп по id ниже всё равно на месте, чтобы порядок отбора не был неявным
+    # условием корректности.
+    liked_selection: List = []
+    if liked_target:
+        for candidate in ranked_candidates:
+            if _item_identity(candidate) not in liked_identities:
+                continue
+            liked_selection.append(candidate)
+            if len(liked_selection) >= liked_target:
+                break
+
+    reserved: List = []
+    reserved_ids: set[int] = set()
+    for candidate in (*novel_selection, *liked_selection):
+        if id(candidate) in reserved_ids:
+            continue
+        reserved_ids.add(id(candidate))
+        reserved.append(candidate)
+    # Добор — общим рейтингом, но БЕЗ лайков: их квота уже заполнена, и всё
+    # сверх неё вытеснило бы из порции то новое, за чем в поток и приходят.
+    filler = [
+        candidate
+        for candidate in ranked_candidates
+        if id(candidate) not in reserved_ids
+        and _item_identity(candidate) not in liked_identities
+    ]
+    selected_candidates = (reserved + filler)[:limit]
 
     mix: List[dict] = [
         _candidate_payload(candidate) for candidate in selected_candidates
@@ -2662,10 +2888,12 @@ async def get_flow(
     finally:
         telemetry_db.close()
     logger.debug(
-        "flow result user=%s explore=%d exploit=%d returned=%d",
+        "flow result user=%s explore=%d exploit=%d liked=%d/%d returned=%d",
         user_id,
         n_explore,
         n_exploit,
+        len(liked_selection),
+        liked_target,
         len(mix),
     )
     return mix

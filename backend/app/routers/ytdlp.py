@@ -846,8 +846,10 @@ def proxy_for_url(url: str) -> Optional[str]:
     """Прокси для скачивания ``url`` или None (прямой выход).
 
     Проксируем ТОЛЬКО googlevideo. stream_cached_audio общий с SoundCloud
-    (soundcloud.py:1019), а у cf-media привязки к IP нет — гнать его аудио и
-    обложки через платный прокси незачем.
+    (soundcloud.stream_soundcloud), а у cf-media привязки к IP нет — гнать его
+    аудио и обложки через платный прокси незачем. Метаданные SoundCloud — другое
+    дело, они закрыты целиком и ходят через свой выход
+    (soundcloud.soundcloud_proxy).
     """
     proxy = stream_proxy()
     if not proxy:

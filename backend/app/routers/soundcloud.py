@@ -18,6 +18,7 @@ from app.routers.ytdlp import (
     TransientResolveError,
     _cached_file,
     _enforce_cache_limit,
+    _mask_proxy,
     _serve_file,
     cached_ydl,
     clean_title,
@@ -47,6 +48,79 @@ _SC_SOCKET_TIMEOUT = 8
 # суммарное время ограничиваем отдельно: /api/recommendations/ веерит несколько
 # поисков сразу, и один флапающий источник не должен вешать главную.
 _SC_SEARCH_BUDGET = 10
+
+# ─── Прокси для метаданных SoundCloud ───
+#
+# ПОКА ВЫКЛЮЧЕН: обе переменные закомментированы в docker-compose.yml и
+# docker-compose.prod.yml, поэтому soundcloud_proxy() отдаёт None и весь путь
+# идёт прямым выходом. Механизм оставлен целиком — чтобы включить, достаточно
+# раскомментировать SOUNDCLOUD_PROXY_FILE и прописать выход
+# (invidious/proxy-pool/pick-soundcloud-proxy.sh), перезапуск не нужен.
+#
+# Провайдер режет SoundCloud целиком: soundcloud.com не открывается вообще
+# (ConnectTimeout, проверено и с хоста, мимо Docker), а api-v2 с ВАЛИДНЫМ
+# client_id отвечает 403 на прямой запрос и 200 через прокси. То есть закрыт
+# весь метаданный путь, а не один хост, поэтому проксировать надо и скрейп
+# client_id, и все запросы к api-v2.
+#
+# Знак намеренно свой, а не общий STREAM_PROXY (см. ytdlp.stream_proxy): тот
+# включает платный выход для скачивания googlevideo, и починка метаданных
+# SoundCloud не должна попутно загонять туда весь YouTube-трафик.
+#
+# Само аудио SoundCloud (playback.media-streaming.soundcloud.cloud) остаётся
+# прямым: byte-range запрос отдаёт 200 и мимо прокси, и через него, то есть к
+# IP выхода ссылка не привязана — в отличие от googlevideo. Поэтому
+# ytdlp.proxy_for_url менять не нужно, и платный трафик тратится только на
+# JSON метаданных.
+_SC_PROXY_STATIC = os.getenv("SOUNDCLOUD_PROXY", "").strip()
+# Файл важнее переменной, ровно как у стрим-прокси: активный выход пишет
+# сторонний скрипт ротации, а бэкенд перечитывает файл по mtime — смена прокси
+# не требует перезапуска контейнера.
+_SC_PROXY_FILE = os.getenv("SOUNDCLOUD_PROXY_FILE", "").strip()
+# (mtime, url) последнего чтения файла; -1.0 — «ещё не читали».
+_sc_proxy_cache: tuple[float, Optional[str]] = (-1.0, None)
+
+
+def soundcloud_proxy() -> Optional[str]:
+    """Прокси для api-v2 и скрейпа client_id или None (прямой выход).
+
+    Читает первую непустую строку не с ``#`` из ``SOUNDCLOUD_PROXY_FILE`` и
+    перечитывает только при смене mtime: вызывается на каждый запрос к api-v2,
+    так что дешёвый stat вместо открытия файла здесь принципиален.
+    """
+    global _sc_proxy_cache
+    if not _SC_PROXY_FILE:
+        return _SC_PROXY_STATIC or None
+    try:
+        mtime = os.path.getmtime(_SC_PROXY_FILE)
+    except OSError:
+        return _SC_PROXY_STATIC or None
+    cached_mtime, cached = _sc_proxy_cache
+    if mtime != cached_mtime:
+        cached = None
+        try:
+            with open(_SC_PROXY_FILE, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        cached = line
+                        break
+        except OSError as exc:
+            logger.warning("SoundCloud proxy file unreadable: %s", exc)
+        _sc_proxy_cache = (mtime, cached)
+        logger.info("SoundCloud proxy reloaded: %s", _mask_proxy(cached))
+    return cached or _SC_PROXY_STATIC or None
+
+
+def _sc_ydl_opts(opts: dict) -> dict:
+    """Опции yt-dlp с прокси для SoundCloud, если он настроен.
+
+    Ключ добавляется только когда прокси есть: с ``proxy`` в опциях yt-dlp
+    перестаёт смотреть на переменные окружения, и без этой проверки поведение
+    ненастроенного стенда изменилось бы молча.
+    """
+    proxy = soundcloud_proxy()
+    return {**opts, "proxy": proxy} if proxy else opts
 
 
 def _metric_count(value) -> int:
@@ -258,8 +332,7 @@ async def _search_api(request: Request, q: str, limit: int) -> List[ExternalTrac
 def _search_blocking(q: str, limit: int) -> list:
     # Переиспользуем YoutubeDL в рамках потока (см. ytdlp.cached_ydl) —
     # конструктор на каждый поиск заново грузил бы реестр экстракторов.
-    ydl = cached_ydl(
-        "soundcloud:search",
+    opts = _sc_ydl_opts(
         {
             "quiet": True,
             "no_warnings": True,
@@ -267,8 +340,12 @@ def _search_blocking(q: str, limit: int) -> list:
             "skip_download": True,
             "noplaylist": True,
             "socket_timeout": _SC_SOCKET_TIMEOUT,
-        },
+        }
     )
+    # Прокси — часть ключа кэша: инстанс переживает вызовы внутри потока, и
+    # после ротации выхода закэшированный YoutubeDL иначе продолжал бы ходить
+    # через уже снятый прокси.
+    ydl = cached_ydl(("soundcloud:search", opts.get("proxy")), opts)
     info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
     return (info or {}).get("entries") or []
 
@@ -339,8 +416,7 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
     # Переиспользуем YoutubeDL в рамках потока — конструктор грузит реестр
     # экстракторов заново на каждый вызов, это заметная накладная трата
     # (см. ytdlp.cached_ydl).
-    ydl = cached_ydl(
-        "soundcloud",
+    opts = _sc_ydl_opts(
         {
             "quiet": True,
             "no_warnings": True,
@@ -354,8 +430,10 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
             # ошибку — формат всё равно выбирает _pick_progressive.
             "ignore_no_formats_error": True,
             "socket_timeout": _SC_SOCKET_TIMEOUT,
-        },
+        }
     )
+    # Прокси в ключе кэша — см. _search_blocking.
+    ydl = cached_ydl(("soundcloud", opts.get("proxy")), opts)
     try:
         info = ydl.extract_info(permalink, download=False)
     except yt_dlp.utils.DownloadError as exc:
@@ -478,8 +556,12 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     # connect отдельно и коротким: недоступный/зафильтрованный api-v2 должен
     # отваливаться быстро (замер: с общим timeout=15 один такой вызов стоил
     # ровно 15с), а вот чтение ответа по медленному каналу ждём дольше.
+    # proxy: прямой выход к api-v2 отдаёт 403 даже с валидным client_id,
+    # см. soundcloud_proxy.
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True
+        timeout=httpx.Timeout(15.0, connect=5.0),
+        follow_redirects=True,
+        proxy=soundcloud_proxy(),
     ) as client:
         client_id = await get_cache_async(_CLIENT_ID_KEY)
         for attempt in range(2):
@@ -518,7 +600,12 @@ async def _transcoding_direct_url(transcoding_url: str) -> str:
     """
     import httpx
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+    # proxy: эндпоинт транскодирования — тот же api-v2, закрытый для прямого
+    # выхода (см. soundcloud_proxy). Проксируется только он: выданная им ссылка
+    # на аудио к IP не привязана и качается напрямую.
+    async with httpx.AsyncClient(
+        timeout=15, follow_redirects=False, proxy=soundcloud_proxy()
+    ) as client:
         client_id = await get_cache_async(_CLIENT_ID_KEY)
         for attempt in range(2):
             if not client_id:

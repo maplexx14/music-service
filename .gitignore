@@ -43,6 +43,10 @@ invidious/proxy-pool/active.env
 # Активный выход для скачивания googlevideo: тот же URL с кредами, читается
 # бэкендом (STREAM_PROXY_FILE). Пишется rotate.sh.
 invidious/proxy-pool/stream-proxy/active.url
+# Активный выход для метаданных SoundCloud (SOUNDCLOUD_PROXY_FILE). Тоже с
+# кредами и тоже из пула, но знак отдельный: SoundCloud заблокирован целиком, а
+# платный выход для googlevideo-аудио включать из-за этого не нужно.
+invidious/proxy-pool/stream-proxy/soundcloud.url
 
 #repowise
 .mcp.json

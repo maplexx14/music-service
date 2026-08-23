@@ -199,6 +199,21 @@ services:
       STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
       # Статическая альтернатива файлу: адрес прокси одной строкой.
       STREAM_PROXY: ${STREAM_PROXY:-}
+      # Прокси для МЕТАДАННЫХ SoundCloud: api-v2 и скрейпа client_id. ПОКА
+      # ВЫКЛЮЧЕН — раскомментировать, когда решим включать. Механизм в коде
+      # остался (soundcloud.soundcloud_proxy): без этих переменных он отдаёт
+      # None, и всё идёт прямым выходом.
+      #
+      # Знак отдельный от STREAM_PROXY намеренно. Провайдер режет SoundCloud
+      # целиком (soundcloud.com не открывается вообще, api-v2 отдаёт 403 даже с
+      # валидным client_id), из-за чего поиск возвращает пусто, потратив ~15
+      # секунд. Но включать из-за этого STREAM_PROXY нельзя: он погнал бы через
+      # платный выход ВСЁ googlevideo-аудио. Само аудио SoundCloud к IP выхода
+      # не привязано и качается напрямую, так что платного трафика здесь было бы
+      # только JSON метаданных. Файл пишет pick-soundcloud-proxy.sh, бэкенд
+      # перечитывает по mtime.
+      # SOUNDCLOUD_PROXY_FILE: ${SOUNDCLOUD_PROXY_FILE:-/run/stream-proxy/soundcloud.url}
+      # SOUNDCLOUD_PROXY: ${SOUNDCLOUD_PROXY:-}
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
       # Похожие треки по названию для потока рекомендаций (см.
       # app/beets_similar.py). Пусто = источник выключен.
