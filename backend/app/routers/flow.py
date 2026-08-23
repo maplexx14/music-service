@@ -1909,7 +1909,9 @@ async def get_flow(
     history_key = f"flow:history:v2:{user_id}"
     history = await get_cache_async(history_key) or {}
     if not any(history.get(name) for name in ("ids", "keys", "artists")):
-        history = _persisted_flow_history(db, user_id, _FLOW_HISTORY_LIMIT)
+        history = await asyncio.to_thread(
+            _persisted_flow_history, db, user_id, _FLOW_HISTORY_LIMIT
+        )
     history_ids = set(history.get("ids") or [])
     history_keys = {
         tuple(key) for key in (history.get("keys") or [])
@@ -1922,8 +1924,12 @@ async def get_flow(
 
     explore_ratio = discovery_ratio(current_user)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
-    contextual_profile = build_context_profile(
-        db, user_id, hour_bucket(hour), now=ranking_now
+    # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
+    # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
+    # Последовательно, а не в gather: Session не потокобезопасна, и обе функции
+    # работают с одним и тем же db.
+    contextual_profile = await asyncio.to_thread(
+        build_context_profile, db, user_id, hour_bucket(hour), now=ranking_now
     )
     # Дальше идут секунды сетевых ожиданий (radio YT Music + поиск SoundCloud),
     # а сессия всё это время держала бы соединение открытым в состоянии

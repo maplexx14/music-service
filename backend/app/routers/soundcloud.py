@@ -36,6 +36,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Таймауты сетевых операций yt-dlp. Без socket_timeout yt-dlp оставляет сокет на
+# дефолте Python (None) и ждёт таймаут ОС, а сверху накладывает свои ретраи:
+# при деградации сети до SoundCloud один поиск уходил на десятки секунд (замер:
+# /api/soundcloud/search 0.5с в норме против 52с при сбое api-v2). У YouTube-пути
+# такой предел стоит с самого начала (см. ytdlp._SOCKET_TIMEOUT).
+_SC_SOCKET_TIMEOUT = 8
+# Общий бюджет фолбэка на yt-dlp. socket_timeout ограничивает ОДНУ операцию,
+# а экстрактор делает их несколько (резолв client_id, сам поиск), поэтому
+# суммарное время ограничиваем отдельно: /api/recommendations/ веерит несколько
+# поисков сразу, и один флапающий источник не должен вешать главную.
+_SC_SEARCH_BUDGET = 10
+
 
 def _metric_count(value) -> int:
     if isinstance(value, str):
@@ -254,6 +266,7 @@ def _search_blocking(q: str, limit: int) -> list:
             "extract_flat": True,  # только метаданные, без резолва аудио (быстро)
             "skip_download": True,
             "noplaylist": True,
+            "socket_timeout": _SC_SOCKET_TIMEOUT,
         },
     )
     info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
@@ -272,7 +285,17 @@ async def search_soundcloud(
         logger.warning("SoundCloud api-v2 search failed (%s), falling back to yt-dlp", exc)
 
     try:
-        raw = await asyncio.to_thread(_search_blocking, q, limit)
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(_search_blocking, q, limit),
+            timeout=_SC_SEARCH_BUDGET,
+        )
+    except asyncio.TimeoutError:
+        # Поток отменить нельзя, он доработает сам — socket_timeout не даст ему
+        # висеть долго. Здесь важно не заставлять ЖДАТЬ вызывающий запрос.
+        logger.warning(
+            "SoundCloud yt-dlp fallback exceeded %ss for %r", _SC_SEARCH_BUDGET, q
+        )
+        return []
     except Exception:  # noqa: BLE001 — нет сети / yt-dlp не установлен
         logger.exception("SoundCloud search failed")
         return []
@@ -330,6 +353,7 @@ def _resolve_blocking(permalink: str) -> tuple[str, str, Optional[int]]:
             # И подстраховка: даже если селектор не смэтчился, не кидаем
             # ошибку — формат всё равно выбирает _pick_progressive.
             "ignore_no_formats_error": True,
+            "socket_timeout": _SC_SOCKET_TIMEOUT,
         },
     )
     try:
@@ -451,7 +475,12 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     """GET к api-v2 с client_id из Redis; при 401/403 скрейпит новый и повторяет."""
     import httpx
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+    # connect отдельно и коротким: недоступный/зафильтрованный api-v2 должен
+    # отваливаться быстро (замер: с общим timeout=15 один такой вызов стоил
+    # ровно 15с), а вот чтение ответа по медленному каналу ждём дольше.
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True
+    ) as client:
         client_id = await get_cache_async(_CLIENT_ID_KEY)
         for attempt in range(2):
             if not client_id:
@@ -718,6 +747,7 @@ def _search_youtube_blocking(query: str, limit: int = 8) -> list[dict]:
             "no_warnings": True,
             "skip_download": True,
             "extract_flat": True,
+            "socket_timeout": _SC_SOCKET_TIMEOUT,
         },
     )
     try:

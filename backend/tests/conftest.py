@@ -97,6 +97,20 @@ def _reset_ytdlp_bot_check_backoff():
     ytdlp._bot_check_until = 0.0
 
 
+@pytest.fixture(autouse=True)
+def _reset_external_recommendation_cooldown():
+    """Предохранитель внешних источников рекомендаций живёт 2 минуты в общем
+    Redis (см. recommendations._EXTERNAL_COOLDOWN_KEY). Тот же повод, что у
+    cooldown'а почтовой 2FA: тест, у которого провайдеры не замоканы и потому
+    падают все до одного, открывает его и ломает все последующие — выдача
+    приходит без внешних треков, хотя тест ждёт именно их."""
+    from app.cache import clear_pattern
+
+    clear_pattern("recs:external:*")
+    yield
+    clear_pattern("recs:external:*")
+
+
 @pytest.fixture()
 def db():
     Base.metadata.create_all(bind=engine)

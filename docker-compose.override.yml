@@ -1,7 +1,51 @@
 # Dev override: --reload для hot-reload при локальной разработке.
 # Автоматически подхватывается docker-compose up.
+#
+# WATCHFILES_IGNORE_PERMISSION_DENIED обязателен, и вот почему.
+#
+# watchfiles обходит всё дерево наблюдения, чтобы поставить watch, и на
+# нечитаемом каталоге падает целиком: на /app/.pytest-tmp-media (режим
+# d--x--x--x, мусор от прогона pytest через bind-mount Docker Desktop) обход
+# ронял reload-supervisor с
+#   WatchfilesRustInternalError: ... Permission denied (os error 13)
+# Форкнутый server-процесс при этом выживал, так что снаружи сервис работал, но
+# hot-reload был мёртв, а раньше цикл падений давал 34 «Started server process»
+# на 2 «Started reloader process» — отсюда и проседание быстродействия.
+#
+# --reload-dir здесь НЕ помогает, это проверено: uvicorn выбрасывает каталоги,
+# которые лежат внутри cwd, как избыточные, и подставляет вместо них саму cwd
+# (см. uvicorn/supervisors/watchfilesreload.py, ветка `if Path.cwd() not in
+# directory.parents`). При WORKDIR=/app и --reload-dir /app/app список
+# сворачивается ровно в ['/app'], то есть наблюдение остаётся за всем деревом.
+# Лог «Will watch for changes in these directories» печатает исходный
+# config.reload_dirs, а не этот свёрнутый список, и вводит в заблуждение.
+#
+# --reload-exclude тоже не помогает: он фильтрует уже пойманные события, а
+# падение происходит на обходе.
+#
+# WATCHFILES_IGNORE_PERMISSION_DENIED — штатный флаг устойчивости watchfiles
+# (см. watchfiles/main.py: «Setting the WATCHFILES_IGNORE_PERMISSION_DENIED
+# environment variable will set this value too»), и переменная действительно
+# читается. Но здесь её недостаточно, это проверено: на bind-mount Docker
+# Desktop watchfiles сам включает polling (_default_force_polling() -> True,
+# потому что inotify через 9p/virtiofs не доходит), а в polling-ветке 1.2.0
+# флаг не применяется — прямой вызов watch('/app') с ним всё равно падает.
+# Оставлен как задел: заработает, если ветку починят или включится inotify.
+#
+# Что реально лечит — tmpfs поверх сломанного пути. Контейнер видит на его
+# месте обычный пустой читаемый каталог, хостовый ACL в обход не попадает.
+# Каталог на хосте удалить нельзя: его ACL не читается даже владельцем, а
+# takeown/icacls требуют администратора. Для pytest-каталога tmpfs — то, чем он
+# и должен быть; содержимое не обязано переживать перезапуск.
 version: '3.8'
 
 services:
   backend:
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips='*'"
+    environment:
+      WATCHFILES_IGNORE_PERMISSION_DENIED: "1"
+    tmpfs:
+      - /app/.pytest-tmp-media
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      --proxy-headers --forwarded-allow-ips='*'"

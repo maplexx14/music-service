@@ -4,6 +4,11 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: music_postgres
+    # Без restart-политики стек не поднимается после перезагрузки хоста или
+    # рестарта Docker Desktop: однажды всё легло на трое суток (backend/nginx/
+    # frontend/minio/slskd в Exited 255, postgres в 137) и снаружи это выглядело
+    # как «сервис стал медленным», хотя не слушал вообще никто.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-music_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-music_password}
@@ -41,6 +46,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: music_redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -54,6 +60,7 @@ services:
   minio:
     image: minio/minio:latest
     container_name: music_minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -74,6 +81,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: music_backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-music_user}:${POSTGRES_PASSWORD:-music_password}@postgres:5432/${POSTGRES_DB:-music_db}
       REDIS_HOST: redis
@@ -201,6 +209,7 @@ services:
   slskd:
     image: slskd/slskd:latest
     container_name: music_slskd
+    restart: unless-stopped
     environment:
       SLSKD_SLSK_USERNAME: ${SOULSEEK_USERNAME:-}
       SLSKD_SLSK_PASSWORD: ${SOULSEEK_PASSWORD:-}
@@ -225,6 +234,7 @@ services:
         # что нужно для доступа с других устройств через reverse proxy / tunnel.
         VITE_API_URL: ${VITE_API_URL:-}
     container_name: music_frontend
+    restart: unless-stopped
     environment:
       VITE_API_URL: ${VITE_API_URL:-}
     ports:
@@ -240,6 +250,7 @@ services:
       context: ./nginx
       dockerfile: Dockerfile
     container_name: music_nginx
+    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:

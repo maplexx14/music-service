@@ -5,10 +5,11 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from collections import Counter
 import asyncio
+import logging
 import math
 import re
 from app.database import get_db
-from app.cache import get_cache, set_cache
+from app.cache import get_cache, set_cache, get_cache_async, set_cache_async
 from app.models import (
     Track,
     Playlist,
@@ -70,6 +71,8 @@ from app.routers import flow as flow_router
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 # Рекомендации пересчитывать на каждый запрос дорого (несколько запросов с
 # IN-списками и сортировками), а меняются они медленно — короткий кэш.
 # Явные действия (лайк/скип) инвалидируют его сразу (см. tracks.py), TTL
@@ -86,6 +89,20 @@ _EXTERNAL_ARTISTS = 4
 _EXTERNAL_SIMILAR_ARTISTS = 2
 _EXTERNAL_GENRES = 1
 _EXTERNAL_POOL_FACTOR = 4
+
+# Внешние источники — это сеть, и её отказ не должен стоить главной минуту.
+# Замер: /api/recommendations/ отдавался 52.9с холодным против 39-68мс тёплого,
+# потому что при недоступном SoundCloud api-v2 веер поисков уходил в фолбэк
+# yt-dlp без ограничения по времени.
+#
+# _EXTERNAL_BUDGET ограничивает ОДНУ попытку, а cooldown не даёт платить этот
+# бюджет заново на каждом промахе кэша: _RECS_TTL всего 300с, поэтому без него
+# пользователь ловил длинный запрос раз в пять минут. Локальные рекомендации
+# при открытом cooldown отдаются как обычно — деградируем в полноте выдачи,
+# а не в доступности.
+_EXTERNAL_BUDGET = 20
+_EXTERNAL_COOLDOWN_KEY = "recs:external:cooldown"
+_EXTERNAL_COOLDOWN_TTL = 120
 
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого "топ-N" по позиции/play_count — иначе у активных
@@ -445,6 +462,11 @@ async def _external_recommendation_pool(
     materialize a fraction of them; using their artist/title/genre seeds keeps
     recommendations useful before any acoustic backfill is complete.
     """
+    # Провайдеры недавно не уложились в бюджет — не платим его снова, отдаём
+    # только локальную выдачу (см. _EXTERNAL_COOLDOWN_TTL).
+    if await get_cache_async(_EXTERNAL_COOLDOWN_KEY):
+        return []
+
     seed_tracks: list[tuple[str, str]] = []
     seen_tracks: set[tuple[str, str]] = set()
     for track, _added_at in liked:
@@ -537,7 +559,34 @@ async def _external_recommendation_pool(
     if not jobs:
         return []
 
-    pools = await asyncio.gather(*jobs, return_exceptions=True)
+    try:
+        pools = await asyncio.wait_for(
+            asyncio.gather(*jobs, return_exceptions=True),
+            timeout=_EXTERNAL_BUDGET,
+        )
+    except asyncio.TimeoutError:
+        await set_cache_async(
+            _EXTERNAL_COOLDOWN_KEY, 1, expire=_EXTERNAL_COOLDOWN_TTL
+        )
+        logger.warning(
+            "external recommendation pool exceeded %ss, cooling down for %ss",
+            _EXTERNAL_BUDGET,
+            _EXTERNAL_COOLDOWN_TTL,
+        )
+        return []
+
+    # Все источники до одного упали — сеть/провайдеры лежат. Следующий промах
+    # кэша не должен снова ждать их по кругу.
+    if all(isinstance(pool, Exception) for pool in pools):
+        await set_cache_async(
+            _EXTERNAL_COOLDOWN_KEY, 1, expire=_EXTERNAL_COOLDOWN_TTL
+        )
+        logger.warning(
+            "every external recommendation source failed, cooling down for %ss",
+            _EXTERNAL_COOLDOWN_TTL,
+        )
+        return []
+
     result: list[ExternalTrackResponse] = []
     seen: set[str] = set()
     seen_track_keys = set(excluded_track_keys or ())
@@ -1664,6 +1713,10 @@ async def get_recommended_playlists(
     recommendations = await get_recommendations(
         request=request,
         limit=limit,
+        # Вызываем get_recommendations напрямую, а не через FastAPI, поэтому
+        # дефолты параметров НЕ разрешаются: без явного hour внутрь уехал бы
+        # объект Query(...) и _hour_bucket падал с TypeError (HTTP 500).
+        hour=None,
         current_user=current_user,
         db=db,
     )
