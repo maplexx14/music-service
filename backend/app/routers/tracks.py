@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, Response, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from typing import List, Optional
@@ -757,9 +758,16 @@ async def upload_track_cover(
 
 
 def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
-    playlist = db.query(Playlist).filter(
-        Playlist.owner_id == user.id, Playlist.is_liked == True
-    ).first()
+    # Порядок по id обязателен: до миграции 0021 уникальности в БД не было, и
+    # два одновременных лайка могли создать второй is_liked-плейлист. Читатели
+    # (профиль вкуса, рекомендации) выбирают самый старый — здесь тот же выбор,
+    # иначе лайки расползлись бы по двум плейлистам.
+    playlist = (
+        db.query(Playlist)
+        .filter(Playlist.owner_id == user.id, Playlist.is_liked.is_(True))
+        .order_by(Playlist.id)
+        .first()
+    )
     if playlist is None:
         playlist = Playlist(
             name="Понравившиеся",
@@ -768,7 +776,20 @@ def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
             owner_id=user.id,
         )
         db.add(playlist)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Параллельный запрос успел вставить свой — берём его, а не падаем.
+            db.rollback()
+            playlist = (
+                db.query(Playlist)
+                .filter(Playlist.owner_id == user.id, Playlist.is_liked.is_(True))
+                .order_by(Playlist.id)
+                .first()
+            )
+            if playlist is None:
+                raise
+            return playlist
         db.refresh(playlist)
     return playlist
 
@@ -894,8 +915,6 @@ def get_listening_history(
     )
     return history
 
-
-from sqlalchemy.exc import IntegrityError
 
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
 def record_track_play(

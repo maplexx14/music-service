@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
+import logging
 from app.database import get_db
 from app.cache import get_cache, set_cache, redis_client
 from app.models import User, Track
@@ -14,6 +15,8 @@ from app.artist_utils import artist_key
 from app.recommendation_cache import invalidate_recommendation_cache
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -163,7 +166,15 @@ def get_admin_dashboard(
     users = db.query(User).order_by(User.created_at.desc()).all()
     profiles = []
     for user in users:
-        detected = _taste_profile(db, user.id) or {}
+        # Профиль вкуса — самая хрупкая часть дашборда (он читает лайки,
+        # историю и плейлисты). Один пользователь с битыми данными не должен
+        # ронять всю панель: его карточка просто едет без detected_*.
+        try:
+            detected = _taste_profile(db, user.id) or {}
+        except Exception:
+            logger.exception("taste profile failed for user %s", user.id)
+            db.rollback()
+            detected = {}
         profiles.append({
             "id": user.id,
             "username": user.username,

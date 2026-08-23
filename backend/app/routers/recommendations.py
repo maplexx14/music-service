@@ -57,7 +57,7 @@ from app.acoustic_features import (
     acoustic_similarity,
     weighted_centroid,
 )
-from app.playlist_signals import aggregate_playlist_origin
+from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import (
     ALLOWED_EVENT_TYPES,
@@ -701,9 +701,7 @@ async def get_recommendations(
         return RecommendationResponse(**cached_payload)
 
     # Get user's liked tracks and frequently played tracks
-    liked_playlist_id = db.query(Playlist.id).filter(
-        Playlist.owner_id == current_user.id, Playlist.is_liked == True
-    ).scalar()
+    liked_playlist_id = find_liked_playlist_id(db, current_user.id)
     liked = []
     if liked_playlist_id is not None:
         liked = (

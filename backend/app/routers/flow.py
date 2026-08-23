@@ -86,7 +86,7 @@ from app.acoustic_features import (
     acoustic_similarity,
     weighted_centroid,
 )
-from app.playlist_signals import aggregate_playlist_origin
+from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import (
@@ -376,9 +376,7 @@ def _external_population_stats_on_bind(bind, items, now=None) -> dict:
 
 def _taste_profile(db: Session, user_id: int) -> dict:
     """Собирает профиль вкуса пользователя из лайков и истории (блокирующая)."""
-    liked_playlist_id = db.query(Playlist.id).filter(
-        Playlist.owner_id == user_id, Playlist.is_liked == True
-    ).scalar()
+    liked_playlist_id = find_liked_playlist_id(db, user_id)
     liked = (
         db.query(Track, playlist_tracks.c.added_at)
         .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)

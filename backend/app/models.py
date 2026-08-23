@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON, select
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON, Index, select, text
 from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
 from app.database import Base
@@ -236,6 +236,19 @@ class Track(Base):
 
 class Playlist(Base):
     __tablename__ = "playlists"
+
+    # "Понравившиеся" — ровно один на пользователя. Без этого индекса
+    # get_or_create ловил гонку двух одновременных лайков и заводил второй
+    # плейлист, а читатели падали с MultipleResultsFound (см. миграцию 0021).
+    __table_args__ = (
+        Index(
+            "uq_playlists_owner_liked",
+            "owner_id",
+            unique=True,
+            postgresql_where=text("is_liked IS TRUE"),
+            sqlite_where=text("is_liked IS TRUE"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
