@@ -16,11 +16,15 @@ from typing import Any, Iterable, Mapping, Optional
 
 from app.acoustic_features import acoustic_similarity
 
-ALGORITHM_VERSION = "hybrid-v6"
+ALGORITHM_VERSION = "hybrid-v7"
 
-# Keep popularity deliberately small.  A global counter must never overpower a
-# user's explicit signal or a content match.
-_POPULARITY_WEIGHT = 0.28
+# Popularity must never overpower a user's explicit signal or a content match,
+# but it does have to separate a genuine hit from a no-name upload.  The weight
+# stays far below affinity (2.4) while the curve below keeps the *spread* usable:
+# with tanh(raw / 5.0) every candidate above ~1k plays scored 0.72..0.98, so the
+# whole real range of play counts was worth 0.04 points — less than the novelty
+# bonus alone, i.e. popularity could not decide anything.
+_POPULARITY_WEIGHT = 0.5
 _FRESHNESS_WEIGHT = 0.22
 _AFFINITY_WEIGHT = 2.4
 _CONTENT_WEIGHT = 1.15
@@ -30,6 +34,14 @@ _NOVELTY_WEIGHT = 0.16
 _FATIGUE_WEIGHT = 0.55
 _CONTEXT_WEIGHT = 0.65
 _POPULATION_QUALITY_WEIGHT = 1.0
+
+# Play counts arrive on two incompatible scales, and they used to share one
+# curve.  ``Track.play_count`` is OUR counter (a few hundred plays is a
+# well-known track in this catalogue); a provider metric is views/playback_count,
+# where a few hundred means nobody listened.  The shared curve rated every
+# external candidate — hit and bedroom upload alike — as maximally popular.
+LOCAL_POPULARITY_REFERENCE = 400
+SERVICE_POPULARITY_REFERENCE = 3_000_000
 
 
 def _as_utc(value: Any) -> Optional[datetime]:
@@ -47,12 +59,26 @@ def _field(item: Any, name: str, default: Any = None) -> Any:
     return getattr(item, name, default)
 
 
-def popularity_score(play_count: Any = 0, listener_count: Any = 0) -> float:
+def popularity_score(
+    play_count: Any = 0,
+    listener_count: Any = 0,
+    *,
+    reference: float = LOCAL_POPULARITY_REFERENCE,
+) -> float:
     """Return a bounded popularity signal with diminishing returns.
 
     ``listener_count`` is optional for compatibility with old catalogues.  The
     unique-listener term prevents a single user's repeated plays from looking
-    like broad popularity once the aggregate is available.
+    like broad popularity once the aggregate is available.  When it is unknown
+    the play term carries the full signal instead of losing 35% of it: provider
+    candidates never have a listener aggregate, and splitting the weight anyway
+    made every external track look less popular than it is.
+
+    ``reference`` is the count that earns a full score, and it is what keeps the
+    two counter scales apart — see ``SERVICE_POPULARITY_REFERENCE``.  The ramp is
+    linear in ``log1p`` so the ordinary range of counts stays separable; the old
+    ``tanh`` on top of the logarithm compressed everything above a thousand plays
+    into the same value.
     """
     try:
         plays = max(0.0, float(play_count or 0))
@@ -62,10 +88,12 @@ def popularity_score(play_count: Any = 0, listener_count: Any = 0) -> float:
         listeners = max(0.0, float(listener_count or 0))
     except (TypeError, ValueError):
         listeners = 0.0
-    # log1p keeps the signal stable; the square-root term rewards breadth but
-    # is capped so a very popular item cannot dominate affinity.
-    raw = math.log1p(plays) * 0.65 + math.log1p(listeners) * 0.35
-    return math.tanh(raw / 5.0)
+    if listeners > 0:
+        raw = math.log1p(plays) * 0.65 + math.log1p(listeners) * 0.35
+    else:
+        raw = math.log1p(plays)
+    scale = math.log1p(max(1.0, float(reference or LOCAL_POPULARITY_REFERENCE)))
+    return max(0.0, min(1.0, raw / scale))
 
 
 def population_quality_score(positive_users: Any = 0, negative_users: Any = 0) -> float:
@@ -190,6 +218,8 @@ def score_track(
     source: Optional[str] = None,
     play_count: Optional[int] = None,
     listener_count: int = 0,
+    popularity_reference: Optional[float] = None,
+    popularity: Optional[float] = None,
     content_bonus: float = 0.0,
     acoustic_profile: Any = None,
     acoustic_bonus: float = 0.0,
@@ -212,9 +242,18 @@ def score_track(
             + float(acoustic_bonus or 0.0),
         ),
     )
-    popularity = popularity_score(
-        _field(track, "play_count", 0) if play_count is None else play_count,
-        listener_count or _field(track, "unique_listener_count", 0),
+    popularity = (
+        popularity_score(
+            _field(track, "play_count", 0) if play_count is None else play_count,
+            listener_count or _field(track, "unique_listener_count", 0),
+            reference=(
+                LOCAL_POPULARITY_REFERENCE
+                if popularity_reference is None
+                else popularity_reference
+            ),
+        )
+        if popularity is None
+        else max(0.0, min(1.0, float(popularity)))
     )
     freshness = freshness_score(track, now=now)
     source_fit = source_confidence(source or _field(track, "source"))

@@ -13,11 +13,19 @@ from app.acoustic_features import acoustic_similarity, weighted_centroid
 from app.models import Playlist, Track, playlist_tracks, recommendation_events
 from app.playlist_signals import aggregate_playlist_origin, imported_playlist_clause
 from app.recommendation_scoring import (
+    LOCAL_POPULARITY_REFERENCE,
+    SERVICE_POPULARITY_REFERENCE,
+    popularity_score,
     population_quality_score,
     population_rejects,
     score_track,
 )
-from app.routers.flow import _external_population_stats_on_bind, _taste_profile
+from app.routers.flow import (
+    _EXPLORE_MIN_SERVICE_PLAYS,
+    _drop_service_unpopular,
+    _external_population_stats_on_bind,
+    _taste_profile,
+)
 from app.routers.soundcloud import _normalize_api as normalize_soundcloud
 from app.routers.ytdlp import _normalize as normalize_ytmusic
 from app.schemas import ExternalTrackResponse
@@ -268,6 +276,76 @@ def test_provider_popularity_is_normalized():
 
     assert youtube is not None and youtube.play_count == 1_200_000
     assert soundcloud is not None and soundcloud.play_count == 45_600
+
+
+def _external(external_id: str, play_count: int = 0) -> ExternalTrackResponse:
+    return ExternalTrackResponse(
+        id=f"ytmusic:{external_id}",
+        source="ytmusic",
+        external_id=external_id,
+        title=external_id,
+        artist="Somebody",
+        duration=180,
+        stream_url="",
+        play_count=play_count,
+    )
+
+
+def test_popularity_scales_are_separate_for_local_and_provider_counters():
+    """Наш счётчик и метрика площадки — разные порядки величин.
+
+    300 прослушиваний в этом каталоге — заигранный трек; 300 просмотров на
+    площадке значит, что его не слушал никто. На общей кривой оба выходили
+    одинаково «популярными», и любой внешний кандидат получал почти полный балл.
+    """
+    assert popularity_score(300, 90, reference=LOCAL_POPULARITY_REFERENCE) > 0.6
+    assert popularity_score(300, reference=SERVICE_POPULARITY_REFERENCE) < 0.45
+    assert popularity_score(
+        5_000, reference=SERVICE_POPULARITY_REFERENCE
+    ) < popularity_score(3_000_000, reference=SERVICE_POPULARITY_REFERENCE)
+
+
+def test_popularity_outweighs_the_novelty_bonus_for_a_service_hit():
+    """Хит не должен уступать безымянной загрузке только за счёт новизны.
+
+    До hybrid-v7 popularity_score сжимал весь реальный диапазон прослушиваний в
+    0.72..0.98, поэтому разница между 5k и 3M стоила 0.04 балла — меньше одного
+    бонуса за новизну (+0.16), и обскурный «новый» трек обгонял популярный.
+    """
+    hit = score_track(
+        _external("hit", play_count=3_000_000),
+        play_count=3_000_000,
+        popularity_reference=SERVICE_POPULARITY_REFERENCE,
+        novelty=False,
+    )
+    obscure = score_track(
+        _external("obscure", play_count=5_000),
+        play_count=5_000,
+        popularity_reference=SERVICE_POPULARITY_REFERENCE,
+        novelty=True,
+    )
+
+    assert hit > obscure
+
+
+def test_search_exploration_drops_low_play_uploads_but_keeps_unknown_metric():
+    """Поисковая разведка не должна тащить в пул любительские загрузки.
+
+    Ноль — это «провайдер метрику не прислал», такой трек порог проходит:
+    плоская выдача yt-dlp бывает вообще без счётчиков.
+    """
+    kept = {
+        track.external_id
+        for track in _drop_service_unpopular(
+            [
+                _external("loud", play_count=_EXPLORE_MIN_SERVICE_PLAYS * 2),
+                _external("quiet", play_count=12),
+                _external("no-metric", play_count=0),
+            ]
+        )
+    }
+
+    assert kept == {"loud", "no-metric"}
 
 
 def test_acoustic_similarity_and_weighted_centroid():

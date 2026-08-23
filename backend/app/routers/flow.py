@@ -76,6 +76,9 @@ from app.diversity import (
 )
 from app.recommendation_scoring import (
     ALGORITHM_VERSION,
+    LOCAL_POPULARITY_REFERENCE,
+    SERVICE_POPULARITY_REFERENCE,
+    popularity_score,
     population_quality_score,
     population_rejects,
     score_track,
@@ -176,6 +179,17 @@ _SC_EXPLORE_TTL = 1800
 _TAG_EXPLORE_TAGS = 3
 _TAG_EXPLORE_LIMIT = 15
 _TAG_EXPLORE_TTL = 1800
+# Порог популярности НА ПЛОЩАДКЕ для поисковой разведки (теги и SoundCloud по
+# имени артиста). Это полнотекстовый поиск, а не радио и не каталог артиста:
+# выдача забита случайными любительскими загрузками, у которых нет ни нашей
+# телеметрии (population_rejects их не отсекает), ни истории у пользователя, —
+# зато есть бонус за новизну. В ранжировании они конкурировали на равных,
+# поэтому режем их на входе в пул.
+#
+# Ноль означает «провайдер метрику не прислал» (см. _service_play_count), и такой
+# трек порог проходит: иначе мы бы выбросили всю выдачу там, где yt-dlp отдаёт
+# плоский результат без счётчиков.
+_EXPLORE_MIN_SERVICE_PLAYS = 5_000
 # Сколько артистов вкуса берём в работу за один запрос. Дальше endpoint
 # переупорядочивает их стабильным хэшем текущей flow-history, поэтому это не
 # «топ-N навсегда»: каждая подгрузка достаёт и другие имена из библиотеки.
@@ -1725,6 +1739,22 @@ def _service_play_count(item) -> int:
         return 0
 
 
+def _drop_service_unpopular(
+    pool, floor: int = _EXPLORE_MIN_SERVICE_PLAYS
+) -> List[ExternalTrackResponse]:
+    """Отсечь по метрике площадки то, что нашлось поиском, а не радио.
+
+    Трек без метрики (ноль — «провайдер не прислал») остаётся: у yt-dlp плоская
+    выдача бывает вообще без счётчиков, и жёсткий порог выбросил бы её целиком.
+    """
+    kept = []
+    for item in pool:
+        plays = _service_play_count(item)
+        if plays == 0 or plays >= floor:
+            kept.append(item)
+    return kept
+
+
 def _by_service_popularity(pool) -> List[ExternalTrackResponse]:
     """Пул артиста в порядке популярности на его площадке.
 
@@ -1872,7 +1902,9 @@ async def _soundcloud_pool(
     key = f"flow:sc:{artist.lower()}"
     cached = await get_cache_async(key)
     if cached is not None:
-        return [ExternalTrackResponse(**t) for t in cached]
+        return _drop_service_unpopular(
+            [ExternalTrackResponse(**t) for t in cached]
+        )
 
     try:
         pool = await soundcloud.search_soundcloud(
@@ -1899,7 +1931,7 @@ async def _soundcloud_pool(
         ]
 
     await set_cache_async(key, [t.model_dump() for t in pool], expire=_SC_EXPLORE_TTL)
-    return pool
+    return _drop_service_unpopular(pool)
 
 
 async def _tag_pool(request: Request, tag: str) -> List[ExternalTrackResponse]:
@@ -1910,7 +1942,9 @@ async def _tag_pool(request: Request, tag: str) -> List[ExternalTrackResponse]:
     key = f"flow:tag:{tag.lower()}"
     cached = await get_cache_async(key)
     if cached is not None:
-        return [ExternalTrackResponse(**t) for t in cached]
+        return _drop_service_unpopular(
+            [ExternalTrackResponse(**t) for t in cached]
+        )
 
     sc_results, yt_results = await asyncio.gather(
         soundcloud.search_soundcloud(request, tag, limit=_TAG_EXPLORE_LIMIT),
@@ -1926,7 +1960,7 @@ async def _tag_pool(request: Request, tag: str) -> List[ExternalTrackResponse]:
         pool.extend(results)
 
     await set_cache_async(key, [t.model_dump() for t in pool], expire=_TAG_EXPLORE_TTL)
-    return pool
+    return _drop_service_unpopular(pool)
 
 
 def _parse_exclude(exclude: str) -> tuple:
@@ -2130,6 +2164,25 @@ async def get_flow(
             if isinstance(item, dict)
             else getattr(item, "unique_listener_count", 0)
         ) or 0
+        # Два счётчика на РАЗНЫХ шкалах, и раньше они шли в один max() по сырому
+        # числу: у внешнего кандидата play_count — метрика площадки (views,
+        # playback_count), у строки каталога — наш собственный счётчик. Любое
+        # число просмотров перебивало наш счётчик, а на общей кривой и хит, и
+        # безымянная загрузка выходили одинаково «популярными». Считаем обе
+        # популярности на своей шкале и берём лучшую уже НОРМАЛИЗОВАННУЮ.
+        is_external = not isinstance(getattr(item, "id", None), int)
+        local_popularity = popularity_score(
+            population.get("play_count", 0) if is_external else item_play_count,
+            max(item_listener_count, population.get("listener_count", 0)),
+            reference=LOCAL_POPULARITY_REFERENCE,
+        )
+        service_popularity = (
+            popularity_score(
+                item_play_count, reference=SERVICE_POPULARITY_REFERENCE
+            )
+            if is_external
+            else 0.0
+        )
         score = score_track(
             item,
             user_id=user_id,
@@ -2137,10 +2190,7 @@ async def get_flow(
             genres=profile.get("genres") or (),
             novelty=key not in (profile.get("artist_weight") or {}),
             source=item.get("source") if isinstance(item, dict) else getattr(item, "source", None),
-            play_count=max(item_play_count, population.get("play_count", 0)),
-            listener_count=max(
-                item_listener_count, population.get("listener_count", 0)
-            ),
+            popularity=max(local_popularity, service_popularity),
             content_bonus=content_bonus,
             acoustic_profile=profile.get("acoustic_profile"),
             context_bonus=context_bonus(item, contextual_profile),
