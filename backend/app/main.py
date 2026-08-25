@@ -282,6 +282,66 @@ async def _play_events_cleanup_loop() -> None:
 
 
 @app.on_event("startup")
+async def _artist_probe_loop() -> None:
+    """Фоновая сверка артистов-кандидатов по косинусу (app/artist_probe.py).
+
+    Разведке потока нужен не ещё один пул, а один ПРОВЕРЕННЫЙ трек: воркер
+    берёт незнакомые имена из графа похожести, сворачивает каталог каждого в
+    вектор, меряет косинус к вектору вкуса и кладёт в Redis один трек
+    победителя. ``get_flow`` читает готовое одним GET — в запросе сравнение
+    стоило бы до шести сетевых вызовов подряд.
+
+    LEADER ELECTION с ПРОДЛЕНИЕМ: как и в соседних циклах, работает один
+    воркер, но ключ здесь держит токен владельца, и владелец продлевает TTL
+    на каждой итерации. Без этого (см. _cooccurrence_rebuild_loop) ключ с
+    TTL = 2 × interval ещё жив на следующей итерации, SET NX не проходит ни у
+    кого — и проход по факту случается вдвое реже заявленного интервала.
+    """
+    import logging
+    import uuid
+
+    from app.artist_probe import refresh_probes
+    from app.cache import redis_client
+
+    logger = logging.getLogger("artist_probe")
+    interval = int(os.getenv("ARTIST_PROBE_INTERVAL_SEC", "900"))
+    if interval <= 0:
+        logger.info("artist probe disabled (ARTIST_PROBE_INTERVAL_SEC <= 0)")
+        return
+    users = int(os.getenv("ARTIST_PROBE_USERS", "25"))
+    days = int(os.getenv("ARTIST_PROBE_ACTIVE_DAYS", "14"))
+    lock_key = "background:artist_probe:leader"
+    # Токен переживает только этот процесс: воркер, которого перезапустили,
+    # претендует на лидерство заново, а не наследует чужое владение.
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
+    # Запас на длительность самого прохода: сеть провайдеров может отвечать
+    # долго, и терять лидерство посреди сравнения незачем.
+    lock_ttl = interval + max(300, interval)
+
+    def _acquire() -> bool:
+        if redis_client.set(lock_key, token, nx=True, ex=lock_ttl):
+            return True
+        # Уже наш ключ с прошлой итерации — продлеваем и работаем дальше.
+        if redis_client.get(lock_key) == token:
+            redis_client.expire(lock_key, lock_ttl)
+            return True
+        return False
+
+    async def _loop() -> None:
+        while True:
+            try:
+                if await asyncio.to_thread(_acquire):
+                    picked = await refresh_probes(days=days, limit=users)
+                    if picked:
+                        logger.info("artist probe: %d user(s) got a new pick", picked)
+            except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
+                logger.exception("artist probe pass failed")
+            await asyncio.sleep(interval)
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
 async def _warmup_ytdlp() -> None:
     # Первый резолв YouTube Music в свежем процессе платит cold-start за
     # импорт yt_dlp и загрузку реестра экстракторов/плагинов (~0.5-0.7с) —

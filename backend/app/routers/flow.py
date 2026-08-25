@@ -25,6 +25,15 @@ Last.fm, радио и граф YouTube Music, каталоги любимых �
 внутри знакомой и новой частей порядок определяет общая модель. Генераторы
 могут быть пропущены, когда пул уже широк и цель разведки выполнена.
 
+Особняком стоит один кандидат — трек, который фоновый воркер выбрал СРАВНЕНИЕМ
+незнакомых артистов по косинусу к вектору вкуса (см. ``app/artist_probe.py``).
+От остальных источников он отличается тем, что за ним стоит измерение, а не
+чужое утверждение о похожести, поэтому и confidence bonus у него выше
+(``_PROBE_BONUS``), и внутри цели разведки он идёт первым. Фиксированного места
+это всё равно не даёт: пик входит в тот же единый пул и может не пройти
+ранжирование, а его отсутствие (воркер выключен, вкуса ещё нет, все кандидаты
+далеко) поток не меняет никак.
+
 Какой именно трек артист отдаёт в пул, зависит от того, доказал ли он
 «любимость» (порог ``_ARTIST_PROVEN_WEIGHT`` по накопленному весу вкуса):
 доказанный отдаёт любой трек из глубины каталога, ещё не проверенный — только
@@ -48,7 +57,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import and_, case, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from app import beets_genre, beets_similar, storage
+from app import artist_probe, beets_genre, beets_similar, storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -277,6 +286,13 @@ _LASTFM_NAMES_TTL = 24 * 60 * 60
 _LASTFM_POOL_TTL = 6 * 60 * 60
 # Сколько свежих курированных треков держим в профиле как потенциальные сиды.
 _SEED_TRACK_LIMIT = 20
+# Confidence bonus треку, который фоновый воркер выбрал сравнением артистов по
+# косинусу (см. app/artist_probe.py). Выше, чем у соседа по графу (0.08), и
+# выше точного каталога любимого артиста (0.12): за этим треком стоит
+# измеренная близость к вектору вкуса, а не чужое утверждение о похожести. Но
+# ниже явного лайка (0.15) — измерение всё-таки не подтверждение от юзера.
+# Места в порции бонус не даёт: пик идёт в общий пул и конкурирует ранжированием.
+_PROBE_BONUS = 0.14
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -2263,6 +2279,10 @@ async def get_flow(
     # точному каталогу и track-similar источнику дать разные soft-confidence.
     favorite_explore: List[ExternalTrackResponse] = []
     similar_explore: List[ExternalTrackResponse] = []
+    # Готовый пик фонового сравнения артистов по косинусу. Отдельный список —
+    # только чтобы дать ему свой confidence bonus и приоритет ВНУТРИ уже
+    # существующей цели разведки; своей квоты у него нет.
+    probe_explore: List[ExternalTrackResponse] = []
     explore: List[ExternalTrackResponse] = []
     banned = profile["banned_artists"]
 
@@ -2333,6 +2353,15 @@ async def get_flow(
                 t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
             (explore if target is None else target).append(t)
             accepted += 1
+
+    # Пик фонового сравнения — первым, до сетевых источников: он уже посчитан,
+    # и при совпадении с тем же треком от радио/графа в пул должна попасть
+    # именно эта копия, со своим bonus. Синхронно сравнение НЕ запускаем —
+    # каталоги кандидатов стоят до шести сетевых вызовов, а это прямая задержка
+    # запроса; нет посчитанного пика — поток работает ровно как раньше.
+    probe_pick = await artist_probe.cached_pick(user_id)
+    if probe_pick is not None:
+        _add_explore([probe_pick], probe_explore)
 
     # YT Music радио — это чужой алгоритм "похожести" от YouTube, никак не
     # завязанный на наши жанр/тег-фильтры. Когда у пользователя уже есть
@@ -2477,7 +2506,12 @@ async def get_flow(
 
     def _needs_more_pools() -> bool:
         """Whether an additional provider call can still widen the ranker."""
-        available = len(favorite_explore) + len(similar_explore) + len(explore)
+        available = (
+            len(favorite_explore)
+            + len(similar_explore)
+            + len(probe_explore)
+            + len(explore)
+        )
         if available < max(limit * 2, limit + 4):
             return True
         if not discovery_target:
@@ -2486,7 +2520,7 @@ async def get_flow(
         familiar_artists = set(profile.get("artist_weight") or {})
         novel_tracks = []
         novel_artists = set()
-        for candidate in (*similar_explore, *explore):
+        for candidate in (*similar_explore, *probe_explore, *explore):
             key = artist_key(effective_track_artist_title(candidate)[0])
             if key in familiar_artists:
                 continue
@@ -2638,17 +2672,18 @@ async def get_flow(
         )
 
     logger.debug(
-        "flow explore user=%s favorite=%d similar=%d fresh_candidates=%d excluded_external=%d",
+        "flow explore user=%s favorite=%d similar=%d probe=%d fresh_candidates=%d excluded_external=%d",
         user_id,
         len(favorite_explore),
         len(similar_explore),
+        len(probe_explore),
         len(explore),
         len(external_exclude) + len(excl_videos),
     )
     external_population = await asyncio.to_thread(
         _external_population_stats_on_bind,
         telemetry_bind,
-        favorite_explore + similar_explore + explore,
+        favorite_explore + similar_explore + probe_explore + explore,
         ranking_now,
     )
 
@@ -2662,6 +2697,9 @@ async def get_flow(
     # catalogs of explicitly liked artists are only down-ranked: a niche track
     # should not be globally banned from a listener who asked for that artist.
     similar_explore = [t for t in similar_explore if _population_allows_discovery(t)]
+    # Пик воркера проверяем так же: косинус мерил близость к ВКУСУ, а не то,
+    # как этот трек уже приняли живые слушатели.
+    probe_explore = [t for t in probe_explore if _population_allows_discovery(t)]
     explore = [t for t in explore if _population_allows_discovery(t)]
     # --- локальная библиотека, понравившееся и единый пул ---
     local, liked_pool = await asyncio.to_thread(
@@ -2742,6 +2780,7 @@ async def get_flow(
     for candidate in (
         *liked_candidates,
         *local_candidates,
+        *probe_explore,
         *favorite_explore,
         *similar_explore,
         *explore,
@@ -2761,6 +2800,8 @@ async def get_flow(
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.15)
     for candidate in local_candidates:
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.05)
+    for candidate in probe_explore:
+        content_bonus_by_identity.setdefault(_item_identity(candidate), _PROBE_BONUS)
     for candidate in favorite_explore:
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.12)
     for candidate in similar_explore:
@@ -2790,6 +2831,18 @@ async def get_flow(
         novel_candidates = [
             candidate for candidate in ranked_candidates if _is_novel(candidate)
         ]
+        # Пик воркера — первый среди новых имён, но именно ВНУТРИ уже
+        # существующей цели разведки: третьей квоты он не получает, и когда
+        # цели нет (ползунок на дефолте), этой ветки просто не будет. Сортировка
+        # стабильная, так что для всех остальных порядок общего ранжирования
+        # сохраняется. Приоритет здесь потому, что косинус померил близость
+        # каталогом целиком, а ранкер видит один трек — при равном score
+        # проверенное имя стоит показать раньше.
+        probe_identities = {_item_identity(t) for t in probe_explore}
+        if probe_identities:
+            novel_candidates.sort(
+                key=lambda candidate: _item_identity(candidate) not in probe_identities
+            )
         novel_artist_keys = set()
 
         # Prefer one track per new artist first, then use additional tracks from
@@ -2951,13 +3004,15 @@ async def get_flow(
         logger.exception("flow delivery telemetry failed user=%s", user_id)
     finally:
         telemetry_db.close()
+    probe_identities_delivered = {_item_identity(t) for t in probe_explore}
     logger.debug(
-        "flow result user=%s explore=%d exploit=%d liked=%d/%d returned=%d",
+        "flow result user=%s explore=%d exploit=%d liked=%d/%d probe=%d returned=%d",
         user_id,
         n_explore,
         n_exploit,
         len(liked_selection),
         liked_target,
+        sum(1 for item in mix if _item_identity(item) in probe_identities_delivered),
         len(mix),
     )
     return mix
