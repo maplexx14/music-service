@@ -75,6 +75,17 @@ def available() -> bool:
     return _get_network() is not None
 
 
+def get_network():
+    """Тот же собранный pylast-клиент для других потребителей Last.fm.
+
+    Ключ и его фолбэк живут здесь (см. модульный docstring), и второй такой же
+    инициализации быть не должно: lastfm_genres.py спрашивает теги и артистов
+    через этот же клиент. None означает «Last.fm недоступен» — вызывающий
+    обязан продолжать работать без него.
+    """
+    return _get_network()
+
+
 def reset_cache() -> None:
     """Сбрасывает собранный клиент — нужен тестам, подменяющим сеть."""
     global _network, _init_failed

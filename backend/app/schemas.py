@@ -72,9 +72,17 @@ class UserPreferencesUpdate(BaseModel):
 
 
 class GenreOption(BaseModel):
-    """Пункт списка жанров для выбора: технический ключ + подпись."""
+    """Пункт списка жанров для выбора: технический ключ + подпись.
+
+    Ключ — либо наш внутренний ключ (genre_keywords.GENRE_KEYWORDS), либо тег
+    Last.fm ("black metal"): каталог собирает lastfm_genres. group — внутренний
+    ключ, к которому тег сводится; UI раскладывает чипы по группам.
+    """
     key: str
     label: str
+    group: Optional[str] = None
+    group_label: Optional[str] = None
+    popularity: int = 0
 
 
 class Token(BaseModel):

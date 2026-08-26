@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
@@ -7,7 +7,8 @@ from app.database import get_db
 from app.cache import get_cache, set_cache, redis_client
 from app.models import User, Track
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
-from app.genre_keywords import GENRE_KEYWORDS, GENRE_LABELS
+from app import lastfm_genres
+from app.genre_keywords import GENRE_KEYWORDS
 from app.dependencies import get_current_active_user, get_current_admin_user
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
@@ -28,12 +29,61 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
 # NB: эти GET-маршруты обязаны идти ДО /{user_id}, иначе "genres"
 # будет попадать в параметр user_id: int и давать 422.
 @router.get("/genres", response_model=List[GenreOption])
-def list_genres():
-    """Список доступных жанров из встроенного словаря."""
-    return [
-        GenreOption(key=key, label=GENRE_LABELS.get(key, key.title()))
-        for key in GENRE_KEYWORDS.keys()
-    ]
+async def list_genres():
+    """Список жанров для выбора — теги Last.fm плюс наши ключи.
+
+    Каталог собирает lastfm_genres (кэш в Redis, фолбэк на встроенный словарь,
+    если Last.fm недоступен), поэтому здесь только отдача.
+    """
+    return [GenreOption(**option) for option in await lastfm_genres.genre_catalog_async()]
+
+
+@router.get("/artists/by-genres", response_model=List[str])
+async def artists_by_genres(
+    genres: List[str] = Query(default=[]),
+    limit: int = 24,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Артисты под выбранные жанры — второй шаг онбординга.
+
+    Источник — топ артистов тега в Last.fm (`tag.getTopArtists`), по кругу из
+    каждого выбранного жанра. Если Last.fm недоступен или жанры не переданы,
+    добираем самыми слушаемыми артистами локального каталога: подсказки должны
+    быть непустыми даже без сети.
+    """
+    wanted: List[str] = []
+    for raw in genres:
+        # Клиент может прислать и ?genres=a&genres=b, и ?genres=a,b.
+        for part in str(raw or "").split(","):
+            name = part.strip()
+            if name and name.lower() not in {w.lower() for w in wanted}:
+                wanted.append(name)
+
+    limit = min(max(limit, 1), 60)
+    names: List[str] = []
+    if wanted:
+        names = await lastfm_genres.artists_for_genres_async(wanted, limit=limit)
+
+    if len(names) < limit:
+        existing = {artist_key(n) for n in names}
+        rows = (
+            db.query(Track.artist)
+            .filter(Track.artist.isnot(None))
+            .group_by(Track.artist)
+            .order_by(func.coalesce(func.sum(Track.play_count), 0).desc())
+            .limit(limit * 2)
+            .all()
+        )
+        for (artist,) in rows:
+            if not artist or artist_key(artist) in existing:
+                continue
+            existing.add(artist_key(artist))
+            names.append(artist)
+            if len(names) >= limit:
+                break
+
+    return names[:limit]
 
 
 @router.get("/artists/suggest", response_model=List[str])
@@ -100,11 +150,17 @@ def update_preferences(
 ):
     """Обновляет явные предпочтения пользователя.
 
-    Жанры валидируются по словарю (храним только известные ключи),
-    артисты — чистятся от пустых/дублей и ограничиваются.
+    Жанры валидируются ОФФЛАЙН-данными (наши ключи + теги, которые узнаёт
+    beets — см. lastfm_genres.is_known_genre): каталог для выбора приходит из
+    Last.fm, поэтому сводить его к 12 ключам нельзя, а зависеть от сети при
+    сохранении — нельзя тем более. Артисты чистятся от пустых/дублей.
     """
     valid_genres = [
-        g for g in dict.fromkeys(prefs.preferred_genres) if g in GENRE_KEYWORDS
+        g
+        for g in dict.fromkeys(
+            str(raw).strip().lower() for raw in prefs.preferred_genres if raw
+        )
+        if lastfm_genres.is_known_genre(g)
     ]
     artists: List[str] = []
     seen = set()

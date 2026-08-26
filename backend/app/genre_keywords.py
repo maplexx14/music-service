@@ -18,7 +18,17 @@
 нашей трактовкой в beets_genre._APP_OWNED. Beets только ДОБАВЛЯЕТ определения
 там, где раньше возвращался None, — а None в taste.py означал «жанр
 неопределим» и пропускал кандидата на грубую языковую проверку.
+
+Список жанров, который ВЫБИРАЕТ пользователь, живёт не здесь: он приходит из
+Last.fm (см. lastfm_genres.py) — там настоящие имена тегов ("black metal",
+"witch house", "memphis rap") с реальной популярностью, а не 12 общих слов.
+Этот словарь остался ДВИЖКОМ: он сводит любое имя (тег Last.fm, строку
+провайдера, слово из названия) к своему ключу — см. resolve_internal_key и
+expand_user_genres. Поэтому в User.preferred_genres лежат и наши ключи (старые
+профили), и теги Last.fm, а сравнение вкуса с жанром трека идёт по ОБОИМ
+алфавитам сразу.
 """
+
 import re
 from collections import Counter
 from typing import Optional
@@ -144,6 +154,47 @@ def build_keyword_filters(title_col, genre_counts: dict, top_n: int = 3) -> list
     return [title_col.ilike(f"%{kw}%") for kw in top_genre_keywords(genre_counts, top_n)]
 
 
+def resolve_internal_key(genre) -> Optional[str]:
+    """Любое имя жанра → ключ GENRE_KEYWORDS, либо None.
+
+    Принимает наш собственный ключ ("phonk"), тег Last.fm ("black metal",
+    "drum and bass"), свободную строку провайдера ("Hip-Hop & Rap"). Порядок
+    тот же, что и везде: словарь проекта первым, beets — на его промахе.
+    """
+    if not genre:
+        return None
+    raw = str(genre).strip().lower()
+    if not raw:
+        return None
+    if raw in GENRE_KEYWORDS:
+        return raw
+    direct = infer_genre_from_text(raw)
+    if direct:
+        return direct
+    return beets_genre.to_internal(raw)
+
+
+def expand_user_genres(user_genres) -> set:
+    """Вкус юзера в ДВУХ алфавитах: как выбрано + сведённое к нашим ключам.
+
+    Юзер выбирает теги Last.fm ("black metal"), а жанр трека определяется
+    нашим словарём ("rock") — без сведения такие имена никогда не совпадут, и
+    выбравший конкретный поджанр получил бы пустую выдачу. Обратное тоже
+    важно: старые профили хранят наши ключи, а тег трека может прийти из
+    Last.fm.
+    """
+    expanded = set()
+    for value in user_genres or []:
+        raw = str(value).strip().lower()
+        if not raw:
+            continue
+        expanded.add(raw)
+        key = resolve_internal_key(raw)
+        if key:
+            expanded.add(key)
+    return expanded
+
+
 def genre_is_compatible(explicit_genre, title: str, artist: str, user_genres: set) -> bool:
     """Кандидат прошёл в выдачу по слабому сигналу (ключевое слово в
     названии, тег вкуса) — но это ничего не говорит о жанре самого трека:
@@ -157,9 +208,9 @@ def genre_is_compatible(explicit_genre, title: str, artist: str, user_genres: se
     genre = explicit_genre or infer_genre_from_text(title, artist)
     if genre is None:
         return True
-    normalized_user_genres = {
-        str(value).strip().lower() for value in user_genres if value
-    }
+    # Вкус сводим к внутренним ключам ОДИН раз: юзер мог выбрать тег Last.fm
+    # ("black metal"), а жанр трека определился как наш ключ ("rock").
+    normalized_user_genres = expand_user_genres(user_genres)
     normalized_genre = str(genre).strip().lower()
     if normalized_genre in normalized_user_genres:
         return True

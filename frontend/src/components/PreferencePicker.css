@@ -31,6 +31,34 @@
   gap: 10px;
 }
 
+/* Жанров теперь десятки (каталог Last.fm), поэтому они разложены по группам,
+   а сам список скроллится внутри карточки: иначе онбординг превращается в
+   простыню на три экрана. */
+.pref-genre-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.pref-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.pref-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b8b8b;
+}
+
+.pref-hint {
+  margin: 6px 0 0;
+}
+
 .pref-chip {
   display: inline-flex;
   align-items: center;

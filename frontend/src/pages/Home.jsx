@@ -427,7 +427,7 @@ function Home() {
 
           {soundCloudPlaylists.length > 0 && (
             <div className="content-section">
-              <h2 className="section-title">Плейлисты SoundCloud для вас</h2>
+              <h2 className="section-title">Плейлисты для вас</h2>
               <Carousel
                 items={soundCloudPlaylists}
                 label="Рекомендуемые плейлисты SoundCloud"
