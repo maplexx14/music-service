@@ -1445,7 +1445,12 @@ async def get_recommendations(
         if len(candidate_pool) < max(limit * 2, limit):
             popular = _varied_popular(
                 db,
-                exclude_ids | set(candidate_pool),
+                # В пуле есть внешние кандидаты со строковыми id
+                # ("soundcloud:...", "ytmusic:...") — их нельзя подставлять в
+                # Track.id.in_(): Postgres ронял запрос ошибкой "invalid input
+                # syntax for type integer", эндпоинт отвечал 500, кэш не
+                # писался и каждый заход на главную платил полный холодный путь.
+                exclude_ids | {tid for tid in candidate_pool if isinstance(tid, int)},
                 max(limit * 4, limit),
                 keep=keep_unrelated,
                 restrict_artists=scope_artist_keys or None,

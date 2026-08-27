@@ -426,6 +426,72 @@ def test_recommendations_retrieve_provider_track_from_imported_playlist(
     assert similar_calls == []
 
 
+def test_popular_fallback_excludes_only_integer_ids(client, db, monkeypatch):
+    """Внешние кандидаты (id-строки) не должны попадать в Track.id.in_().
+
+    Боевая регрессия: внешние кандидаты попадали в candidate_pool, а добор
+    популярным передавал их строковые id ("soundcloud:408415401") в
+    ~Track.id.in_() вместе с целочисленными. Postgres отвечал
+    "invalid input syntax for type integer" — эндпоинт падал 500, кэш не
+    писался, и каждый заход на главную платил полный холодный путь. SQLite
+    (тестовая БД) тип не проверяет, поэтому ловим утечку строк через шпион,
+    а не через статус ответа.
+    """
+    from app.routers import recommendations as recommendations_router
+
+    user = create_user(db, username="popular-fallback-int-ids-user")
+    liked_pl = Playlist(name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id)
+    db.add(liked_pl)
+    db.commit()
+    db.refresh(liked_pl)
+
+    liked = _track(db, "liked-seed", "SeedArtist", play_count=1)
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_pl.id, track_id=liked.id, position=0))
+    db.commit()
+
+    async def _external_pool(*_args, **_kwargs):
+        return [
+            ExternalTrackResponse(
+                id="soundcloud:408415401",
+                source="soundcloud",
+                external_id="408415401",
+                title="external song",
+                artist="ExternalArtist",
+                duration=190,
+                stream_url="https://soundcloud.example/stream",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.routers.recommendations._external_recommendation_pool",
+        _external_pool,
+    )
+
+    seen_exclude_ids = []
+    original = recommendations_router._varied_popular
+
+    def _spy(db, exclude_ids, *args, **kwargs):
+        seen_exclude_ids.append(exclude_ids)
+        return original(db, exclude_ids, *args, **kwargs)
+
+    monkeypatch.setattr(recommendations_router, "_varied_popular", _spy)
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="popular-fallback-int-ids-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    # Пул кандидатов мал (только лайк + внешний трек) — добор популярным
+    # обязан был сработать, иначе проверять нечего.
+    assert seen_exclude_ids, "popular fallback did not run"
+    for exclude_ids in seen_exclude_ids:
+        assert all(
+            isinstance(tid, int) for tid in exclude_ids
+        ), f"non-integer Track.id leaked into SQL: {exclude_ids}"
+
+
 def test_recommendations_use_real_artist_for_legacy_soundcloud_scope(
     client, db, monkeypatch
 ):
