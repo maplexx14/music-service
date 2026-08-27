@@ -1608,6 +1608,14 @@ async def _lastfm_similar_names(artist: str, title: str) -> List[list]:
     if cached is not None:
         return cached
 
+    return await _pool_single_flight(
+        key, lambda: _lastfm_similar_names_fetch(artist, title)
+    )
+
+
+async def _lastfm_similar_names_fetch(artist: str, title: str) -> List[list]:
+    norm_artist, norm_title = _norm_key(artist, title)
+    key = f"flow:lastfm_similar:{norm_artist}|{norm_title}"
     pairs = await beets_similar.similar_tracks_async(
         artist, title, limit=_LASTFM_SIMILAR_LIMIT
     )
@@ -1673,6 +1681,26 @@ async def _resolve_similar(
     return None
 
 
+# Single-flight на пулы внешних кандидатов. Ключи пулов НЕ зависят от
+# пользователя (только artist/title/tag), поэтому одновременные веера разных
+# пользователей с общим вкусом должны ждать ОДНУ задачу, а не плодить
+# одинаковые запросы к провайдерам: N юзеров на утреннем пике — это N вееров
+# Last.fm/YT/SoundCloud на те же хиты. Регистр живёт в процессе (4 воркера
+# gunicorn дадут максимум 4 параллельных веера на один сид — всё лучше N).
+# ensure_future, а не await factory(): создателя могут отменить, а задача
+# должна дожить до set_cache_async, иначе её результат потеряют все ждущие.
+_inflight_pools: dict = {}
+
+
+def _pool_single_flight(key: str, factory):
+    task = _inflight_pools.get(key)
+    if task is None:
+        task = asyncio.ensure_future(factory())
+        _inflight_pools[key] = task
+        task.add_done_callback(lambda _t, k=key: _inflight_pools.pop(k, None))
+    return task
+
+
 async def _lastfm_pool(
     request: Request, artist: str, title: str
 ) -> List[ExternalTrackResponse]:
@@ -1687,7 +1715,17 @@ async def _lastfm_pool(
     cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
+    return await _pool_single_flight(
+        key, lambda: _lastfm_pool_fetch(request, artist, title)
+    )
 
+
+async def _lastfm_pool_fetch(
+    request: Request, artist: str, title: str
+) -> List[ExternalTrackResponse]:
+    """Сетевая часть _lastfm_pool — без проверки кэша, под single-flight."""
+    norm_artist, norm_title = _norm_key(artist, title)
+    key = f"flow:lastfm_pool:{norm_artist}|{norm_title}"
     names = await _lastfm_similar_names(artist, title)
     if not names:
         return []
@@ -1715,6 +1753,13 @@ async def _similar_artist_names(artist: str) -> List[dict]:
     if cached is not None:
         return cached
 
+    return await _pool_single_flight(
+        key, lambda: _similar_artist_names_fetch(artist)
+    )
+
+
+async def _similar_artist_names_fetch(artist: str) -> List[dict]:
+    key = f"flow:similar_names:{artist_key(artist)}"
     related = await ytdlp.related_ytmusic_artists(artist, limit=_SIMILAR_ARTISTS)
     # Негативный кэш короткий: у нишевого артиста соседей может не быть сейчас,
     # но появиться позже — навсегда его вычёркивать не за что.
@@ -1732,6 +1777,13 @@ async def _artist_songs_pool(browse_id: str) -> List[ExternalTrackResponse]:
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
 
+    return await _pool_single_flight(
+        key, lambda: _artist_songs_pool_fetch(browse_id)
+    )
+
+
+async def _artist_songs_pool_fetch(browse_id: str) -> List[ExternalTrackResponse]:
+    key = f"flow:artist_songs:{browse_id}"
     songs = await ytdlp.ytmusic_artist_songs(browse_id)
     await set_cache_async(
         key,
@@ -1824,6 +1876,16 @@ async def _similar_pool(artist: str) -> List[ExternalTrackResponse]:
     сначала упорядочивается по прослушиваниям на площадке, а затем соседи
     обходятся по кругу — иначе вся выдача была бы дискографией первого из них.
     """
+    # Своего кэша нет (внутри кэшируются _similar_artist_names/_artist_songs_pool),
+    # поэтому single-flight на виртуальном ключе: соседи одного артиста — общий
+    # граф, его не должны параллельно качать несколько пользователей.
+    return await _pool_single_flight(
+        f"flow:similar_pool:{artist_key(artist)}",
+        lambda: _similar_pool_fetch(artist),
+    )
+
+
+async def _similar_pool_fetch(artist: str) -> List[ExternalTrackResponse]:
     related = await _similar_artist_names(artist)
     browse_ids = [r["browse_id"] for r in related if r.get("browse_id")]
     if not browse_ids:
@@ -1844,6 +1906,15 @@ async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalT
     cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
+    return await _pool_single_flight(
+        key, lambda: _favorite_artist_pool_fetch(request, artist)
+    )
+
+
+async def _favorite_artist_pool_fetch(
+    request: Request, artist: str
+) -> List[ExternalTrackResponse]:
+    key = f"flow:favorite:{artist_key(artist)}"
     # Страница артиста — его собственная выдача во всю глубину. Она нужна именно
     # доказанному артисту: «любой случайный трек» по верхушке поиска — это всё
     # тот же его хит. search остаётся фолбэком: карточки артиста у провайдера
@@ -1961,7 +2032,13 @@ async def _tag_pool(request: Request, tag: str) -> List[ExternalTrackResponse]:
         return _drop_service_unpopular(
             [ExternalTrackResponse(**t) for t in cached]
         )
+    return await _pool_single_flight(
+        key, lambda: _tag_pool_fetch(request, tag)
+    )
 
+
+async def _tag_pool_fetch(request: Request, tag: str) -> List[ExternalTrackResponse]:
+    key = f"flow:tag:{tag.lower()}"
     sc_results, yt_results = await asyncio.gather(
         soundcloud.search_soundcloud(request, tag, limit=_TAG_EXPLORE_LIMIT),
         ytdlp.search_ytmusic(request, tag, limit=_TAG_EXPLORE_LIMIT),

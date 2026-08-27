@@ -531,6 +531,13 @@ _CLIENT_ID_KEY = "soundcloud:client_id"
 _CLIENT_ID_TTL = 24 * 3600
 _API_V2 = "https://api-v2.soundcloud.com"
 
+# Клэмп параллельности к api-v2. Все запросы метаданных SoundCloud идут через
+# ОДИН прокси-выход (soundcloud_proxy), и веер фоновых прогревов рекомендаций
+# (Last.fm-резолвы, теги, поиск) мог выстрелить в него десятками запросов
+# разом — а выход платный и ограниченный. Очередь тут дешевле, чем 403 от
+# CloudFront на весь стек. Прецедент и размер — как у ytdlp._WARM_SEM.
+_API_V2_SEMAPHORE = asyncio.Semaphore(8)
+
 
 async def _scrape_client_id(client: "httpx.AsyncClient") -> Optional[str]:
     try:
@@ -558,7 +565,7 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     # ровно 15с), а вот чтение ответа по медленному каналу ждём дольше.
     # proxy: прямой выход к api-v2 отдаёт 403 даже с валидным client_id,
     # см. soundcloud_proxy.
-    async with httpx.AsyncClient(
+    async with _API_V2_SEMAPHORE, httpx.AsyncClient(
         timeout=httpx.Timeout(15.0, connect=5.0),
         follow_redirects=True,
         proxy=soundcloud_proxy(),

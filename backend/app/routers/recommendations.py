@@ -4,9 +4,12 @@ from sqlalchemy import func, desc, or_, select, union
 from typing import List, Optional
 from datetime import datetime, timezone
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import asyncio
 import logging
 import math
+import os
 import re
 from app.database import get_db
 from app.cache import (
@@ -646,6 +649,19 @@ async def _external_recommendation_pool(
 # asyncio.create_task).
 _background_pool_tasks: set = set()
 
+# Отдельный пул под _compute_recommendations. ЕГО потоки блокируются в
+# pool_fetch().result(), ожидая корутину на event loop, а сам loop тем временем
+# зовёт asyncio.to_thread (NX-лок в _external_pool_cached) из ДЕФОЛТНОГО
+# экзекьютора. Если бы оба шли через default executor, насыщение его потоками
+# заблокированными pool_fetch намертво вешало бы loop: to_thread не находит
+# свободный поток, а занятые ждут именно loop. Разделение экзекьюторов снимает
+# зависимость. Размер меньше default-минимума: каждый поток ест connection из
+# пула SQLAlchemy (DB_POOL_SIZE+overflow на воркера).
+_COMPUTE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=int(os.getenv("RECS_COMPUTE_THREADS", "16")),
+    thread_name_prefix="recs-compute",
+)
+
 
 async def _external_pool_cached(request, **pool_kwargs) -> tuple[list, bool]:
     """Кэшированный внешний пул: не держит провайдеров в критическом пути.
@@ -755,21 +771,31 @@ def _collection_exclude_select(user_id: int):
     return union(own_playlists, plays, skips)
 
 
-@router.get("/", response_model=RecommendationResponse)
-async def get_recommendations(
+def _compute_recommendations(
     request: Request,
-    limit: int = 20,
-    hour: Optional[int] = Query(None, ge=0, le=23),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
+    current_user: User,
+    db: Session,
+    *,
+    limit: int,
+    request_id: str,
+    ranking_now: datetime,
+    bucket: Optional[str],
+    cache_key: str,
+    pool_fetch,
+) -> RecommendationResponse:
+    """Всё тело эндпоинта /recommendations: синхронно, НО не на event loop.
+
+    Здесь сотни миллисекунд синхронного SQLAlchemy; в async def это блокировало
+    loop целиком, и конкурентные запросы сериализовались (замер: 10 одновременных
+    холодных расчётов — по ~1с каждый). get_recommendations запускает эту
+    функцию в тредпуле (asyncio.to_thread), а единственный сетевой шаг — внешний
+    пул — подтягивается через pool_fetch: мост run_coroutine_threadsafe на
+    основной loop, чтобы фоновый прогрев и 2с-таймаут ожидания работали как
+    раньше.
+    """
     # hour — локальный час клиента (таймзона юзера серверу неизвестна).
     # Кэш сегментируем по временному интервалу: утренняя и вечерняя выдачи
     # различаются и не должны перетирать друг друга.
-    request_id = new_request_id()
-    ranking_now = datetime.now(timezone.utc)
-    bucket = _hour_bucket(hour)
-    cache_key = recommendation_cache_key(current_user.id, limit, bucket)
     cached = get_cache(cache_key)
     if cached is not None:
         # A cached candidate list is reusable, but a delivery is not.  Give
@@ -1045,9 +1071,9 @@ async def get_recommendations(
     # Пул не сидит в критическом пути: холодный расчёт 5-17с (сеть до
     # Last.fm/YT/SoundCloud) против ~0.1с всего остального. Ждём только
     # _EXTERNAL_POOL_WAIT, дальше отдаём локальную выдачу, пул догреется
-    # фоном (см. _external_pool_cached).
-    external_candidates, external_degraded = await _external_pool_cached(
-        request,
+    # фоном (см. _external_pool_cached). pool_fetch — мост к основному
+    # event loop: сама корутина пула асинхронная.
+    external_candidates, external_degraded = pool_fetch(
         liked=liked,
         playlisted=playlisted,
         played=played,
@@ -1746,6 +1772,47 @@ async def get_recommendations(
     )
     db.commit()
     return response
+
+
+@router.get("/", response_model=RecommendationResponse)
+async def get_recommendations(
+    request: Request,
+    limit: int = 20,
+    hour: Optional[int] = Query(None, ge=0, le=23),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    # Тонкая async-обёртка: тело (синхронный SQLAlchemy) уходит в тредпул,
+    # чтобы не блокировать event loop, а внешний пул дёргается через мост на
+    # основной loop (см. _compute_recommendations).
+    request_id = new_request_id()
+    ranking_now = datetime.now(timezone.utc)
+    bucket = _hour_bucket(hour)
+    cache_key = recommendation_cache_key(current_user.id, limit, bucket)
+    loop = asyncio.get_running_loop()
+
+    def pool_fetch(**pool_kwargs):
+        future = asyncio.run_coroutine_threadsafe(
+            _external_pool_cached(request, **pool_kwargs),
+            loop,
+        )
+        return future.result()
+
+    return await loop.run_in_executor(
+        _COMPUTE_EXECUTOR,
+        partial(
+            _compute_recommendations,
+            request,
+            current_user,
+            db,
+            limit=limit,
+            request_id=request_id,
+            ranking_now=ranking_now,
+            bucket=bucket,
+            cache_key=cache_key,
+            pool_fetch=pool_fetch,
+        ),
+    )
 
 
 @router.post("/events", status_code=204)
