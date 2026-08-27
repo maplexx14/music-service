@@ -34,26 +34,11 @@
   min-width: 0;
 }
 
-.fullscreen-title {
-  text-align: center;
+.fullscreen-logo {
   flex: 1;
   min-width: 0;
-}
-
-.fullscreen-subtitle {
-  font-size: var(--text-xs);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.55);
-  margin-bottom: 4px;
-}
-
-.fullscreen-track {
-  font-size: var(--text-base);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  height: 34px;
+  object-fit: contain;
 }
 
 .fullscreen-icon {
@@ -465,16 +450,6 @@
   .fullscreen-icon {
     width: 40px;
     height: 40px;
-  }
-
-  .fullscreen-subtitle {
-    display: none;
-  }
-
-  .fullscreen-track {
-    display: block;
-    font-size: var(--text-sm);
-    white-space: nowrap;
   }
 
   .fullscreen-art {

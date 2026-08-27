@@ -70,9 +70,6 @@ function FullScreenPlayer() {
   const isShuffle = usePlayerStore((s) => s.isShuffle)
   const toggleRepeatOne = usePlayerStore((s) => s.toggleRepeatOne)
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle)
-  const queue = usePlayerStore((s) => s.queue)
-  const currentIndex = usePlayerStore((s) => s.currentIndex)
-  const queuePager = usePlayerStore((s) => s.queuePager)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
@@ -224,11 +221,6 @@ function FullScreenPlayer() {
 
   const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
   const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
-  // Знаменатель — размер всего плейлиста, а не загруженной части очереди:
-  // хвост догружается на ходу (см. queuePager), и «20 из 20» на середине
-  // плейлиста из сотни треков читалось бы как «дальше ничего нет».
-  const queueTotal = Math.max(queue.length, queuePager?.total || 0)
-  const queueLabel = queueTotal > 1 ? `${currentIndex + 1} из ${queueTotal}` : 'Трек'
 
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)
 
@@ -248,10 +240,7 @@ function FullScreenPlayer() {
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
-        <div className="fullscreen-title">
-          <div className="fullscreen-subtitle">{queueLabel}</div>
-          <div className="fullscreen-track">{currentTrack.title}</div>
-        </div>
+        <img className="fullscreen-logo" src="/logoBolt.PNG" alt="Логотип" />
         {(
           <button
             className={`fullscreen-icon fullscreen-lyrics-toggle${hasLyrics ? ' active' : ''}`}
