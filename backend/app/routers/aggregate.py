@@ -5,6 +5,7 @@ from typing import List
 
 from fastapi import APIRouter, Query, Request
 
+from app.cache import get_cache, set_cache
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import (
@@ -16,6 +17,10 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# TTL кэша поиска внешних плейлистов (как _SEARCH_TTL в search.py: выдача
+# не от пользователя, сиды на главной меняются редко).
+_EXTERNAL_PLAYLISTS_TTL = 180
 
 # Приоритет источников при дедупе одинаковых треков.
 # В гибриде по умолчанию показываем быстрый ytmusic, но lossless (soulseek)
@@ -186,9 +191,26 @@ async def search_external_playlists(
     q: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=30),
 ):
-    """Поиск плейлистов во внешних источниках (пока только SoundCloud)."""
+    """Поиск плейлистов во внешних источниках (пока только SoundCloud).
+
+    Главная дёргает этот эндпоинт веером по сидам вкуса на КАЖДЫЙ заход, а
+    каждый запрос — это ход через прокси к api-v2 (~1с и платный трафик).
+    Выдача от пользователя не зависит и меняется редко: короткий кэш, как у
+    /api/search (см. search.py).
+    """
+    normalized_q = " ".join(q.lower().split())
+    cache_key = f"search:external:playlists:{normalized_q}:{limit}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return [ExternalPlaylistResponse(**item) for item in cached]
     try:
-        return await soundcloud.search_soundcloud_playlists(q, limit)
+        playlists = await soundcloud.search_soundcloud_playlists(q, limit)
     except Exception:  # noqa: BLE001
         logger.exception("external playlist search failed")
         return []
+    set_cache(
+        cache_key,
+        [p.model_dump(mode="json") for p in playlists],
+        expire=_EXTERNAL_PLAYLISTS_TTL,
+    )
+    return playlists

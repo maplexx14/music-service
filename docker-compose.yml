@@ -144,20 +144,20 @@ services:
       # качать через тот же прокси. Файла нет — прямой выход.
       STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
       STREAM_PROXY: ${STREAM_PROXY:-}
-      # Прокси для МЕТАДАННЫХ SoundCloud (api-v2 и скрейп client_id). ПОКА
-      # ВЫКЛЮЧЕН — раскомментировать, когда решим включать. Механизм в коде
-      # остался (soundcloud.soundcloud_proxy): без этих переменных он отдаёт
-      # None, и всё идёт прямым выходом, как до правки.
+      # Прокси для МЕТАДАННЫХ SoundCloud (api-v2 и скрейп client_id).
+      # Включён 2026-08-27: провайдер режет SoundCloud целиком с прямого
+      # выхода (soundcloud.com и api-v2 отдают 403 CloudFront), поиск плейлистов
+      # на главной возвращал пусто.
       #
-      # Отдельно от STREAM_PROXY намеренно: провайдер режет SoundCloud целиком
-      # (soundcloud.com не открывается, api-v2 отдаёт 403 с прямого выхода), но
-      # включать из-за этого платный выход для всего googlevideo-аудио незачем.
-      # Само аудио SoundCloud к IP не привязано и качается напрямую.
+      # Отдельно от STREAM_PROXY намеренно: этот выход нужен только для JSON
+      # метаданных (квоту почти не тратит), а само аудио SoundCloud к IP не
+      # привязано и качается напрямую — включать из-за этого платный выход
+      # для всего googlevideo-аудио незачем.
       #
-      # Цена выключенного состояния: поиск по SoundCloud возвращает пусто,
-      # потратив ~15с (5с connect к api-v2 + 10с бюджет фолбэка на yt-dlp).
-      # SOUNDCLOUD_PROXY_FILE: ${SOUNDCLOUD_PROXY_FILE:-/run/stream-proxy/soundcloud.url}
-      # SOUNDCLOUD_PROXY: ${SOUNDCLOUD_PROXY:-}
+      # Файл пишет invidious/proxy-pool/pick-soundcloud-proxy.sh (выбор живого
+      # выхода из пула). Файла нет — прямой выход.
+      SOUNDCLOUD_PROXY_FILE: ${SOUNDCLOUD_PROXY_FILE:-/run/stream-proxy/soundcloud.url}
+      SOUNDCLOUD_PROXY: ${SOUNDCLOUD_PROXY:-}
       # ─── Yandex Music (нативная интеграция) ───
       # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
