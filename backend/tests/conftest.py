@@ -24,6 +24,14 @@ from app.main import app
 from app.models import User
 from app.auth import get_password_hash
 
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_external_pools: тест внутренних частей провайдерских пулов — "
+        "conftest не подменяет их пустышками (см. _no_external_pool_network)",
+    )
+
 engine = create_engine(
     "sqlite://",
     connect_args={"check_same_thread": False},
@@ -109,6 +117,31 @@ def _reset_external_recommendation_cooldown():
     clear_pattern("recs:external:*")
     yield
     clear_pattern("recs:external:*")
+
+
+@pytest.fixture(autouse=True)
+def _no_external_pool_network(request, monkeypatch):
+    """Провайдерские пулы рекомендаций не должны ходить в сеть из юнит-тестов.
+
+    Пул /recommendations считается фоном и живёт дольше ответа: реальный вызов
+    (Last.fm/YouTube Music/SoundCloud) держал event loop TestClient'а в
+    teardown до 20с бюджета на каждом тесте. Стабим сами пулы провайдеров, а
+    не оркестратор (_external_recommendation_pool): тесты, которым нужна
+    логика пула с замоканными ответами, патчат их поверх — их monkeypatch
+    применяется позже и выигрывает (см. test_recommendations.py).
+
+    Тесты САМИХ пулов (внутренности с замоканными beets/резолверами)
+    помечаются @pytest.mark.real_external_pools.
+    """
+    if not request.node.get_closest_marker("real_external_pools"):
+        async def _empty(*_args, **_kwargs):
+            return []
+
+        monkeypatch.setattr("app.routers.flow._lastfm_pool", _empty)
+        monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _empty)
+        monkeypatch.setattr("app.routers.flow._similar_pool", _empty)
+        monkeypatch.setattr("app.routers.flow._tag_pool", _empty)
+    yield
 
 
 @pytest.fixture()

@@ -9,7 +9,14 @@ import logging
 import math
 import re
 from app.database import get_db
-from app.cache import get_cache, set_cache, get_cache_async, set_cache_async
+from app.cache import (
+    get_cache,
+    set_cache,
+    get_cache_async,
+    set_cache_async,
+    delete_cache,
+    redis_client,
+)
 from app.models import (
     Track,
     Playlist,
@@ -103,6 +110,25 @@ _EXTERNAL_POOL_FACTOR = 4
 _EXTERNAL_BUDGET = 20
 _EXTERNAL_COOLDOWN_KEY = "recs:external:cooldown"
 _EXTERNAL_COOLDOWN_TTL = 120
+
+# Сколько первый запрос ждёт внешний пул, прежде чем ответить локальной выдачей
+# и досчитать пул фоном. Замер в живом контуре: cold с пулом 5-17с, без пула
+# 0.07с — пул и есть весь вес холодного ответа, поэтому он не должен сидеть
+# в критическом пути первого экрана. Фоновый пересчёт обновит кэш, так что
+# первый же промах через POOL_WAIT получит полную выдачу.
+_EXTERNAL_POOL_WAIT = 2.0
+# Сама фоновая задача живёт дольше request-таймаута клиента, поэтому помечаем
+# её «pending» в Redis и не запускаем вторую, пока первая не завершилась
+# (TTL страхует от зависшей навсегда метки).
+_EXTERNAL_POOL_KEY = "recs:external:pool:user:{}"
+_EXTERNAL_POOL_LOCK_TTL = 60
+
+# Сегмент кэша провайдерских кандидатов: годен для ЛЮБОГО запроса того же
+# юзера (сиды от его коллекции не зависят от limit/bucket), поэтому считается
+# один раз и переиспользуется, пока не истёк. TTL равен бюджету плюс запас —
+# провайдеры медленные, и платить 5-17с за каждый промах основного кэша
+# (а он промахивается каждые 300с и при каждой смене hour-bucket) нельзя.
+_EXTERNAL_POOL_TTL = _EXTERNAL_BUDGET + 60
 
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого "топ-N" по позиции/play_count — иначе у активных
@@ -615,6 +641,96 @@ async def _external_recommendation_pool(
     return result
 
 
+# Ссылки на фоновые задачи: без сильной ссылки event loop может собрать задачу
+# сборщиком мусора до её завершения (см. предупреждение в документации
+# asyncio.create_task).
+_background_pool_tasks: set = set()
+
+
+async def _external_pool_cached(request, **pool_kwargs) -> tuple[list, bool]:
+    """Кэшированный внешний пул: не держит провайдеров в критическом пути.
+
+    Холодный пересчёт пула (Last.fm/YouTube Music/SoundCloud) — это весь вес
+    холодного ответа /recommendations: локальный ранкер отрабатывает за ~0.1с,
+    а пул 5-17с. Схема:
+
+    * пул в кэше — отдаём мгновенно, полный ранкер отрабатывает синхронно;
+    * пул считают прямо сейчас — ждём _EXTERNAL_POOL_WAIT и отдаём;
+    * пул не успел — НЕ отменяем его, а досчитываем фоном (внешние вызовы
+      уже оплачены, .cancel() выбросил бы их впустую) и отвечаем без внешних
+      кандидатов. Фоновая задача пишет кэш пула, и следующий запрос получает
+      полную выдачу.
+    * пул уже кто-то греет — не ждём и не дублируем вызовы провайдерам.
+
+    Возвращает (пул, деградация). Ответ с деградацией пишется в основной кэш
+    коротким TTL — иначе «тощая» выдача закрепилась бы на полные 300с.
+    """
+    user_id = pool_kwargs.pop("user_id")
+    key = _EXTERNAL_POOL_KEY.format(user_id)
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**item) for item in cached], False
+
+    # NX-лок, а не get+set: главная дёргает /recommendations и
+    # /recommendations/playlists одновременно, и без атомарности оба запроса
+    # запускали бы один и тот же веер вызовов к провайдерам.
+    lock_key = key + ":lock"
+
+    def _try_lock() -> bool:
+        try:
+            return bool(
+                redis_client.set(lock_key, 1, nx=True, ex=_EXTERNAL_POOL_LOCK_TTL)
+            )
+        except Exception:  # noqa: BLE001 — Redis недоступен: считаем без лока
+            return True
+
+    if not await asyncio.to_thread(_try_lock):
+        # Кто-то уже греет — ждущий ответит без пула, фоновый прогрев допишет.
+        return [], True
+
+    task = asyncio.create_task(
+        _external_recommendation_pool(request, **pool_kwargs)
+    )
+    try:
+        pool = await asyncio.wait_for(
+            asyncio.shield(task), timeout=_EXTERNAL_POOL_WAIT
+        )
+    except asyncio.TimeoutError:
+        # Задача продолжает работу; по завершении пишет кэш и снимает лок.
+        _background_pool_tasks.add(task)
+
+        def _persist(t):
+            _background_pool_tasks.discard(task)
+            try:
+                result = t.result()
+            except Exception:  # noqa: BLE001 — фоновая задача не должна ронять loop
+                logger.exception("external pool background warmup failed")
+                result = []
+            _external_pool_store(key, result)
+            delete_cache(lock_key)
+
+        task.add_done_callback(_persist)
+        return [], True
+    except Exception:
+        # Сбой самого пула не должен 500-ить главную — отдаём локальную выдачу.
+        delete_cache(lock_key)
+        logger.exception("external recommendation pool failed")
+        return [], True
+    delete_cache(lock_key)
+    _external_pool_store(key, pool)
+    return pool, False
+
+
+def _external_pool_store(key: str, pool: list) -> None:
+    # Пустой пул кэшируем короче: это либо нет сигналов (дёшево пересчитать),
+    # либо провайдеры легли (cooldown отработал — дадим им подняться скорее).
+    expire = _EXTERNAL_POOL_TTL if pool else _EXTERNAL_COOLDOWN_TTL
+    try:
+        set_cache(key, [t.model_dump(mode="json") for t in pool], expire=expire)
+    except Exception:  # noqa: BLE001 — кэш не должен ронять выдачу
+        logger.exception("external pool cache store failed")
+
+
 def _collection_exclude_select(user_id: int):
     """Вся коллекция юзера (плейлисты, включая «Понравившиеся», повторные
     прослушивания) плюс скипнутое — единым UNION-подзапросом.
@@ -926,7 +1042,11 @@ async def get_recommendations(
     # local ranking and telemetry after retrieval completes.
     db.expire_on_commit = False
     db.commit()
-    external_candidates = await _external_recommendation_pool(
+    # Пул не сидит в критическом пути: холодный расчёт 5-17с (сеть до
+    # Last.fm/YT/SoundCloud) против ~0.1с всего остального. Ждём только
+    # _EXTERNAL_POOL_WAIT, дальше отдаём локальную выдачу, пул догреется
+    # фоном (см. _external_pool_cached).
+    external_candidates, external_degraded = await _external_pool_cached(
         request,
         liked=liked,
         playlisted=playlisted,
@@ -936,6 +1056,7 @@ async def get_recommendations(
         limit=limit,
         excluded_external=excluded_external,
         excluded_track_keys=excluded_track_keys,
+        user_id=current_user.id,
     )
 
     def _candidate_score(track, content_bonus: Optional[float] = None) -> float:
@@ -1437,6 +1558,16 @@ async def get_recommendations(
             artist = artist_key(effective_track_artist_title(track)[0])
             if artist in excluded_artist_keys:
                 continue
+            # Пул может прийти из кэша и быть старее последних лайков/скипов:
+            # исключения применяются не только при его расчёте, но и здесь,
+            # при сборке выдачи (см. _external_pool_cached).
+            if (track.source, track.external_id) in excluded_external:
+                continue
+            track_key = flow_router._norm_key(
+                *effective_track_artist_title(track)
+            )
+            if all(track_key) and track_key in excluded_track_keys:
+                continue
             candidate_pool.setdefault(track.id, track)
 
         # Relevant popular tracks are only a fallback candidate source.  They
@@ -1606,7 +1737,13 @@ async def get_recommendations(
     )
     # The endpoint is intentionally cacheable, but callers can associate
     # subsequent feedback with the exact non-cached generation.
-    set_cache(cache_key, response.model_dump(mode="json"), expire=_RECS_TTL)
+    # Деградировавший ответ (внешний пул ещё греется) кэшируем лишь на время
+    # ожидания пула — тощая выдача не должна закрепиться на полные _RECS_TTL.
+    set_cache(
+        cache_key,
+        response.model_dump(mode="json"),
+        expire=int(_EXTERNAL_POOL_WAIT) if external_degraded else _RECS_TTL,
+    )
     db.commit()
     return response
 

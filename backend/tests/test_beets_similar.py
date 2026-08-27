@@ -215,6 +215,7 @@ def _resolver(monkeypatch, yt=None, sc=None):
     monkeypatch.setattr(flow.soundcloud, "search_soundcloud", _sc)
 
 
+@pytest.mark.real_external_pools
 def test_lastfm_pool_resolves_names_into_playable_tracks(monkeypatch):
     """Last.fm отдаёт только имена — играбельными их делает поиск."""
 
@@ -245,6 +246,7 @@ def test_lastfm_pool_drops_names_nobody_has(monkeypatch):
     assert asyncio.run(flow._lastfm_pool(None, "A", "B")) == []
 
 
+@pytest.mark.real_external_pools
 def test_lastfm_pool_falls_back_to_soundcloud(monkeypatch):
     """YT Music предпочитаем, но имя может быть только в SoundCloud."""
 
