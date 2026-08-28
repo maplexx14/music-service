@@ -190,6 +190,9 @@ def _normalize(item: dict) -> Optional[ExternalTrackResponse]:
         download_url=None,
         download_allowed=False,
         play_count=_metric_count(item.get("views")),
+        # isExplicit есть у результатов поиска ytmusicapi (1.8.2): True у
+        # оригинала, False у clean-версии. Отсутствует — считаем non-explicit.
+        is_explicit=bool(item.get("isExplicit")),
     )
 
 

@@ -299,6 +299,8 @@ class ExternalTrackImport(BaseModel):
     cover_url: Optional[str] = None
     stream_url: Optional[str] = None
     genre: Optional[str] = None
+    # См. ExternalTrackResponse.is_explicit: оригинал, а не clean-версия.
+    is_explicit: bool = False
 
 
 class PlaylistBase(BaseModel):
@@ -393,6 +395,9 @@ class ExternalTrackResponse(BaseModel):
     # SoundCloud playback_count).  Defaults keep older cached payloads valid.
     play_count: int = 0
     unique_listener_count: int = 0
+    # YT Music помечает оригинал (без цензуры) isExplicit; clean-версии флага
+    # не имеют. False также для источников без такого понятия.
+    is_explicit: bool = False
     recommendation_id: Optional[str] = None
     recommendation_surface: Optional[str] = None
     recommendation_position: Optional[int] = None

@@ -261,6 +261,8 @@ def test_extract_yandex_native_builds_entries(monkeypatch):
         "duration": 200,
         "thumbnails": [{"url": "https://cov/1"}],
         "id": "1",
+        # у Yandex-треков флага explicit нет — всегда False (см. _tracks_to_entries)
+        "explicit": False,
     }]
 
 

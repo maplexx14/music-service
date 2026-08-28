@@ -83,6 +83,9 @@ class SpotifyTrack(BaseModel):
     duration: int = 0
     cover_url: Optional[str] = None
     isrc: Optional[str] = None
+    # Web API отдаёт explicit у каждого трека: это источник правды о том,
+    # оригинал ли трек (см. importer._entry_to_import — отбор зацензуренных).
+    explicit: bool = False
 
 
 def is_configured() -> bool:
@@ -259,6 +262,7 @@ def _track_from_object(obj: Optional[dict], fallback_album: Optional[dict] = Non
         duration=int((obj.get("duration_ms") or 0) // 1000),
         cover_url=_biggest_image(album_obj.get("images")),
         isrc=(obj.get("external_ids") or {}).get("isrc"),
+        explicit=bool(obj.get("explicit")),
     )
 
 

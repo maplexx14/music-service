@@ -262,6 +262,8 @@ def _tracks_to_entries(tracks: List) -> List[dict]:
             "duration": t.duration,
             "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
             "id": t.id,
+            # explicit есть только у Spotify (Web API); yandex-треки несут False
+            "explicit": bool(getattr(t, "explicit", False)),
         }
         for t in tracks
     ]
@@ -446,6 +448,29 @@ async def _entry_to_import(
     if not best_match:
         return None, True
 
+    # Источник говорит «explicit», а ytmusic отдал clean-версию (isExplicit
+    # отсутствует/False) — в YouTube Music у такой записи обычно нет
+    # нецензурной редакции. Ищем ту же запись на SoundCloud: там цензуры нет.
+    if entry.get("explicit") and not best_match.is_explicit:
+        uncensored = await _find_uncensored_soundcloud(
+            request, artist, title, entry.get("duration") or 0
+        )
+        if uncensored is not None:
+            return (
+                ExternalTrackImport(
+                    source=uncensored.source,
+                    external_id=uncensored.external_id,
+                    title=uncensored.title,
+                    artist=uncensored.artist,
+                    album=uncensored.album,
+                    duration=uncensored.duration,
+                    cover_url=uncensored.cover_url,
+                    stream_url=uncensored.stream_url,
+                    genre=uncensored.genre,
+                ),
+                True,
+            )
+
     payload = ExternalTrackImport(
         source=best_match.source,
         external_id=best_match.external_id,
@@ -464,7 +489,9 @@ def _select_best_match(
 ) -> Optional[object]:
     """Выбирает лучшее совпадение из списка кандидатов.
 
-    Использует простой scoring: точное совпадение артиста + название = высший балл.
+    Использует простой scoring: точное совпадение артиста + название = высший
+    балл. При равном счёте предпочитаем explicit-кандидата: в YouTube Music
+    часто лежат обе версии записи с одинаковым названием и длительностью.
     """
     if not candidates:
         return None
@@ -503,8 +530,9 @@ def _select_best_match(
 
         scored.append((score, candidate))
 
-    # Сортируем по убыванию балла
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Сортируем по убыванию балла; при равном счёте первым идёт explicit
+    # (оригинал), а не clean-версия той же записи.
+    scored.sort(key=lambda x: (-x[0], not getattr(x[1], "is_explicit", False)))
 
     # Возвращаем лучший вариант, если балл достаточный
     best_score, best_candidate = scored[0]
@@ -513,6 +541,42 @@ def _select_best_match(
 
     # Если балл низкий, всё равно возвращаем лучший (может быть полезен)
     return best_candidate
+
+
+# Маркеры «другой записи» в названии: slowed/reverb-версии живут на SoundCloud
+# тысячами, совпадают по названию (вхождение) и длительности, но записью не
+# являются. Clean — наоборот, та же цензура, за которой мы сюда пришли.
+_NOT_SAME_RECORDING = re.compile(
+    r"slowed|reverb|sped\s*up|nightcore|8d|instrumental|clean",
+    re.IGNORECASE,
+)
+
+
+async def _find_uncensored_soundcloud(
+    request: Request, artist: str, title: str, duration: int
+) -> Optional["ExternalTrackResponse"]:
+    """Та же запись на SoundCloud — там нет цензуры, в отличие от ytmusic.
+
+    Матч строгий (как у soundcloud.find_ytmusic_equivalent): артист, название
+    и длительность одновременно — иначе есть риск подменить трек чужой
+    записью или «slowed + reverb». None — точного совпадения нет, вызывающий
+    код оставляет ytmusic-матч (лучше цензурный трек, чем никакого).
+    """
+    query = _build_match_query(artist, title)
+    if len(query) < 3:
+        query = f"{artist} {title}".strip()
+    try:
+        results = await soundcloud.search_soundcloud(request, query, limit=10)
+    except Exception:  # noqa: BLE001 — поиск не должен ломать импорт
+        logger.exception("soundcloud uncensored search failed for %s", query)
+        return None
+
+    for candidate in results:
+        if _NOT_SAME_RECORDING.search(candidate.title or ""):
+            continue
+        if soundcloud._is_exact_match(candidate, title, artist, duration):
+            return candidate
+    return None
 
 
 async def _soundcloud_playlist_native(
