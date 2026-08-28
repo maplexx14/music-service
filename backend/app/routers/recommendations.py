@@ -303,6 +303,16 @@ def _varied_popular(
             t.id,
         )
     )
+    # Разнос по юзерам: у холодного юзера score_track глобален и даёт строгое
+    # упорядочение без связей, поэтому stable_jitter как тай-брейк никогда не
+    # срабатывал — все юзеры без профиля получали один и тот же список в одном
+    # и том же порядке. Крутим отсортированное окно на стабильный сдвиг от
+    # user_id: выдача остаётся детерминированной для юзера, но между юзерами
+    # различаются и состав, и порядок. Популярность по-прежнему ведёт (окно
+    # сверху вниз по score), меняется лишь точка входа.
+    if user_id is not None and len(pool) > need:
+        offset = int(stable_jitter(user_id, "varied-popular-rotation") * len(pool))
+        pool = pool[offset:] + pool[:offset]
     return cap_per_artist(pool, _MAX_PER_ARTIST, used=used)[:need]
 
 

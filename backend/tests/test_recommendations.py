@@ -99,6 +99,37 @@ def test_recommendations_cold_start_shows_popular(client, db):
     assert hit.id in ids
 
 
+def test_recommendations_cold_start_varies_between_users(client, db):
+    """Холодный старт без предпочтений — у каждого юзера свой набор.
+
+    Раньше stable_jitter в _varied_popular был только тай-брейком: у юзера
+    без сигналов score_track глобален и упорядочивает пул строго, без связей,
+    поэтому все, кто пропустил онбординг, получали один и тот же список в
+    одном и том же порядке (живая регрессия: «у всех юзеров на главной
+    рекомендуются одинаковые треки»).
+    """
+    create_user(db, username="cold-one")
+    create_user(db, username="cold-two")
+    for i in range(30):
+        _track(db, f"hit-{i}", f"Artist{i}", play_count=1000 - i)
+
+    first = client.get(
+        "/api/recommendations/", headers=auth_headers(client, username="cold-one")
+    )
+    second = client.get(
+        "/api/recommendations/", headers=auth_headers(client, username="cold-two")
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    first_ids = {t["id"] for t in first.json()["tracks"]}
+    second_ids = {t["id"] for t in second.json()["tracks"]}
+    assert first_ids and second_ids
+    assert first_ids != second_ids, (
+        "два холодных юзера без сигналов получили идентичную выдачу"
+    )
+
+
 def test_recommendations_cold_start_respects_preferred_genre(
     client, db, monkeypatch
 ):
