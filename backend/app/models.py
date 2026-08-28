@@ -194,6 +194,11 @@ class User(Base):
         Float, nullable=False, default=0.2, server_default="0.2"
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Последний аутентифицированный запрос — «последний онлайн» для админки.
+    # Пишется с троттлингом (см. dependencies.get_current_user), чтобы не
+    # делать UPDATE на каждый запрос; живой маркер онлайна остаётся в Redis
+    # (users:online:<id>). NULL — юзер не заходил после появления колонки.
+    last_seen = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Relationships
     playlists = relationship("Playlist", back_populates="owner", cascade="all, delete-orphan")

@@ -208,47 +208,95 @@ def get_user_count(
     return result
 
 
+def _online_user_ids() -> set:
+    """Id юзеров с живым presence-маркером в Redis (TTL 120 с, см. dependencies)."""
+    try:
+        return {
+            int(key.rsplit(":", 1)[-1])
+            for key in redis_client.scan_iter(match="users:online:*")
+        }
+    except Exception:
+        logger.exception("failed to read online markers")
+        return set()
+
+
+def _admin_profile(db: Session, user: User, online_ids: set) -> dict:
+    # Профиль вкуса — самая хрупкая часть дашборда (он читает лайки,
+    # историю и плейлисты). Один пользователь с битыми данными не должен
+    # ронять всю панель: его карточка просто едет без detected_*.
+    try:
+        detected = _taste_profile(db, user.id) or {}
+    except Exception:
+        logger.exception("taste profile failed for user %s", user.id)
+        db.rollback()
+        detected = {}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "preferred_genres": user.preferred_genres or [],
+        "preferred_artists": user.preferred_artists or [],
+        "detected_genres": sorted((detected.get("genre_counts") or {}).keys())[:12],
+        "detected_artists": (detected.get("artists") or [])[:12],
+        "created_at": user.created_at,
+        "last_seen": user.last_seen,
+        "is_online": user.id in online_ids,
+        "is_active": user.is_active,
+    }
+
+
+def _admin_users_page(
+    db: Session, online_ids: set, limit: int, offset: int
+) -> tuple:
+    """Страница профилей, отсортированных по последнему онлайну.
+
+    Онлайн-юзеры попадают наверх без отдельной сортировки: presence-маркер
+    живёт 120 с, а last_seen пишется минимум раз в минуту, так что у всех
+    кто в сети, он свежее, чем у остальных. NULL (никогда не заходил после
+    появления колонки) — в конце.
+    """
+    query = db.query(User).order_by(
+        User.last_seen.desc().nullslast(), User.created_at.desc()
+    )
+    total = query.count()
+    users = query.limit(limit).offset(offset).all()
+    return total, [_admin_profile(db, user, online_ids) for user in users]
+
+
 @router.get("/admin/dashboard")
 def get_admin_dashboard(
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
-    """Dashboard metrics and safe user profiles for administrators."""
-    online = 0
-    try:
-        online = sum(1 for _ in redis_client.scan_iter(match="users:online:*"))
-    except Exception:
-        online = 0
-    users = db.query(User).order_by(User.created_at.desc()).all()
-    profiles = []
-    for user in users:
-        # Профиль вкуса — самая хрупкая часть дашборда (он читает лайки,
-        # историю и плейлисты). Один пользователь с битыми данными не должен
-        # ронять всю панель: его карточка просто едет без detected_*.
-        try:
-            detected = _taste_profile(db, user.id) or {}
-        except Exception:
-            logger.exception("taste profile failed for user %s", user.id)
-            db.rollback()
-            detected = {}
-        profiles.append({
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "preferred_genres": user.preferred_genres or [],
-            "preferred_artists": user.preferred_artists or [],
-            "detected_genres": sorted((detected.get("genre_counts") or {}).keys())[:12],
-            "detected_artists": (detected.get("artists") or [])[:12],
-            "created_at": user.created_at,
-            "is_active": user.is_active,
-        })
+    """Dashboard metrics and safe user profiles for administrators.
+
+    Профили приезжают первой страницей (USERS_PAGE_SIZE); остальное панель
+    догружает по /admin/users — прогонять _taste_profile по всем юзерам
+    сразу значило бы делать панель линейно дороже с каждым регистрацией.
+    """
+    online_ids = _online_user_ids()
+    users_total, profiles = _admin_users_page(db, online_ids, limit=50, offset=0)
     return {
-        "users_count": len(users),
-        "online_users_count": online,
+        "users_count": users_total,
+        "online_users_count": len(online_ids),
         "tracks_count": db.query(Track).count(),
         "artists_count": db.query(func.count(func.distinct(Track.artist))).scalar() or 0,
         "users": profiles,
+        "users_total": users_total,
     }
+
+
+@router.get("/admin/users")
+def get_admin_users(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Следующая страница профилей для ленивой загрузки админ-панели."""
+    online_ids = _online_user_ids()
+    total, profiles = _admin_users_page(db, online_ids, limit, offset)
+    return {"total": total, "users": profiles}
 
 
 @router.get("/{user_id}", response_model=UserResponse)

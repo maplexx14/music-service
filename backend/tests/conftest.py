@@ -93,6 +93,18 @@ def _reset_password_tokens():
 
 
 @pytest.fixture(autouse=True)
+def _reset_online_presence_markers():
+    """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
+    id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого
+    теста оставался онлайн в следующем."""
+    from app.cache import clear_pattern
+
+    clear_pattern("users:online:*")
+    yield
+    clear_pattern("users:online:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_ytdlp_bot_check_backoff():
     """Глобальный бэкофф bot-check'а YouTube живёт в памяти процесса 3 минуты
     и переживает конец теста. Без сброса тест, который его открыл, ломает все
