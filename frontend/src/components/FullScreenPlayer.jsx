@@ -240,7 +240,7 @@ function FullScreenPlayer() {
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
-        <img className="fullscreen-logo" src="/logoBoltwo.png" alt="Логотип" />
+         <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
         {(
           <button
             className={`fullscreen-icon fullscreen-lyrics-toggle${hasLyrics ? ' active' : ''}`}
@@ -260,6 +260,7 @@ function FullScreenPlayer() {
             <img src={coverUrl} alt={currentTrack.title} onError={handleCoverError} />
           </div>
 
+       
           <div className="fullscreen-info">
             <div>
               <div className="fullscreen-track-name">{currentTrack.title}</div>
