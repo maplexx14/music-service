@@ -46,10 +46,10 @@ const PRELOAD_MIN_BUFFER_SEC = 30
 // на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
 // успел наврать.
 const SWAP_VERIFY_MS = 2500
-// Последний аварийный потолок handoff. Нормально предыдущий элемент отпускается
-// по `playing` или продвижению currentTime; один таймер здесь ненадёжен, потому
-// что скрытую страницу iOS может заморозить надолго.
-const SWAP_RELEASE_MAX_MS = 3000
+// Потолок handoff берём из движка (engine.SWAP_RELEASE_MAX_MS): принудительное
+// завершение просроченной подмены (engine.reconcile) сверяется с тем же
+// дедлайном, и разъезд двух констант означал бы, что таймер отпускает элемент
+// раньше, чем reconcile считает подмену зависшей.
 // Прослушивание засчитывается в play_count (сигнал вкуса) ТОЛЬКО после
 // реального прослушивания, а не на старте. Иначе в автоплей-«волне» каждый
 // поданный трек получал +play независимо от вовлечённости — и скипнутые/
@@ -578,8 +578,17 @@ function PlayerInner() {
     // если должно было играть. На мобильных браузерах audio может быть приостановлен
     // при уходе в фон (переключение приложения, блокировка экрана).
     const handleVisibility = () => {
+      // Сверка зависшей подмены — ДО guard'а isLive: если страница была
+      // заморожена, React мог не успеть перевесить эффекты на новый элемент,
+      // и этот слушатель ещё принадлежит прежнему. reconcile работает с
+      // состоянием движка, а не замыкания, — ему всё равно, кто спросил.
+      engine.reconcile()
       if (!isLive()) return
       if (!document.hidden) {
+        // Если в фоне потерялись все сигналы завершения подмены ('playing',
+        // продвижение позиции, страховочный таймер), брошенный элемент всё ещё
+        // звучит — и первый же play() ниже дал бы два трека одновременно.
+        // Принудительное закрытие произошло выше, в reconcile.
         // Вернулись на видимый экран с отложенным переходом (трек кончился в
         // фоне, буфера не было). Здесь старт с нуля уже безопасен — доигрываем.
         if (pendingAdvanceRef.current) {
@@ -777,6 +786,10 @@ function PlayerInner() {
     // не мгновенный; мгновенный путь — кнопка ▶ виджета (жест).
     let stalledTicks = 0
     const watchdog = setInterval(() => {
+      // Здесь тоже сверяем зависшую подмену: в фоне интервал троттлится, но
+      // ~раз в минуту всё же выстреливает — и каждый выстрел закрывает
+      // просроченный handoff, не дожидаясь возврата на видимый экран.
+      engine.reconcile()
       if (!isLive()) return
       const { isPlaying: playing } = usePlayerStore.getState()
       if (!playing || !audio.src || audio.ended) {
@@ -1117,7 +1130,7 @@ function PlayerInner() {
       primed.addEventListener('playing', releasePrevious)
       primed.addEventListener('timeupdate', releaseOnProgress)
       clearTimeout(swapReleaseTimerRef.current)
-      releaseTimer = setTimeout(releasePrevious, SWAP_RELEASE_MAX_MS)
+      releaseTimer = setTimeout(releasePrevious, engine.SWAP_RELEASE_MAX_MS)
       swapReleaseTimerRef.current = releaseTimer
       swapReleaseNowRef.current = releaseNow
       playWithDiag(primed, `swap:${offset > 0 ? 'next' : 'prev'}:primed`)

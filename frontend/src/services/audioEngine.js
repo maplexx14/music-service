@@ -82,6 +82,13 @@ const isIOS =
 // (idle) элемент всегда 'auto': ему как раз и нужны байты вперёд.
 const ACTIVE_PRELOAD = isIOS ? 'metadata' : 'auto'
 
+// Потолок длительности handoff подмены (мс): столько предыдущему элементу
+// позволено звучать поверх стартующего нового ради непрерывности аудиосессии.
+// Тот же срок использует страховочный таймер в Player.jsx — значение одно на
+// оба места, чтобы принудительное завершение в движке (reconcile) не
+// разъезжалось с таймером.
+export const SWAP_RELEASE_MAX_MS = 3000
+
 function createSlot(label) {
   if (typeof Audio === 'undefined') return null
   const el = new Audio()
@@ -128,6 +135,8 @@ let detachPreloadWatch = null
 // запоздалый callback от предыдущей подмены не освободил уже другой переход.
 let pendingRelease = null
 let detachSwapHandoffWatch = null
+// Момент старта текущей подмены — вход для reconcile (см. ниже).
+let swapStartedAt = 0
 
 const swapListeners = new Set()
 const idleReadyListeners = new Set()
@@ -366,6 +375,7 @@ function watchPreload(el, abs) {
 // Заряжает свободный элемент указанным URL и начинает тянуть байты.
 // Идемпотентно: повторный вызов с тем же URL ничего не перезапускает.
 export function preload(url) {
+  reconcile()
   const abs = absolutize(url)
   const idle = getIdle()
   if (!abs || !idle) return false
@@ -427,12 +437,36 @@ function watchSwapHandoff(active) {
   active.addEventListener('timeupdate', finishOnProgress)
 }
 
+// Самолечение зависшей подмены. Handoff завершают три сигнала: 'playing',
+// продвижение позиции и страховочный таймер в Player. В фоне все три могут
+// пропасть разом: WebKit теряет 'playing', таймеры скрытой страницы iOS
+// замораживает на десятки секунд, а замороженную страницу не будит никто.
+// Тогда finishSwap не происходит вовсе: предыдущий элемент продолжает
+// звучать (на iOS его не заглушить — volume там только для чтения), а движок
+// остаётся «занятым»: swapTo отказывает, preload и clearStalePreload не
+// трогают звучащий слот. Следующий переход идёт медленным путём на активном
+// элементе — и играет поверх брошенного трека. Отсюда «два трека
+// одновременно» после возврата в приложение.
+//
+// Сверяемся по настенным часам: Date.now() не замерзает вместе с таймерами,
+// поэтому после разморозки страницы зависшая подмена мгновенно видна как
+// просроченная. Дедлайн — тот же SWAP_RELEASE_MAX_MS, что у страховочного
+// таймера: раньше него reconcile молчит и не рвёт честный handoff.
+export function reconcile() {
+  if (!pendingRelease) return
+  const age = Date.now() - swapStartedAt
+  if (age < SWAP_RELEASE_MAX_MS) return
+  diag('swap:reconcile', { age })
+  finishSwap()
+}
+
 // Подмена активного элемента на заряженный. Возвращает элемент, который зовущей
 // стороне остаётся только play() — СИНХРОННО, в том же жесте (ended / кнопка
 // виджета). Возвращает null, если заряженного буфера нет: тогда вызывающий код
 // идёт старым путём (src + load + play на активном элементе).
 export function swapTo(url) {
   const abs = absolutize(url)
+  reconcile()
   // Два одновременных handoff используют те же два элемента и не могут быть
   // корректно представлены одним pendingRelease. Окно обычно короче одного
   // timeupdate; повторная команда безопасно пройдёт сразу после завершения.
@@ -485,6 +519,7 @@ export function swapTo(url) {
     }
   }
   pendingRelease = { previous, active: idle }
+  swapStartedAt = Date.now()
   watchSwapHandoff(idle)
   diag('engine:swap', { url: shortUrl(abs), ...snapshotAudio(idle) })
   swapListeners.forEach((cb) => {
@@ -560,6 +595,7 @@ export function setVolume(value) {
 // полосу у играющего трека ради потока, который никто не услышит.
 // keepUrl — URL, ради которого элемент стоит сохранить.
 export function clearStalePreload(keepUrl) {
+  reconcile()
   const idle = getIdle()
   if (!idle?.src) return
   // После смены currentTrack React вызывает этот cleanup почти сразу, но до
