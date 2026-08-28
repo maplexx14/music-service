@@ -749,6 +749,42 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             )
             skipped_keys.add(_norm_key(skipped_artist, skipped_title))
 
+    # Слышанные артисты — про НОВИЗНУ, а не про вес вкуса. Порог
+    # _PLAYED_ARTIST_MIN_PLAYS ниже отделяет разовый клик от вкуса, но «слышал
+    # один раз» ≠ «новое имя»: без этого артист с одним прослушиванием занимал
+    # слоты разведки как «новый». artist_play_totals уже посчитан по ВСЕМ
+    # прослушиваниям без порога, поэтому для локальной истории достаточно его
+    # ключей. Внешний трек волны попадает в user_track_plays только после
+    # материализации (POST /tracks/{id}/play), поэтому незаматериализованные
+    # прослушивания добираем из телеметрии — иначе прослушанный в самой волне
+    # артист оставался «новым» вечно, и каждая подгрузка «открывала» его снова.
+    heard_artist_keys = {key for key in artist_play_totals if key}
+    heard_since = datetime.now(timezone.utc) - timedelta(days=90)
+    heard_rows = db.execute(
+        select(
+            recommendation_events.c.artist,
+            recommendation_events.c.title,
+            recommendation_events.c.source,
+        ).where(
+            recommendation_events.c.user_id == user_id,
+            recommendation_events.c.event_type.in_(("play", "listen")),
+            recommendation_events.c.occurred_at >= heard_since,
+        )
+        .order_by(recommendation_events.c.occurred_at.desc())
+        .limit(_TASTE_QUERY_LIMIT)
+    ).all()
+    for heard_artist, heard_title, heard_source in heard_rows:
+        if not heard_artist:
+            continue
+        effective_heard_artist, _ = effective_artist_title(
+            heard_title or "",
+            heard_artist,
+            source=heard_source or "",
+        )
+        key = artist_key(effective_heard_artist)
+        if key:
+            heard_artist_keys.add(key)
+
     # Дизлайк — не вкусовой признак, а запрет («не нравится, больше не
     # показывать»), поэтому окном _TASTE_QUERY_LIMIT он НЕ ограничен: тот же
     # довод, что у collection_rows выше. Скипы пишутся автоматически (фронт шлёт
@@ -1094,6 +1130,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             )
         ],
         "artist_weight": {k: v for k, v in artist_weight.items() if v > 0},
+        # Все слышанные имена: без порога и без требования «вкуса» — новизна
+        # и вес вкуса разные вопросы (см. сбор heard_artist_keys выше).
+        "heard_artist_keys": heard_artist_keys,
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
         "genres": list(dict.fromkeys(genres)),
@@ -2190,6 +2229,12 @@ async def get_flow(
 
     explore_ratio = discovery_ratio(current_user)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
+    # Новизну меряем по ВСЕМ слышанным именам (вес вкуса + разовые
+    # прослушивания + прослушанные в волне без материализации), а не только по
+    # весу вкуса: иначе уже знакомые имена занимали слоты разведки.
+    heard_artist_keys = set(profile.get("artist_weight") or {}) | set(
+        profile.get("heard_artist_keys") or []
+    )
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
     # Последовательно, а не в gather: Session не потокобезопасна, и обе функции
@@ -2281,7 +2326,7 @@ async def get_flow(
             user_id=user_id,
             artist_affinity=(profile.get("artist_weight") or {}).get(key, 0.0),
             genres=profile.get("genres") or (),
-            novelty=key not in (profile.get("artist_weight") or {}),
+            novelty=key not in heard_artist_keys,
             source=item.get("source") if isinstance(item, dict) else getattr(item, "source", None),
             popularity=max(local_popularity, service_popularity),
             content_bonus=content_bonus,
@@ -2290,7 +2335,7 @@ async def get_flow(
             population_quality=population.get("quality", 0.0),
             now=ranking_now,
         )
-        is_novel_artist = key not in (profile.get("artist_weight") or {})
+        is_novel_artist = key not in heard_artist_keys
         # Keep the score itself continuous. A higher discovery target is
         # enforced after ranking, so relevance still decides which new tracks
         # fill the requested new-artist portion.
@@ -2594,7 +2639,7 @@ async def get_flow(
         if not discovery_target:
             return False
 
-        familiar_artists = set(profile.get("artist_weight") or {})
+        familiar_artists = heard_artist_keys
         novel_tracks = []
         novel_artists = set()
         for candidate in (*similar_explore, *probe_explore, *explore):
@@ -2897,7 +2942,9 @@ async def get_flow(
         artist_of=lambda item: _item_artist_title(item)[0],
         repeat_penalties=(0.0, 0.18, 0.48, 1.0, 1.7, 2.6),
     )
-    familiar_artists = set(profile.get("artist_weight") or {})
+    # Новизна — по слышанным именам целиком (вкус + разовые прослушивания +
+    # прослушанное в волне), см. heard_artist_keys в профиле.
+    familiar_artists = heard_artist_keys
 
     def _is_novel(candidate) -> bool:
         artist, _title = _item_artist_title(candidate)
@@ -2982,8 +3029,7 @@ async def get_flow(
     n_explore = sum(
         1
         for item in mix
-        if artist_key(_item_artist_title(item)[0])
-        not in (profile.get("artist_weight") or {})
+        if artist_key(_item_artist_title(item)[0]) not in heard_artist_keys
     )
     n_exploit = len(mix) - n_explore
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной

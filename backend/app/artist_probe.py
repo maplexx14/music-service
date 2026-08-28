@@ -328,7 +328,12 @@ async def candidate_artists(
     """
     from app.routers import flow
 
-    familiar = set(profile.get("artist_weight") or {})
+    # Новизна меряется по всем слышанным именам (см. heard_artist_keys в
+    # _taste_profile): раз прослушанный артист новым уже не считается.
+    # artist_weight — fallback для профилей, собранных до разделения понятий.
+    familiar = set(profile.get("artist_weight") or {}) | set(
+        profile.get("heard_artist_keys") or []
+    )
     banned = set(profile.get("banned_artists") or set())
     seed_names = [name for name in (profile.get("artists") or []) if name][:seeds]
     if not seed_names:
