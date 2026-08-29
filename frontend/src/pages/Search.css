@@ -90,6 +90,32 @@
   white-space: nowrap;
 }
 
+/* Бейдж цензуры у названия: E — оригинал (explicit), CLEAN — цензурная
+   редакция. Инлайновые, чтобы строка не переносилась и не «дышала». */
+.track-badge {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  line-height: 14px;
+  color: #b3b3b3;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.track-badge-e {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.track-badge-clean {
+  color: #e8b44c;
+  background: rgba(232, 180, 76, 0.14);
+}
+
 .track-item-artist {
   font-size: 14px;
   color: #b3b3b3;

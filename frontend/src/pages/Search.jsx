@@ -202,7 +202,13 @@ function Search() {
                 onError={handleCoverError}
               />
               <div className="track-item-info">
-                <div className="track-item-title">{track.title}</div>
+                <div className="track-item-title">
+                  {track.title}
+                  {/* E — оригинал с явным контентом, CLEAN — цензурная
+                      редакция: см. aggregate._mark_clean / ytdlp.is_explicit. */}
+                  {track.is_explicit && <span className="track-badge track-badge-e">E</span>}
+                  {track.is_clean && <span className="track-badge track-badge-clean">CLEAN</span>}
+                </div>
                 <ArtistLink artist={track.artist} className="track-item-artist" />
               </div>
               <div className="track-item-meta">

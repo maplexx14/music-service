@@ -398,6 +398,10 @@ class ExternalTrackResponse(BaseModel):
     # YT Music помечает оригинал (без цензуры) isExplicit; clean-версии флага
     # не имеют. False также для источников без такого понятия.
     is_explicit: bool = False
+    # Цензурная редакция: в поиске помечаем по clean-маркерам в названии
+    # («Song (Clean)», «Song (Radio Edit)»). Фронт рисует бейдж; см.
+    # aggregate._mark_clean.
+    is_clean: bool = False
     recommendation_id: Optional[str] = None
     recommendation_surface: Optional[str] = None
     recommendation_position: Optional[int] = None
