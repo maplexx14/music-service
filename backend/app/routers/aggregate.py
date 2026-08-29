@@ -53,13 +53,12 @@ def _mark_clean(track: ExternalTrackResponse) -> ExternalTrackResponse:
     return track
 
 
-def _prefer_uncensored(tracks: List[ExternalTrackResponse]) -> List[ExternalTrackResponse]:
-    """Нецензурированные версии одного трека — раньше цензурных.
+def _collapse_versions(tracks: List[ExternalTrackResponse]) -> List[ExternalTrackResponse]:
+    """«Song» и «Song (Clean)» — одна запись в двух редакциях.
 
-    «Song» и «Song (Clean)» — одна запись в двух редакциях: схлопываем по
-    базовому ключу (маркер вырезается), побеждает explicit-версия и сохраняет
-    позицию первой встреченной. clean-версии без пары остаются в выдаче (с
-    бейджем), но стабильной сортировкой уходят в конец секции.
+    Схлопываем по базовому ключу (clean-маркер вырезается): побеждает
+    explicit-версия и сохраняет позицию первой встреченной. Попутно
+    проставляем is_clean (бейдж на фронте).
     """
     marked = [_mark_clean(t) for t in tracks]
 
@@ -74,7 +73,17 @@ def _prefer_uncensored(tracks: List[ExternalTrackResponse]) -> List[ExternalTrac
         elif t.is_explicit and not prev.is_explicit:
             best[key] = t
 
-    return sorted((best[k] for k in order), key=lambda t: t.is_clean)
+    return [best[k] for k in order]
+
+
+def _prefer_uncensored(tracks: List[ExternalTrackResponse]) -> List[ExternalTrackResponse]:
+    """Нецензурированные версии одного трека — раньше цензурных.
+
+    Схлопывает редакции одной записи (см. _collapse_versions), затем
+    стабильной сортировкой отправляет оставшиеся clean-версии в конец
+    секции — не вытесняя чужие треки.
+    """
+    return sorted(_collapse_versions(tracks), key=lambda t: t.is_clean)
 
 
 def _censored(track: ExternalTrackResponse) -> bool:
@@ -264,22 +273,31 @@ async def search_external_grouped(
     # собственная дискография, а search подмешивает чужие треки с этим именем
     # в названии (см. ytmusic_artist_catalog).
     #
-    # Цензура: clean-версии помечаем для бейджа и отодвигаем вниз секции
-    # (_prefer_uncensored); на дедупе между источниками нецензурированная
-    # версия бьёт цензурированную независимо от ранга источника.
+    # Цензура: редакции одной записи схлопываем (_collapse_versions),
+    # цензурную ytmusic-версию заменяем той же записью из SoundCloud —
+    # там цензуры нет; оставшиеся без замены clean-версии — в хвост секции.
     ytmusic = dedup_sequential(
-        _prefer_uncensored(ok(catalog) + ok(songs)), limit
+        _collapse_versions(ok(catalog) + ok(songs)), limit
     )
     # seen прокинут дальше: дубль, уже показанный в YouTube Music, в секции
     # SoundCloud второй раз не появится.
     soundcloud_tracks = dedup_sequential(
-        _prefer_uncensored(ok(sc)), limit, _seen_keys(ytmusic)
+        _collapse_versions(ok(sc)), limit, _seen_keys(ytmusic)
     )
 
-    # Цензурная ytmusic-версия, для которой в SoundCloud есть та же запись,
-    # не показывается вовсе: ниже секция с нецензурированным вариантом.
-    sc_keys = {dedup_key(t) for t in soundcloud_tracks if not t.is_clean}
-    ytmusic = [t for t in ytmusic if not (t.is_clean and _base_key(t) in sc_keys)]
+    # Замена на месте: порядок выдачи не меняется, трек просто меняет источник
+    # (и дальше стримится движком SoundCloud). Эквивалента нет — оставляем
+    # clean-версию с бейджем: лучше цензурный трек, чем дырка в выдаче.
+    sc_replacement = {dedup_key(t): t for t in soundcloud_tracks if not t.is_clean}
+    ytmusic = [
+        sc_replacement.get(_base_key(t), t) if t.is_clean else t
+        for t in ytmusic
+    ]
+    # Незамещённые clean-версии — в хвост (замещённые уже не clean).
+    ytmusic = sorted(ytmusic, key=lambda t: t.is_clean)
+    # Заменённые записи не должны дублироваться секцией SoundCloud ниже.
+    shown = {dedup_key(t) for t in ytmusic}
+    soundcloud_tracks = [t for t in soundcloud_tracks if dedup_key(t) not in shown]
 
     return ExternalSearchGrouped(ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 

@@ -140,18 +140,23 @@ def test_grouped_explicit_version_takes_the_cleans_position(monkeypatch):
     assert [t.title for t in grouped.ytmusic] == ["First", "Second"]
 
 
-def test_grouped_drops_clean_when_soundcloud_has_the_track(monkeypatch):
-    """clean-версия с SoundCloud-эквивалентом не показывается вовсе."""
+def test_grouped_replaces_clean_with_soundcloud_version(monkeypatch):
+    """clean-версия заменяется записью из SoundCloud на том же месте выдачи."""
     _patch_providers(
         monkeypatch,
-        songs=[_ext("ytmusic", "Song (Clean)")],
+        songs=[_ext("ytmusic", "Song (Clean)"), _ext("ytmusic", "Other")],
         sc=[_ext("soundcloud", "Song")],
     )
 
     grouped = asyncio.run(aggregate.search_external_grouped(None, "q", 30))
 
-    assert [t.title for t in grouped.ytmusic] == []
-    assert [t.title for t in grouped.soundcloud] == ["Song"]
+    # позиция в выдаче сохранена, источник сменился на нецензурированный
+    assert [(t.title, t.source) for t in grouped.ytmusic] == [
+        ("Song", "soundcloud"),
+        ("Other", "ytmusic"),
+    ]
+    # и дублем секцией SoundCloud ниже не показывается
+    assert grouped.soundcloud == []
 
 
 def test_grouped_keeps_clean_without_soundcloud_equivalent(monkeypatch):
