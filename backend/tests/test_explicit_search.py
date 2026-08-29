@@ -159,6 +159,44 @@ def test_grouped_replaces_clean_with_soundcloud_version(monkeypatch):
     assert grouped.soundcloud == []
 
 
+def test_grouped_replaces_explicit_with_soundcloud_version(monkeypatch):
+    """YTM отдаёт цензурный звук и под explicit-флагом — заменяем и explicit.
+
+    Заменённый трек сохраняет бейдж E (explicit-флаг переносится) и место
+    в выдаче, дубль из секции SoundCloud исчезает.
+    """
+    _patch_providers(
+        monkeypatch,
+        songs=[
+            _ext("ytmusic", "Loud", explicit=True),
+            _ext("ytmusic", "Quiet"),
+        ],
+        sc=[_ext("soundcloud", "Loud"), _ext("soundcloud", "Quiet")],
+    )
+
+    grouped = asyncio.run(aggregate.search_external_grouped(None, "q", 30))
+
+    assert [(t.title, t.source, t.is_explicit) for t in grouped.ytmusic] == [
+        ("Loud", "soundcloud", True),
+        ("Quiet", "ytmusic", False),
+    ]
+    # Quiet без признаков цензуры не заменялся — но и не дублируется
+    assert grouped.soundcloud == []
+
+
+def test_grouped_explicit_stays_on_ytmusic_without_soundcloud_equivalent(monkeypatch):
+    """Эквивалента в SoundCloud нет — explicit-трек остаётся на ytmusic."""
+    _patch_providers(
+        monkeypatch,
+        songs=[_ext("ytmusic", "Loud", explicit=True)],
+        sc=[],
+    )
+
+    grouped = asyncio.run(aggregate.search_external_grouped(None, "q", 30))
+
+    assert [(t.title, t.source) for t in grouped.ytmusic] == [("Loud", "ytmusic")]
+
+
 def test_grouped_keeps_clean_without_soundcloud_equivalent(monkeypatch):
     """Эквивалента в SoundCloud нет — clean остаётся, но с бейджем и в хвосте."""
     _patch_providers(

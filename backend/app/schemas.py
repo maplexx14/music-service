@@ -396,7 +396,9 @@ class ExternalTrackResponse(BaseModel):
     play_count: int = 0
     unique_listener_count: int = 0
     # YT Music помечает оригинал (без цензуры) isExplicit; clean-версии флага
-    # не имеют. False также для источников без такого понятия.
+    # не имеют. False также для источников без такого понятия. При замене
+    # цензурной версии звукозаписью из SoundCloud флаг переносится на неё —
+    # трек остаётся explicit, просто источник другой (aggregate._uncensored).
     is_explicit: bool = False
     # Цензурная редакция: в поиске помечаем по clean-маркерам в названии
     # («Song (Clean)», «Song (Radio Edit)»). Фронт рисует бейдж; см.

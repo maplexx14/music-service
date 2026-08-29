@@ -106,11 +106,6 @@ def _base_key(track) -> tuple:
     return dedup_key(shim)
 
 
-def _seen_keys(tracks: List[ExternalTrackResponse]) -> set:
-    """Ключи уже показанных треков — для вычитания секции SoundCloud."""
-    return {dedup_key(t) for t in tracks}
-
-
 def dedup_key(track) -> tuple:
     """Ключ «тот же трек» — по нормализованным исполнителю и названию.
 
@@ -251,8 +246,10 @@ async def search_external_grouped(
     Поиск показывает источники разными секциями в фиксированном порядке
     (библиотека → YouTube Music → SoundCloud), поэтому round-robin-склейка
     /external ему только мешает: она перемешивает то, что потом всё равно
-    придётся разбирать обратно по source. Дедуп между источниками сохранён —
-    при совпадении трека остаётся версия из YouTube Music (см. _SOURCE_RANK).
+    придётся разбирать обратно по source. Дубли между источниками схлопываются
+    в пользу YouTube Music; исключение — цензура: явная (clean) или
+    подозрительная (explicit — YTM может отдавать цензурный звук и под
+    флагом) версия заменяется записью из SoundCloud, см. _uncensored.
     """
     per_source = max(10, limit)
 
@@ -273,31 +270,41 @@ async def search_external_grouped(
     # собственная дискография, а search подмешивает чужие треки с этим именем
     # в названии (см. ytmusic_artist_catalog).
     #
-    # Цензура: редакции одной записи схлопываем (_collapse_versions),
-    # цензурную ytmusic-версию заменяем той же записью из SoundCloud —
-    # там цензуры нет; оставшиеся без замены clean-версии — в хвост секции.
+    # Цензура: редакции одной записи схлопываем (_collapse_versions), затем
+    # «подозрительные» ytmusic-версии заменяем той же записью из SoundCloud.
+    # Подозрительные — обе: clean-меченые (явная цензура) и explicit (по опыту
+    # YTM отдаёт цензурный звук и под explicit-флагом); SoundCloud не цензурит.
     ytmusic = dedup_sequential(
         _collapse_versions(ok(catalog) + ok(songs)), limit
     )
-    # seen прокинут дальше: дубль, уже показанный в YouTube Music, в секции
-    # SoundCloud второй раз не появится.
-    soundcloud_tracks = dedup_sequential(
-        _collapse_versions(ok(sc)), limit, _seen_keys(ytmusic)
-    )
+    sc_all = _collapse_versions(ok(sc))
 
     # Замена на месте: порядок выдачи не меняется, трек просто меняет источник
-    # (и дальше стримится движком SoundCloud). Эквивалента нет — оставляем
-    # clean-версию с бейджем: лучше цензурный трек, чем дырка в выдаче.
-    sc_replacement = {dedup_key(t): t for t in soundcloud_tracks if not t.is_clean}
-    ytmusic = [
-        sc_replacement.get(_base_key(t), t) if t.is_clean else t
-        for t in ytmusic
-    ]
+    # (и дальше стримится движком SoundCloud). Эквивалента нет — оставляем как
+    # есть с бейджем: лучше цензурный трек, чем дырка в выдаче.
+    sc_replacement = {dedup_key(t): t for t in sc_all if not t.is_clean}
+
+    def _uncensored(t: ExternalTrackResponse) -> ExternalTrackResponse:
+        if not (t.is_explicit or t.is_clean):
+            return t
+        sc = sc_replacement.get(_base_key(t))
+        if sc is None:
+            return t
+        if t.is_explicit:
+            # бейдж E сохраняем — трек остаётся explicit, просто источник
+            # теперь нецензурированный
+            return sc.model_copy(update={"is_explicit": True})
+        return sc
+
+    ytmusic = [_uncensored(t) for t in ytmusic]
     # Незамещённые clean-версии — в хвост (замещённые уже не clean).
     ytmusic = sorted(ytmusic, key=lambda t: t.is_clean)
-    # Заменённые записи не должны дублироваться секцией SoundCloud ниже.
+    # Показанное в секции YouTube Music не дублируем секцией SoundCloud:
+    # и оригинальные ytmusic-треки, и влитые туда SC-замены.
     shown = {dedup_key(t) for t in ytmusic}
-    soundcloud_tracks = [t for t in soundcloud_tracks if dedup_key(t) not in shown]
+    soundcloud_tracks = dedup_sequential(
+        [t for t in sc_all if dedup_key(t) not in shown], limit
+    )
 
     return ExternalSearchGrouped(ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 
