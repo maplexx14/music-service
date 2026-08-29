@@ -19,7 +19,12 @@ from app.routers.artists import _by_this_artist
 from app.schemas import ExternalTrackResponse
 
 
-def ext(title: str, artist: str, source: str = "ytmusic") -> ExternalTrackResponse:
+def ext(
+    title: str,
+    artist: str,
+    source: str = "ytmusic",
+    explicit: bool = False,
+) -> ExternalTrackResponse:
     return ExternalTrackResponse(
         id=f"{source}:{title}",
         source=source,
@@ -28,6 +33,7 @@ def ext(title: str, artist: str, source: str = "ytmusic") -> ExternalTrackRespon
         artist=artist,
         duration=100,
         stream_url="http://x/stream",
+        is_explicit=explicit,
     )
 
 
@@ -217,6 +223,119 @@ class TestArtistEndpoint:
         data = client.get("/api/artists", params={"name": "Jay-Z"}).json()
         # Трек записан склеенной строкой — на странице Jay-Z он тоже должен быть.
         assert [t["title"] for t in data["tracks"]] == ["Numb/Encore"]
+
+
+class TestArtistPageCensorship:
+    """Цензура на странице исполнителя — регрессия «CUPSIZE — Клей».
+
+    Поиск (/search/external/grouped) уже замещал подозрительные ytmusic-треки
+    записями из SoundCloud, а страница артиста собиралась без этой обработки —
+    и играла цензурные версии. Подозрительные — оба вида: явные clean-редакции
+    и explicit (YTM отдаёт цензурный звук и под флагом).
+    """
+
+    @pytest.fixture
+    def providers(self, monkeypatch):
+        """Подменяет ytmusic-профиль и SC-поиск; возвращает сеттер."""
+        from app.routers import artists as artists_router
+
+        state = {}
+
+        async def fake_profile(request, name, limit=60):
+            return {
+                "name": name,
+                "cover_url": None,
+                "tracks": state.get("yt", []),
+                "albums": [],
+            }
+
+        async def fake_sc(request, q, limit=20):
+            return state.get("sc", [])
+
+        monkeypatch.setattr(artists_router.ytdlp, "ytmusic_artist_profile", fake_profile)
+        monkeypatch.setattr(artists_router.soundcloud, "search_soundcloud", fake_sc)
+
+        def setup(yt, sc):
+            state["yt"] = yt
+            state["sc"] = sc
+
+        return setup
+
+    def test_replaces_explicit_with_soundcloud_equivalent(self, client, db, providers):
+        providers(
+            yt=[ext("Клей", "CUPSIZE", explicit=True)],
+            sc=[ext("Клей", "CUPSIZE", "soundcloud")],
+        )
+
+        external = client.get("/api/artists", params={"name": "CUPSIZE"}).json()["external"]
+
+        # На том же месте выдачи — источник сменился, бейдж E сохранён.
+        assert [(t["title"], t["source"], t["is_explicit"]) for t in external] == [
+            ("Клей", "soundcloud", True)
+        ]
+
+    def test_replaces_clean_marker_with_soundcloud_equivalent(self, client, db, providers):
+        providers(
+            yt=[ext("Song (Clean)", "A"), ext("Other", "A")],
+            sc=[ext("Song", "A", "soundcloud")],
+        )
+
+        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+
+        assert [(t["title"], t["source"]) for t in external] == [
+            ("Song", "soundcloud"),
+            ("Other", "ytmusic"),
+        ]
+
+    def test_keeps_suspect_track_without_soundcloud_equivalent(self, client, db, providers):
+        providers(
+            yt=[ext("Loud", "A", explicit=True)],
+            sc=[ext("Different", "A", "soundcloud")],
+        )
+
+        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+
+        # Лучше цензурный трек, чем дырка в дискографии.
+        assert [(t["title"], t["source"]) for t in external] == [
+            ("Loud", "ytmusic"),
+            ("Different", "soundcloud"),
+        ]
+
+    def test_collapses_two_editions_of_same_track(self, client, db, providers):
+        providers(
+            yt=[ext("Song (Clean)", "A"), ext("Song", "A", explicit=True)],
+            sc=[],
+        )
+
+        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+
+        # «Song» и «Song (Clean)» — одна запись: explicit-версия побеждает.
+        assert [t["title"] for t in external] == ["Song"]
+
+    def test_replacement_does_not_duplicate_in_soundcloud_tail(self, client, db, providers):
+        providers(
+            yt=[ext("Song", "A", explicit=True)],
+            sc=[ext("Song", "A", "soundcloud"), ext("Another", "A", "soundcloud")],
+        )
+
+        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+
+        # Замещённый трек влит в ytmusic-часть — вторым разом в SC-хвосте не был.
+        assert [(t["title"], t["source"]) for t in external] == [
+            ("Song", "soundcloud"),
+            ("Another", "soundcloud"),
+        ]
+
+    def test_plain_track_stays_on_ytmusic(self, client, db, providers):
+        providers(
+            yt=[ext("Quiet", "A")],
+            sc=[ext("Quiet", "A", "soundcloud")],
+        )
+
+        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+
+        # Без признаков цензуры порядок источников прежний: ytmusic бьёт SC.
+        assert [(t["title"], t["source"]) for t in external] == [("Quiet", "ytmusic")]
 
 
 class TestCrossScriptArtist:

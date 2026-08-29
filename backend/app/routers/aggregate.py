@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 from types import SimpleNamespace
-from typing import List
+from typing import List, Tuple
 
 from fastapi import APIRouter, Query, Request
 
@@ -93,6 +93,50 @@ def _censored(track: ExternalTrackResponse) -> bool:
     который вовсе не explicit, флага и не бывает (см. isExplicit в ytdlp.py).
     """
     return bool(track.is_clean)
+
+
+def _suspect(track: ExternalTrackResponse) -> bool:
+    """ytmusic-трек, которому доверять нельзя: clean ИЛИ explicit.
+
+    По опыту YTM отдаёт цензурный звук и под explicit-флагом, поэтому для
+    замены «подозрительными» считаем оба вида. SoundCloud не цензурит — его
+    копия той же записи всегда предпочтительнее.
+    """
+    return bool(track.is_explicit or track.is_clean)
+
+
+def replace_censored(
+    tracks: List[ExternalTrackResponse],
+    replacements: List[ExternalTrackResponse],
+) -> Tuple[List[ExternalTrackResponse], List[ExternalTrackResponse]]:
+    """Замещает подозрительные ytmusic-треки той же записью из SoundCloud.
+
+    Общий код выдачи поиска и страницы артиста. Замена на месте: порядок
+    выдачи не меняется, трек просто меняет источник (и дальше стримится
+    движком SoundCloud). explicit-флаг переносится на замену — бейдж E на
+    фронте остаётся. Эквивалента нет — трек остаётся как есть: лучше
+    цензурный трек, чем дырка в выдаче.
+
+    Возвращает (замещённый список, невостребованные замены) — вторым зовущий
+    дедупит остаток SoundCloud в отдельную секцию/хвост выдачи.
+    """
+    sc_replacement = {dedup_key(t): t for t in replacements if not t.is_clean}
+
+    def _uncensored(t: ExternalTrackResponse) -> ExternalTrackResponse:
+        if not _suspect(t):
+            return t
+        sc = sc_replacement.get(_base_key(t))
+        if sc is None:
+            return t
+        if t.is_explicit:
+            # бейдж E сохраняем — трек остаётся explicit, просто источник
+            # теперь нецензурированный
+            return sc.model_copy(update={"is_explicit": True})
+        return sc
+
+    replaced = [_uncensored(t) for t in tracks]
+    shown = {dedup_key(t) for t in replaced}
+    return replaced, [t for t in replacements if dedup_key(t) not in shown]
 
 
 def _base_key(track) -> tuple:
@@ -277,34 +321,12 @@ async def search_external_grouped(
     ytmusic = dedup_sequential(
         _collapse_versions(ok(catalog) + ok(songs)), limit
     )
-    sc_all = _collapse_versions(ok(sc))
 
-    # Замена на месте: порядок выдачи не меняется, трек просто меняет источник
-    # (и дальше стримится движком SoundCloud). Эквивалента нет — оставляем как
-    # есть с бейджем: лучше цензурный трек, чем дырка в выдаче.
-    sc_replacement = {dedup_key(t): t for t in sc_all if not t.is_clean}
-
-    def _uncensored(t: ExternalTrackResponse) -> ExternalTrackResponse:
-        if not (t.is_explicit or t.is_clean):
-            return t
-        sc = sc_replacement.get(_base_key(t))
-        if sc is None:
-            return t
-        if t.is_explicit:
-            # бейдж E сохраняем — трек остаётся explicit, просто источник
-            # теперь нецензурированный
-            return sc.model_copy(update={"is_explicit": True})
-        return sc
-
-    ytmusic = [_uncensored(t) for t in ytmusic]
-    # Незамещённые clean-версии — в хвост (замещённые уже не clean).
+    # Цензура: см. replace_censored. Замещённые clean-версии уже не clean,
+    # поэтому хвостовая сортировка — после замены.
+    ytmusic, sc_rest = replace_censored(ytmusic, _collapse_versions(ok(sc)))
     ytmusic = sorted(ytmusic, key=lambda t: t.is_clean)
-    # Показанное в секции YouTube Music не дублируем секцией SoundCloud:
-    # и оригинальные ytmusic-треки, и влитые туда SC-замены.
-    shown = {dedup_key(t) for t in ytmusic}
-    soundcloud_tracks = dedup_sequential(
-        [t for t in sc_all if dedup_key(t) not in shown], limit
-    )
+    soundcloud_tracks = dedup_sequential(sc_rest, limit)
 
     return ExternalSearchGrouped(ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 

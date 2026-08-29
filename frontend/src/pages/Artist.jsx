@@ -383,7 +383,11 @@ function Artist() {
                         onError={handleCoverError}
                       />
                       <div>
-                        <div className="track-name">{track.title}</div>
+                        <div className="track-name">
+                          {track.title}
+                          {track.is_explicit && <span className="track-badge track-badge-e">E</span>}
+                          {track.is_clean && <span className="track-badge track-badge-clean">CLEAN</span>}
+                        </div>
                         <ArtistLink artist={track.artist} className="track-artist" />
                         {/* Колонки «Альбом» и «Длительность» на узких экранах
                             скрыты — источник и хронометраж возвращаем сюда

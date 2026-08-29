@@ -27,7 +27,12 @@ from app.database import get_db
 from app.dependencies import get_current_active_user, get_current_user_optional
 from app.models import Playlist, Track, User, playlist_tracks
 from app.routers import soundcloud, ytdlp
-from app.routers.aggregate import dedup_key, dedup_sequential
+from app.routers.aggregate import (
+    _collapse_versions,
+    dedup_key,
+    dedup_sequential,
+    replace_censored,
+)
 from app.routers.tracks import get_or_create_external_track
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.schemas import (
@@ -156,10 +161,15 @@ async def _collect_tracks(
     # Библиотека занимает ключи первой — внешний дубль уже сохранённого трека
     # в список не попадёт.
     seen = {dedup_key(t) for t in local}
-    external = dedup_sequential(profile.get("tracks") or [], limit, seen)
-    external += dedup_sequential(
-        [t for t in sc if _by_this_artist(t, name)], limit, seen
+    # Цензура: ytmusic-версии (clean или explicit — YTM отдаёт цензурный звук
+    # и под флагом) замещаются той же записью из SoundCloud, см. replace_censored.
+    ytmusic = dedup_sequential(
+        _collapse_versions(profile.get("tracks") or []), limit, seen
     )
+    ytmusic, sc_rest = replace_censored(
+        ytmusic, _collapse_versions([t for t in sc if _by_this_artist(t, name)])
+    )
+    external = ytmusic + dedup_sequential(sc_rest, limit, seen)
 
     return profile, local, external
 
