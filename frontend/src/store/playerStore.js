@@ -27,6 +27,18 @@ function prefetchKeyFor(track) {
   return null
 }
 
+// Ключ идентификации трека для индикации лайка. У записей из БД (числовой
+// id/db_id) — стабильный db-ключ; у внешних (строчный id вида «ytmusic:...»)
+// — source + external_id. Нужен, чтобы залить сердечко ОПТИМИСТИЧНО ещё до
+// материализации внешнего трека в БД (см. toggleLikeForTrack).
+function trackLikeKey(track) {
+  if (!track) return null
+  if (typeof track.id === 'number') return `db:${track.id}`
+  if (typeof track.db_id === 'number') return `db:${track.db_id}`
+  const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+  return externalId ? `${track.source}:${externalId}` : null
+}
+
 // Готов ли трек к мгновенному старту: его резолв на бэке уже завершён, либо
 // резолв ему не нужен вовсе (локальный трек — prefetchKeyFor даёт null).
 function isTrackResolved(track) {
@@ -179,6 +191,10 @@ const usePlayerStore = create((set, get) => ({
   likedTrackIds: [],
   likedTracksLoaded: false,
   likedTracksLoading: false,
+  // Ключи внешних треков (trackLikeKey), чей лайк сейчас «летит»: трек ещё не
+  // материализован в БД, но сердечко уже должно быть залито. Пустеет по
+  // завершении — к тому моменту db-трек уже в likedTrackIds.
+  pendingLikeKeys: [],
   dislikedTrackIds: [],
   dislikedTracksLoaded: false,
   dislikedTracksLoading: false,
@@ -242,6 +258,49 @@ const usePlayerStore = create((set, get) => ({
       queue: state.queue.map((t) => (t.id === currentTrack.id ? merged : t)),
     }))
     return data.id
+  },
+
+  // Лайк трека «как он есть»: у записи из БД — мгновенный оптимистичный
+  // toggleTrackLike; внешнему треку сначала нужно материализоваться
+  // (POST /tracks/import), что занимает сетевой раундтрип. Чтобы кнопка
+  // отзывалась без задержки, ключ попадает в pendingLikeKeys ДО похода в
+  // сеть — сердечко зальётся сразу и откатится только при ошибке.
+  // onMaterialized вызывается с db_id сразу после импорта, чтобы вызывающая
+  // страница успела записать его в свой локальный список ДО снятия
+  // pending-ключа (иначе между ними проскакивал кадр с незалитым сердцем).
+  toggleLikeForTrack: async (track, onMaterialized = null) => {
+    if (!track) return null
+    const numericId = typeof track.id === 'number' ? track.id : null
+    const dbId = numericId ?? (typeof track.db_id === 'number' ? track.db_id : null)
+    if (dbId) {
+      await get().toggleTrackLike(dbId, track)
+      return dbId
+    }
+
+    const key = trackLikeKey(track)
+    if (!key) return null
+    if (get().pendingLikeKeys.includes(key)) return null // уже летит
+    set({ pendingLikeKeys: [...get().pendingLikeKeys, key] })
+    try {
+      const id = await get().materializeTrack(track)
+      if (!id) return null
+      // Лайкнут играющий сейчас трек — вшиваем db_id в него и в очередь
+      // (зеркалит materializeCurrentTrack): иначе следующий лайк/дизлайк
+      // этого же трека снова ждал бы материализации.
+      const state = get()
+      if (state.currentTrack && String(state.currentTrack.id) === String(track.id)) {
+        const merged = { ...state.currentTrack, db_id: id }
+        set((s) => ({
+          currentTrack: merged,
+          queue: s.queue.map((t) => (t.id === track.id ? merged : t)),
+        }))
+      }
+      onMaterialized?.(id)
+      await get().toggleTrackLike(id, track)
+      return id
+    } finally {
+      set((s) => ({ pendingLikeKeys: s.pendingLikeKeys.filter((k) => k !== key) }))
+    }
   },
 
   fetchLikedTracks: async () => {
@@ -1051,4 +1110,5 @@ export {
   invalidateFlowPreload,
   postRecommendationEvent,
   recordRecommendationImpression,
+  trackLikeKey,
 }

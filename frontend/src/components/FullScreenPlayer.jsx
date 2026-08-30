@@ -3,6 +3,7 @@ import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, P
 import {
   invalidateFlowPreload,
   postRecommendationEvent,
+  trackLikeKey,
   usePlayerStore,
 } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
@@ -72,11 +73,12 @@ function FullScreenPlayer() {
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
-  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
+  const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const dislikedTrackIds = usePlayerStore((s) => s.dislikedTrackIds)
   const fetchDislikedTracks = usePlayerStore((s) => s.fetchDislikedTracks)
   const toggleTrackDislike = usePlayerStore((s) => s.toggleTrackDislike)
-  const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
+  const materializeTrack = usePlayerStore((s) => s.materializeTrack)
   const karaokeMode = usePlayerStore((s) => s.karaokeMode)
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
@@ -189,8 +191,9 @@ function FullScreenPlayer() {
     postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
     invalidateFlowPreload()
     try {
-      const id = dbTrackId ?? (await materializeCurrentTrack())
-      if (id) await toggleTrackLike(id, currentTrack)
+      // Внешний трек материализуется внутри — сердечко зальётся сразу
+      // через pendingLikeKeys, не дожидаясь сети.
+      await toggleLikeForTrack(currentTrack)
     } catch (error) {
       console.error('Error toggling like:', error)
     } finally {
@@ -204,14 +207,22 @@ function FullScreenPlayer() {
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
+    // «Был ли дизлайк» решаем ДО сети: у трека без db_id метки быть не могло.
+    // Дизлайкаемый трек фиксируем до переключения — nextTrack() меняет
+    // currentTrack, а материализовать нужно именно СТАРЫЙ.
+    const wasDislikedBefore = dbTrackId
+      ? usePlayerStore.getState().dislikedTrackIds.includes(dbTrackId)
+      : false
+    const dislikedTrack = currentTrack
     postRecommendationEvent(currentTrack, isDisliked ? 'undislike' : 'dislike')
     invalidateFlowPreload()
+    // Уход на следующий трек — сразу, не дожидаясь материализации и сети:
+    // кнопка обязана отзываться мгновенно, сеть догонит в фоне.
+    if (!wasDislikedBefore) nextTrack()
     try {
-      const id = dbTrackId ?? (await materializeCurrentTrack())
+      const id = dbTrackId ?? (await materializeTrack(dislikedTrack))
       if (!id) return
-      const wasDisliked = usePlayerStore.getState().dislikedTrackIds.includes(id)
-      await toggleTrackDislike(id, currentTrack)
-      if (!wasDisliked) nextTrack()
+      await toggleTrackDislike(id, dislikedTrack)
     } catch (error) {
       console.error('Error toggling dislike:', error)
     } finally {
@@ -219,7 +230,11 @@ function FullScreenPlayer() {
     }
   }
 
-  const isLiked = dbTrackId ? likedTrackIds.includes(dbTrackId) : false
+  // Сердечко залито, если трек в likedTrackIds, ЛИБО его лайк сейчас летит
+  // (внешний трек до материализации: pendingLikeKeys).
+  const isLiked =
+    (dbTrackId ? likedTrackIds.includes(dbTrackId) : false) ||
+    pendingLikeKeys.includes(trackLikeKey(currentTrack))
   const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
 
   const dragOpacity = Math.max(0.4, 1 - dragY / 700)

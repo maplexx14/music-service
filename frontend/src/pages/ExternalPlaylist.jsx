@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
+import { usePlayerStore, trackIntentHandlers, trackLikeKey } from '../store/playerStore'
 import { Play, Plus, Heart } from 'lucide-react'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
@@ -28,7 +28,8 @@ function ExternalPlaylist() {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
-  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
+  const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
 
@@ -109,8 +110,11 @@ function ExternalPlaylist() {
   const handleToggleLike = async (track, e) => {
     e.stopPropagation()
     try {
-      const dbId = await ensureDbId(track)
-      await toggleTrackLike(dbId)
+      // Сердечко зальётся сразу (pendingLikeKeys в сторе), материализация
+      // внешнего трека и сам лайк летят в фоне.
+      await toggleLikeForTrack(track, (id) => {
+        setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: id } : t)))
+      })
     } catch (error) {
       console.error('Error toggling like:', error)
       toast.error('Не удалось обновить понравившиеся')
@@ -219,7 +223,9 @@ function ExternalPlaylist() {
               {visibleTracks.map((track, index) => {
                 const isCurrent = currentTrack?.id === track.id
                 const dbId = typeof track.db_id === 'number' ? track.db_id : null
-                const isLiked = dbId ? likedTrackIds.includes(dbId) : false
+                const isLiked =
+                  (dbId ? likedTrackIds.includes(dbId) : false) ||
+                  pendingLikeKeys.includes(trackLikeKey(track))
                 return (
                 <tr
                   key={track.id}

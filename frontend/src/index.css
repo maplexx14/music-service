@@ -132,6 +132,14 @@ body {
   flex-direction: column;
 }
 
+/* Мгновенный отклик кнопок на тач: без manipulation Safari держит тап
+   ~300 мс в ожидании второго (double-tap-to-zoom), и кнопка «нажимается»
+   с заметной задержкой. Пинч-зум страницы это не отключает. */
+button,
+[role='button'] {
+  touch-action: manipulation;
+}
+
 
 code {
   font-family: "Unbounded", sans-serif;

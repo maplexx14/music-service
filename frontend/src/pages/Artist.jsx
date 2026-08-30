@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Play, Plus, Heart } from 'lucide-react'
-import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
+import { usePlayerStore, trackIntentHandlers, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
@@ -90,7 +90,8 @@ function Artist() {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
-  const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
+  const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
+  const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
 
@@ -145,6 +146,9 @@ function Artist() {
   // онбординге) — оттуда его читают волна и рекомендации.
   const handleToggleArtistLike = async () => {
     if (liking) return
+    // Оптимистично: сердечко переключается сразу, сеть подтверждает в фоне.
+    const nextLiked = !artist.is_liked
+    setArtist((prev) => ({ ...prev, is_liked: nextLiked }))
     setLiking(true)
     try {
       const { data } = await api.post('/artists/like', { name: artist.name })
@@ -155,6 +159,8 @@ function Artist() {
           : `«${artist.name}» убран из понравившихся`,
       )
     } catch (error) {
+      // Откат оптимистичного состояния.
+      setArtist((prev) => ({ ...prev, is_liked: !nextLiked }))
       console.error('Error toggling artist like:', error)
       toast.error('Не удалось обновить понравившихся исполнителей')
     } finally {
@@ -205,7 +211,11 @@ function Artist() {
   const handleToggleLike = async (track, e) => {
     e.stopPropagation()
     try {
-      await toggleTrackLike(await ensureDbId(track))
+      // Сердечко зальётся сразу (pendingLikeKeys в сторе), материализация
+      // внешнего трека и сам лайк летят в фоне.
+      await toggleLikeForTrack(track, (id) => {
+        setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: id } : t)))
+      })
     } catch (error) {
       console.error('Error toggling like:', error)
       toast.error('Не удалось обновить понравившиеся')
@@ -355,7 +365,9 @@ function Artist() {
                     : typeof track.db_id === 'number'
                       ? track.db_id
                       : null
-                const isLiked = dbId !== null && likedTrackIds.includes(dbId)
+                const isLiked =
+                  (dbId !== null && likedTrackIds.includes(dbId)) ||
+                  pendingLikeKeys.includes(trackLikeKey(track))
                 const sourceLabel = SOURCE_LABEL[track.source]
                 return (
                   <tr
