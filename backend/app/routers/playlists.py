@@ -35,16 +35,26 @@ def _paginated_playlist_response(
     запросом, см. фронтовый пейджер и очередь плеера) могла бы отдать один
     трек дважды, а другой пропустить — у треков с равным play_count порядок
     между страницами не гарантирован.
+
+    Исключение — «Понравившиеся» (is_liked): там порядок — добавление
+    пользователем, свежий лайк сверху (тот же принцип, что у
+    /tracks/me/liked). Заигранность менялась бы при каждом прослушивании и
+    перетасовывала бы страницу; position назначается монотонно (max+1),
+    added_at страхует от старых строк с одинаковым position.
     """
+    if playlist.is_liked:
+        order = (
+            playlist_tracks.c.position.desc(),
+            playlist_tracks.c.added_at.desc(),
+            playlist_tracks.c.track_id.desc(),
+        )
+    else:
+        order = (Track.play_count.desc(), playlist_tracks.c.position, Track.id)
     tracks_query = (
         db.query(Track)
         .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
         .filter(playlist_tracks.c.playlist_id == playlist.id)
-        .order_by(
-            Track.play_count.desc(),
-            playlist_tracks.c.position,
-            Track.id,
-        )
+        .order_by(*order)
     )
     total = tracks_query.count()
     response.headers["X-Total-Count"] = str(total)

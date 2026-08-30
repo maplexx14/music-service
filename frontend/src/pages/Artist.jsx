@@ -11,6 +11,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { formatDuration } from '../utils/format'
+import { trackPopularity } from '../utils/popularity'
 import './PlaylistDetail.css'
 import './Artist.css'
 
@@ -70,9 +71,10 @@ function AlbumsRow({ title, albums }) {
   )
 }
 
-// Страница исполнителя: его треки одним плейлистом. Сначала то, что уже в
-// библиотеке, затем каталог YouTube Music, затем SoundCloud — порядок задаёт
-// бэк (см. routers/artists.py), фронт только склеивает списки в одну очередь.
+// Страница исполнителя: его треки одним плейлистом. Бэк отдаёт библиотеку и
+// каталоги YouTube Music / SoundCloud отдельными списками (см.
+// routers/artists.py), фронт склеивает их в одну очередь и сортирует по
+// популярности — см. fetchArtist.
 function Artist() {
   const { name } = useParams()
   const navigate = useNavigate()
@@ -124,7 +126,13 @@ function Artist() {
       setArtist(data)
       // Библиотека и внешние источники — одна очередь: пользователь видит
       // «все треки исполнителя» и слушает их подряд, не думая об источнике.
-      const all = [...(data.tracks || []), ...(data.external || [])]
+      // Порядок — по популярности: у внешних это метрика провайдера (views /
+      // playback_count), у треков медиатеки — наш счётчик; шкалы сведены
+      // одной кривой (trackPopularity). Сортировка стабильна, поэтому при
+      // равной популярности сохраняется порядок источников от бэка.
+      const all = [...(data.tracks || []), ...(data.external || [])].sort(
+        (a, b) => trackPopularity(b) - trackPopularity(a),
+      )
       setTracks(all)
       setAlbums(data.albums || [])
       // Прогреваем резолв верхушки — старт воспроизведения без паузы.

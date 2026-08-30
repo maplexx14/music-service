@@ -1,5 +1,8 @@
 """Порядок треков на странице плейлиста: по play_count, самое заигранное сверху.
 
+Исключение — «Понравившиеся»: там порядок добавления пользователя, свежий
+лайк сверху (см. _paginated_playlist_response).
+
 Порядок должен быть детерминированным и на границе страниц — страница
 подгружается тем же запросом со skip/limit (пейджер фронта и очередь плеера),
 и «плавающий» ORDER BY отдал бы один трек дважды, а другой пропустил.
@@ -69,7 +72,13 @@ def test_playlist_pagination_stable_with_equal_play_counts(client, db):
     assert len(set(ids)) == 6
 
 
-def test_liked_playlist_sorted_by_play_count(client, db):
+def test_liked_playlist_sorted_by_add_order(client, db):
+    """«Понравившиеся» — по добавлению, а не по заигранности.
+
+    Лайки ставятся в порядке 2 → 90 → 40: порядок добавления отличим от
+    сортировки по play_count ([90, 40, 2]) — тест ловит возврат к старому
+    ORDER BY. Свежий лайк сверху, как и в /tracks/me/liked.
+    """
     create_user(db, "liker")
     headers = auth_headers(client, "liker")
 
@@ -88,4 +97,4 @@ def test_liked_playlist_sorted_by_play_count(client, db):
 
     resp = client.get("/api/playlists/me/liked", headers=headers)
     assert resp.status_code == 200, resp.text
-    assert [t["play_count"] for t in resp.json()["tracks"]] == [90, 40, 2]
+    assert [t["play_count"] for t in resp.json()["tracks"]] == [40, 90, 2]
