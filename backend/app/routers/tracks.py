@@ -1041,24 +1041,24 @@ def dislike_track(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    # Без pg-специфичного upsert (как в /skip): дизлайк — редкое ручное
-    # действие, гонки параллельных нажатий тут нет, зато код работает и на
-    # SQLite (тесты).
-    updated = db.execute(
-        user_track_skips.update()
-        .where(
-            (user_track_skips.c.user_id == current_user.id) &
-            (user_track_skips.c.track_id == track_id)
-        )
-        .values(disliked=True, last_skipped=func.now())
-    ).rowcount
-    if not updated:
-        db.execute(user_track_skips.insert().values(
-            user_id=current_user.id,
-            track_id=track_id,
-            skip_count=1,
-            disliked=True,
-        ))
+    # Атомарный upsert — как в /skip и /play. Ручное действие тоже гоняется:
+    # двойной клик или ретрай фронтенда дают два параллельных запроса, и
+    # update-then-insert на обоих видит rowcount 0 и оба делают INSERT —
+    # второй ловит UniqueViolation по составному ключу. _dialect_insert
+    # держит и SQLite (тесты), и PostgreSQL.
+    stmt = _dialect_insert(db, user_track_skips).values(
+        user_id=current_user.id,
+        track_id=track_id,
+        skip_count=1,
+        disliked=True,
+        last_skipped=func.now(),
+    ).on_conflict_do_update(
+        index_elements=[user_track_skips.c.user_id, user_track_skips.c.track_id],
+        # При существующей строке (скип до дизлайка) skip_count не трогаем —
+        # как в старом UPDATE.
+        set_={"disliked": True, "last_skipped": func.now()},
+    )
+    db.execute(stmt)
 
     liked_playlist = get_or_create_liked_playlist(db, current_user)
     db.execute(playlist_tracks.delete().where(
