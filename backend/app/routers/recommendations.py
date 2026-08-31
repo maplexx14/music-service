@@ -1441,10 +1441,16 @@ def _compute_recommendations(
             # прошли в limit*8 по популярности. Иначе плейлисты с нишевыми
             # артистами (SoundCloud, малая база) систематически игнорируются.
             curated_in_pool = {t.id for t in pool}
-            # Гарантируем треки курируемых артистов: делаем отдельный запрос
-            # по каждому артисту из плейлистов или явных предпочтений, т.к. общий
-            # `.in_(artist_keys)` с 97+ элементами (кириллица/юникод) может
-            # молча не матчить отдельных артистов.
+            # Гарантируем треки курируемых артистов. SQL здесь только
+            # предфильтр: lower() в SQLite не опускает кириллицу, а у
+            # soundcloud-треков реальный артист живёт в названии — поэтому
+            # авторитетная проверка ниже в Python через artist_key, и общий
+            # `.in_` с 97+ ключами ничего не «теряет»: трек, прошедший бы
+            # старый per-artist фильтр, проходит и этот (lower(artist)==pk
+            # покрывается in_, soundcloud — тем же OR). Раньше на каждого
+            # приоритетного артиста уходил отдельный запрос с неотиндек-
+            # сируемым NOT IN поверх всей таблицы — десятки full-scan'ов
+            # на один пересчёт рекомендаций.
             _played_liked_keys = {
                 artist_key(effective_track_artist_title(t)[0]) for t, _ in liked
             }
@@ -1453,15 +1459,24 @@ def _compute_recommendations(
                 for t, _, _ in played
             }
             _new_priority_keys = priority_artist_keys - _played_liked_keys
-            for pk in _new_priority_keys:
-                extra = db.query(Track).filter(
-                    or_(func.lower(Track.artist) == pk, Track.source == "soundcloud"),
-                    ~Track.id.in_(exclude_select),
-                ).order_by(desc(Track.play_count)).all()
+            if _new_priority_keys:
+                # Порядок по play_count не нужен: ниже пул всё равно
+                # перефильтровывается и ранжируется заново в Python.
+                extra = (
+                    db.query(Track)
+                    .filter(
+                        or_(
+                            func.lower(Track.artist).in_(_new_priority_keys),
+                            Track.source == "soundcloud",
+                        ),
+                        ~Track.id.in_(exclude_select),
+                    )
+                    .all()
+                )
                 for t in extra:
                     if (
                         t.id not in curated_in_pool
-                        and artist_key(effective_track_artist_title(t)[0]) == pk
+                        and artist_key(effective_track_artist_title(t)[0]) in _new_priority_keys
                     ):
                         pool.append(t)
                         curated_in_pool.add(t.id)
