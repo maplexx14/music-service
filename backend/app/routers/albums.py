@@ -10,6 +10,7 @@
 routers/soundcloud.py), и когда появится второй провайдер альбомов, добавится
 ветка, а не второй эндпоинт.
 """
+import asyncio
 import logging
 from typing import List
 
@@ -71,6 +72,16 @@ async def save_album_to_library(
     if not tracks:
         raise HTTPException(status_code=404, detail="В этом альбоме нет треков")
 
+    # Материализация треков — чисто sync (SQLAlchemy + commit'ы на каждый трек);
+    # в async-хендлере это блокировало бы event loop на всём цикле. Уходит в
+    # тредпул (см. recommendations.py — тот же приём).
+    return await asyncio.to_thread(
+        _save_album_tracks, db, current_user, album, tracks
+    )
+
+
+def _save_album_tracks(db: Session, current_user: User, album, tracks) -> AlbumSaveResponse:
+    """Материализует треки альбома в плейлист. Sync-тело save_album_to_library."""
     playlist = (
         db.query(Playlist)
         .filter(Playlist.owner_id == current_user.id, Playlist.name == album.title)

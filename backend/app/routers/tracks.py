@@ -158,8 +158,13 @@ async def stream_track(
     Stream audio file with proper headers for audio playback.
     Supports range requests for seeking.
     """
-    # смотрим по базе данных
-    track = db.query(Track).filter(Track.id == track_id).first()
+    # смотрим по базе данных. Хендлер async (дальше async-стриминг из MinIO),
+    # поэтому sync-запрос уходит в тредпул: блокирующий SQLAlchemy в event
+    # loop подвешивал ВСЕ запросы на время каждого lookup'а (см. рекомендации —
+    # там тот же приём с run_in_executor).
+    track = await asyncio.to_thread(
+        db.query(Track).filter(Track.id == track_id).first
+    )
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 

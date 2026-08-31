@@ -143,13 +143,20 @@ async def _collect_tracks(
     страница обязана открываться даже когда провайдер недоступен — библиотека
     всё равно покажется.
     """
-    local = _local_tracks(db, name, limit)
-
-    profile, sc = await asyncio.gather(
+    # Локальный запрос — sync SQLAlchemy, в event loop он блокировал бы все
+    # запросы на время внешних вызовов. Уходит в тредпул и бежит ПАРАЛЛЕЛЬНО
+    # с ytmusic/soundcloud (те не трогают эту сессию, так что конфликтов нет):
+    # страница артиста раньше ждала сек External API + запрос последовательно.
+    local, profile, sc = await asyncio.gather(
+        asyncio.to_thread(_local_tracks, db, name, limit),
         ytdlp.ytmusic_artist_profile(request, name, limit=limit),
         soundcloud.search_soundcloud(request, name, limit=limit),
         return_exceptions=True,
     )
+    # Ошибка БД — фатальна для страницы (в отличие от ошибок провайдеров):
+    # перебрасываем как есть.
+    if isinstance(local, BaseException):
+        raise local
 
     if isinstance(profile, Exception):
         logger.warning("ytmusic artist profile failed for %s: %s", name, profile)
@@ -231,7 +238,11 @@ async def artist_page(
     )
 
     canonical = profile.get("name") or display
-    saved = _saved_playlist(db, current_user, canonical) if current_user else None
+    saved = (
+        await asyncio.to_thread(_saved_playlist, db, current_user, canonical)
+        if current_user
+        else None
+    )
 
     return ArtistPageResponse(
         name=canonical,
@@ -244,6 +255,24 @@ async def artist_page(
         albums=profile.get("albums") or [],
         is_liked=_is_liked(current_user, canonical) or _is_liked(current_user, display),
         playlist_id=saved.id if saved else None,
+    )
+
+
+def _search_local_artists(db: Session, term: str) -> List[Track]:
+    """Локальная часть поиска артистов. Sync-тело search_artists."""
+    solo, collab = _library_spellings(db, term)
+    spellings = solo + collab
+    return (
+        db.query(Track)
+        .filter(
+            or_(
+                Track.artist.ilike(_like_pattern(term), escape="\\"),
+                Track.artist.in_(spellings) if spellings else false(),
+            )
+        )
+        .order_by(Track.play_count.desc(), Track.created_at.desc())
+        .limit(60)
+        .all()
     )
 
 
@@ -269,20 +298,10 @@ async def search_artists(
     # запрос «Земфира» пометка «в медиатеке» должна появиться и тогда, когда
     # треки лежат под именем «Zemfira». Для куска слова («зем») список
     # написаний пуст — там работает один ilike.
-    solo, collab = _library_spellings(db, term)
-    spellings = solo + collab
-    rows = (
-        db.query(Track)
-        .filter(
-            or_(
-                Track.artist.ilike(_like_pattern(term), escape="\\"),
-                Track.artist.in_(spellings) if spellings else false(),
-            )
-        )
-        .order_by(Track.play_count.desc(), Track.created_at.desc())
-        .limit(60)
-        .all()
-    )
+    # Вся локальная часть — sync SQLAlchemy, уходит в тредпул одним куском
+    # (второй query зависит от spellings, параллелить внутри нет смысла):
+    # в event loop блокировала бы поиск по каждому нажатию клавиши.
+    rows = await asyncio.to_thread(_search_local_artists, db, term)
 
     out: List[ArtistSummary] = []
     # Ключ карточки — translit_key, а не имя: «Земфира» из медиатеки и
@@ -386,6 +405,23 @@ async def save_artist_playlist(
         (t.cover_url for t in [*local, *external] if t.cover_url), None
     )
 
+    # Материализация треков — чисто sync (SQLAlchemy + commit'ы на каждый трек);
+    # в async-хендлере это блокировало бы event loop на всём цикле. Уходит в
+    # тредпул (см. albums.py — тот же приём).
+    return await asyncio.to_thread(
+        _save_artist_tracks, db, current_user, canonical, cover, local, external
+    )
+
+
+def _save_artist_tracks(
+    db: Session,
+    current_user: User,
+    canonical: str,
+    cover: Optional[str],
+    local: List[Track],
+    external: List[ExternalTrackResponse],
+) -> ArtistSaveResponse:
+    """Материализует треки артиста в плейлист. Sync-тело save_artist_playlist."""
     playlist = _saved_playlist(db, current_user, canonical)
     created = playlist is None
     if created:

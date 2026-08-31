@@ -33,7 +33,15 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            git fetch --prune origin
+            # GitHub транзиентно режет git-протокол с датацентровых IP
+            # (secondary rate-limit): один fetch падает, через минуту — работает.
+            # Ретраи с паузой превращают разовый обрыв в задержку деплоя,
+            # а не в его остановку. Креды не трогаем: репозиторий публичный.
+            for i in 1 2 3 4 5; do
+              git fetch --prune origin && break
+              echo "git fetch failed (attempt $i/5), retrying in 60s..."
+              sleep 60
+            done
             # Жёсткая синхронизация вместо `merge --ff-only`: main в этом
             # репозитории переписывается force-push'ем, после чего локальная
             # ветка сервера расходится с origin/main и ff-merge падает с
