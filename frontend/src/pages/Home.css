@@ -106,7 +106,8 @@
   border-radius: 12px;
   padding: 40px 32px;
   margin-bottom: 32px;
-  min-height: 300px;
+  /* Контейнер потока занимает большую часть экрана и центрирован. */
+  min-height: 70vh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -138,8 +139,6 @@
 }
 
 .wave-widget {
-  width: 220px;
-  height: 140px;
   border-radius: 999px;
   position: relative;
   z-index: 2;
@@ -232,8 +231,8 @@
 }
 
 .wave-gif-button img {
-  width: 200px;
-  height: 200px;
+  width: min(280px, 30vw);
+  height: min(280px, 30vw);
   display: block;
   border-radius: 50%;
 }
@@ -636,11 +635,6 @@
 
   .hero-grainient {
     border-radius: 0;
-  }
-
-  .wave-widget {
-    width: auto;
-    height: auto;
   }
 
   .wave-gif-button img {
