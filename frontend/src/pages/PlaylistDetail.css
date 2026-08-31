@@ -44,6 +44,10 @@
   color: #ffffff;
   margin-bottom: 16px;
   line-height: 1;
+  /* Unbounded — широкий дисплейный гротеск: на 72px межбуквенные просветы
+     читаются рыхло, tightened по правилу «крупный кегль — отрицательный
+     трекинг». */
+  letter-spacing: -0.02em;
 }
 
 .playlist-description {
@@ -158,6 +162,11 @@
 
 .track-row:hover {
   background-color: #1a1a1a;
+}
+
+/* Строка трека — тоже «кнопка»: подтверждаём нажатие сразу. */
+.track-row:active {
+  background-color: #222;
 }
 
 .track-row td {
@@ -404,6 +413,10 @@
   .load-more-btn:hover:not(:disabled) {
     transform: scale(1.03);
   }
+}
+
+.load-more-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .load-more-btn:disabled {

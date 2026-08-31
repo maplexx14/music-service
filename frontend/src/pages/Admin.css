@@ -15,6 +15,7 @@
   margin: 0;
   font-size: 28px;
   color: #ffffff;
+  letter-spacing: -0.01em;
 }
 
 .admin-subtitle {
@@ -30,6 +31,17 @@
   border-radius: 999px;
   font-size: 14px;
   cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+
+.admin-refresh:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.admin-refresh:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  transform: scale(0.97);
 }
 
 .admin-section-title {
@@ -144,6 +156,17 @@
   border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
+  transition: background var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+
+.admin-delete:hover:not(:disabled) {
+  background: #ff6b6d;
+}
+
+.admin-delete:active:not(:disabled) {
+  background: #e03e40;
+  transform: scale(0.97);
 }
 
 .admin-delete:disabled {

@@ -9,6 +9,7 @@
   font-size: 32px;
   font-weight: bold;
   color: #ffffff;
+  letter-spacing: -0.01em;
 }
 
 .create-playlist-btn {
@@ -205,6 +206,10 @@
 
 .playlist-card:hover {
   background-color: #282828;
+}
+
+.playlist-card:active {
+  transform: scale(0.98);
 }
 
 @media (hover: hover) and (pointer: fine) {

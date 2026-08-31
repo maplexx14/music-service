@@ -39,6 +39,8 @@
   color: #ffffff;
   margin-bottom: 16px;
   line-height: 1;
+  /* Крупный кегль — отрицательный трекинг (Unbounded широкий). */
+  letter-spacing: -0.02em;
 }
 
 .liked-meta {
@@ -162,6 +164,10 @@
 
 .track-row:hover {
   background-color: #1a1a1a;
+}
+
+.track-row:active {
+  background-color: #222;
 }
 
 .track-row td {
@@ -355,6 +361,10 @@
   .load-more-btn:hover:not(:disabled) {
     transform: scale(1.03);
   }
+}
+
+.load-more-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .load-more-btn:disabled {

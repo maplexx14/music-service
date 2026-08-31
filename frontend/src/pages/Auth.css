@@ -26,6 +26,7 @@
   font-weight: bold;
   color: #ffffff;
   margin-bottom: 8px;
+  letter-spacing: -0.01em;
 }
 
 .auth-header p {
@@ -143,6 +144,11 @@
 .auth-button.secondary:hover:not(:disabled) {
   background-color: #2a2a2a;
   border-color: #b3b3b3;
+}
+
+.auth-button.secondary:active:not(:disabled) {
+  background-color: #222;
+  transform: scale(0.98);
 }
 
 .success-message {

@@ -59,6 +59,11 @@
   background: rgba(255, 255, 255, 0.1);
 }
 
+/* Сегмент поднимается от нажатия — отклик мгновенный, на pointer-down. */
+.home-tab-card:active::after {
+  background: rgba(255, 255, 255, 0.14);
+}
+
 .home-tab-icon {
   width: 44px;
   height: 44px;
@@ -326,6 +331,12 @@
   background-color: #282828;
 }
 
+/* Отклик в момент нажатия: тач-устройства не имеют hover, без :active
+   нажатие на карточку никак не подтверждается до перехода. */
+.track-card:active {
+  transform: scale(0.98);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .track-card:hover {
     transform: translateY(-4px);
@@ -397,6 +408,10 @@
 
 .playlist-card:hover {
   background-color: #282828;
+}
+
+.playlist-card:active {
+  transform: scale(0.98);
 }
 
 @media (hover: hover) and (pointer: fine) {

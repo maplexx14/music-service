@@ -63,6 +63,10 @@
   background-color: #282828;
 }
 
+.album-card:active {
+  transform: scale(0.98);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .album-card:hover {
     transform: translateY(-4px);

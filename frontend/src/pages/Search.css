@@ -20,6 +20,12 @@
   background-color: #222;
 }
 
+/* Кликнув в поле, пользователь должен видеть каретку сразу —
+   caret-color в акценте подчёркивает фокус даже до рамки. */
+.search-input::placeholder {
+  color: #7a7a7a;
+}
+
 .search-results {
   display: flex;
   flex-direction: column;
@@ -51,12 +57,18 @@
   background-color: #181818;
   border-radius: 8px;
   cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out);
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
   min-width: 0;
 }
 
 .track-item:hover {
   background-color: #282828;
+}
+
+/* Отклик в момент нажатия, не после отпускания. */
+.track-item:active {
+  transform: scale(0.99);
 }
 
 .track-item-cover {
@@ -148,7 +160,8 @@
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out);
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
   /* Карточка живёт в карусели: ширину задаёт лента, а содержимое не должно
      её распирать. */
   min-width: 0;
@@ -156,6 +169,10 @@
 
 .playlist-item:hover {
   background-color: #282828;
+}
+
+.playlist-item:active {
+  transform: scale(0.98);
 }
 
 .playlist-item-cover {
@@ -211,11 +228,16 @@
   background-color: #181818;
   border-radius: 8px;
   cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out);
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
 }
 
 .user-item:hover {
   background-color: #282828;
+}
+
+.user-item:active {
+  transform: scale(0.98);
 }
 
 .user-avatar {
@@ -273,6 +295,7 @@
   font-size: 32px;
   color: #ffffff;
   margin-bottom: 16px;
+  letter-spacing: -0.01em;
 }
 
 @media (max-width: 768px) {
@@ -332,11 +355,16 @@
   text-align: center;
   text-decoration: none;
   color: inherit;
-  transition: background-color var(--duration-base) var(--ease-out);
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
 }
 
 .artist-card:hover {
   background-color: #282828;
+}
+
+.artist-card:active {
+  transform: scale(0.97);
 }
 
 .artist-card-cover {

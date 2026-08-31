@@ -140,6 +140,17 @@ button,
   touch-action: manipulation;
 }
 
+/* Единый клавиатурный фокус: контур появляется только при навигации с
+   клавиатуры (не по клику/тапу). Компоненты со своим focus-visible
+   перебивают это правило за счёт специфичности класса. */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
 
 code {
   font-family: "Unbounded", sans-serif;

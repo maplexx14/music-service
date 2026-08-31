@@ -7,6 +7,7 @@
   font-weight: bold;
   color: #ffffff;
   margin-bottom: 6px;
+  letter-spacing: -0.01em;
 }
 
 .settings-header p {
@@ -107,7 +108,7 @@
   inset: 0;
   background: #2a2a33;
   border-radius: 999px;
-  transition: background 0.2s ease;
+  transition: background var(--duration-base) var(--ease-out);
 }
 
 .settings-toggle-slider::before {
@@ -119,7 +120,15 @@
   top: 3px;
   border-radius: 50%;
   background: #ffffff;
-  transition: transform 0.2s ease;
+  /* Быстрый разгон, мягкий докат — характер тумблера, а не линейное ease. */
+  transition: transform var(--duration-base) var(--ease-out);
+}
+
+/* Реальный input невидим (opacity:0): без этого фокус с клавиатуры
+   вообще никак не подсвечивал тумблер. */
+.settings-toggle input:focus-visible + .settings-toggle-slider {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {
@@ -292,6 +301,11 @@
 
 .settings-save-btn:hover:not(:disabled) {
   background: var(--brand-accent-hover);
+}
+
+.settings-save-btn:active:not(:disabled) {
+  background: var(--brand-accent-active);
+  transform: scale(0.98);
 }
 
 .settings-save-btn:disabled {
