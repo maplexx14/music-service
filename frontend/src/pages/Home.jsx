@@ -274,37 +274,42 @@ function Home() {
               <span>{(user?.username || 'U').charAt(0).toUpperCase()}</span>
             )}
           </button>
-          {isProfileMenuOpen && (
-            <div className="mobile-profile-menu" role="menu">
-              <Link
-                to="/settings"
-                className="mobile-profile-item"
-                role="menuitem"
-                onClick={() => setIsProfileMenuOpen(false)}
-              >
-                <Settings size={20} />
-                Настройки
-              </Link>
-              <Link
-                to="/admin"
-                className="mobile-profile-item"
-                role="menuitem"
-                onClick={() => setIsProfileMenuOpen(false)}
-              >
-                <Shield size={20} />
-                Админ
-              </Link>
-              <button
-                type="button"
-                className="mobile-profile-item"
-                role="menuitem"
-                onClick={handleLogout}
-              >
-                <LogOut size={20} />
-                Выйти
-              </button>
-            </div>
-          )}
+          <div
+            className="mobile-profile-menu"
+            role="menu"
+            data-open={isProfileMenuOpen}
+            // React 18 не знает boolean-атрибут inert: true он просто
+            // выкинет с warning. Пустая строка попадает в DOM как inert="".
+            inert={!isProfileMenuOpen ? '' : undefined}
+          >
+            <Link
+              to="/settings"
+              className="mobile-profile-item"
+              role="menuitem"
+              onClick={() => setIsProfileMenuOpen(false)}
+            >
+              <Settings size={20} />
+              Настройки
+            </Link>
+            <Link
+              to="/admin"
+              className="mobile-profile-item"
+              role="menuitem"
+              onClick={() => setIsProfileMenuOpen(false)}
+            >
+              <Shield size={20} />
+              Админ
+            </Link>
+            <button
+              type="button"
+              className="mobile-profile-item"
+              role="menuitem"
+              onClick={handleLogout}
+            >
+              <LogOut size={20} />
+              Выйти
+            </button>
+          </div>
         </div>
       </div>
       <div className="hero-section">
@@ -410,7 +415,7 @@ function Home() {
 
       {activeTab === 'home' ? (
         <>
-          <div className="content-section">
+          <div className="content-section content-section--tab-fade">
             <h2 className="section-title">Рекомендуемые треки</h2>
             <Carousel
               items={recommendations.tracks}
@@ -426,7 +431,7 @@ function Home() {
           </div>
 
           {soundCloudPlaylists.length > 0 && (
-            <div className="content-section">
+            <div className="content-section content-section--tab-fade">
               <h2 className="section-title">Плейлисты для вас</h2>
               <Carousel
                 items={soundCloudPlaylists}
@@ -491,7 +496,7 @@ function Home() {
           )} */}
         </>
       ) : (
-        <div className="content-section">
+        <div className="content-section content-section--tab-fade">
           <h2 className="section-title">История прослушиваний</h2>
           {historyLoading ? (
             <Spinner />

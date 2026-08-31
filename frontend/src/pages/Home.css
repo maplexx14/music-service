@@ -62,6 +62,7 @@
 /* Сегмент поднимается от нажатия — отклик мгновенный, на pointer-down. */
 .home-tab-card:active::after {
   background: rgba(255, 255, 255, 0.14);
+  transition-duration: 100ms;
 }
 
 .home-tab-icon {
@@ -209,6 +210,7 @@
 
 .wave-title:active {
   transform: translateY(0) scale(0.97);
+  transition-duration: 100ms;
 }
 
 .wave-gif-button {
@@ -233,6 +235,13 @@
   .wave-gif-button:hover {
     transform: translateY(-1px);
   }
+}
+
+/* Отклик нажатия: кнопка потока с GIF подтверждает нажатие сразу,
+   без ожидания hover (на таче hover нет). */
+.wave-gif-button:active {
+  transform: scale(0.97);
+  transition-duration: 100ms;
 }
 
 .wave-gif-button img {
@@ -278,6 +287,18 @@
   margin-bottom: 48px;
 }
 
+/* Смена вкладки Главная ⇄ История: короткий fade подменяемой секции.
+   Частое действие — только opacity, 150ms, без движения и stagger. */
+.content-section--tab-fade {
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+@starting-style {
+  .content-section--tab-fade {
+    opacity: 0;
+  }
+}
+
 .section-title {
   font-size: var(--text-xl);
   font-weight: bold;
@@ -298,18 +319,17 @@
   to { opacity: 1; }
 }
 
+/* Секция с fade-контейнером: карточки входят без собственной задержки —
+   timing задаёт контейнер. */
+.content-section--tab-fade .tracks-grid > *,
+.content-section--tab-fade .playlists-grid > * {
+  animation: none;
+}
+
 .tracks-grid > *,
 .playlists-grid > * {
   animation: cardFadeIn var(--duration-base) var(--ease-out) backwards;
 }
-
-.tracks-grid > *:nth-child(1), .playlists-grid > *:nth-child(1) { animation-delay: 0ms; }
-.tracks-grid > *:nth-child(2), .playlists-grid > *:nth-child(2) { animation-delay: 40ms; }
-.tracks-grid > *:nth-child(3), .playlists-grid > *:nth-child(3) { animation-delay: 80ms; }
-.tracks-grid > *:nth-child(4), .playlists-grid > *:nth-child(4) { animation-delay: 120ms; }
-.tracks-grid > *:nth-child(5), .playlists-grid > *:nth-child(5) { animation-delay: 160ms; }
-.tracks-grid > *:nth-child(6), .playlists-grid > *:nth-child(6) { animation-delay: 200ms; }
-.tracks-grid > *:nth-child(n+7), .playlists-grid > *:nth-child(n+7) { animation-delay: 240ms; }
 
 .track-card {
   background-color: #181818;
@@ -332,9 +352,11 @@
 }
 
 /* Отклик в момент нажатия: тач-устройства не имеют hover, без :active
-   нажатие на карточку никак не подтверждается до перехода. */
+   нажатие на карточку никак не подтверждается до перехода. Вход —
+   мгновенный (100ms), возврат — базовые 200ms. */
 .track-card:active {
   transform: scale(0.98);
+  transition-duration: 100ms;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -412,6 +434,7 @@
 
 .playlist-card:active {
   transform: scale(0.98);
+  transition-duration: 100ms;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -485,7 +508,7 @@
   z-index: 20;
   /* Вырастает от аватара сверху-справа. */
   transform-origin: top right;
-  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), display var(--duration-fast) allow-discrete;
 }
 
 @starting-style {
@@ -493,6 +516,14 @@
     opacity: 0;
     transform: scale(0.96);
   }
+}
+
+/* Закрытое меню: display-переход ниже даёт и выходу проиграть те же
+   150ms — элемент остаётся в DOM до конца анимации. */
+.mobile-profile-menu[data-open="false"] {
+  opacity: 0;
+  transform: scale(0.96);
+  display: none;
 }
 
 .mobile-profile-item {
