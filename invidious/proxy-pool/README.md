@@ -100,8 +100,10 @@ companion вообще без работающего egress до следующ�
 
 ## Требования к прокси
 
-**HTTP-прокси с CONNECT, не SOCKS5.** Companion (Deno-fetch) через
-`HTTPS_PROXY` понимает только HTTP. Проверить адрес до внесения в список:
+**HTTP-прокси с CONNECT, не SOCKS5.** Companion читает переменную `PROXY`
+(собственная настройка `networking.proxy`, см. `config.example.toml` в его
+репозитории) и передаёт её в `Deno.createHttpClient`. Проверить адрес до
+внесения в список:
 
 ```bash
 curl -s --max-time 15 -x http://USER:PASS@IP:PORT https://api.ipify.org
@@ -174,18 +176,22 @@ journalctl -u invidious-proxy-rotate -n 50   # что делала автома�
 
 ```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.proxy.yml config \
-  | grep -A2 HTTPS_PROXY
+  | grep -A2 PROXY
 ```
 
-2. **Обязательная проверка допущения.** Вся схема держится на том, что
-   Deno-fetch внутри companion уважает `HTTPS_PROXY`. Если вывод совпадёт с IP
-   сервера, а не прокси, переменные игнорируются и нужен прозрачный перехват
-   (см. ниже):
+2. **Обязательная проверка.** Companion применяет прокси только через свою
+   переменную `PROXY` (в `active.env` её пишет `rotate.sh`); в логе при старте
+   она должна попасть в конфиг:
 
 ```bash
-docker run --rm -e HTTPS_PROXY="$(sed -n 's/^HTTPS_PROXY=//p' proxy-pool/active.env)" \
-  denoland/deno:alpine eval 'console.log(await (await fetch("https://api.ipify.org")).text())'
+docker logs invidious-invidious-companion-1 2>&1 | grep -m1 'Loaded Configuration'
 ```
+
+   В `"networking": { "proxy": ... }` должен быть адрес активного прокси.
+   Раньше схема держалась на допущении, что Deno-fetch уважает стандартные
+   `HTTPS_PROXY`/`HTTP_PROXY` — оно не подтвердилось (companion передаёт в
+   fetch собственный клиент с прокси только из `PROXY`), из-за чего трафик
+   мог молча ходить с адреса VPS при любой ротации.
 
 3. Резолв реально работает (то же, что дёргает бэкенд):
 
@@ -231,11 +237,13 @@ PO-token скрипт не может. Поэтому возможен случ�
 генерируется с режимом 0600. Пароли в журнал не попадают — логируется только
 `ip:port`.
 
-## Если прокси-переменные не работают
+## Если переменная PROXY не работает
 
-Нужен прозрачный перехват вместо `HTTPS_PROXY`: контейнер-шлюз
-(redsocks/gluetun-подобный) и `network_mode: "service:<шлюз>"` у companion —
-весь его egress уйдёт через шлюз независимо от поддержки прокси в рантайме.
-Логика ротации при этом не меняется: «проверить → сменить выход → перевыпустить
-сессию» не зависит от способа доставки трафика, меняется только то, что
-`rotate.sh` переписывает конфиг шлюза вместо `active.env`.
+Путь через `PROXY` — штатный для companion (`Deno.createHttpClient`), но если
+в вашей версии образа он вдруг не применился (в логе `"networking": {"proxy":
+null}` при заполненном `active.env`), нужен прозрачный перехват:
+контейнер-шлюз (redsocks/gluetun-подобный) и `network_mode: "service:<шлюз>"`
+у companion — весь его egress уйдёт через шлюз независимо от поддержки прокси
+в рантайме. Логика ротации при этом не меняется: «проверить → сменить выход →
+перевыпустить сессию» не зависит от способа доставки трафика, меняется только
+то, что `rotate.sh` переписывает конфиг шлюза вместо `active.env`.

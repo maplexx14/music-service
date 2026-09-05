@@ -258,10 +258,11 @@ write_active() {
     printf '# Файл ГЕНЕРИРУЕТСЯ rotate.sh — правки затираются при ротации.\n'
     printf '# Менять выход: rotate.sh --activate N (список — proxies.list).\n'
     printf '# Выход: %s, назначен %s\n' "$label" "$(date -Is)"
-    # Регистр дублируется: разные рантаймы смотрят на разный вариант, дешевле
-    # задать оба, чем отлаживать «прокси игнорируется».
-    printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
-      "$url" "$url" "$url" "$url"
+    # PROXY — собственная переменная companion (networking.proxy в config.ts):
+    # именно её он передаёт в Deno.createHttpClient, стандартные HTTP(S)_PROXY
+    # его код не читает. Их оставляем для Deno-рантайма и консистентности.
+    printf 'PROXY=%s\nHTTP_PROXY=%s\nHTTPS_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\n' \
+      "$url" "$url" "$url" "$url" "$url"
   } >"$tmp"
   # mv, а не запись на месте: compose не должен прочитать файл на середине.
   mv "$tmp" "$ACTIVE"
@@ -278,7 +279,7 @@ write_active_direct() {
     printf '# Direct-режим: в пуле не осталось прокси, который обслуживает YouTube.\n'
     printf '# Файл ГЕНЕРИРУЕТСЯ rotate.sh — правки затираются при ротации.\n'
     printf '# Companion работает с адреса VPS. Возврат в пул: rotate.sh --activate N.\n'
-    printf '#HTTP_PROXY=\n#HTTPS_PROXY=\n#http_proxy=\n#https_proxy=\n'
+    printf '#HTTP_PROXY=\n#HTTPS_PROXY=\n#http_proxy=\n#https_proxy=\n#PROXY=\n'
   } >"$tmp"
   mv "$tmp" "$ACTIVE"
 }
@@ -463,7 +464,9 @@ case "${1:-}" in
     [[ "$n" =~ ^[0-9]+$ && "$n" -ge 1 ]] || die "usage: $0 --activate N   (N — номер строки в $LIST, с 1)"
     entry="$(parse_list | sed -n "${n}p")"
     [[ -n "$entry" ]] || die "в списке нет прокси №${n}"
-    IFS=$'\t' read -r label url <<<"$entry"
+    # Третье поле (лимит) в _ : без него bash кладёт в url остаток строки
+    # ЦЕЛИКОМ — вместе с табом и лимитом, и active.env получал битый URL.
+    IFS=$'\t' read -r label url _ <<<"$entry"
     # Проверяем, но не блокируем: раз выход назначен руками, решение за
     # оператором — скрипт лишь предупреждает, что адрес выглядит битым.
     if verify_proxy "$url"; then
