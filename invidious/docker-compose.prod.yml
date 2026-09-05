@@ -50,6 +50,21 @@ services:
       - ./companion-cookies.env
     environment:
       - SERVER_SECRET_KEY=qXoabG0Gkpo4xTyS
+      # Ретраи сетевых вызовов к YouTube. По умолчанию у companion выключены:
+      # ОДИН transient-обрыв (TypeError: fetch failed на валидационном HEAD к
+      # googlevideo — DNS-дрожь/обрыв соединения) бракует ВЕСЬ сминченный
+      # PO-token, и сессия перевыпускается только кроном раз в 5 минут.
+      # Наблюдали 2026-09-06: форматы YouTube отдавал, CDN с хоста отвечал
+      # (curl → 302), но валидация падала на fetch failed, /player держал
+      # «wait until a valid potoken is found» неограниченно долго.
+      # 3 попытки с бэкоффом 1с→2с закрывают именно это.
+      - NETWORKING_FETCH_RETRY_ENABLED=true
+      - NETWORKING_FETCH_RETRY_TIMES=3
+      - NETWORKING_FETCH_RETRY_INITIAL_DEBOUNCE=1000
+      - NETWORKING_FETCH_RETRY_DEBOUNCE_MULTIPLIER=2
+      # Таймаут одного fetch: дефолт 30с держит зависший запрос долго,
+      # а сетевые сбои с VPS к YouTube характерно resolves за 10-15с.
+      - NETWORKING_FETCH_TIMEOUT_MS=15000
       # YOUTUBE_SESSION_COOKIES (строка-заголовок "name=val; n2=v2", НЕ путь)
       # приходит из companion-cookies.env. Ручками здесь её не задавать: там
       # сессия Google-аккаунта, её место — в генерируемом файле, не в git.
