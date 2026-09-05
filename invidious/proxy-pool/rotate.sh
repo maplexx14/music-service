@@ -6,6 +6,7 @@
 #                             (так его запускает таймер, см. systemd/)
 #   rotate.sh --activate N    назначить N-й прокси из списка вручную; этим же
 #                             создаётся active.env при первой установке
+#   rotate.sh --direct        выключить прокси и работать с адреса VPS
 #   rotate.sh --status        какой выход активен и кто сейчас «отдыхает»
 #
 # Зачем именно так:
@@ -472,6 +473,17 @@ case "${1:-}" in
     fi
     rm -f "$STATE_DIR/cool.$(key "$label")"
     switch_to "$label" "$url"
+    exit 0
+    ;;
+  --direct)
+    # Ручной вход в direct-режим: то же, что авто-режим делает при мёртвом
+    # пуле. Прямой выход проверяем, но не блокируем — решение за оператором.
+    if verify_direct; then
+      log "адрес VPS: YouTube отвечает playabilityStatus OK"
+    else
+      log "ВНИМАНИЕ: адрес VPS не проходит проверку YouTube — перехожу в direct по вашему указанию"
+    fi
+    switch_to_direct
     exit 0
     ;;
   --status)
