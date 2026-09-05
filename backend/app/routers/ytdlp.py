@@ -775,8 +775,10 @@ def _ytdlp_cookie_opts() -> dict:
     ``_cookiefile_missing_logged`` не даёт заспамить лог на каждом резолве.
     """
     global _cookiefile_missing_logged
-    if not _YTDLP_COOKIEFILE or os.path.exists(_YTDLP_COOKIEFILE):
+    if not _YTDLP_COOKIEFILE:
         return {}
+    if os.path.exists(_YTDLP_COOKIEFILE):
+        return {"cookiefile": _YTDLP_COOKIEFILE}
     if not _cookiefile_missing_logged:
         _cookiefile_missing_logged = True
         logger.warning(
