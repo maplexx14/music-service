@@ -41,8 +41,18 @@ services:
   invidious-companion:
     image: quay.io/invidious/invidious-companion:latest
     restart: unless-stopped
+    # Куки YouTube для выпуска PO-token (см. proxy-pool/make-companion-cookies.sh):
+    # env_file, а не environment — секрет не должен жить в git-файле. Файл
+    # обязателен к существованию, поэтому после клона репо нужно выполнить
+    # make-companion-cookies.sh (или создать пустой: touch companion-cookies.env).
+    # Нет файла → compose откажется стартовать: это лучше, чем молча анонимно.
+    env_file:
+      - ./companion-cookies.env
     environment:
       - SERVER_SECRET_KEY=qXoabG0Gkpo4xTyS
+      # YOUTUBE_SESSION_COOKIES (строка-заголовок "name=val; n2=v2", НЕ путь)
+      # приходит из companion-cookies.env. Ручками здесь её не задавать: там
+      # сессия Google-аккаунта, её место — в генерируемом файле, не в git.
     cap_drop:
       - ALL
     read_only: true

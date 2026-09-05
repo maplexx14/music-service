@@ -52,6 +52,10 @@ invidious/proxy-pool/stream-proxy/soundcloud.url
 # (YTDLP_COOKIEFILE) и oauth-файл ytmusicapi (YTMUSIC_AUTH). Приезжают на
 # сервер отдельно (см. DEPLOY-инструкцию в .env.example), в git не попадают.
 backend/secrets/*
+# Строка-заголовок Cookie для invidious-companion (YOUTUBE_SESSION_COOKIES):
+# генерируется из backend/secrets/ytdlp_cookies.txt скриптом
+# invidious/proxy-pool/make-companion-cookies.sh — там сессия Google, не в git.
+invidious/companion-cookies.env
 
 #repowise
 .mcp.json
