@@ -33,6 +33,12 @@
 #    оставить companion вообще без работающего egress, а следующая попытка
 #    случилась бы только через MIN_INTERVAL.
 #
+#  * Если рабочего кандидата нет вовсе, включается direct-режим: прокси
+#    выключаются, companion пересоздаётся без оверлея и работает с адреса
+#    самого VPS. Пока прямой выход отдаёт аудио, скрипт его не трогает;
+#    обратно в пул — автоматически при деградации прямого выхода
+#    (оживший прокси находится сам) или вручную: --activate N.
+#
 #  * Бэкофф обязателен. Если причина не в IP (сменился BotGuard, лежит
 #    провайдер прокси), ротация не поможет ни на одном выходе, а цикл
 #    «переключение → минт → отказ» сожжёт весь пул за минуты. Отсюда
@@ -60,6 +66,9 @@ REDIS_CONTAINER="${REDIS_CONTAINER:-music_redis}"
 # зрения хоста (в .env бэкенда он через host.docker.internal).
 INVIDIOUS_URL="${INVIDIOUS_URL:-http://127.0.0.1:3050}"
 STATE_DIR="${STATE_DIR:-/var/lib/invidious-proxy-rotate}"
+# Метка direct-режима: пул мёртв, companion работает без прокси, с адреса VPS.
+# По её наличию compose() решает, подключать ли оверлей с env_file прокси.
+DIRECT_MARK="${DIRECT_MARK:-$STATE_DIR/direct}"
 # Пауза, после которой отправленный «отдыхать» прокси снова становится
 # кандидатом: блок по IP снимается сам, и выжигать пул навсегда не нужно.
 COOLDOWN="${COOLDOWN:-3600}"
@@ -84,7 +93,15 @@ log() { printf '%s rotate: %s\n' "$(date -Is)" "$*" >&2; }
 die() { log "$*"; exit 1; }
 
 compose() {
-  docker compose -f docker-compose.prod.yml -f docker-compose.proxy.yml "$@"
+  # В direct-режиме оверлей не подключаем: он снова навесил бы env_file с
+  # прокси на пересоздаваемый companion. Поэтому метка direct ставится/сносится
+  # ДО вызова reissue_session — чтобы эта функция уже видела нужный набор
+  # compose-файлов.
+  if [[ -f "$DIRECT_MARK" ]]; then
+    docker compose -f docker-compose.prod.yml "$@"
+  else
+    docker compose -f docker-compose.prod.yml -f docker-compose.proxy.yml "$@"
+  fi
 }
 # Процентное кодирование логина и пароля: они уходят в URL, и любой из
 # символов @ : / ? # % в пароле иначе разъехался бы с его структурой (пароль
@@ -218,6 +235,16 @@ verify_proxy() {
   grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body"
 }
 
+# Обслуживает ли YouTube адрес самого VPS (без прокси). Прямому выходу тоже
+# может быть отдан LOGIN_REQUIRED — тогда direct-режим ничего не починит, и это
+# надо честно видеть в журнале, а не гадать по отсутствию аудио-форматов.
+verify_direct() {
+  local body
+  body="$(curl -s --max-time 25 -A "$UA" \
+    "https://www.youtube.com/watch?v=${VERIFY_ID}" 2>/dev/null)" || return 1
+  grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body"
+}
+
 # Перезаписывает active.env. В файле пароль, поэтому режим задаём явно (0600):
 # на umask окружения, из которого запущен таймер, полагаться нельзя. compose
 # читает файл от root.
@@ -236,6 +263,22 @@ write_active() {
       "$url" "$url" "$url" "$url"
   } >"$tmp"
   # mv, а не запись на месте: compose не должен прочитать файл на середине.
+  mv "$tmp" "$ACTIVE"
+}
+
+# active.env в direct-режиме: переменные прокси закомментированы, но файл
+# существует — ручной `up -d` с оверлеем не откажется стартовать (env_file
+# обязателен) и не навесит прокси обратно (строки с «#» — комментарии).
+write_active_direct() {
+  local tmp
+  tmp="$(mktemp "${ACTIVE}.XXXXXX")"
+  chmod 600 "$tmp"
+  {
+    printf '# Direct-режим: в пуле не осталось прокси, который обслуживает YouTube.\n'
+    printf '# Файл ГЕНЕРИРУЕТСЯ rotate.sh — правки затираются при ротации.\n'
+    printf '# Companion работает с адреса VPS. Возврат в пул: rotate.sh --activate N.\n'
+    printf '#HTTP_PROXY=\n#HTTPS_PROXY=\n#http_proxy=\n#https_proxy=\n'
+  } >"$tmp"
   mv "$tmp" "$ACTIVE"
 }
 
@@ -258,6 +301,24 @@ write_stream_url() {
   } >"$tmp"
   mv "$tmp" "$STREAM_URL_FILE"
   log "выход для стриминга записан в $(basename "$STREAM_URL_FILE")"
+}
+
+# То же для direct-режима: файл из одних комментариев. Бэкенд ищет первую
+# непустую строку без «#» (stream_proxy() в ytdlp.py), не находит — и качает
+# напрямую, что при прямом резолве и требуется: ссылки googlevideo привязаны
+# к IP запросившего.
+write_stream_url_direct() {
+  local dir tmp
+  dir="$(dirname "$STREAM_URL_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    log "ВНИМАНИЕ: нет каталога ${dir} — бэкенд продолжит качать через прежний выход"
+    return 0
+  fi
+  tmp="$(mktemp "${STREAM_URL_FILE}.XXXXXX")"
+  chmod 600 "$tmp"
+  printf '# Direct-режим: пул мёртв, качаем с адреса VPS. Назначено %s\n' "$(date -Is)" >"$tmp"
+  mv "$tmp" "$STREAM_URL_FILE"
+  log "стриминг переведён на прямой выход"
 }
 
 # Кэш резолва хранит ссылки, привязанные к прежнему выходу: после смены адреса
@@ -357,6 +418,9 @@ pick_candidate() {
 # и для автоматической ротации, чтобы эти два сценария не разъезжались.
 switch_to() {
   local label="$1" url="$2"
+  rm -f "$DIRECT_MARK"   # выход из direct-режима: compose() ниже должен
+                         # увидеть оверлей и навесить env_file на companion
+  clear_session_reissued "direct"
   clear_session_reissued "$label"
   write_active "$url" "$label"
   write_stream_url "$url" "$label"
@@ -365,6 +429,27 @@ switch_to() {
   # После companion: до этого момента резолв всё равно не работал, а сброшенный
   # раньше кэш успел бы наполниться ссылками прежнего выхода.
   flush_resolve_cache
+}
+
+# Пул мёртв: выключаем прокси и переводим companion на адрес VPS. Метка
+# ставится ДО reissue_session — compose() по ней пересоздаст companion уже без
+# оверлея. Возврат в пул: авто-режим при деградации прямого выхода (блок
+# direct-режима ниже) или вручную --activate N.
+switch_to_direct() {
+  printf '%s\n' "$(date +%s)" >"$DIRECT_MARK"
+  write_active_direct
+  write_stream_url_direct
+  log "в пуле не осталось рабочего прокси — перевожу companion на прямой выход (адрес VPS)"
+  if ! verify_direct; then
+    log "ВНИМАНИЕ: YouTube не отдаёт playabilityStatus OK и адресу VPS — прямой выход, возможно, тоже в блоке"
+  fi
+  reissue_session
+  flush_resolve_cache
+  # Сессия только что выпущена заново: если прямой выход и после этого не
+  # отдаст аудио, повторные перевыпуски (каждые MIN_INTERVAL) уже не помогут.
+  mark_session_reissued "direct"
+  echo "$(date +%s)" >"$STATE_DIR/last_rotate"
+  echo 0 >"$STATE_DIR/fails"
 }
 
 mkdir -p "$STATE_DIR"
@@ -392,7 +477,11 @@ case "${1:-}" in
   --status)
     now="$(date +%s)"
     cur="$(active_label || true)"
-    printf 'активный выход: %s\n' "${cur:-НЕ НАЗНАЧЕН (нет $ACTIVE)}"
+    if [[ -f "$DIRECT_MARK" ]]; then
+      printf 'активный выход: ПРЯМОЙ (адрес VPS; пул был мёртв — возврат: --activate N)\n'
+    else
+      printf 'активный выход: %s\n' "${cur:-НЕ НАЗНАЧЕН (нет $ACTIVE)}"
+    fi
     printf 'промахов подряд: %s   последняя ротация: %s\n' \
       "$(cat "$STATE_DIR/fails" 2>/dev/null || echo 0)" \
       "$(ts="$(cat "$STATE_DIR/last_rotate" 2>/dev/null || echo 0)"; \
@@ -423,6 +512,55 @@ esac
 # ─────────────────────────── авто-режим ───────────────────────────
 now="$(date +%s)"
 expire_cooldowns
+
+# ─────────────────────────── direct-режим ───────────────────────────
+# Пул был мёртв, companion работает с адреса VPS. Пока прямой выход отдаёт
+# аудио — не трогаем: прокси выключены, ротация не нужна. При деградации
+# сначала ищем оживший прокси (нашли — возвращаем проксирование), и лишь
+# потом чиним сессию прямого выхода.
+if [[ -f "$DIRECT_MARK" ]]; then
+  if probe_invidious; then
+    clear_session_reissued "direct"
+    echo 0 >"$STATE_DIR/fails"
+    exit 0
+  fi
+  fails=$(( $(cat "$STATE_DIR/fails" 2>/dev/null || echo 0) + 1 ))
+  echo "$fails" >"$STATE_DIR/fails"
+  log "прямой выход не отдаёт аудио-форматы (подряд: ${fails})"
+  if (( fails < FAIL_THRESHOLD )); then
+    log "ждём подтверждения на следующем запуске"
+    exit 0
+  fi
+  last="$(cat "$STATE_DIR/last_rotate" 2>/dev/null || echo 0)"
+  if (( now - last < MIN_INTERVAL )); then
+    log "вмешательство было $(( (now - last) / 60 )) мин назад (< ${MIN_INTERVAL}с) — держим бэкофф"
+    exit 0
+  fi
+  if entry="$(pick_candidate "")"; then
+    IFS=$'\t' read -r new_label new_url <<<"$entry"
+    log "в пуле снова есть рабочий выход (${new_label}) — возвращаю проксирование"
+    switch_to "$new_label" "$new_url"
+    echo "$now" >"$STATE_DIR/last_rotate"
+    echo 0 >"$STATE_DIR/fails"
+    exit 0
+  fi
+  # Пейсинг: полный прогон пула (по curl на каждый прокси) не чаще MIN_INTERVAL.
+  echo "$now" >"$STATE_DIR/last_rotate"
+  if verify_direct; then
+    if session_reissued "direct"; then
+      log "повторный выпуск сессии на прямом выходе не помог — жду, пока что-то изменится"
+    else
+      log "адрес VPS YouTube обслуживает — дело в сессии, перевыпускаю её на прямом выходе"
+      reissue_session
+      flush_resolve_cache
+      mark_session_reissued "direct"
+      echo 0 >"$STATE_DIR/fails"
+    fi
+  else
+    log "ВНИМАНИЕ: прямой выход YouTube не обслуживает, и в пуле никого живого — жду"
+  fi
+  exit 0
+fi
 
 cur_label="$(active_label || true)"
 cur_url="$(active_url || true)"
@@ -490,12 +628,12 @@ else
   log "выход ${cur_label} YouTube больше не обслуживает — ищу замену"
 fi
 if ! entry="$(pick_candidate "$cur_label")"; then
-  # Ничего не меняем: рабочего кандидата нет, а переключение «наугад» лишь
-  # оставило бы companion без egress до следующего запуска таймера. Бэкенд в
-  # это время работает через yt-dlp (см. _resolve_audio).
-  log "ВНИМАНИЕ: в пуле нет прокси, который обслуживается YouTube — оставляю ${cur_label}"
-  echo "$now" >"$STATE_DIR/last_rotate"
-  exit 1
+  # Рабочего кандидата нет, но текущий выход тоже мёртв — остаётся адрес VPS.
+  # Хуже, чем сидеть на заведомо мёртвом прокси, не бывает: egress и так
+  # сломан, а прямой выход YouTube может обслуживать.
+  log "в пуле нет прокси, который обслуживается YouTube — выключаю прокси, companion перейдёт на адрес VPS"
+  switch_to_direct
+  exit 0
 fi
 
 IFS=$'\t' read -r new_label new_url <<<"$entry"
