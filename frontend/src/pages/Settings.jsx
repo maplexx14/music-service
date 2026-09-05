@@ -4,8 +4,6 @@ import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
 import PreferencePicker from '../components/PreferencePicker'
-import TwoFactorSettings from '../components/TwoFactorSettings'
-import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import './Settings.css'
@@ -161,8 +159,6 @@ function Settings() {
         </div>
       </div>
 
-      <TwoFactorSettings />
-      <EmailTwoFactorSettings />
       <TrustedDevices />
 
       <div className="settings-card">
@@ -204,6 +200,10 @@ function Settings() {
         </div>
       </div>
 
+      {/* Диагностика плеера — отладочный инструмент, обычному пользователю
+          не нужен: лог событий воспроизведения имеет смысл только при разборе
+          багов, о которых сообщили админам. */}
+      {user?.is_admin && (
       <div className="settings-card">
         <div className="settings-section-title">Диагностика плеера</div>
         <p className="settings-hint settings-section-hint">
@@ -233,6 +233,7 @@ function Settings() {
           <pre className="settings-diag-log">{diagText}</pre>
         )}
       </div>
+      )}
     </div>
   )
 }
