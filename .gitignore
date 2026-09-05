@@ -48,6 +48,11 @@ invidious/proxy-pool/stream-proxy/active.url
 # платный выход для googlevideo-аудио включать из-за этого не нужно.
 invidious/proxy-pool/stream-proxy/soundcloud.url
 
+# Cookie-сессии YouTube против bot-check: Netscape-экспорт браузера
+# (YTDLP_COOKIEFILE) и oauth-файл ytmusicapi (YTMUSIC_AUTH). Приезжают на
+# сервер отдельно (см. DEPLOY-инструкцию в .env.example), в git не попадают.
+backend/secrets/*
+
 #repowise
 .mcp.json
 .repowise/

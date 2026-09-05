@@ -67,11 +67,29 @@ def _patch_watch_tab_parser() -> None:
 
 # ytmusicapi/yt-dlp — опциональные зависимости. Если их нет, провайдер тихо
 # отключается (search вернёт []), чтобы не ронять весь агрегатор.
+#
+# Cookie-сессия YouTube — главный рычаг против bot-check: «Sign in to confirm
+# you're not a bot» прилетает анонимному датацентровому трафику, и залогиненный
+# запрос его обходит. YTMUSIC_AUTH — путь к oauth/browser-файлу ytmusicapi
+# (см. .env.example); при сбое файлa откатываемся на анонимную сессию, а не
+# отключаем провайдер целиком.
+_YTMUSIC_AUTH = os.getenv("YTMUSIC_AUTH", "").strip()
 try:
     from ytmusicapi import YTMusic
 
     _patch_watch_tab_parser()
-    _ytmusic: Optional["YTMusic"] = YTMusic()
+    if _YTMUSIC_AUTH:
+        try:
+            _ytmusic: Optional["YTMusic"] = YTMusic(auth=_YTMUSIC_AUTH)
+        except Exception:  # noqa: BLE001 — битый/протухший auth-файл
+            logger.warning(
+                "YTMUSIC_AUTH=%s не открылся — ytmusicapi работает анонимно",
+                _YTMUSIC_AUTH,
+                exc_info=True,
+            )
+            _ytmusic = YTMusic()
+    else:
+        _ytmusic = YTMusic()
 except Exception:  # noqa: BLE001 — библиотека может быть не установлена / без сети
     _ytmusic = None
     logger.warning("ytmusicapi недоступен — провайдер YouTube Music отключён")
@@ -737,6 +755,39 @@ _CLIENT_CANDIDATES = (
 # found ... some formats may be missing").
 _JS_RUNTIMES = {"node": {}}
 
+# Cookie-файл YouTube в Netscape-формате (экспорт из браузера с залогиненной
+# сессией). Пусто — анонимный резолв, как раньше. Залогиненные куки — главный
+# способ обойти "Sign in to confirm you're not a bot": этот ответ прилетает
+# анонимному датацентровому трафику, а не конкретному ролику.
+# Нюанс web_safari: логин-статус влияет на выбор форматов, и cookie-файл с
+# активной сессией поднимает шансы получить рабочие progressive-стримы даже
+# тогда, когда android_vr уже словил bot-check.
+# Настроечная переменная читается один раз при импорте: смена файла требует
+# перезапуска контейнера (сами куки yt-dlp перечитывает на каждый extract_info).
+_YTDLP_COOKIEFILE = os.getenv("YTDLP_COOKIEFILE", "").strip()
+
+
+def _ytdlp_cookie_opts() -> dict:
+    """``cookiefile``-опции для YoutubeDL, если задан YTDLP_COOKIEFILE.
+
+    Файл может исчезнуть (ротация/очистка) — тогда логируем один раз и
+    возвращаем пустой dict: резолв уходит анонимно, а не падает. Флаг
+    ``_cookiefile_missing_logged`` не даёт заспамить лог на каждом резолве.
+    """
+    global _cookiefile_missing_logged
+    if not _YTDLP_COOKIEFILE or os.path.exists(_YTDLP_COOKIEFILE):
+        return {}
+    if not _cookiefile_missing_logged:
+        _cookiefile_missing_logged = True
+        logger.warning(
+            "YTDLP_COOKIEFILE=%s не существует — резолв идёт анонимно",
+            _YTDLP_COOKIEFILE,
+        )
+    return {}
+
+
+_cookiefile_missing_logged = False
+
 
 # Каждую попытку резолва ограничиваем по времени: без таймаута зависшее
 # соединение с YouTube тянет extract_info очень долго (жалобы «грузится вечно»).
@@ -1070,6 +1121,7 @@ def _warmup_ydl_blocking() -> None:
                 "ignore_no_formats_error": True,
                 "js_runtimes": _JS_RUNTIMES,
                 "extractor_args": {"youtube": {"player_client": primary}},
+                **_ytdlp_cookie_opts(),
             },
         )
         logger.info("yt-dlp extractor warmed up")
@@ -1156,6 +1208,7 @@ def _extract_with_clients(
             "ignore_no_formats_error": True,
             "js_runtimes": _JS_RUNTIMES,
             "extractor_args": {"youtube": {"player_client": clients}},
+            **_ytdlp_cookie_opts(),
         },
     )
     # Инстанс переиспользуется в рамках потока (cached_ydl), поэтому чистим

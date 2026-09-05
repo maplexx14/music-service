@@ -106,3 +106,33 @@ def test_bot_check_not_treated_as_unavailable():
     msg = "Sign in to confirm you’re not a bot"
     assert ytdlp.is_bot_check_error(msg)
     assert not ytdlp.is_track_unavailable_error(Exception(msg))
+
+
+# ─── Cookie-сессия (YTDLP_COOKIEFILE) ───
+
+def test_cookie_opts_empty_when_unset(monkeypatch):
+    """Без YTDLP_COOKIEFILE опций нет: резолв анонимный, как раньше."""
+    monkeypatch.setattr(ytdlp, "_YTDLP_COOKIEFILE", "")
+    assert ytdlp._ytdlp_cookie_opts() == {}
+
+
+def test_cookie_opts_with_existing_file(monkeypatch, tmp_path):
+    """Файл существует — opts содержат cookiefile с указанным путём."""
+    cookiefile = tmp_path / "cookies.txt"
+    cookiefile.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setattr(ytdlp, "_YTDLP_COOKIEFILE", str(cookiefile))
+    monkeypatch.setattr(ytdlp, "_cookiefile_missing_logged", False)
+    opts = ytdlp._ytdlp_cookie_opts()
+    assert opts == {"cookiefile": str(cookiefile)}
+
+
+def test_cookie_opts_missing_file_degrades_to_anonymous(monkeypatch, tmp_path):
+    """Файл пропал (ротация/чистка) — пустой dict, а не исключение:
+    резолв продолжается анонимно. Предупреждение логируется один раз."""
+    monkeypatch.setattr(
+        ytdlp, "_YTDLP_COOKIEFILE", str(tmp_path / "nope.txt")
+    )
+    monkeypatch.setattr(ytdlp, "_cookiefile_missing_logged", False)
+    assert ytdlp._ytdlp_cookie_opts() == {}
+    assert ytdlp._cookiefile_missing_logged  # второй вызов не пишет в лог
+    assert ytdlp._ytdlp_cookie_opts() == {}

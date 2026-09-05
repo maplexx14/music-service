@@ -30,6 +30,10 @@ cookies/*
 tests
 .dockerignore
 
+# Cookie-сессии YouTube (bot-check): секреты, в прод приезжают через
+# bind-mount ./backend/secrets, в образ попадать не должны.
+secrets/*
+
 .DS_Store
 Thumbs.db
 *.swp

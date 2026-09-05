@@ -43,14 +43,6 @@ services:
     restart: unless-stopped
     environment:
       - SERVER_SECRET_KEY=qXoabG0Gkpo4xTyS
-      # Логин по OAuth как TV-клиент: стрим-URL приходят из /player без
-      # PO-token машины, пул прокси при этом не конфликтует (OAuth-сессия
-      # пойдёт через тот же PROXY, если включить оверлей). Первый старт
-      # требует ручного действия: код device-flow печатается в логи —
-      # docker compose logs invidious-companion, до логина сервис не отвечает.
-      # Креды кешируются в companioncache (/var/tmp/youtubei.js), рестарты
-      # переживают; токен обновляется сам (update-credentials).
-      - YOUTUBE_SESSION_OAUTH_ENABLED=true
     cap_drop:
       - ALL
     read_only: true

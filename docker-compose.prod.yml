@@ -190,6 +190,13 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # Cookie-сессии YouTube против bot-check: анонимный датацентровый
+      # трафик YouTube режет «Sign in to confirm you're not a bot», залогиненный
+      # — нет. YTDLP_COOKIEFILE — Netscape-экспорт из браузера (положить файл
+      # по пути из .env и смонтировать его — см. volumes ниже); YTMUSIC_AUTH —
+      # oauth/browser-файл ytmusicapi. Пусто = анонимно, как раньше.
+      YTDLP_COOKIEFILE: ${YTDLP_COOKIEFILE:-/app/secrets/ytdlp_cookies.txt}
+      YTMUSIC_AUTH: ${YTMUSIC_AUTH:-/app/secrets/ytmusic_auth.json}
       # Ссылки googlevideo привязаны к IP запросившего (подписанный параметр
       # `ip` в sparams). Если Invidious-companion выходит через прокси
       # (invidious/proxy-pool), то и качать аудио надо через тот же выход,
@@ -239,6 +246,9 @@ services:
       # Каталог, а не файл: rotate.sh подменяет active.url через mv (новый
       # inode), и bind-mount самого файла продолжил бы показывать старый.
       - ./invidious/proxy-pool/stream-proxy:/run/stream-proxy:ro
+      # Cookie-сессии YouTube (bot-check): read-only каталог с секретами.
+      # Код переживает отсутствие файлов — анонимный резолв, как раньше.
+      - ./backend/secrets:/app/secrets:ro
     # Invidious живёт отдельным compose-стеком (invidious/docker-compose.prod.yml)
     # и публикует порт на хосте, поэтому INVIDIOUS_API_BASE указывает на
     # host.docker.internal. На Docker Desktop это имя резолвится само, а на

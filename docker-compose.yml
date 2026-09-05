@@ -139,6 +139,13 @@ services:
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
       INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
       INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # Cookie-сессии YouTube против bot-check: анонимный датацентровый
+      # трафик YouTube режет «Sign in to confirm you're not a bot», залогиненный
+      # — нет. YTDLP_COOKIEFILE — Netscape-экспорт из браузера, подхватывается
+      # yt-dlp на каждом резолве; YTMUSIC_AUTH — oauth/browser-файл ytmusicapi
+      # (поиск/каталог). Пусто = анонимно, как раньше.
+      YTDLP_COOKIEFILE: ${YTDLP_COOKIEFILE:-}
+      YTMUSIC_AUTH: ${YTMUSIC_AUTH:-}
       # Прокси для скачивания googlevideo: ссылка привязана к IP выхода,
       # который её выдал, поэтому при проксированном companion аудио надо
       # качать через тот же прокси. Файла нет — прямой выход.
