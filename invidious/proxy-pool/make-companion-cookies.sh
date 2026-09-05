@@ -31,10 +31,17 @@ if [[ ! -f "$SRC" ]]; then
 fi
 
 # awk-часть: строки формата domain \t flag \t path \t secure \t expiry \t name \t value.
-# Берём домены youtube.com/google.com (по префиксу домена с точкой или без),
-# пропускаем комментарии и пустые строки. Имя и значение — 6-е и 7-е поля.
+# Берём домены youtube.com/google.com и ТОЛЬКО имена из белого списка —
+# сессионные куки Google-аккаунта. Реальный экспорт тащит с собой ~40
+# мёртвых ST-*-кук (transfer-токены флоу входа) и аналитику (_ga, _gcl_au):
+# заголовок раздувается до ~18КБ, и YouTube его режет. Пропускаем комментарии
+# и пустые строки. Имя и значение — 6-е и 7-е поля.
 header="$(awk -F'\t' '
+    function allowed(name) {
+        return name ~ /^(SID|HSID|SSID|SAPISID|APISID|LOGIN_INFO|SIDCC|PREF|NID|VISITOR_INFO1_LIVE|CONSISTENCY|__Secure-(1P|3P)APISID|__Secure-(1P|3P)SID|__Secure-(1P|3P)SIDCC|__Secure-(1P|3P)SIDTS|__Secure-(BUCKET|ROLLOUT_TOKEN|YENID|YNID))$/
+    }
     /^#/ || NF < 7 { next }
+    !allowed($6) { next }
     $1 ~ /\.youtube\.com$/ || $1 == "youtube.com" { keep[$6] = $7; next }
     $1 ~ /\.google\.com$/  || $1 == "google.com"  { keep[$6] = $7 }
     END {
@@ -62,4 +69,4 @@ printf '# Сгенерировано make-companion-cookies.sh — не комм
 printf 'YOUTUBE_SESSION_COOKIES=%s\n' "$header" >>"$tmp"
 mv "$tmp" "$OUT"
 
-echo "ок: $OUT, куки: $(awk -F'\t' '$1 ~ /youtube|google/ && NF>=7 {print $6}' "$SRC" | sort -u | tr '\n' ' ')"
+echo "ок: $OUT, длина заголовка ${#header} байт, куки: $(printf '%s' "$header" | tr ';' '\n' | cut -d= -f1 | sed 's/^ *//' | sort | tr '\n' ' ')"
