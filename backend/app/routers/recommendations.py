@@ -650,7 +650,11 @@ async def _external_recommendation_pool(
                 seen_track_keys.add(track_key)
             result.append(item)
             if len(result) >= max(limit * _EXTERNAL_POOL_FACTOR, limit):
+                # ytmusic — только метаданные: греем поиск soundcloud-эквивалентов,
+                # чтобы стрим уходил на SoundCloud (см. ytdlp._schedule_sc_match).
+                flow_router.ytdlp._schedule_sc_match(result)
                 return result
+    flow_router.ytdlp._schedule_sc_match(result)
     return result
 
 

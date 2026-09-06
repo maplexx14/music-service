@@ -2341,14 +2341,16 @@ async def stream_ytmusic(video_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Некорректный id")
     # ytmusic — только каталог метаданных: аудио той же записи (название +
     # артист + длительность) качаем с SoundCloud, если матч уже найден
-    # (ищется заранее из поисковых эндпоинтов, см. _schedule_sc_match).
-    # На промахе остаёмся на обычном YouTube-пути. scfallback=1 — это 307 из
+    # (ищется заранее из поисковых эндпоинтов и сборки потока, см.
+    # _schedule_sc_match). Идущий поиск первого трека порции поток играет
+    # сразу после выдачи — коротко ждём его, а не уходим на YouTube. На
+    # промахе остаёмся на обычном YouTube-пути. scfallback=1 — это 307 из
     # /api/soundcloud/stream после DRM-404: без проверки редиректы зациклятся.
     if request.query_params.get("scfallback") != "1":
         try:
             from app.routers import soundcloud
 
-            match = await soundcloud.soundcloud_match_for(video_id)
+            match = await soundcloud.await_soundcloud_match(video_id)
             if match:
                 track_id, permalink = match
                 return RedirectResponse(
@@ -2388,10 +2390,12 @@ async def prefetch_ytmusic(video_id: str):
         raise HTTPException(status_code=400, detail="Некорректный id")
     # Известна soundcloud-подмена — греем именно её: играть будет она, а
     # YouTube-прогрев был бы лишним резолвом и первыми байтами с googlevideo.
+    # Поиск подмены может ещё идти (первый трек порции потока) — коротко
+    # ждём: POST /prefetch фронт всё равно не ждёт для старта воспроизведения.
     try:
         from app.routers import soundcloud
 
-        match = await soundcloud.soundcloud_match_for(video_id)
+        match = await soundcloud.await_soundcloud_match(video_id)
     except Exception:  # noqa: BLE001 — выбор источника прогрева не фатален
         logger.warning("sc match lookup failed for %s", video_id, exc_info=True)
         match = None

@@ -3092,4 +3092,11 @@ async def get_flow(
         sum(1 for item in mix if _item_identity(item) in probe_identities_delivered),
         len(mix),
     )
+    # ytmusic в потоке — только метаданные: фоновой ищем soundcloud-эквиваленты
+    # треков отданной порции, чтобы /api/ytdlp/stream/{id} успевал уйти на
+    # SoundCloud, а не качать аудио с YouTube. Пулы (радио, дискографии)
+    # кэшируются в Redis, поэтому матчить надо именно здесь, по итоговой
+    # выдаче — на момент сборки пула этих треков могло ещё не быть в кэше.
+    # Мисс — фолбэк на YouTube (см. ytdlp.stream_ytmusic).
+    ytdlp._schedule_sc_match(mix)
     return mix

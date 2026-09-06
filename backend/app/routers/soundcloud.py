@@ -1042,42 +1042,83 @@ async def soundcloud_match_for(video_id: str) -> Optional[tuple[str, str]]:
 
 
 # Сколько треков из одной выдачи уходит в фоновый матчинг: верхушка списка —
-# то, что пользователь реально кликает; хвост греть незачем.
-_SC_MATCH_SCHEDULE_LIMIT = 12
-_sc_match_inflight: set[str] = set()
+# то, что пользователь реально кликает/слушает; хвост греть незачем.
+_SC_MATCH_SCHEDULE_LIMIT = 16
+# Сколько /stream готов ждать идущий поиск эквивалента. Первый трек порции
+# потока играет сразу после выдачи, и без ожидания матч (~1с через прокси)
+# не успевал бы лечь в кэш — трек уходил бы на YouTube.
+_SC_MATCH_STREAM_WAIT = 3.0
+_sc_match_inflight: dict[str, asyncio.Task] = {}
+
+
+def _sc_match_fields(track) -> Optional[tuple[str, str, str, int]]:
+    """(video_id, title, artist, duration) ytmusic-трека.
+
+    Понимает и объекты выдачи (поиск/каталог ytmusic), и dict'и (mix потока,
+    кэш рекомендаций). None — трек не ytmusic или без external_id.
+    """
+    if isinstance(track, dict):
+        get = track.get
+    else:
+        get = lambda name, default=None: getattr(track, name, default)  # noqa: E731
+    if get("source") != "ytmusic":
+        return None
+    video_id = get("external_id")
+    if not video_id:
+        return None
+    return str(video_id), get("title") or "", get("artist") or "", get("duration") or 0
 
 
 def schedule_ytmusic_soundcloud_match(tracks) -> None:
     """Ищет soundcloud-эквиваленты ytmusic-треков в фоне (fire-and-forget).
 
-    Вызывается из поисковых эндпоинтов ytmusic: пока пользователь выбирает
-    трек, матч успевает лечь в Redis, и /api/ytdlp/stream/{id} отдаст 307 на
-    SoundCloud вместо скачивания с YouTube. Повторные вызовы дешёвые: промахи
-    кэшируются на _MATCH_MISS_TTL, а параллельные дубли режет
-    _sc_match_inflight; сам поиск ограничен _API_V2_SEMAPHORE.
+    Вызывается из поисковых эндпоинтов ytmusic и из сборки порции потока:
+    пока пользователь доходит до трека, матч уже лежит в Redis, и
+    /api/ytdlp/stream/{id} отдаёт 307 на SoundCloud вместо скачивания с
+    YouTube. Повторные вызовы дешёвые: промахи кэшируются на
+    _MATCH_MISS_TTL, параллельные дубли режет _sc_match_inflight, а сам
+    поиск ограничен _API_V2_SEMAPHORE.
     """
     for track in list(tracks)[:_SC_MATCH_SCHEDULE_LIMIT]:
-        video_id = getattr(track, "external_id", None)
-        if not video_id or getattr(track, "source", "") != "ytmusic":
+        fields = _sc_match_fields(track)
+        if fields is None or fields[0] in _sc_match_inflight:
             continue
-        if video_id in _sc_match_inflight:
-            continue
-        _sc_match_inflight.add(video_id)
+        video_id, title, artist, duration = fields
+        task = asyncio.create_task(_sc_match_job(video_id, title, artist, duration))
+        _sc_match_inflight[video_id] = task
+        task.add_done_callback(
+            lambda _task, vid=video_id: _sc_match_inflight.pop(vid, None)
+        )
 
-        async def _run(
-            vid: str = video_id,
-            title: str = track.title,
-            artist: str = track.artist,
-            duration: int = track.duration,
-        ) -> None:
-            try:
-                await find_soundcloud_equivalent(vid, title, artist, duration)
-            except Exception:  # noqa: BLE001 — фоновый матч, стрим его не ждёт
-                logger.warning("sc match failed for ytmusic %s", vid, exc_info=True)
-            finally:
-                _sc_match_inflight.discard(vid)
 
-        asyncio.create_task(_run())
+async def _sc_match_job(
+    video_id: str, title: str, artist: str, duration: int
+) -> Optional[tuple[str, str]]:
+    try:
+        return await find_soundcloud_equivalent(video_id, title, artist, duration)
+    except Exception:  # noqa: BLE001 — фоновый матч, стрим его не ждёт
+        logger.warning("sc match failed for ytmusic %s", video_id, exc_info=True)
+        return None
+
+
+async def await_soundcloud_match(
+    video_id: str, timeout: float = _SC_MATCH_STREAM_WAIT
+) -> Optional[tuple[str, str]]:
+    """Эквивалент из кэша; если поиск этого трека сейчас идёт — ждём его.
+
+    До timeout, дальше — как получится (промах → вызывающий код играет с
+    YouTube). shield: таймаут стрима не отменяет общий поиск — его результата
+    ждут и другие вызовы.
+    """
+    task = _sc_match_inflight.get(video_id)
+    if task is not None:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:  # noqa: BLE001 — матч не должен ломать стрим
+            logger.warning("sc match wait failed for %s", video_id, exc_info=True)
+    return await soundcloud_match_for(video_id)
 
 
 async def _soundcloud_match_ready(video_id: str) -> bool:

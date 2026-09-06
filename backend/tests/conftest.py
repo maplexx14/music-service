@@ -153,6 +153,17 @@ def _no_external_pool_network(request, monkeypatch):
         monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _empty)
         monkeypatch.setattr("app.routers.flow._similar_pool", _empty)
         monkeypatch.setattr("app.routers.flow._tag_pool", _empty)
+
+    # Фоновой матчинг ytmusic→SoundCloud (порция потока/поиск) тоже не должен
+    # ходить в сеть из юнит-тестов: стабим сам поиск эквивалента, а не
+    # планировщик — его дедуп и ограничение бёрста должны работать как есть.
+    # Тесты самого матчера патчат его поверх.
+    async def _no_sc_match(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.routers.soundcloud.find_soundcloud_equivalent", _no_sc_match
+    )
     yield
 
 
