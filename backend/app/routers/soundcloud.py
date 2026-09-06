@@ -4,7 +4,7 @@ import binascii
 import logging
 import os
 import re
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -950,6 +950,150 @@ async def find_ytmusic_equivalent(track_id: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Обратное направление той же подмены: ytmusic остаётся каталогом метаданных,
+# а аудио той же записи (название + артист + длительность) качаем с SoundCloud.
+# Матч ищется ЗАРАНЕЕ, из поисковых эндпоинтов ytmusic: у /stream/{video_id}
+# метаданных трека нет — только videoId, поэтому стрим проверяет один кэш.
+# ---------------------------------------------------------------------------
+
+class _ScMatchCandidate(NamedTuple):
+    """Кандидат из /search/tracks в форме, понятной _is_exact_match."""
+
+    title: str
+    artist: str
+    duration: int
+
+
+async def find_soundcloud_equivalent(
+    video_id: str, title: str, artist: str, duration: int
+) -> Optional[tuple[str, str]]:
+    """(track_id, permalink) той же записи в SoundCloud для трека YouTube Music.
+
+    None — точного совпадения нет (или поиск недоступен): вызывающий код
+    остаётся на обычном скачивании с YouTube.
+    """
+    key = f"ytmusic:scmatch:{video_id}"
+    cached = await get_cache_async(key)
+    if cached:
+        # Промах тоже кэшируем — иначе каждый запрос на стрим гонял бы
+        # поиск в SoundCloud заново.
+        track_id = cached.get("track_id")
+        if track_id:
+            return str(track_id), cached.get("permalink") or ""
+        return None
+
+    title = clean_title(title or "")
+    if not title or not artist or duration <= 0:
+        # Матчить нечего: без любого из трёх полей _is_exact_match всегда
+        # False. Кэшируем промах, чтобы не гонять поиск на каждый вызов.
+        await set_cache_async(key, {"track_id": None}, expire=_MATCH_MISS_TTL)
+        return None
+
+    match: Optional[tuple[str, str]] = None
+    try:
+        data = await _api_get("/search/tracks", {"q": f"{artist} {title}", "limit": 8})
+        if not isinstance(data, dict):
+            # Поиск недоступен (прокси лёг, 403): промах не доказан — не
+            # кэшируем, следующий вызов попробует снова.
+            return None
+        for item in data.get("collection") or []:
+            track_id = str(item.get("id") or "")
+            permalink = item.get("permalink_url") or ""
+            if not track_id or "soundcloud.com/" not in permalink:
+                continue
+            cand_artist, cand_title = _api_artist_title(item)
+            candidate = _ScMatchCandidate(
+                title=clean_title(cand_title),
+                artist=cand_artist,
+                duration=round((item.get("duration") or 0) / 1000),
+            )
+            if _is_exact_match(candidate, title, artist, duration):
+                match = (track_id, permalink)
+                break
+    except Exception:  # noqa: BLE001 — матч не должен ломать воспроизведение
+        logger.exception("soundcloud search failed for ytmusic track %s", video_id)
+        return None
+
+    await set_cache_async(
+        key,
+        {"track_id": match[0], "permalink": match[1]} if match else {"track_id": None},
+        expire=_MATCH_TTL if match else _MATCH_MISS_TTL,
+    )
+    if match:
+        logger.info(
+            "ytmusic track %s (%s — %s) matched to soundcloud %s",
+            video_id, artist, title, match[0],
+        )
+    else:
+        logger.info("no soundcloud equivalent for ytmusic track %s", video_id)
+    return match
+
+
+async def soundcloud_match_for(video_id: str) -> Optional[tuple[str, str]]:
+    """Известный soundcloud-эквивалент ytmusic-трека.
+
+    Только чтение кэша, без поиска: вызывается из /stream и /prefetch на
+    каждый чих, поиск там неуместен (запускается заранее, из поиска ytmusic).
+    """
+    cached = await get_cache_async(f"ytmusic:scmatch:{video_id}")
+    if cached and cached.get("track_id"):
+        return str(cached["track_id"]), cached.get("permalink") or ""
+    return None
+
+
+# Сколько треков из одной выдачи уходит в фоновый матчинг: верхушка списка —
+# то, что пользователь реально кликает; хвост греть незачем.
+_SC_MATCH_SCHEDULE_LIMIT = 12
+_sc_match_inflight: set[str] = set()
+
+
+def schedule_ytmusic_soundcloud_match(tracks) -> None:
+    """Ищет soundcloud-эквиваленты ytmusic-треков в фоне (fire-and-forget).
+
+    Вызывается из поисковых эндпоинтов ytmusic: пока пользователь выбирает
+    трек, матч успевает лечь в Redis, и /api/ytdlp/stream/{id} отдаст 307 на
+    SoundCloud вместо скачивания с YouTube. Повторные вызовы дешёвые: промахи
+    кэшируются на _MATCH_MISS_TTL, а параллельные дубли режет
+    _sc_match_inflight; сам поиск ограничен _API_V2_SEMAPHORE.
+    """
+    for track in list(tracks)[:_SC_MATCH_SCHEDULE_LIMIT]:
+        video_id = getattr(track, "external_id", None)
+        if not video_id or getattr(track, "source", "") != "ytmusic":
+            continue
+        if video_id in _sc_match_inflight:
+            continue
+        _sc_match_inflight.add(video_id)
+
+        async def _run(
+            vid: str = video_id,
+            title: str = track.title,
+            artist: str = track.artist,
+            duration: int = track.duration,
+        ) -> None:
+            try:
+                await find_soundcloud_equivalent(vid, title, artist, duration)
+            except Exception:  # noqa: BLE001 — фоновый матч, стрим его не ждёт
+                logger.warning("sc match failed for ytmusic %s", vid, exc_info=True)
+            finally:
+                _sc_match_inflight.discard(vid)
+
+        asyncio.create_task(_run())
+
+
+async def _soundcloud_match_ready(video_id: str) -> bool:
+    """Готова ли soundcloud-подмена ytmusic-трека (только проверка, без поиска)."""
+    match = await soundcloud_match_for(video_id)
+    if not match:
+        return False
+    track_id, _permalink = match
+    return await prefetch_is_ready(
+        f"sc{track_id}",
+        f"soundcloud:resolve:{track_id}",
+        archive_key=f"soundcloud/{track_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # HLS-only треки. Часть каталога (как правило, загрузки лейблов) SoundCloud
 # раздаёт вообще без прогрессивного транскода. Байт-range-прокси m3u8 играть не
 # умеет, поэтому такой трек один раз собирается ffmpeg'ом в цельный файл: он
@@ -1207,7 +1351,13 @@ async def stream_soundcloud(token: str, request: Request):
         if exc.status_code == 404:
             video_id = await find_ytmusic_equivalent(track_id)
             if video_id:
-                return RedirectResponse(f"/api/ytdlp/stream/{video_id}", status_code=307)
+                # scfallback=1 не даёт зациклиться 307-редиректам: этот же
+                # ytmusic-трек может сам подменяться на SoundCloud (см.
+                # soundcloud_match_for), и без флага получился бы круг
+                # ytmusic → SoundCloud → ytmusic → ...
+                return RedirectResponse(
+                    f"/api/ytdlp/stream/{video_id}?scfallback=1", status_code=307
+                )
         raise
 
 

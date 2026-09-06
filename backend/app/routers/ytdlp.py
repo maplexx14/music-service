@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import aiofiles
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
@@ -214,6 +214,22 @@ def _normalize(item: dict) -> Optional[ExternalTrackResponse]:
     )
 
 
+def _schedule_sc_match(tracks: List[ExternalTrackResponse]) -> None:
+    """Фоновый поиск soundcloud-эквивалентов для ytmusic-выдачи.
+
+    ytmusic — только каталог метаданных: аудио той же записи качаем с
+    SoundCloud. Матч нужен к моменту клика, поэтому ищем заранее — сам
+    /stream/{video_id} метаданных трека не имеет и проверяет только кэш
+    (см. soundcloud.schedule_ytmusic_soundcloud_match).
+    """
+    try:
+        from app.routers import soundcloud
+
+        soundcloud.schedule_ytmusic_soundcloud_match(tracks)
+    except Exception:  # noqa: BLE001 — источник аудио не должен ломать поиск
+        logger.exception("soundcloud match scheduling failed")
+
+
 async def search_ytmusic(
     request: Request,
     q: str,
@@ -242,6 +258,7 @@ async def search_ytmusic(
         results.append(track)
         if len(results) >= limit:
             break
+    _schedule_sc_match(results)
     return results
 
 
@@ -386,7 +403,9 @@ async def ytmusic_artist_songs(
     Формат items совпадает с выдачей search(filter="songs"), поэтому нормализуем
     тем же _normalize.
     """
-    return await _songs_from_info(await _artist_info(browse_id), limit)
+    tracks = await _songs_from_info(await _artist_info(browse_id), limit)
+    _schedule_sc_match(tracks)
+    return tracks
 
 
 def _normalize_album(
@@ -558,6 +577,7 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
     base_url = str(request.base_url).rstrip("/")
     for t in profile["tracks"]:
         t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+    _schedule_sc_match(profile["tracks"])
     return profile
 
 
@@ -617,6 +637,7 @@ async def ytmusic_album(request: Request, browse_id: str) -> Optional[ExternalAl
     base_url = str(request.base_url).rstrip("/")
     for t in detail.tracks:
         t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+    _schedule_sc_match(detail.tracks)
     return detail
 
 
@@ -2318,6 +2339,24 @@ async def stream_ytmusic(video_id: str, request: Request):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
+    # ytmusic — только каталог метаданных: аудио той же записи (название +
+    # артист + длительность) качаем с SoundCloud, если матч уже найден
+    # (ищется заранее из поисковых эндпоинтов, см. _schedule_sc_match).
+    # На промахе остаёмся на обычном YouTube-пути. scfallback=1 — это 307 из
+    # /api/soundcloud/stream после DRM-404: без проверки редиректы зациклятся.
+    if request.query_params.get("scfallback") != "1":
+        try:
+            from app.routers import soundcloud
+
+            match = await soundcloud.soundcloud_match_for(video_id)
+            if match:
+                track_id, permalink = match
+                return RedirectResponse(
+                    f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}",
+                    status_code=307,
+                )
+        except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+            logger.exception("soundcloud redirect failed for %s", video_id)
     # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
     # имеют строковой id и играются напрямую через этот эндпоинт, минуя
     # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
@@ -2347,6 +2386,27 @@ async def prefetch_ytmusic(video_id: str):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
+    # Известна soundcloud-подмена — греем именно её: играть будет она, а
+    # YouTube-прогрев был бы лишним резолвом и первыми байтами с googlevideo.
+    try:
+        from app.routers import soundcloud
+
+        match = await soundcloud.soundcloud_match_for(video_id)
+    except Exception:  # noqa: BLE001 — выбор источника прогрева не фатален
+        logger.warning("sc match lookup failed for %s", video_id, exc_info=True)
+        match = None
+    if match:
+        track_id, permalink = match
+        status = schedule_prefetch(
+            f"sc{track_id}",
+            lambda force=False: soundcloud._resolve_cached(
+                track_id, permalink, force=force
+            ),
+            f"soundcloud:resolve:{track_id}",
+            soundcloud._RESOLVE_TTL,
+            archive_key=f"soundcloud/{track_id}",
+        )
+        return {"status": status}
     status = schedule_prefetch(
         video_id,
         lambda force=False: _resolve_cached(video_id, force=force),
@@ -2366,4 +2426,13 @@ async def prefetch_ytmusic_ready(video_id: str):
     ready = await prefetch_is_ready(
         video_id, f"ytdlp:resolve:v2:{video_id}", archive_key=f"ytmusic/{video_id}"
     )
+    if not ready:
+        # Прогревали soundcloud-подмену (см. prefetch_ytmusic) — готовность
+        # трека ровно её готовность.
+        try:
+            from app.routers import soundcloud
+
+            ready = await soundcloud._soundcloud_match_ready(video_id)
+        except Exception:  # noqa: BLE001 — проверка best-effort
+            pass
     return {"ready": ready}
