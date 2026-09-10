@@ -214,13 +214,15 @@ def _normalize(item: dict) -> Optional[ExternalTrackResponse]:
     )
 
 
-def _schedule_sc_match(tracks: List[ExternalTrackResponse]) -> None:
-    """Фоновый поиск soundcloud-эквивалентов для ytmusic-выдачи.
+def _schedule_audio_matches(tracks: List[ExternalTrackResponse]) -> None:
+    """Фоновый поиск источников аудио для ytmusic-выдачи.
 
-    ytmusic — только каталог метаданных: аудио той же записи качаем с
-    SoundCloud. Матч нужен к моменту клика, поэтому ищем заранее — сам
+    ytmusic — только каталог метаданных: аудио той же записи берём по
+    приоритету Soulseek (оригинальный релизный файл) → YouTube → SoundCloud
+    (фолбэк). Матч нужен к моменту клика, поэтому ищем заранее — сам
     /stream/{video_id} метаданных трека не имеет и проверяет только кэш
-    (см. soundcloud.schedule_ytmusic_soundcloud_match).
+    (см. soundcloud.schedule_ytmusic_soundcloud_match и
+    soulseek.schedule_ytmusic_soulseek_match).
     """
     try:
         from app.routers import soundcloud
@@ -228,6 +230,12 @@ def _schedule_sc_match(tracks: List[ExternalTrackResponse]) -> None:
         soundcloud.schedule_ytmusic_soundcloud_match(tracks)
     except Exception:  # noqa: BLE001 — источник аудио не должен ломать поиск
         logger.exception("soundcloud match scheduling failed")
+    try:
+        from app.routers import soulseek
+
+        soulseek.schedule_ytmusic_soulseek_match(tracks)
+    except Exception:  # noqa: BLE001 — источник аудио не должен ломать поиск
+        logger.exception("soulseek match scheduling failed")
 
 
 async def search_ytmusic(
@@ -258,7 +266,7 @@ async def search_ytmusic(
         results.append(track)
         if len(results) >= limit:
             break
-    _schedule_sc_match(results)
+    _schedule_audio_matches(results)
     return results
 
 
@@ -404,7 +412,7 @@ async def ytmusic_artist_songs(
     тем же _normalize.
     """
     tracks = await _songs_from_info(await _artist_info(browse_id), limit)
-    _schedule_sc_match(tracks)
+    _schedule_audio_matches(tracks)
     return tracks
 
 
@@ -577,7 +585,7 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
     base_url = str(request.base_url).rstrip("/")
     for t in profile["tracks"]:
         t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
-    _schedule_sc_match(profile["tracks"])
+    _schedule_audio_matches(profile["tracks"])
     return profile
 
 
@@ -637,7 +645,7 @@ async def ytmusic_album(request: Request, browse_id: str) -> Optional[ExternalAl
     base_url = str(request.base_url).rstrip("/")
     for t in detail.tracks:
         t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
-    _schedule_sc_match(detail.tracks)
+    _schedule_audio_matches(detail.tracks)
     return detail
 
 
@@ -2339,26 +2347,30 @@ async def stream_ytmusic(video_id: str, request: Request):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
-    # ytmusic — только каталог метаданных: аудио той же записи (название +
-    # артист + длительность) качаем с SoundCloud, если матч уже найден
-    # (ищется заранее из поисковых эндпоинтов и сборки потока, см.
-    # _schedule_sc_match). Идущий поиск первого трека порции поток играет
-    # сразу после выдачи — коротко ждём его, а не уходим на YouTube. На
-    # промахе остаёмся на обычном YouTube-пути. scfallback=1 — это 307 из
-    # /api/soundcloud/stream после DRM-404: без проверки редиректы зациклятся.
-    if request.query_params.get("scfallback") != "1":
+    # ytmusic — только каталог метаданных: аудио той же записи берём по
+    # приоритету Soulseek (оригинальный релизный файл с пира) → YouTube
+    # (та же запись ytmusic) → SoundCloud (фолбэк на отказ YouTube). Матчи
+    # ищутся заранее из поисковых эндпоинтов и сборки потока (см.
+    # _schedule_audio_matches). Идущий поиск первого трека порции поток
+    # играет сразу после выдачи — коротко ждём его. Флаги-предохранители от
+    # зацикливания 307-редиректов: slskfallback=1 — пир Soulseek отказал
+    # (повторная проверка зациклит его же), YouTube и SoundCloud ещё не
+    # пробовались; scfallback=1 — это 307 из /api/soundcloud/stream после
+    # DRM-404: Soulseek и YouTube проверялись раньше, повторять их смысла нет.
+    if request.query_params.get("scfallback") != "1" and (
+        request.query_params.get("slskfallback") != "1"
+    ):
         try:
-            from app.routers import soundcloud
+            from app.routers import soulseek
 
-            match = await soundcloud.await_soundcloud_match(video_id)
-            if match:
-                track_id, permalink = match
+            slsk_token = await soulseek.await_soulseek_match(video_id)
+            if slsk_token:
                 return RedirectResponse(
-                    f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}",
+                    f"/api/soulseek/stream/{slsk_token}?vid={video_id}",
                     status_code=307,
                 )
         except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
-            logger.exception("soundcloud redirect failed for %s", video_id)
+            logger.exception("soulseek redirect failed for %s", video_id)
     # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
     # имеют строковой id и играются напрямую через этот эндпоинт, минуя
     # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
@@ -2371,12 +2383,38 @@ async def stream_ytmusic(video_id: str, request: Request):
         asyncio.create_task(external_archive.schedule_archive_external("ytmusic", video_id))
     except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
         logger.exception("lazy-archive-ext: не удалось запланировать архивацию %s", video_id)
-    return await stream_cached_audio(
-        request,
-        video_id,
-        lambda force: _resolve_cached(video_id, force=force),
-        archive_key=f"ytmusic/{video_id}",
-    )
+    try:
+        return await stream_cached_audio(
+            request,
+            video_id,
+            lambda force: _resolve_cached(video_id, force=force),
+            archive_key=f"ytmusic/{video_id}",
+        )
+    except HTTPException as exc:
+        # YouTube отказал (404 трек недоступен / 502 резолв / 503 bot-check) —
+        # последняя надежда SoundCloud, если матч известен. scfallback=1 сюда
+        # уже возвращался после отказа самой SC: повторять нельзя (цикл),
+        # отдаём исходную ошибку плееру.
+        if request.query_params.get("scfallback") == "1":
+            raise
+        try:
+            from app.routers import soundcloud
+
+            match = await soundcloud.await_soundcloud_match(video_id)
+        except Exception:  # noqa: BLE001 — фолбэк не должен прятать исходную ошибку
+            logger.warning("sc fallback lookup failed for %s", video_id, exc_info=True)
+            raise
+        if not match:
+            raise
+        track_id, permalink = match
+        logger.info(
+            "ytmusic stream %s failed (%s), falling back to soundcloud %s",
+            video_id, exc.status_code, track_id,
+        )
+        return RedirectResponse(
+            f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}",
+            status_code=307,
+        )
 
 
 @router.post("/prefetch/{video_id}")
@@ -2388,29 +2426,23 @@ async def prefetch_ytmusic(video_id: str):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
-    # Известна soundcloud-подмена — греем именно её: играть будет она, а
-    # YouTube-прогрев был бы лишним резолвом и первыми байтами с googlevideo.
-    # Поиск подмены может ещё идти (первый трек порции потока) — коротко
-    # ждём: POST /prefetch фронт всё равно не ждёт для старта воспроизведения.
+    # Приоритет прогрева — как у стрима: Soulseek → YouTube. Soulseek-матч
+    # греется постановкой закачки у пира (очередь пира может быть длинной),
+    # YouTube — резолвом в Redis и первыми байтами на диск. Поиск матча может
+    # ещё идти (первый трек порции потока) — коротко ждём: POST /prefetch
+    # фронт всё равно не ждёт для старта воспроизведения. SoundCloud не греем:
+    # это фолбэк на отказ YouTube, двойной прогрев — двойной трафик ради
+    # редкого случая (готовность SC-подмены /prefetch/ready и так увидит, если
+    # та была прогрета раньше).
     try:
-        from app.routers import soundcloud
+        from app.routers import soulseek
 
-        match = await soundcloud.await_soundcloud_match(video_id)
+        slsk_token = await soulseek.prefetch_soulseek_match(video_id)
     except Exception:  # noqa: BLE001 — выбор источника прогрева не фатален
-        logger.warning("sc match lookup failed for %s", video_id, exc_info=True)
-        match = None
-    if match:
-        track_id, permalink = match
-        status = schedule_prefetch(
-            f"sc{track_id}",
-            lambda force=False: soundcloud._resolve_cached(
-                track_id, permalink, force=force
-            ),
-            f"soundcloud:resolve:{track_id}",
-            soundcloud._RESOLVE_TTL,
-            archive_key=f"soundcloud/{track_id}",
-        )
-        return {"status": status}
+        logger.warning("slsk match lookup failed for %s", video_id, exc_info=True)
+        slsk_token = None
+    if slsk_token:
+        return {"status": "downloading"}
     status = schedule_prefetch(
         video_id,
         lambda force=False: _resolve_cached(video_id, force=force),

@@ -12,6 +12,10 @@ os.environ.setdefault("RATE_LIMIT_STORAGE_URI", "memory://")
 os.environ.setdefault("REDIS_HOST", "127.0.0.1")
 os.environ.setdefault("REDIS_CONNECT_TIMEOUT", "0.05")
 os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.05")
+# Фоновый сборщик библиотеки (app/slsk_harvest.py) стартует с приложением и
+# сразу тянет сеть (ytmusic-каталог + slskd). Присваивание, а не setdefault:
+# compose может протащить .env с включённым харвестом.
+os.environ["SLSK_HARVEST"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,6 +167,15 @@ def _no_external_pool_network(request, monkeypatch):
 
     monkeypatch.setattr(
         "app.routers.soundcloud.find_soundcloud_equivalent", _no_sc_match
+    )
+
+    # Soulseek-матчинг — тот же принцип (см. комментарий выше): без стаба
+    # планировщик из _schedule_audio_matches погонял бы slskd-поиски.
+    async def _no_slsk_match(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.routers.soulseek.find_soulseek_equivalent", _no_slsk_match
     )
     yield
 

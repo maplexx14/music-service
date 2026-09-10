@@ -8,9 +8,11 @@ from typing import List, Optional, Tuple
 import aiofiles
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
+from app.cache import get_cache_async, set_cache_async
 from app.schemas import ExternalTrackResponse
+from app import storage
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,16 @@ SEARCH_POLL_INTERVAL = 0.7
 # Стрим: сколько ждать новых байт, прежде чем сдаться (в секундах, при простое).
 STREAM_IDLE_TIMEOUT = 45.0
 STREAM_POLL_INTERVAL = 0.4
+# Сколько ждать первых байт закачки ДО старта StreamingResponse: обычно пир с
+# свободным слотом начинает отдавать за секунды, дольше — очередь, и пусть
+# стрим работает по idle-timeout.
+STREAM_START_TIMEOUT = 8.0
+# Фоновое ожидание завершения трансфера для архивации в MinIO (см.
+# _adopt_when_done): закачка живёт в slskd, а не в стриме, и может тянуться
+# дольше прослушивания.
+_ADOPT_TIMEOUT = 15 * 60
+_ADOPT_POLL_INTERVAL = 5.0
+_adopt_inflight: set[str] = set()
 
 MEDIA_TYPES = {
     ".mp3": "audio/mpeg",
@@ -120,17 +132,8 @@ def _rank_key(response: dict, file: dict) -> tuple:
     return (free, speed, bitrate)
 
 
-@router.get("/search", response_model=List[ExternalTrackResponse])
-async def search_soulseek(
-    request: Request,
-    q: str = Query(..., min_length=1),
-    limit: int = Query(20, ge=1, le=50),
-):
-    if not SOULSEEK_USERNAME:
-        return []
-
-    base_url = str(request.base_url).rstrip("/")
-
+async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Optional[List[dict]]:
+    """Запускает поиск в slskd и собирает ответы пиров. None — поиск недоступен."""
     try:
         create = await _slskd_client.post(
             f"{SLSKD_URL}/api/v0/searches",
@@ -141,12 +144,13 @@ async def search_soulseek(
         search_id = create.json().get("id")
         if not search_id:
             logger.error("slskd search did not return an id: %s", create.text)
-            return []
+            return None
 
         # Собираем ответы пиров, пока поиск не завершится или не истечёт таймаут.
+        # Ответы приходят волнами в течение нескольких секунд — poll-агрегация.
         elapsed = 0.0
         responses: List[dict] = []
-        while elapsed < SEARCH_TIMEOUT:
+        while elapsed < timeout:
             await asyncio.sleep(SEARCH_POLL_INTERVAL)
             elapsed += SEARCH_POLL_INTERVAL
             state = await _slskd_client.get(
@@ -163,8 +167,236 @@ async def search_soulseek(
                 responses = resp.json()
             if payload.get("isComplete") or payload.get("state") == "Completed":
                 break
+        return responses
     except httpx.HTTPError:
         logger.exception("Soulseek search failed")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# ytmusic → Soulseek: то же, что soundcloud-подмена (см. soundcloud.py,
+# schedule_ytmusic_soundcloud_match), только источником аудио служит
+# оригинальный релизный файл с пира — ровно та запись, что была в релизе
+# (включая lossless), а не загрузка в SoundCloud, где матчинг регулярно
+# цеплял ремиксы. Поэтому приоритет ВЫШЕ SoundCloud.
+#
+# Как и scmatch, матч ищется заранее, из поисковых эндпоинтов ytmusic: у
+# /stream/{video_id} метаданных нет — только videoId и кэш. Найденный матч
+# сразу ставит закачку у пира: к моменту клика файл уже течёт.
+# ---------------------------------------------------------------------------
+
+_MATCH_TTL = 7 * 24 * 3600
+_MATCH_MISS_TTL = 6 * 3600
+# У пиров свои рипы (прегэпы/трим тишины расходятся сильнее, чем между
+# стримингами) — окно по длительности шире SC-шных ±5с.
+_MATCH_DURATION_TOLERANCE = 8
+# Поиск в slskd дорогой (до 15с поллинга) — греем только верхушку выдачи.
+_MATCH_SCHEDULE_LIMIT = 3
+# Одновременных поисков: очередь внутри slskd отсутствует, ограничиваем сами.
+_MATCH_CONCURRENCY = 2
+# Ставить закачку сразу при найденном матче, не дожидаясь клика: без этого
+# первый проигрыш платит ожидание очереди пира. 0 — качать только по клику.
+_MATCH_PREFETCH = os.getenv("SLSK_MATCH_PREFETCH", "1") not in ("0", "false", "no")
+_match_sem: Optional[asyncio.Semaphore] = None
+_match_inflight: dict[str, asyncio.Task] = {}
+
+# Слова в имени файла, отличающие ремикс/кавер от оригинальной записи.
+# «live» и «edit» не включены — дают слишком много ложных срабатываний
+# («Live and Die», «Editor»).
+_REMIX_RE = re.compile(
+    r"\b(?:remixes?|bootleg|rework|vip|flip|acapella|instrumental|"
+    r"cover|dub\s*mix|extended\s*mix|radio\s*edit)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_remix_mismatch(filename: str, want_title: str) -> bool:
+    """Кандидат — ремикс/кавер, а ищем оригинал (или наоборот)."""
+    cand = _basename(filename)
+    if _REMIX_RE.search(cand):
+        return not _REMIX_RE.search(want_title or "")
+    return False
+
+
+async def find_soulseek_equivalent(
+    video_id: str, title: str, artist: str, duration: int
+) -> Optional[str]:
+    """Токен файла-эквивалента в Soulseek для трека YouTube Music.
+
+    None — точного совпадения нет (или slskd недоступен): вызывающий код
+    откатывается на SoundCloud/YouTube.
+    """
+    key = f"ytmusic:slskmatch:{video_id}"
+    cached = await get_cache_async(key)
+    if cached:
+        # Промах тоже кэшируем — иначе каждый стрим гонял бы slskd-поиск заново.
+        token = cached.get("token")
+        return str(token) if token else None
+
+    from app.routers.ytdlp import clean_title
+
+    want_title = clean_title(title or "")
+    if not want_title or not artist or duration <= 0:
+        await set_cache_async(key, {"token": None}, expire=_MATCH_MISS_TTL)
+        return None
+
+    global _match_sem
+    if _match_sem is None:
+        _match_sem = asyncio.Semaphore(_MATCH_CONCURRENCY)
+    async with _match_sem:
+        responses = await _slskd_search_responses(f"{artist} {want_title}")
+    if responses is None:
+        # Поиск недоступен: промах не доказан — не кэшируем, следующий вызов
+        # попробует снова.
+        return None
+
+    from app.routers.soundcloud import _ScMatchCandidate, _is_exact_match
+
+    best: Optional[tuple] = None  # (rank, username, file)
+    for response in responses:
+        username = response.get("username") or ""
+        if not username:
+            continue
+        for file in response.get("files") or []:
+            filename = file.get("filename") or ""
+            if not _is_audio(filename):
+                continue
+            try:
+                f_duration = int(file.get("length") or 0)
+            except (TypeError, ValueError):
+                f_duration = 0
+            f_title, f_artist = _parse_title_artist(filename)
+            candidate = _ScMatchCandidate(
+                title=f_title,
+                artist=f_artist,
+                duration=f_duration,
+            )
+            if not _is_exact_match(
+                candidate, want_title, artist, duration,
+                tolerance=_MATCH_DURATION_TOLERANCE,
+            ):
+                continue
+            if _is_remix_mismatch(filename, want_title):
+                continue
+            # Уже скачанный файл — мгновенный стрим без пира вообще.
+            have_local = 1 if _find_local_path(filename) else 0
+            rank = (have_local, *_rank_key(response, file))
+            if best is None or rank > best[0]:
+                best = (rank, username, file)
+
+    if best is None:
+        await set_cache_async(key, {"token": None}, expire=_MATCH_MISS_TTL)
+        logger.info("no soulseek equivalent for ytmusic track %s", video_id)
+        return None
+
+    _rank, username, file = best
+    size = int(file.get("size") or 0)
+    if not size:
+        await set_cache_async(key, {"token": None}, expire=_MATCH_MISS_TTL)
+        return None
+    token = _token_encode(username, file["filename"], size)
+    await set_cache_async(key, {"token": token}, expire=_MATCH_TTL)
+    logger.info(
+        "ytmusic track %s (%s — %s) matched to soulseek peer %s",
+        video_id, artist, title, username,
+    )
+    if _MATCH_PREFETCH:
+        await _enqueue_download(_slskd_client, username, file["filename"], size)
+    return token
+
+
+async def soulseek_match_for(video_id: str) -> Optional[str]:
+    """Известный soulseek-эквивалент ytmusic-трека.
+
+    Только чтение кэша, без поиска: вызывается из /stream и /prefetch на
+    каждый чих (поиск запускается заранее, из поиска ytmusic).
+    """
+    cached = await get_cache_async(f"ytmusic:slskmatch:{video_id}")
+    token = cached.get("token") if cached else None
+    return str(token) if token else None
+
+
+def schedule_ytmusic_soulseek_match(tracks) -> None:
+    """Ищет soulseek-эквиваленты ytmusic-треков в фоне (fire-and-forget).
+
+    Зеркало soundcloud.schedule_ytmusic_soundcloud_match. Повторные вызовы
+    дёшевы: find_soulseek_equivalent выходит по кэшу (в т.ч. по закэширо-
+    ванному промаху), параллельные дубли режет _match_inflight, а
+    одновременность slskd-поисков ограничена _match_sem.
+    """
+    from app.routers.soundcloud import _sc_match_fields
+
+    for track in list(tracks)[:_MATCH_SCHEDULE_LIMIT]:
+        fields = _sc_match_fields(track)
+        if fields is None or fields[0] in _match_inflight:
+            continue
+        video_id, title, artist, duration = fields
+        task = asyncio.create_task(_match_job(video_id, title, artist, duration))
+        _match_inflight[video_id] = task
+        task.add_done_callback(
+            lambda _task, vid=video_id: _match_inflight.pop(vid, None)
+        )
+
+
+async def _match_job(
+    video_id: str, title: str, artist: str, duration: int
+) -> Optional[str]:
+    try:
+        return await find_soulseek_equivalent(video_id, title, artist, duration)
+    except Exception:  # noqa: BLE001 — фоновый матч, стрим его не ждёт
+        logger.warning("slsk match failed for ytmusic %s", video_id, exc_info=True)
+        return None
+
+
+async def await_soulseek_match(
+    video_id: str, timeout: float = 3.0
+) -> Optional[str]:
+    """Эквивалент из кэша; если поиск этого трека сейчас идёт — ждём его.
+
+    До timeout, дальше — как получится (промах → вызывающий код идёт на
+    SoundCloud/YouTube). shield: таймаут стрима не отменяет общий поиск.
+    """
+    task = _match_inflight.get(video_id)
+    if task is not None:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:  # noqa: BLE001 — матч не должен ломать стрим
+            logger.warning("slsk match wait failed for %s", video_id, exc_info=True)
+    return await soulseek_match_for(video_id)
+
+
+async def prefetch_soulseek_match(video_id: str, timeout: float = 3.0) -> Optional[str]:
+    """Ставит закачку известного soulseek-матча; ждёт идущий поиск до timeout.
+
+    Вызывается из /api/ytdlp/prefetch/{video_id}: к моменту клика файл уже
+    течёт с пира, и stream_soulseek отдаёт байты без ожидания очереди.
+    """
+    token = await await_soulseek_match(video_id, timeout=timeout)
+    if not token:
+        return None
+    try:
+        username, filename, size = _token_decode(token)
+    except Exception:  # noqa: BLE001 — битый токен → обычный путь прогрева
+        return None
+    await _enqueue_download(_slskd_client, username, filename, size)
+    return token
+
+
+@router.get("/search", response_model=List[ExternalTrackResponse])
+async def search_soulseek(
+    request: Request,
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+):
+    if not SOULSEEK_USERNAME:
+        return []
+
+    base_url = str(request.base_url).rstrip("/")
+
+    responses = await _slskd_search_responses(q)
+    if responses is None:
         return []
 
     # Разворачиваем (response -> files) и ранжируем.
@@ -248,8 +480,41 @@ async def _transfer_finished(client: httpx.AsyncClient, username: str, filename:
     return None
 
 
+async def _adopt_when_done(
+    source: str, external_id: str, username: str, filename: str
+) -> None:
+    """Дожидается завершения закачки в slskd и уносит файл в MinIO.
+
+    Трансфер не зависит от стрима: клиент мог уйти на середине, а файл
+    продолжает докачиваться. Ошибки только логируем — архивация не должна
+    ничего ломать (следующее прослушивание повторит через стрим).
+    """
+    from app import external_archive
+
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _ADOPT_TIMEOUT
+        while True:
+            finished = await _transfer_finished(_slskd_client, username, filename)
+            if finished is False:
+                return
+            if finished is True:
+                break
+            if loop.time() >= deadline:
+                return
+            await asyncio.sleep(_ADOPT_POLL_INTERVAL)
+
+        path = _find_local_path(filename)
+        if path and os.path.exists(path):
+            await external_archive.adopt_local_file(source, external_id, path)
+    except Exception:  # noqa: BLE001 — фон, воспроизведение важнее
+        logger.warning("slsk adopt failed for %s", filename, exc_info=True)
+    finally:
+        _adopt_inflight.discard(filename)
+
+
 @router.get("/stream/{token}")
-async def stream_soulseek(token: str):
+async def stream_soulseek(token: str, request: Request, vid: str = Query(default="")):
     if not SOULSEEK_USERNAME:
         raise HTTPException(status_code=503, detail="Soulseek не настроен")
 
@@ -261,10 +526,66 @@ async def stream_soulseek(token: str):
     ext = os.path.splitext(_basename(filename))[1].lower()
     media_type = MEDIA_TYPES.get(ext, "application/octet-stream")
 
+    # Архивная копия в MinIO (её кладёт _adopt_when_done после первой
+    # закачки) быстрее пира и не зависит от того, ушёл ли раздающий в
+    # оффлайн. Ключ — исходный идентификатор трека: ytmusic/{vid} для
+    # подмены ytmusic-трека, soulseek/{token} для самостоятельного.
+    if storage.is_minio_backend():
+        try:
+            from app.routers.ytdlp import archived_music_path
+
+            archive_key = (
+                f"ytmusic/{vid}"
+                if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or "")
+                else f"soulseek/{token}"
+            )
+            archived = await archived_music_path(archive_key)
+            if archived:
+                return await storage.minio_range_response_async(archived, request)
+        except Exception:  # noqa: BLE001 — объект мог удалиться, играем по обычному пути
+            logger.warning("slsk archived object unusable for %s", filename, exc_info=True)
+
     # Общий клиент (см. _slskd_client): не закрываем его в finally —
     # он живёт на модуль и переиспользует соединения между стримами.
     client = _slskd_client
     await _enqueue_download(client, username, filename, size)
+
+    # Ждём первых байт ДО ответа клиенту. Пока StreamingResponse не начат,
+    # отказ пира можно честно отыграть фолбэком: этот эндпоинт вызывается 307
+    # из /api/ytdlp/stream/{video_id} (см. vid), и по таймауту очереди мы
+    # возвращаем браузер туда же — с slskfallback=1 стрим уйдёт на SoundCloud.
+    # После старта стрима это уже невозможно: пустой 200 выглядит для плеера
+    # как «трек кончился», а не «истник отказал».
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STREAM_START_TIMEOUT
+    while True:
+        path = _find_local_path(filename)
+        if path and os.path.exists(path) and os.path.getsize(path) > 0:
+            break
+        finished = await _transfer_finished(client, username, filename)
+        if finished is False:
+            if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or ""):
+                return RedirectResponse(
+                    f"/api/ytdlp/stream/{vid}?slskfallback=1", status_code=307
+                )
+            raise HTTPException(status_code=502, detail="Пир не отдал файл")
+        if loop.time() >= deadline:
+            break  # очередь пира длинная — стримуем как получится, дальше idle-timeout
+        await asyncio.sleep(STREAM_POLL_INTERVAL)
+
+    # Архивация: пир уйдёт в оффлайн, а трек должен остаться. Трансфер живёт
+    # в slskd независимо от нашего стрима, поэтому ждём его завершения
+    # фоновой задачей (в т.ч. после ухода клиента) и уносим файл в MinIO под
+    # исходным идентификатором: ytmusic/{vid} для подмены ytmusic-трека
+    # (archive:path подхватит stream_cached_audio) или soulseek/{token}.
+    if storage.is_minio_backend():
+        if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or ""):
+            source, external_id = "ytmusic", vid
+        else:
+            source, external_id = "soulseek", token
+        if filename not in _adopt_inflight:
+            _adopt_inflight.add(filename)
+            asyncio.create_task(_adopt_when_done(source, external_id, username, filename))
 
     async def streamer():
         sent = 0

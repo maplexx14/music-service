@@ -44,14 +44,18 @@ from app.acoustic_features import ANALYZER_VERSION, analyze_file
 logger = logging.getLogger(__name__)
 
 # Источники с детерминированным резолвом, которые умеем архивировать.
-ARCHIVABLE_SOURCES = {"ytmusic", "soundcloud"}
+# soulseek резолва через URL не имеет (файл течёт с пира), но архивируется
+# приёмом готового файла — adopt_local_file из стрима (см. soulseek.py).
+ARCHIVABLE_SOURCES = {"ytmusic", "soundcloud", "soulseek"}
 
 # Расширение аудио → content-type для корректной отдачи из MinIO.
 _AUDIO_CT = {
     ".m4a": "audio/mp4",
     ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
     ".opus": "audio/ogg",
     ".ogg": "audio/ogg",
+    ".wav": "audio/x-wav",
     ".webm": "audio/webm",
 }
 
@@ -177,6 +181,11 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
     if source not in ARCHIVABLE_SOURCES or not external_id:
         return None
     if not local_path or not os.path.exists(local_path):
+        return None
+    # Soulseek-файлы приходят как есть (в т.ч. lossless-рипы) и транскода не
+    # проходят — гиганта в 60+ МБ в хранилище не тащим.
+    if MAX_AUDIO_BYTES and os.path.getsize(local_path) > MAX_AUDIO_BYTES:
+        logger.info("adopt: %s/%s превышает лимит размера, пропуск", source, external_id)
         return None
 
     ext = os.path.splitext(local_path)[1].lower() or ".m4a"

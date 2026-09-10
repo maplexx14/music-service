@@ -3098,5 +3098,5 @@ async def get_flow(
     # кэшируются в Redis, поэтому матчить надо именно здесь, по итоговой
     # выдаче — на момент сборки пула этих треков могло ещё не быть в кэше.
     # Мисс — фолбэк на YouTube (см. ytdlp.stream_ytmusic).
-    ytdlp._schedule_sc_match(mix)
+    ytdlp._schedule_audio_matches(mix)
     return mix

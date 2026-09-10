@@ -342,6 +342,15 @@ async def _artist_probe_loop() -> None:
 
 
 @app.on_event("startup")
+async def _slsk_harvest_loop() -> None:
+    """Фоновое наполнение библиотеки треками известных артистов через Soulseek
+    (app/slsk_harvest.py). Качает лидер из Redis-замка, см. модуль."""
+    from app.slsk_harvest import start as _harvest_start
+
+    await _harvest_start()
+
+
+@app.on_event("startup")
 async def _warmup_ytdlp() -> None:
     # Первый резолв YouTube Music в свежем процессе платит cold-start за
     # импорт yt_dlp и загрузку реестра экстракторов/плагинов (~0.5-0.7с) —
