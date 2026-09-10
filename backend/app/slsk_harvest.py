@@ -158,14 +158,24 @@ async def _watch_and_adopt(video_id: str, token: str, meta: dict) -> None:
         logger.info("harvest: %s — %s в MinIO", meta["artist"], meta["title"])
 
 
-async def _harvest_pass(artist: str, tracks_per_artist: int) -> None:
-    """Один проход: каталог артиста → матчи → закачки с наблюдателями."""
+async def _harvest_pass(artist: str, tracks_per_artist: int) -> bool:
+    """Один проход: каталог артиста → матчи → закачки с наблюдателями.
+
+    False — проход не состоялся (slskd недоступен): артиста нельзя помечать
+    «собранным», к нему нужно вернуться после оживания.
+    """
     from app.routers import soulseek, ytdlp
+
+    # slskd недоступен (предохранитель, см. soulseek._slskd_unreachable) —
+    # проход бессмыслен: все find_soulseek_equivalent вернут None.
+    if not soulseek._slskd_available():
+        logger.info("harvest: slskd недоступен, пропуск %s", artist)
+        return False
 
     catalog = await ytdlp._fetch_artist_catalog(artist, limit=tracks_per_artist)
     if not catalog:
         logger.info("harvest: каталог %s пуст", artist)
-        return
+        return True
 
     matched = 0
     for track in catalog:
@@ -190,6 +200,7 @@ async def _harvest_pass(artist: str, tracks_per_artist: int) -> None:
         "harvest: %s — %d трек(ов) в каталоге, %d заматчено в soulseek",
         artist, len(catalog), matched,
     )
+    return True
 
 
 async def start() -> None:
@@ -232,10 +243,10 @@ async def start() -> None:
                 if await asyncio.to_thread(_acquire):
                     artist = await asyncio.to_thread(_pick_artist, revisit)
                     if artist:
-                        await _harvest_pass(artist, tracks_per_artist)
-                        redis_client.set(
-                            _MARK_PREFIX + artist, time.time(), ex=revisit
-                        )
+                        if await _harvest_pass(artist, tracks_per_artist):
+                            redis_client.set(
+                                _MARK_PREFIX + artist, time.time(), ex=revisit
+                            )
             except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
                 logger.exception("slsk harvest pass failed")
             await asyncio.sleep(interval)

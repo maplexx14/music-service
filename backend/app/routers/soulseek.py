@@ -3,6 +3,7 @@ import base64
 import logging
 import os
 import re
+import time
 from typing import List, Optional, Tuple
 
 import aiofiles
@@ -61,6 +62,30 @@ def _headers() -> dict:
 # Общий клиент к slskd: без него каждый поиск/стрим платит свежий TCP-хендшейк
 # (плюс сокет-чурн под нагрузкой). Заголовки передаются per-request.
 _slskd_client = httpx.AsyncClient(timeout=15.0)
+
+# Предохранитель доступности slskd. Когда контейнер не поднят (или DNS его
+# имени не резолвит — типично после деплоя без slskd), каждый поиск ждёт
+# сетевой таймаут и сыплет ConnectError-трейсбеками, а промах не доказан —
+# кэш не спасает, и matcher/харвест бьются в недоступный хост на каждый чих.
+# После connect-ошибки помечаем slskd «недоступен до» и отказываем быстро.
+# Как и _bot_check_until в ytdlp — память процесса, не Redis: счётчик живёт
+# ровно столько же и не должен переживать рестарт.
+_SLSKD_BACKOFF = 60.0
+_slskd_down_until = 0.0
+
+
+def _slskd_available() -> bool:
+    return time.monotonic() >= _slskd_down_until
+
+
+def _slskd_unreachable() -> None:
+    """Connect-уровень ошибок (DNS/подключение) — slskd недоступен целиком."""
+    global _slskd_down_until
+    _slskd_down_until = time.monotonic() + _SLSKD_BACKOFF
+    logger.warning(
+        "slskd unreachable (%s), pausing soulseek attempts for %ss",
+        SLSKD_URL, _SLSKD_BACKOFF,
+    )
 
 
 def _token_encode(username: str, filename: str, size: int) -> str:
@@ -134,6 +159,8 @@ def _rank_key(response: dict, file: dict) -> tuple:
 
 async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Optional[List[dict]]:
     """Запускает поиск в slskd и собирает ответы пиров. None — поиск недоступен."""
+    if not _slskd_available():
+        return None
     try:
         create = await _slskd_client.post(
             f"{SLSKD_URL}/api/v0/searches",
@@ -168,6 +195,11 @@ async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Op
             if payload.get("isComplete") or payload.get("state") == "Completed":
                 break
         return responses
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        # DNS/подключение — хоста нет целиком (не «плохой запрос»):
+        # включаем предохранитель, трейсбек не нужен.
+        _slskd_unreachable()
+        return None
     except httpx.HTTPError:
         logger.exception("Soulseek search failed")
         return None
@@ -226,6 +258,11 @@ async def find_soulseek_equivalent(
     None — точного совпадения нет (или slskd недоступен): вызывающий код
     откатывается на SoundCloud/YouTube.
     """
+    # Пустой SOULSEEK_USERNAME = Soulseek выключен целиком (например, в
+    # прод-конфигурации без slskd): не ищем и не трогаем кэш, чтобы каждый
+    # ytmusic-поиск/стрим не бился в несуществующий хост.
+    if not SOULSEEK_USERNAME:
+        return None
     key = f"ytmusic:slskmatch:{video_id}"
     cached = await get_cache_async(key)
     if cached:
@@ -374,7 +411,7 @@ async def prefetch_soulseek_match(video_id: str, timeout: float = 3.0) -> Option
     течёт с пира, и stream_soulseek отдаёт байты без ожидания очереди.
     """
     token = await await_soulseek_match(video_id, timeout=timeout)
-    if not token:
+    if not token or not _slskd_available():
         return None
     try:
         username, filename, size = _token_decode(token)
@@ -448,6 +485,8 @@ async def _enqueue_download(client: httpx.AsyncClient, username: str, filename: 
             json=[{"filename": filename, "size": size}],
             headers=_headers(),
         )
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        _slskd_unreachable()
     except httpx.HTTPError:
         # Если файл уже в очереди, slskd вернёт ошибку — это не критично.
         logger.info("Download enqueue for %s returned non-2xx (возможно, уже в очереди)", filename)
@@ -461,6 +500,9 @@ async def _transfer_finished(client: httpx.AsyncClient, username: str, filename:
         )
         resp.raise_for_status()
         data = resp.json()
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        _slskd_unreachable()
+        return None
     except httpx.HTTPError:
         return None
 
@@ -548,6 +590,17 @@ async def stream_soulseek(token: str, request: Request, vid: str = Query(default
     # Общий клиент (см. _slskd_client): не закрываем его в finally —
     # он живёт на модуль и переиспользует соединения между стримами.
     client = _slskd_client
+
+    # slskd недоступен (предохранитель, см. _slskd_unreachable) — не тратим
+    # STREAM_START_TIMEOUT на поллинг мёртвого хоста, сразу отыгрываем
+    # фолбэк тем же кодом, что и отказ пира.
+    if not _slskd_available():
+        if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or ""):
+            return RedirectResponse(
+                f"/api/ytdlp/stream/{vid}?slskfallback=1", status_code=307
+            )
+        raise HTTPException(status_code=502, detail="slskd недоступен")
+
     await _enqueue_download(client, username, filename, size)
 
     # Ждём первых байт ДО ответа клиенту. Пока StreamingResponse не начат,

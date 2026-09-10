@@ -122,6 +122,19 @@ def _reset_ytdlp_bot_check_backoff():
 
 
 @pytest.fixture(autouse=True)
+def _reset_slskd_backoff():
+    """Предохранитель доступности slskd живёт в памяти процесса 60с и переживает
+    конец теста. Без сброса тест, который его открыл (замокал ConnectError),
+    ломает последующие: поиск/закачки отказывают мгновенно, хотя тест ждёт
+    настоящих вызовов."""
+    from app.routers import soulseek
+
+    soulseek._slskd_down_until = 0.0
+    yield
+    soulseek._slskd_down_until = 0.0
+
+
+@pytest.fixture(autouse=True)
 def _reset_external_recommendation_cooldown():
     """Предохранитель внешних источников рекомендаций живёт 2 минуты в общем
     Redis (см. recommendations._EXTERNAL_COOLDOWN_KEY). Тот же повод, что у

@@ -12,7 +12,10 @@
 #   * наружу слушает только nginx (80/443); Postgres и консоль MinIO — на
 #     127.0.0.1, доступ через SSH-туннель; Redis и S3-API MinIO не публикуются;
 #   * нет bind-mount исходников: образы самодостаточны;
-#   * нет slskd и tuna;
+#   * slskd (Soulseek) включён, но вся интеграция активируется только непустым
+#     SOULSEEK_USERNAME в .env.prod — без него контейнер поднимается вхолостую
+#     (файлообмен отключён, матчер/харвест в бэкенде выключены);
+#   * нет tuna;
 #   * restart: unless-stopped и ротация логов у всех сервисов;
 #   * ресурсы рассчитаны на VDS с 8 ГБ RAM (см. комментарии у postgres/backend).
 
@@ -181,10 +184,15 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
-      # Soulseek/slskd в прод-конфигурации отключён: сервиса нет, а пустой
-      # SOULSEEK_USERNAME заставляет роутер отдавать пустую выдачу вместо
-      # попыток соединения (soulseek.py:129).
-      SOULSEEK_USERNAME: ""
+      # Soulseek/slskd (см. сервис slskd ниже). Пустой SOULSEEK_USERNAME =
+      # Soulseek выключен целиком: поиск/матчер/харвест отдают пустоту без
+      # попыток соединения (soulseek.py: find_soulseek_equivalent и роутеры).
+      SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      SLSKD_URL: ${SLSKD_URL:-http://slskd:5030}
+      # Должен совпадать с api_keys.default.key из slskd/slskd.yml.
+      SLSKD_API_KEY: ${SLSKD_API_KEY:-}
+      SLSKD_DOWNLOADS_DIR: /app/slskd_downloads
+      SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
       YTDLP_CACHE_DIR: /app/ytdlp_cache
       YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
       INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
@@ -243,6 +251,10 @@ services:
       - cover_files:/app/cover_files
       - ytdlp_cache:/app/ytdlp_cache
       - cookies_data:/app/cookies
+      # Закачки slskd — read-only, как в dev: бэкенд их стримит и уносит в
+      # MinIO, но никогда не пишет в них (очистка живёт внутри slskd).
+      - slskd_downloads:/app/slskd_downloads:ro
+      - slskd_incomplete:/app/slskd_incomplete:ro
       # Каталог, а не файл: rotate.sh подменяет active.url через mv (новый
       # inode), и bind-mount самого файла продолжил бы показывать старый.
       - ./invidious/proxy-pool/stream-proxy:/run/stream-proxy:ro
@@ -267,6 +279,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      # service_started (а не healthy): достаточно, что контейнер создан и
+      # DNS-имя существует. Бэкенд не должен ждать готовности slskd —
+      # недоступность переживает предохранитель (soulseek._slskd_unreachable).
+      slskd:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status==200 else 1)\""]
       interval: 30s
@@ -283,6 +300,30 @@ services:
       -b 0.0.0.0:8000
       --forwarded-allow-ips='*'
       --access-logfile - --error-logfile -"
+
+  # Soulseek-клиент (slskd): источник аудио с приоритетом выше YouTube.
+  # Наружу порты НЕ публикуются (прод-инвариант «наружу только nginx»):
+  # бэкенд ходит по http://slskd:5030 внутри compose-сети. Консоль slskd на
+  # проде не нужна, а при отладке доступ через SSH-туннель (`ssh -L` +
+  # docker run --network или публикация 127.0.0.1:5030:5030).
+  # Soulseek требует, чтобы пользователь что-то раздавал (иначе сеть не
+  # отдаёт результаты поиска) — шарим музыкальную библиотеку из volume.
+  slskd:
+    image: slskd/slskd:latest
+    container_name: music_slskd
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      SLSKD_SLSK_USERNAME: ${SOULSEEK_USERNAME:-}
+      SLSKD_SLSK_PASSWORD: ${SOULSEEK_PASSWORD:-}
+      SLSKD_DOWNLOADS_DIR: /app/downloads
+      SLSKD_INCOMPLETE_DIR: /app/incomplete
+    volumes:
+      - ./slskd/slskd.yml:/app/slskd.yml
+      - music_files:/app/shared:ro
+      - slskd_downloads:/app/downloads
+      - slskd_incomplete:/app/incomplete
+      - slskd_data:/app/data
 
   frontend:
     build:
@@ -347,5 +388,8 @@ volumes:
   cover_files:
   ytdlp_cache:
   cookies_data:
+  slskd_downloads:
+  slskd_incomplete:
+  slskd_data:
   certbot_conf:
   certbot_www:
