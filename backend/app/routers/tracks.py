@@ -6,15 +6,19 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from typing import List, Optional
 import logging
+import urllib.parse
 import os
 import uuid
 import json
 import shutil
 import aiofiles
+import hashlib
+import base64
+import httpx
 from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import get_db
-from app.cache import get_cache, set_cache
+from app.cache import get_cache, get_cache_async, set_cache, set_cache_async
 from app.recommendation_cache import invalidate_recommendation_cache
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips, user_play_events, rec_impressions
@@ -111,6 +115,117 @@ def get_tracks(
             expire=120,
         )
     return tracks
+
+
+# ─────────────────── Прокси внешних обложек ───────────────────
+#
+# Прямой egress контейнера бэкенда к CDN обложек (ytimg/googleusercontent/
+# sndcdn) закрыт провайдером, а с браузера URL этих CDN мигают: в плохое окно
+# ВСЕ внешние обложки разом падают в дефолт-заглушку, хотя аудио играет —
+# оно идёт через наш прокси. Поэтому http(s)-обложки отдаются через тот же
+# origin, что и приложение: /api/tracks/cover-proxy?url=….
+#
+# Fetch идёт через метаданный прокси (soundcloud.soundcloud_proxy — см.
+# комментарий там о том, почему именно он, а не платный stream-прокси),
+# результат кэшируется в Redis на сутки: обложка — маленький иммутабельный
+# файл, а список/флоу показывают один и тот же URL многими страницами.
+#
+# Роут обязан стоять ВЫШЕ /{track_id}: FastAPI матчит пути по порядку
+# объявления, иначе "cover-proxy" уходит в track_id как строка → 422.
+
+# Разрешённые CDN обложек. Прокси с произвольным url = open relay, поэтому
+# принимаем только хосты, которые реально встречаются в cover_url провайдеров.
+_COVER_CDN_HOSTS = (
+    "i.ytimg.com",
+    "yt3.googleusercontent.com",
+    "lh3.googleusercontent.com",
+    "lh1.googleusercontent.com",
+    "lh2.googleusercontent.com",
+    "lh4.googleusercontent.com",
+    "lh5.googleusercontent.com",
+    "lh6.googleusercontent.com",
+    "i1.sndcdn.com",
+    "i2.sndcdn.com",
+    "i3.sndcdn.com",
+    "i4.sndcdn.com",
+    "i.sndcdn.com",
+    "cf-media.sndcdn.com",
+)
+_COVER_PROXY_MAX_BYTES = 10 * 1024 * 1024  # 10 MB — потолок на одну обложку
+_COVER_CACHE_TTL = 24 * 3600
+# Негативный кэш короче: CDN может отдать 403/timeout мигом, а через минуту
+# ответить 200 — не выпарываем обложку на сутки из-за одного флапа.
+_COVER_NEGATIVE_TTL = 300
+
+
+def _cover_cache_key(url: str) -> str:
+    return "cover-proxy:" + hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+def _is_allowed_cover_url(url: str) -> bool:
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and parts.netloc.lower() in _COVER_CDN_HOSTS
+    )
+
+
+@router.get("/cover-proxy")
+async def proxy_external_cover(url: str):
+    """Отдаёт внешнюю обложку CDN через бэкенд-прокси с кэшем в Redis."""
+    if not _is_allowed_cover_url(url):
+        raise HTTPException(status_code=400, detail="Unsupported cover URL")
+
+    from app.routers.soundcloud import soundcloud_proxy
+
+    cache_key = _cover_cache_key(url)
+
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        if cached.get("error"):
+            raise HTTPException(status_code=502, detail="Cover fetch failed")
+        return Response(
+            content=base64.b64decode(cached["data_b64"]),
+            media_type=cached.get("content_type") or "image/jpeg",
+            headers={"Cache-Control": f"public, max-age={_COVER_CACHE_TTL}"},
+        )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, read=15.0),
+            follow_redirects=True,
+            proxy=soundcloud_proxy(),
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            body = resp.content
+            if len(body) > _COVER_PROXY_MAX_BYTES:
+                raise ValueError("cover too large")
+            content_type = resp.headers.get("content-type", "image/jpeg")
+    except Exception:
+        logger.warning("cover-proxy: fetch failed for %s", url[:120])
+        await set_cache_async(
+            cache_key, {"error": True}, expire=_COVER_NEGATIVE_TTL
+        )
+        raise HTTPException(status_code=502, detail="Cover fetch failed")
+
+    # redis-кэш в cache.py JSON-only — бинарное тело лежит base64.
+    await set_cache_async(
+        cache_key,
+        {
+            "data_b64": base64.b64encode(body).decode("ascii"),
+            "content_type": content_type,
+        },
+        expire=_COVER_CACHE_TTL,
+    )
+    return Response(
+        content=body,
+        media_type=content_type,
+        headers={"Cache-Control": f"public, max-age={_COVER_CACHE_TTL}"},
+    )
 
 
 @router.get("/{track_id}", response_model=TrackResponse)

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Download, Link2 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import defaultCover from '../assets/default-cover.webp'
 import GenreSelect from '../components/GenreSelect'
 import ArtistSelect from '../components/ArtistSelect'
 import api from '../services/api'
@@ -237,7 +239,12 @@ function PreferencesOnboarding() {
               <div className="onboarding-preview">
                 <div className="onboarding-preview-head">
                   {preview.cover_url && (
-                    <img src={preview.cover_url} alt="" className="onboarding-preview-cover" />
+                    <img
+                      src={resolveCoverUrl(preview.cover_url) || defaultCover}
+                      alt=""
+                      className="onboarding-preview-cover"
+                      onError={handleCoverError}
+                    />
                   )}
                   <div>
                     <div className="onboarding-preview-title">

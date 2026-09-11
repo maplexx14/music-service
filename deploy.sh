@@ -108,21 +108,44 @@ else
   # --resolve прибивает запрос к локальному nginx: проверка не зависит от DNS
   # и от того, куда сейчас смотрит A-запись. -k — сертификат здесь не предмет
   # проверки (истёкший поймает certbot, а не деплой).
-  https_code="$(http_code -k --resolve "${domain}:443:127.0.0.1" "https://${domain}/api/health")"
-  if [[ "$https_code" == "200" ]]; then
-    echo "nginx: /api/health отвечает 200 по https"
-  else
+  #
+  # Ретраи, а не одна попытка: единичный 502 сразу после reload ещё не мёртвый
+  # деплой. Бэкенд может упасть и перезапуститься ПОСЛЕ первого успешного
+  # healthcheck (crash на старте, чаще всего OOM): wait-цикл выше уже вышел по
+  # healthy и не увидит ни рестарта, ни смены статуса, а restart-политика
+  # поднимает контейнер заново за десятки секунд (alembic + boot gunicorn).
+  # Наружу это выглядит как раз как наблюдавшийся случай: reload прошёл,
+  # "upstream ... (111: Connection refused)" от свежего воркера, 502. Окно
+  # закрываем ретраями; если за минуту сервис не вернулся — деплой краснеет.
+  echo "Проверяем /api/health через nginx (до 60 с с ретраями)…"
+  check_deadline=$((SECONDS + 60))
+  while :; do
+    https_code="$(http_code -k --resolve "${domain}:443:127.0.0.1" "https://${domain}/api/health")"
+    if [[ "$https_code" == "200" ]]; then
+      echo "nginx: /api/health отвечает 200 по https"
+      break
+    fi
     # Пока сертификата нет, entrypoint разворачивает http-only конфиг
     # (см. nginx/docker-entrypoint.sh) — на первом деплое это норма.
     plain_code="$(http_code -H "Host: ${domain}" "http://127.0.0.1/api/health")"
     if [[ "$plain_code" == "200" ]]; then
       echo "nginx: /api/health отвечает 200 по http (сертификата ещё нет — ожидаемо до init-letsencrypt.sh)"
-    else
-      echo "nginx не отдаёт /api/health: https=${https_code}, http=${plain_code}. Последние строки лога:" >&2
+      break
+    fi
+    if ((SECONDS >= check_deadline)); then
+      echo "nginx не отдаёт /api/health за 60 с (https=${https_code}, http=${plain_code})." >&2
+      # 502 с "connect() failed" в логе nginx почти всегда означает лежащий
+      # бэкенд, а не проблему самого nginx. Без его лога и счётчика рестартов
+      # причина не видна — дампим оба.
+      backend_restarts="$(docker inspect -f '{{.RestartCount}}' "$backend_cid" 2>/dev/null || echo '?')"
+      backend_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' "$backend_cid" 2>/dev/null || echo '?')"
+      echo "backend: RestartCount=${backend_restarts}, health=${backend_health}. Логи backend и nginx:" >&2
+      compose logs --tail=60 backend >&2
       compose logs --tail=40 nginx >&2
       exit 1
     fi
-  fi
+    sleep 5
+  done
 fi
 
 echo "Deployment completed."

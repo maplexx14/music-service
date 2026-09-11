@@ -443,7 +443,7 @@ function Home() {
                     to={`/external/soundcloud/playlists/${playlist.external_id}`}
                   >
                     <img
-                      src={playlist.cover_url || defaultCover}
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.title}
                       className="playlist-cover"
                       loading="lazy"

@@ -1,4 +1,4 @@
-import { SERVER_URL } from '../config'
+import { API_URL, SERVER_URL } from '../config'
 import defaultCover from '../assets/default-cover.webp'
 
 // Просит у CDN Google обложку большего разрешения. Обложки YouTube Music
@@ -16,12 +16,18 @@ const upscaleCover = (url) => {
   return url
 }
 
+// Внешние http(s)-обложки отдаются через бэкенд-прокси, а не напрямую с CDN
+// провайдера: прямой выход к этим CDN с браузера мигает (окна, когда ВСЕ
+// внешние обложки разом падают в дефолт-заглушку), а аудио при этом играет —
+// оно идёт через наш прокси. Бэкенд тянет обложку через свой выход и кэширует.
+const proxyExternalCover = (url) => `${API_URL}/tracks/cover-proxy?url=${encodeURIComponent(url)}`
+
 // Резолвит URL обложки. highQuality=true — для полноэкранного плеера и
 // системного виджета (апскейл CDN). highQuality=false (по умолчанию) —
 // список треков, мини-плеер; экономит трафик и ускоряет загрузку.
 export const resolveCoverUrl = (coverUrl, highQuality = false) => {
   if (!coverUrl) return null
-  if (coverUrl.startsWith('http')) return highQuality ? upscaleCover(coverUrl) : coverUrl
+  if (coverUrl.startsWith('http')) return proxyExternalCover(highQuality ? upscaleCover(coverUrl) : coverUrl)
   if (coverUrl.startsWith('/')) return `${SERVER_URL}${coverUrl}`
   return `${SERVER_URL}/${coverUrl}`
 }

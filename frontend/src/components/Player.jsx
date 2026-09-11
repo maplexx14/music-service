@@ -1514,7 +1514,7 @@ function PlayerInner() {
       }
       return
     }
-    const artwork = resolveCoverUrl(currentTrack.cover_url)
+    const artwork = resolveCoverUrl(currentTrack.cover_url, true)
     const artworkUrl = artwork
       ? new URL(artwork, window.location.origin).href
       : new URL(defaultCover, window.location.origin).href

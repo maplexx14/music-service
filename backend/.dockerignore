@@ -12,6 +12,11 @@ ENV
 .pytest_cache
 .mypy_cache
 .ruff_cache
+# Мусор от прогона тестов через bind-mount Docker Desktop: каталог создаётся
+# root'ом с d--x--x--x, после чего не читается ни хостом, ни build-контекстом
+# (error from sender: Access is denied). В рантайме он маскируется tmpfs
+# (docker-compose.override.yml), в образ попадать не должен в любом случае.
+.pytest-tmp-media
 
 .git
 .gitignore

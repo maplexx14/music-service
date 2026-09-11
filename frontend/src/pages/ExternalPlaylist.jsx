@@ -8,7 +8,7 @@ import ArtistLink from '../components/ArtistLink'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
-import { handleCoverError } from '../utils/media'
+import { handleCoverError, resolveCoverUrl } from '../utils/media'
 import './PlaylistDetail.css'
 
 // Просмотр внешнего (SoundCloud) плейлиста: слушать можно сразу, в библиотеку
@@ -173,7 +173,7 @@ function ExternalPlaylist() {
     <div className="page-container">
       <div className="playlist-header">
         <img
-          src={playlist.cover_url || defaultCover}
+          src={resolveCoverUrl(playlist.cover_url) || defaultCover}
           alt={playlist.title}
           className="playlist-header-cover"
           onError={handleCoverError}
@@ -244,7 +244,7 @@ function ExternalPlaylist() {
                   </td>
                   <td className="track-name-cell">
                     <img
-                      src={track.cover_url || defaultCover}
+                      src={resolveCoverUrl(track.cover_url) || defaultCover}
                       alt={track.title}
                       className="track-table-cover"
                       loading="lazy"

@@ -340,7 +340,7 @@ function Search() {
                     title="Открыть плейлист"
                   >
                     <img
-                      src={playlist.cover_url || defaultCover}
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.title}
                       className="playlist-item-cover"
                       loading="lazy"
