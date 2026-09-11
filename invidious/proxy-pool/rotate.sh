@@ -224,6 +224,24 @@ probe_invidious() {
   return 1
 }
 
+# CONNECT к googlevideo: там живут и стрим-URL, и валидация PO-токена в
+# companion. Провайдер может пускать youtube.com, но резать googlevideo —
+# такой выход проходит playabilityStatus-проверку, а аудио не отдаётся
+# никогда (companion не валидирует PO-токен, Invidious — без аудио-форматов,
+# наблюдавшееся 2026-09-11 на 11 из 14 адресов пула: youtube=200,
+# redirector.googlevideo.com=000).
+# report_mapping — публичный эндпоинт без подписи, годится как probe.
+verify_googlevideo() {
+  local url="$1"
+  if [[ -n "$url" ]]; then
+    curl -sf -o /dev/null --max-time 10 -x "$url" \
+      -I https://redirector.googlevideo.com/report_mapping 2>/dev/null
+  else
+    curl -sf -o /dev/null --max-time 10 \
+      -I https://redirector.googlevideo.com/report_mapping 2>/dev/null
+  fi
+}
+
 # Обслуживает ли YouTube этот прокси. playabilityStatus:OK на watch-странице —
 # признак, что адрес не в блоке (при блоке приходит LOGIN_REQUIRED /
 # «Sign in to confirm you're not a bot» либо запрос вовсе не проходит).
@@ -233,7 +251,8 @@ verify_proxy() {
   local url="$1" body
   body="$(curl -s --max-time 25 -x "$url" -A "$UA" \
     "https://www.youtube.com/watch?v=${VERIFY_ID}" 2>/dev/null)" || return 1
-  grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body"
+  grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body" || return 1
+  verify_googlevideo "$url"
 }
 
 # Обслуживает ли YouTube адрес самого VPS (без прокси). Прямому выходу тоже
@@ -243,7 +262,8 @@ verify_direct() {
   local body
   body="$(curl -s --max-time 25 -A "$UA" \
     "https://www.youtube.com/watch?v=${VERIFY_ID}" 2>/dev/null)" || return 1
-  grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body"
+  grep -q -E '"playabilityStatus":\{"status":"OK"' <<<"$body" || return 1
+  verify_googlevideo ""
 }
 
 # Перезаписывает active.env. В файле пароль, поэтому режим задаём явно (0600):

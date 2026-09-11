@@ -1140,8 +1140,11 @@ def _warmup_ydl_blocking() -> None:
     """
     try:
         primary = _CLIENT_CANDIDATES[0]
+        # Ключ как у _extract_with_clients (прокси входит в ключ), иначе
+        # прогретый инстанс не переиспользуется первым же резолвом.
+        warm_proxy = stream_proxy()
         cached_ydl(
-            tuple(primary),
+            (tuple(primary), warm_proxy or ""),
             {
                 "quiet": True,
                 "no_warnings": True,
@@ -1152,6 +1155,7 @@ def _warmup_ydl_blocking() -> None:
                 "ignore_no_formats_error": True,
                 "js_runtimes": _JS_RUNTIMES,
                 "extractor_args": {"youtube": {"player_client": primary}},
+                **({"proxy": warm_proxy} if warm_proxy else {}),
                 **_ytdlp_cookie_opts(),
             },
         )
@@ -1210,8 +1214,17 @@ def _extract_with_clients(
     import yt_dlp
 
     url = f"https://music.youtube.com/watch?v={video_id}"
+    # Резолв идёт через тот же egress, что и скачивание (см. proxy_for_url):
+    # URL googlevideo привязан к IP, который его выдал. Когда включён
+    # invidious/proxy-pool, Invidious-резолв уже выходит через активный прокси
+    # (companion), а yt-dlp-фолбэк ходил напрямую с адреса VDS — такие URL
+    # умирали на probe с 403 при скачивании через прокси. Пустой stream_proxy
+    # (= файл active.url отсутствует) — прямой выход, как раньше.
+    proxy = stream_proxy()
     ydl = cached_ydl(
-        tuple(clients),
+        # Прокси входит в ключ кэша: после ротации active.url старый инстанс
+        # YoutubeDL продолжил бы резолвить через прежний выход.
+        (tuple(clients), proxy or ""),
         {
             "quiet": True,
             # Нужны тексты предупреждений: причина отказа приходит именно
@@ -1239,6 +1252,7 @@ def _extract_with_clients(
             "ignore_no_formats_error": True,
             "js_runtimes": _JS_RUNTIMES,
             "extractor_args": {"youtube": {"player_client": clients}},
+            **({"proxy": proxy} if proxy else {}),
             **_ytdlp_cookie_opts(),
         },
     )
