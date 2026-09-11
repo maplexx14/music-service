@@ -5,7 +5,7 @@ web:
   authentication:
     api_keys:
       default:
-        key: cddd9a716e984ff9724ad26c1534230ec8132c3728d01aadd24c0b86911d5d9e
+        key: bd9a149c4fd40831c908e9e44c9e623d5c3fa85383b2637a73e5c1093dac3d00
         role: administrator
         cidr: 0.0.0.0/0,::/0
 # Soulseek требует, чтобы пользователь что-то раздавал — иначе сеть не отдаёт

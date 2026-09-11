@@ -238,7 +238,14 @@ services:
       SLSKD_INCOMPLETE_DIR: /app/incomplete
     ports:
       - "5030:5030"
-      - "50300:50300"
+      # 50300 (входящие P2P-соединения Soulseek) НАМЕРЕННО не публикуем на
+      # хосте: Windows/Hyper-V после перезагрузок резервирует динамические
+      # диапазоны портов, 50300 регулярно попадает в резерв (проверить:
+      # `netsh interface ipv4 show excludedportrange protocol=tcp`), и bind
+      # падает «access permissions» — контейнер slskd не стартует вообще.
+      # Поиск/скачивание работают через исходящие соединения; входящие дали бы
+      # лишь скорость раздачи, а за NAT dev-машины они всё равно невозможны.
+      # Прод 50300 тоже не публикует (см. docker-compose.prod.yml).
     volumes:
       - ./slskd/slskd.yml:/app/slskd.yml
       - ./backend/music_files:/app/shared:ro

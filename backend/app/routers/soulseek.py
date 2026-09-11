@@ -27,9 +27,12 @@ INCOMPLETE_DIR = os.getenv("SLSKD_INCOMPLETE_DIR", "/app/slskd_incomplete")
 
 AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
 
-# Как долго собирать ответы пиров на поиск, прежде чем вернуть агрегат.
-# Результаты Soulseek приходят волнами в течение нескольких секунд.
-SEARCH_TIMEOUT = 15.0
+# Как долго ждать завершения поиска в slskd, прежде чем вернуть агрегат.
+# slskd отдаёт /responses ТОЛЬКО у завершившегося поиска: пока state
+# InProgress, responseCount уже растёт, но GET /responses даёт []. Сам поиск
+# живёт ~50 с на стороне slskd и завершается state='Completed, TimedOut'.
+# 15 с здесь стабильно возвращали пустоту на любой запрос.
+SEARCH_TIMEOUT = 60.0
 SEARCH_POLL_INTERVAL = 0.7
 # Стрим: сколько ждать новых байт, прежде чем сдаться (в секундах, при простое).
 STREAM_IDLE_TIMEOUT = 45.0
@@ -173,8 +176,13 @@ async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Op
             logger.error("slskd search did not return an id: %s", create.text)
             return None
 
-        # Собираем ответы пиров, пока поиск не завершится или не истечёт таймаут.
-        # Ответы приходят волнами в течение нескольких секунд — poll-агрегация.
+        # Ждём завершения поиска, прежде чем забирать ответы: slskd отдаёт
+        # /responses ТОЛЬКО у завершившегося поиска (InProgress → responseCount
+        # уже растёт, но GET /responses даёт []). Сам поиск живёт десятки
+        # секунд и завершается state='Completed, TimedOut' — flags-строка,
+        # точное равенство с 'Completed' не сработает, проверяем вхождение.
+        # Промежуточные опросы нужны, чтобы заметить завершение раньше
+        # потолка SEARCH_TIMEOUT.
         elapsed = 0.0
         responses: List[dict] = []
         while elapsed < timeout:
@@ -185,14 +193,13 @@ async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Op
             )
             state.raise_for_status()
             payload = state.json()
-            if payload.get("responseCount", 0) > 0:
+            if payload.get("isComplete") or "Completed" in str(payload.get("state") or ""):
                 resp = await _slskd_client.get(
                     f"{SLSKD_URL}/api/v0/searches/{search_id}/responses",
                     headers=_headers(),
                 )
                 resp.raise_for_status()
                 responses = resp.json()
-            if payload.get("isComplete") or payload.get("state") == "Completed":
                 break
         return responses
     except (httpx.ConnectError, httpx.ConnectTimeout):
