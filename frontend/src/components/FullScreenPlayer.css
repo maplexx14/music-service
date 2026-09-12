@@ -22,12 +22,14 @@
 }
 /* Фолбэк-закрытие (нет View Transitions / reduced-motion): плеер уезжает
    вниз 300ms, но fixed inset:0 всё это время перекрывает страницу и глотает
-   тапы. Пока едет — он уже «не существует» для ввода. */
+   тапы. Пока едет — он уже «не существует» для ввода.
+   Без opacity: полупрозрачный тёмный плеер поверх страницы выглядел как
+   затемнение экрана; непрозрачный слайд раскрывает страницу сверху вниз,
+   как настоящий drawer. */
 .fullscreen-player.is-closing {
   transform: translateY(100%);
-  opacity: 0.4;
   pointer-events: none;
-  transition: transform 0.3s var(--ease-drawer), opacity 0.3s var(--ease-drawer);
+  transition: transform 0.3s var(--ease-drawer);
 }
 
 .fullscreen-header {

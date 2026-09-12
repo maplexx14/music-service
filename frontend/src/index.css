@@ -173,23 +173,22 @@ input[type='range']:active {
    резкий; здесь — мягкий, в такт остальным motion-токенам. Браузеры без
    поддержки просто не видят этих правил (graceful degradation). */
 @media (prefers-reduced-motion: no-preference) {
+  /* Кроссфейд «старый не гаснет, новый проявляется сверху»: старый снапшот
+     остаётся непрозрачной подложкой все 200ms, новый плавно набирает
+     альфу поверх него. Суммарное покрытие всегда 1 — сквозь пару
+     снапшотов не просвечивает чёрный канвас (симптом «экран затемняется»
+     на закрытии фуллскрина). Прежний фикс через mix-blend-mode:
+     plus-lighter рассчитывал, что оба слоя гаснут одновременно, но
+     iOS Safari блендинг внутри ::view-transition не применяет —
+     полупрозрачная пара складывалась в затемнение. Схема с непрозрачным
+     старым слоем от блендинга не зависит вовсе. */
   ::view-transition-old(root) {
-    animation: 200ms var(--ease-in-out) both vt-fade-out;
+    animation: none;
+    mix-blend-mode: normal;
   }
   ::view-transition-new(root) {
     animation: 200ms var(--ease-out) both vt-fade-in;
-  }
-
-  /* UA гоняет свой кроссфейд рута парой анимаций: fade-out/fade-in ПЛЮС
-     служебная, включающая mix-blend-mode: plus-lighter. Переопределив
-     animation выше, мы сбили и её: в середине перехода старый и новый
-     снапшот оба полупрозрачны, суммарная альфа < 1, и сквозь них
-     просвечивает чёрный фон канваса — экран на пару сотен ms
-     «затемняется». Заметнее всего на закрытии фуллскрина, где старый
-     слой сам тёмный. Возвращаем блендинг явным свойством. */
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
-    mix-blend-mode: plus-lighter;
+    mix-blend-mode: normal;
   }
 
   /* Shared-element морф обложки мини-плеер ⇄ фуллскрин: имя
@@ -225,12 +224,6 @@ input[type='range']:active {
 .vt-swap .fullscreen-player,
 .vt-swap .fullscreen-player.is-closing {
   transition: none !important;
-}
-
-@keyframes vt-fade-out {
-  to {
-    opacity: 0;
-  }
 }
 
 @keyframes vt-fade-in {
