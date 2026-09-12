@@ -39,3 +39,34 @@ export const handleCoverError = (e) => {
   if (e.currentTarget.src.endsWith(defaultCover)) return
   e.currentTarget.src = defaultCover
 }
+
+// Прогрев обложки до показа: скачивание + декод. Резолвится true, когда
+// картинка готова к мгновенной отрисовке, false — по ошибке или таймауту
+// (холодная сеть не должна блокировать открытие плеера дольше предела).
+// Без crossOrigin: no-cors, как у обычного <img>, — та же ячейка кэша,
+// что у плеера (decode не «пачкает» canvas, чтение пикселей не нужно).
+export const preloadCover = (url, timeoutMs = 450) => {
+  if (!url) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const img = new Image()
+    let settled = false
+    const finish = (ok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    img.onload = () => {
+      // decode() отдельно от load: load значит «скачано», decode —
+      // «готово к рисованию без задержки на декодирование».
+      if (typeof img.decode === 'function') {
+        img.decode().then(() => finish(true), () => finish(false))
+      } else {
+        finish(true)
+      }
+    }
+    img.onerror = () => finish(false)
+    img.src = url
+  })
+}

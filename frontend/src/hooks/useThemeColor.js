@@ -12,13 +12,26 @@ function getThemeMeta() {
 
 // Средний цвет обложки по даунскейлу: canvas 1x1 с imageSmoothing
 // отрисовкой картинки даёт нам «доминирующий» цвет почти бесплатно
-// (браузер сам усредняет пиксели при масштабировании). Взвешивать
-// гистограмму незачем — для окраски статус-бара среднегармонического
-// хватает, а кросс-доменные картинки в canvas и так опираются на CORS.
+// (браузер сам усредняет пиксели при масштабировании).
+//
+// crossOrigin ставим ТОЛЬКО для кросс-доменных URL (dev): canvas имеет
+// право читать пиксели лишь с CORS-чистого изображения. Для same-origin
+// (прод) атрибут не нужен и ВРЕДЕН: он переводит запрос в CORS-режим, а
+// ответы с Vary: Origin (или просто разные режимы) браузер кэширует
+// отдельными ячейками — обложка перекачивалась бы при каждом открытии
+// плеера параллельно с обычным <img>.
+function isCrossOriginUrl(src) {
+  try {
+    return new URL(src, window.location.origin).origin !== window.location.origin
+  } catch {
+    return false
+  }
+}
+
 async function extractDominantColor(src) {
   return new Promise((resolve) => {
     const img = new Image()
-    img.crossOrigin = 'anonymous'
+    if (isCrossOriginUrl(src)) img.crossOrigin = 'anonymous'
     img.decoding = 'async'
     img.onload = () => {
       try {

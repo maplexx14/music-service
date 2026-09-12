@@ -9,7 +9,7 @@ import {
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { uiTransition } from '../utils/uiTransition'
@@ -463,15 +463,34 @@ function PlayerInner() {
   // мини-плеера. Сначала дожидаемся чанка фуллскрин-плеера (тот же модуль,
   // что лениво грузит Layout, — Vite отдаст из кэша): если внутри свапа
   // чанка нет, Suspense-фолбэк попал бы в «новый» снапшот пустотой.
+  // Затем — hi-res обложку: фуллскрин показывает её в увеличенном виде, и
+  // без прогрева снапшот ловил бы ещё не декодированную картинку (пустую
+  // заглушку → скачок после морфа). Таймаут внутри preloadCover страхует
+  // от блокировки открытия на холодной сети.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
-      uiTransition(() => openFullScreen(karaoke))
     } catch {
-      // Чанк не приехал — просто открываем, без морфа.
       openFullScreen(karaoke)
+      return
     }
+    const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
+    if (hiRes) await preloadCover(hiRes)
+    uiTransition(() => openFullScreen(karaoke))
   }
+
+  // Hi-res обложка нужна фуллскрину при открытии (морф из мини-плеера) —
+  // качаем её заранее, в простое после смены трека, чтобы открытие не
+  // ждало сети. Таймаут в preloadCover не даёт прогреву копить промисы.
+  useEffect(() => {
+    if (!currentTrack?.cover_url || isFullScreen) return undefined
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const handle = idle(() => {
+      preloadCover(resolveCoverUrl(currentTrack.cover_url, true)).catch(() => {})
+    })
+    return () => cancel(handle)
+  }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen])
 
   useEffect(() => {
     const audio = audioRef.current
