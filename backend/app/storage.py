@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from typing import AsyncIterator, Iterator, Optional
 from urllib.parse import urlsplit
@@ -260,6 +261,9 @@ def upload_music_file(local_path: str, key: str, content_type: str) -> str:
     _get_internal_client().fput_object(
         MUSIC_BUCKET, key, local_path, content_type=content_type
     )
+    # Ключ мог существовать (re-archive внешнего трека) — stat-кэш больше
+    # не валиден, ETag перезалитого объекта другой.
+    _stat_cache_invalidate(MUSIC_BUCKET, key)
     return make_object_path(MUSIC_BUCKET, key)
 
 
@@ -275,6 +279,7 @@ def upload_cover_file(local_path: str, key: str, content_type: str) -> str:
     _get_internal_client().fput_object(
         COVERS_BUCKET, key, local_path, content_type=content_type
     )
+    _stat_cache_invalidate(COVERS_BUCKET, key)
     return public_cover_url(key)
 
 
@@ -340,18 +345,69 @@ def find_music_object(prefix: str) -> Optional[str]:
     return None
 
 
-def stat_music_object(file_path: str) -> tuple[int, str]:
-    """(size, content_type) аудио-объекта по minio://bucket/key."""
+# ─────────────────────── кэш stat-запросов ───────────────────────
+#
+# Каждый Range-запрос браузера (а iOS Safari шлёт их десятками на один трек:
+# probe bytes=0-1, хвост за метаданными, затем последовательные 206-чанки)
+# раньше стоил отдельного HEAD в MinIO. Байты объекта для ключа практически
+# неизменяемы, поэтому кэшируем (size, content_type, ETag) в памяти воркера
+# с TTL; upload/remove инвалидируют запись явно, TTL страхует от перезаливки
+# того же ключа мимо этих функций. Дикт-операции атомарны под GIL — из
+# event loop и из тредпула concurrently безопасно.
+
+_STAT_CACHE_TTL = float(os.getenv("MINIO_STAT_CACHE_TTL", "300"))
+_STAT_CACHE_MAX = int(os.getenv("MINIO_STAT_CACHE_MAX", "8192"))
+
+_stat_cache: dict[str, tuple[float, tuple[int, str, str]]] = {}
+
+
+def _stat_cache_get(bucket: str, key: str) -> Optional[tuple[int, str, str]]:
+    hit = _stat_cache.get(f"{bucket}/{key}")
+    if hit is not None and hit[0] > time.monotonic():
+        return hit[1]
+    return None
+
+
+def _stat_cache_put(bucket: str, key: str, value: tuple[int, str, str]) -> None:
+    if len(_stat_cache) >= _STAT_CACHE_MAX:
+        now = time.monotonic()
+        for stale in [k for k, (exp, _) in _stat_cache.items() if exp <= now]:
+            del _stat_cache[stale]
+        if len(_stat_cache) >= _STAT_CACHE_MAX:
+            _stat_cache.clear()  # дороже один лишний HEAD, чем неограниченный рост
+    _stat_cache[f"{bucket}/{key}"] = (time.monotonic() + _STAT_CACHE_TTL, value)
+
+
+def _stat_cache_invalidate(bucket: str, key: str) -> None:
+    _stat_cache.pop(f"{bucket}/{key}", None)
+
+
+def stat_music_object(file_path: str) -> tuple[int, str, str]:
+    """(size, content_type, etag) аудио-объекта по minio://bucket/key."""
     bucket, key = parse_object_path(file_path)
+    cached = _stat_cache_get(bucket, key)
+    if cached is not None:
+        return cached
     st = _get_internal_client().stat_object(bucket, key)
-    return st.size, (st.content_type or "audio/mpeg")
+    value = (st.size, (st.content_type or "audio/mpeg"), (st.etag or ""))
+    _stat_cache_put(bucket, key, value)
+    return value
 
 
-async def stat_music_object_async(file_path: str) -> tuple[int, str]:
+async def stat_music_object_async(file_path: str) -> tuple[int, str, str]:
     """Async-двойник stat_music_object (hot-path, см. init_async_client)."""
     bucket, key = parse_object_path(file_path)
+    cached = _stat_cache_get(bucket, key)
+    if cached is not None:
+        return cached
     resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
-    return resp["ContentLength"], (resp.get("ContentType") or "audio/mpeg")
+    value = (
+        resp["ContentLength"],
+        (resp.get("ContentType") or "audio/mpeg"),
+        (resp.get("ETag") or ""),
+    )
+    _stat_cache_put(bucket, key, value)
+    return value
 
 
 def iter_music_object(
@@ -400,35 +456,61 @@ async def iter_music_object_async(
         stream.close()
 
 
-def minio_range_response(file_path: str, request: Request) -> Response:
-    """Отдаёт аудио-объект из MinIO с поддержкой Range (перемотка/докачка).
+# ─────────────── условные запросы и Range-парсинг ───────────────
+#
+# Общий слой для аудио- и cover-прокси: ETag + If-None-Match (304 без тела)
+# + If-Range (защита от отдачи байтов от перезалитого объекта под старый
+# Range) + разбор Range в одном месте для sync/async-версий.
 
-    Проксируем через бэкенд (тот же origin/https, что и приложение), А НЕ
-    редиректом на MINIO_PUBLIC_ENDPOINT: за https-туннелем прямой
-    http://<minio>:9000 блокируется как mixed content, а localhost с другого
-    устройства указывает на сам клиент. Внутренний клиент (minio:9000) доступен
-    из контейнера всегда.
 
-    Общий путь для /tracks/{id}/stream и для провайдерских стрим-эндпоинтов
-    (ytdlp/soundcloud), которые проверяют архивную копию до резолва.
-    """
-    file_size, mime_type = stat_music_object(file_path)
-    common_headers = {
+def audio_common_headers(etag: str) -> dict[str, str]:
+    """Общие заголовки ответа на аудио-объект из MinIO."""
+    headers = {
         "Accept-Ranges": "bytes",
         # Байты объекта неизменны для данного ключа — разрешаем браузеру
         # кэшировать: повторный старт и перемотка не тянут их заново через
         # туннель (раньше здесь стоял no-store и каждый seek качал заново).
-        "Cache-Control": "private, max-age=3600",
+        # Неделю, а не час: вместе с ETag/If-Range ревалидация дешёвая.
+        "Cache-Control": "private, max-age=604800",
         "Vary": "Accept-Encoding",
     }
-    range_header = request.headers.get("range")
-    if not range_header:
-        return StreamingResponse(
-            iter_music_object(file_path),
-            media_type=mime_type,
-            headers={**common_headers, "Content-Length": str(file_size)},
-        )
+    if etag:
+        headers["ETag"] = etag
+    return headers
 
+
+def if_none_match_matches(request: Request, etag: str) -> bool:
+    """True, если If-None-Match совпал с текущим ETag — отдавать 304.
+
+    Понимает список тегов ("a", "b") и '*', как требует RFC 7232 §3.2.
+    """
+    header = request.headers.get("if-none-match")
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    return any(tag.strip() == etag for tag in header.split(","))
+
+
+def if_range_allows_206(request: Request, etag: str) -> bool:
+    """Range применим, только если If-Range (когда он есть) совпал с ETag.
+
+    If-Range с HTTP-датой не проверяем (Last-Modified не отдаём) — считаем
+    несовпадением и отдаём 200 целиком: безопаснее, чем срезать чужие байты
+    под старый Range.
+    """
+    header = request.headers.get("if-range")
+    if header is None:
+        return True
+    return bool(etag) and header.strip() == etag
+
+
+def parse_range_header(range_header: str, file_size: int) -> Optional[tuple[int, int]]:
+    """'bytes=start-end' → (start, end) включительно.
+
+    Некорректный диапазон → None (вызовет 416). Один диапазон; список
+    ('0-1,5-9') не поддерживается — сознательно, браузеры так не шлют.
+    """
     try:
         unit, raw_range = range_header.strip().split("=", 1)
         if unit.lower() != "bytes" or "," in raw_range:
@@ -445,13 +527,52 @@ def minio_range_response(file_path: str, request: Request) -> Response:
             end = file_size - 1
         if start < 0 or start >= file_size or end < start:
             raise ValueError
-        end = min(end, file_size - 1)
+        return start, min(end, file_size - 1)
     except (ValueError, TypeError):
+        return None
+
+
+def minio_range_response(file_path: str, request: Request) -> Response:
+    """Отдаёт аудио-объект из MinIO с поддержкой Range (перемотка/докачка).
+
+    Проксируем через бэкенд (тот же origin/https, что и приложение), А НЕ
+    редиректом на MINIO_PUBLIC_ENDPOINT: за https-туннелем прямой
+    http://<minio>:9000 блокируется как mixed content, а localhost с другого
+    устройства указывает на сам клиент. Внутренний клиент (minio:9000) доступен
+    из контейнера всегда.
+
+    Общий путь для /tracks/{id}/stream и для провайдерских стрим-эндпоинтов
+    (ytdlp/soundcloud), которые проверяют архивную копию до резолва.
+    """
+    file_size, mime_type, etag = stat_music_object(file_path)
+    common_headers = audio_common_headers(etag)
+
+    # Кэш браузера протух, но валидатор совпал — 304 без тела: Safari на iOS
+    # ревалидирует медиа-кэш агрессивно, без 304 он тянул бы байты заново.
+    if if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=common_headers)
+
+    range_header = request.headers.get("range")
+    if range_header and not if_range_allows_206(request, etag):
+        # Объект перезаливался после того, как браузер закэшировал кусок —
+        # старый Range под новые байты не режем, отдаём целиком.
+        range_header = None
+
+    if not range_header:
+        return StreamingResponse(
+            iter_music_object(file_path),
+            media_type=mime_type,
+            headers={**common_headers, "Content-Length": str(file_size)},
+        )
+
+    parsed = parse_range_header(range_header, file_size)
+    if parsed is None:
         return Response(
             status_code=416,
             headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
         )
 
+    start, end = parsed
     content_length = end - start + 1
     return StreamingResponse(
         iter_music_object(file_path, offset=start, length=content_length),
@@ -468,16 +589,20 @@ def minio_range_response(file_path: str, request: Request) -> Response:
 async def minio_range_response_async(file_path: str, request: Request) -> Response:
     """Async-двойник minio_range_response — hot-path, не держит OS-тред на стрим.
 
-    Range-парсинг/валидация/416 идентичны sync-версии (чистый Python, S3-объект
-    не трогаем до проверки границ — InvalidRange от get_object невозможен).
+    Range-парсинг/валидация/416/304 идентичны sync-версии (чистый Python,
+    S3-объект не трогаем до проверки границ — InvalidRange от get_object
+    невозможен).
     """
-    file_size, mime_type = await stat_music_object_async(file_path)
-    common_headers = {
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "private, max-age=3600",
-        "Vary": "Accept-Encoding",
-    }
+    file_size, mime_type, etag = await stat_music_object_async(file_path)
+    common_headers = audio_common_headers(etag)
+
+    if if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=common_headers)
+
     range_header = request.headers.get("range")
+    if range_header and not if_range_allows_206(request, etag):
+        range_header = None
+
     if not range_header:
         return StreamingResponse(
             iter_music_object_async(file_path),
@@ -485,29 +610,14 @@ async def minio_range_response_async(file_path: str, request: Request) -> Respon
             headers={**common_headers, "Content-Length": str(file_size)},
         )
 
-    try:
-        unit, raw_range = range_header.strip().split("=", 1)
-        if unit.lower() != "bytes" or "," in raw_range:
-            raise ValueError
-        raw_start, raw_end = raw_range.split("-", 1)
-        if raw_start:
-            start = int(raw_start)
-            end = int(raw_end) if raw_end else file_size - 1
-        else:
-            suffix_length = int(raw_end)
-            if suffix_length <= 0:
-                raise ValueError
-            start = max(file_size - suffix_length, 0)
-            end = file_size - 1
-        if start < 0 or start >= file_size or end < start:
-            raise ValueError
-        end = min(end, file_size - 1)
-    except (ValueError, TypeError):
+    parsed = parse_range_header(range_header, file_size)
+    if parsed is None:
         return Response(
             status_code=416,
             headers={**common_headers, "Content-Range": f"bytes */{file_size}"},
         )
 
+    start, end = parsed
     content_length = end - start + 1
     return StreamingResponse(
         iter_music_object_async(file_path, offset=start, length=content_length),
@@ -521,10 +631,16 @@ async def minio_range_response_async(file_path: str, request: Request) -> Respon
     )
 
 
-def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int]:
-    """(генератор байтов, content_type, size) обложки из covers-бакета."""
+def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int, str]:
+    """(генератор байтов, content_type, size, etag) обложки из covers-бакета."""
     client = _get_internal_client()
-    st = client.stat_object(COVERS_BUCKET, key)
+    cached = _stat_cache_get(COVERS_BUCKET, key)
+    if cached is not None:
+        size, content_type, etag = cached
+    else:
+        st = client.stat_object(COVERS_BUCKET, key)
+        size, content_type, etag = st.size, (st.content_type or "image/jpeg"), (st.etag or "")
+        _stat_cache_put(COVERS_BUCKET, key, (size, content_type, etag))
 
     def _gen() -> Iterator[bytes]:
         resp = client.get_object(COVERS_BUCKET, key)
@@ -535,13 +651,21 @@ def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int]:
             resp.close()
             resp.release_conn()
 
-    return _gen(), (st.content_type or "image/jpeg"), st.size
+    return _gen(), content_type, size, etag
 
 
-async def open_cover_object_async(key: str) -> tuple[AsyncIterator[bytes], str, int]:
+async def open_cover_object_async(key: str) -> tuple[AsyncIterator[bytes], str, int, str]:
     """Async-двойник open_cover_object (hot-path)."""
     client = _get_async_client()
-    st = await client.head_object(Bucket=COVERS_BUCKET, Key=key)
+    cached = _stat_cache_get(COVERS_BUCKET, key)
+    if cached is not None:
+        size, content_type, etag = cached
+    else:
+        st = await client.head_object(Bucket=COVERS_BUCKET, Key=key)
+        size = st["ContentLength"]
+        content_type = st.get("ContentType") or "image/jpeg"
+        etag = st.get("ETag") or ""
+        _stat_cache_put(COVERS_BUCKET, key, (size, content_type, etag))
 
     async def _gen() -> AsyncIterator[bytes]:
         resp = await client.get_object(Bucket=COVERS_BUCKET, Key=key)
@@ -552,7 +676,7 @@ async def open_cover_object_async(key: str) -> tuple[AsyncIterator[bytes], str, 
         finally:
             stream.close()
 
-    return _gen(), (st.get("ContentType") or "image/jpeg"), st["ContentLength"]
+    return _gen(), content_type, size, etag
 
 
 def remove_object_path(file_path: str) -> None:
@@ -560,6 +684,7 @@ def remove_object_path(file_path: str) -> None:
     if not is_minio_path(file_path):
         return
     bucket, key = parse_object_path(file_path)
+    _stat_cache_invalidate(bucket, key)
     try:
         _get_internal_client().remove_object(bucket, key)
     except Exception:  # noqa: BLE001 — best-effort, как и удаление с диска
@@ -571,6 +696,7 @@ def remove_cover_url(cover_url: Optional[str]) -> None:
     key = cover_key_from_url(cover_url)
     if not key:
         return
+    _stat_cache_invalidate(COVERS_BUCKET, key)
     try:
         _get_internal_client().remove_object(COVERS_BUCKET, key)
     except Exception:  # noqa: BLE001

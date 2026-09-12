@@ -398,7 +398,7 @@ async def stream_track(
 
 
 @router.get("/cover/{key:path}")
-async def stream_cover(key: str):
+async def stream_cover(key: str, request: Request):
     """Отдаёт обложку из MinIO через бэкенд-прокси (тот же origin, что и app).
 
     Нужно, чтобы за https-туннелем обложки не ломались как mixed content
@@ -407,16 +407,24 @@ async def stream_cover(key: str):
     if not storage.is_minio_backend():
         raise HTTPException(status_code=404, detail="Cover not found")
     try:
-        stream, content_type, size = await storage.open_cover_object_async(key)
+        stream, content_type, size, etag = await storage.open_cover_object_async(key)
     except Exception:
         raise HTTPException(status_code=404, detail="Cover not found")
+    # Байты обложки неизменны для ключа — браузеру можно кэшировать надолго;
+    # ETag + 304 делают ревалидацию бесплатной (Safari на iOS охотно шлёт
+    # условные запросы к картинкам из списков).
+    headers = {
+        "Content-Length": str(size),
+        "Cache-Control": "public, max-age=2592000, immutable",
+    }
+    if etag:
+        headers["ETag"] = etag
+    if storage.if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=headers)
     return StreamingResponse(
         stream,
         media_type=content_type,
-        headers={
-            "Content-Length": str(size),
-            "Cache-Control": "public, max-age=86400",
-        },
+        headers=headers,
     )
 
 
