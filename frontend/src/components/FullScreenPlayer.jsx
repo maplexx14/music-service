@@ -11,6 +11,7 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { uiTransition } from '../utils/uiTransition'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -109,9 +110,51 @@ function FullScreenPlayer() {
 
   const startClose = () => {
     if (isClosing) return
+    // VT-путь: обложка морфится обратно в мини-плеер. uiTransition вернёт
+    // false без API/reduced-motion — тогда классический слайд вниз.
+    if (uiTransition(() => closeFullScreen())) return
     setIsClosing(true)
     setTimeout(closeFullScreen, 350)
   }
+
+  // Пока фуллскрин открыт, страница под ним не прокручивается вовсе —
+  // ни тачем, ни колесом, ни клавиатурой. Классический симптом «тяну
+  // плеер вниз, а позади ползёт главная» — это скролл документа за
+  // fixed-оверлеем.
+  useEffect(() => {
+    const root = document.documentElement
+    const body = document.body
+    const prevHtml = root.style.overflow
+    const prevBody = body.style.overflow
+    root.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
+    return () => {
+      root.style.overflow = prevHtml
+      body.style.overflow = prevBody
+    }
+  }, [])
+
+  // Тач по плееру не должен скроллить ничего, кроме текстов песни
+  // (они прокручиваются намеренно, см. touch-action: pan-y у
+  // .fullscreen-lyrics-mobile). preventDefault обязан идти через
+  // НЕпассивный листener — синтетические onTouchMove React пассивны,
+  // и preventDefault в них не работает.
+  useEffect(() => {
+    const SCROLLABLE = '.fullscreen-lyrics-mobile, .fullscreen-lyrics-desktop, .lyrics-panel'
+    let inScrollable = false
+    const onStart = (e) => {
+      inScrollable = Boolean(e.target.closest?.(SCROLLABLE))
+    }
+    const onMove = (e) => {
+      if (!inScrollable && e.target.closest?.('.fullscreen-player')) e.preventDefault()
+    }
+    document.addEventListener('touchstart', onStart, { passive: true })
+    document.addEventListener('touchmove', onMove, { passive: false })
+    return () => {
+      document.removeEventListener('touchstart', onStart)
+      document.removeEventListener('touchmove', onMove)
+    }
+  }, [])
 
   const handleTouchStart = (e) => {
     if (e.touches.length !== 1) return
@@ -280,7 +323,12 @@ function FullScreenPlayer() {
       <div className="fullscreen-body">
         <div className="fullscreen-content">
           <div className={`fullscreen-art${lyricsMode ? ' compact' : ''}`}>
-            <img src={coverUrl} alt={currentTrack.title} onError={handleCoverError} />
+            <img
+              src={coverUrl}
+              alt={currentTrack.title}
+              onError={handleCoverError}
+              style={{ viewTransitionName: 'player-cover' }}
+            />
           </div>
 
        
@@ -290,7 +338,11 @@ function FullScreenPlayer() {
               <ArtistLink
                 artist={currentTrack.artist}
                 className="fullscreen-artist"
-                onNavigate={startClose}
+                // Прямое закрытие, без uiTransition: этот клик ещё и
+                // навигирует, и роутер сам завернёт переход в свой
+                // view transition — два конкурирующих startViewTransition
+                // в одном клике дают глитч.
+                onNavigate={closeFullScreen}
               />
             </div>
             <div className="fullscreen-actions">

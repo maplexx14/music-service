@@ -12,6 +12,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { uiTransition } from '../utils/uiTransition'
 import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -267,6 +268,11 @@ function PlayerInner() {
   const setDuration = usePlayerStore((s) => s.setDuration)
   const setVolume = usePlayerStore((s) => s.setVolume)
   const openFullScreen = usePlayerStore((s) => s.openFullScreen)
+  // Имя shared-element-морфа обложки (view-transition-name) в каждый момент
+  // должно жить ровно на ОДНОМ элементе, иначе браузер отменяет переход.
+  // Пока фуллскрин закрыт — оно на обложке мини-плеера; когда открыт —
+  // мини-плеер его отдаёт обложке фуллскрина (см. FullScreenPlayer).
+  const isFullScreen = usePlayerStore((s) => s.isFullScreen)
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
   const isShuffle = usePlayerStore((s) => s.isShuffle)
   const toggleRepeatOne = usePlayerStore((s) => s.toggleRepeatOne)
@@ -452,6 +458,20 @@ function PlayerInner() {
     },
     threshold: 48,
   })
+
+  // Открытие фуллскрина под снапшот view transition: обложка морфится из
+  // мини-плеера. Сначала дожидаемся чанка фуллскрин-плеера (тот же модуль,
+  // что лениво грузит Layout, — Vite отдаст из кэша): если внутри свапа
+  // чанка нет, Suspense-фолбэк попал бы в «новый» снапшот пустотой.
+  const openFullScreenWithTransition = async (karaoke) => {
+    try {
+      await import('./FullScreenPlayer')
+      uiTransition(() => openFullScreen(karaoke))
+    } catch {
+      // Чанк не приехал — просто открываем, без морфа.
+      openFullScreen(karaoke)
+    }
+  }
 
   useEffect(() => {
     const audio = audioRef.current
@@ -2035,7 +2055,7 @@ function PlayerInner() {
         <button
           type="button"
           className="player-cover-wrap"
-          onClick={() => openFullScreen(false)}
+          onClick={() => openFullScreenWithTransition(false)}
           aria-label="Открыть плеер на весь экран"
         >
           <img
@@ -2045,6 +2065,7 @@ function PlayerInner() {
             loading="lazy"
             decoding="async"
             onError={handleCoverError}
+            style={{ viewTransitionName: isFullScreen ? 'none' : 'player-cover' }}
           />
           {isExternalTrack && isBuffering && (
             <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
@@ -2199,7 +2220,7 @@ function PlayerInner() {
           className={`lyrics-btn${hasLyrics ? '' : ' disabled'}`}
           onClick={(event) => {
             event.stopPropagation()
-            if (hasLyrics) openFullScreen(true)
+            if (hasLyrics) openFullScreenWithTransition(true)
           }}
           disabled={!hasLyrics}
           title={hasLyrics ? 'Текст песни' : 'Текст не найден'}

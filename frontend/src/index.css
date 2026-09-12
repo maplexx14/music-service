@@ -179,6 +179,25 @@ input[type='range']:active {
   ::view-transition-new(root) {
     animation: 200ms var(--ease-out) both vt-fade-in;
   }
+
+  /* Shared-element морф обложки мини-плеер ⇄ фуллскрин: имя
+     (view-transition-name: player-cover) вешается инлайном в Player.jsx
+     и FullScreenPlayer.jsx. Группа морфится между прямоугольниками
+     автоматически; здесь только тайминг — чуть дольше кроссфейда рута,
+     в такт drawer-кривой. */
+  ::view-transition-group(player-cover) {
+    animation-duration: 340ms;
+    animation-timing-function: var(--ease-drawer);
+  }
+}
+
+/* На время view-transition реальный DOM скрыт под снапшотами — и его
+   собственные анимации входа/выхода (@starting-style-слайд фуллскрина,
+   .is-closing) шли бы «в столе» и выстреливали скачком на финише.
+   Класс ставит/снимает uiTransition(). */
+.vt-swap .fullscreen-player,
+.vt-swap .fullscreen-player.is-closing {
+  transition: none !important;
 }
 
 @keyframes vt-fade-out {
