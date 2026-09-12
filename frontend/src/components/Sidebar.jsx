@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ChevronDown, Shield } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { prefetchRouteChunk } from './Layout'
 import './Sidebar.css'
 
 function Sidebar() {
@@ -72,6 +73,8 @@ function Sidebar() {
               to={item.path}
               className={`nav-item ${isActive ? 'active' : ''}`}
               title={isCollapsed ? item.label : ''}
+              onPointerEnter={() => prefetchRouteChunk(item.path)}
+              onPointerDown={() => prefetchRouteChunk(item.path)}
             >
               <Icon size={24} fill={isActive ? 'currentColor' : 'none'} />
               {!isCollapsed && <span>{item.label}</span>}

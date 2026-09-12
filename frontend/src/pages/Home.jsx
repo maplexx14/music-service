@@ -13,6 +13,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { splitArtists } from '../utils/artists'
+import { usePullToRefresh } from '../hooks/usePullToRefresh'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
@@ -224,6 +225,18 @@ function Home() {
   // проигрывания карточки кнопка вместо запуска потока просто ставила ту
   // очередь на паузу, и пользователь бесконечно слушал одну цепочку.
   const isWavePlaying = isPlaying && source === 'flow'
+  // Pull-to-refresh: шапка/hero не зависят от рекомендаций, поэтому тянем
+  // обновление вручную по жесту — как в нативных приложениях. Индикатор
+  // рисуется отдельным fixed-элементом, список не дёргается.
+  // reachTop важен: скролл живёт в .main-content, window.scrollY всегда 0.
+  const { pull, refreshing } = usePullToRefresh({
+    onRefresh: () => fetchData(),
+    reachTop: () => {
+      const el = document.querySelector('.main-content')
+      return (el ? el.scrollTop : window.scrollY) <= 0
+    },
+  })
+  const pullProgress = refreshing ? 1 : Math.min(pull / 64, 1)
   // Страховка на случай долгого пребывания на странице (TTL предзагрузки
   // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
   // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
@@ -270,6 +283,19 @@ function Home() {
   // локализовано в той единственной полке, которой нужны данные.
   return (
     <div className="page-container">
+      {/* Индикатор pull-to-refresh: выезжает из-под шапки по мере жеста. */}
+      {(pull > 0 || refreshing) && (
+        <div
+          className="ptr-indicator"
+          style={{ opacity: pullProgress, transform: `translateY(${-32 + (refreshing ? 32 : pull * 0.35)}px)` }}
+          aria-hidden="true"
+        >
+          <span
+            className={`ptr-spinner${refreshing ? ' spinning' : ''}`}
+            style={refreshing ? undefined : { transform: `rotate(${pullProgress * 260}deg)` }}
+          />
+        </div>
+      )}
       <div className="mobile-header">
         
         <span href = "">

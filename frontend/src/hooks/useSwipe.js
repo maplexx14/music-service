@@ -14,6 +14,7 @@ export function useSwipe({
   onSwipeRight,
   onSwipeUp,
   onSwipeDown,
+  onSwipe, // (direction: 'left'|'right'|'up'|'down') => void — при любом сработавшем свайпе
   threshold = 50,
 } = {}) {
   const gestureRef = useRef(null)
@@ -47,9 +48,13 @@ export function useSwipe({
     gestureRef.current = null
 
     if (g.axis === 'x' && Math.abs(dx) >= threshold) {
+      const dir = dx < 0 ? 'left' : 'right'
+      onSwipe?.(dir)
       if (dx < 0) onSwipeLeft?.()
       else onSwipeRight?.()
     } else if (g.axis === 'y' && Math.abs(dy) >= threshold) {
+      const dir = dy < 0 ? 'up' : 'down'
+      onSwipe?.(dir)
       if (dy < 0) onSwipeUp?.()
       else onSwipeDown?.()
     }

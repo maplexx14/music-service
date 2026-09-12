@@ -124,6 +124,10 @@ body {
   background-color: #121212;
   color: #ffffff;
   overflow-x: hidden;
+  /* Нативное приложение никогда не выделяет текст пальцем. Выделение
+     остаётся там, где оно по смыслу: ввод и читаемый контент. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #root {
@@ -132,12 +136,61 @@ body {
   flex-direction: column;
 }
 
+/* Разрешаем выделение там, где пользователь ожидает его видеть:
+   поля ввода и «читательский» контент (био, тексты, названия). */
+input,
+textarea,
+[contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* Мгновенный отклик кнопок на тач: без manipulation Safari держит тап
    ~300 мс в ожидании второго (double-tap-to-zoom), и кнопка «нажимается»
    с заметной задержкой. Пинч-зум страницы это не отключает. */
 button,
 [role='button'] {
   touch-action: manipulation;
+}
+
+/* Нативный press-feedback: элемент чуть «проваливается» под пальцем
+   в момент нажатия. transform в :active не триггерит layout — дешевле
+   bg-подсветки и заметнее глазу. Слайдеры и крупные кнопки-«плиты»
+   (play) исключены: их прожатие решается их собственными стилями. */
+button:not([disabled]):active,
+a:active,
+.track-card:active {
+  transform: scale(0.96);
+  transition: transform 80ms var(--ease-out);
+}
+
+input[type='range']:active {
+  transform: none;
+}
+
+/* View Transitions API: Router(viewTransition) оборачивает смену роута в
+   document.startViewTransition. Дефолтный кроссфейд Chrome/WebKit слишком
+   резкий; здесь — мягкий, в такт остальным motion-токенам. Браузеры без
+   поддержки просто не видят этих правил (graceful degradation). */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) {
+    animation: 200ms var(--ease-in-out) both vt-fade-out;
+  }
+  ::view-transition-new(root) {
+    animation: 200ms var(--ease-out) both vt-fade-in;
+  }
+}
+
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes vt-fade-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* Единый клавиатурный фокус: контур появляется только при навигации с

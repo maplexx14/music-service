@@ -15,6 +15,27 @@ import './Layout.css'
 const importFullScreenPlayer = () => import('./FullScreenPlayer')
 const FullScreenPlayer = lazy(importFullScreenPlayer)
 
+// Прогрев чанков страниц по intent (hover тачпадом / pointerdown тапа):
+// к моменту клика чанк уже в кэше, переход мгновенный — как в нативных
+// приложениях. Ссылки на десктопе прогреваются по hover (120мс задержка
+// против случайных ведений), на таче pointerdown на ~100мс раньше click.
+const ROUTE_CHUNKS = {
+  '/': () => import('../pages/Home'),
+  '/search': () => import('../pages/Search'),
+  '/playlists': () => import('../pages/Playlists'),
+  '/liked': () => import('../pages/LikedSongs'),
+  '/upload': () => import('../pages/UploadTrack'),
+  '/settings': () => import('../pages/Settings'),
+  '/admin': () => import('../pages/Admin'),
+}
+
+function prefetchRouteChunk(path) {
+  const loader = ROUTE_CHUNKS[path]
+  if (loader) loader().catch(() => {})
+}
+
+export { prefetchRouteChunk }
+
 function Layout({ children }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
@@ -125,6 +146,8 @@ function Layout({ children }) {
                 className={`mobile-nav-global-item ${isActive ? 'active' : ''}`}
                 aria-current={isActive ? 'page' : undefined}
                 aria-label={label}
+                onPointerEnter={() => prefetchRouteChunk(to)}
+                onPointerDown={() => prefetchRouteChunk(to)}
               >
                 <span className="mobile-nav-global-icon">
                   <Icon size={22} fill={isActive ? 'currentColor' : 'none'} />

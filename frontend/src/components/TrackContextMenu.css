@@ -1,0 +1,97 @@
+/* Контекстное меню трека (long-press / правая кнопка). */
+
+.track-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  /* Прозрачный, но ловит тап — «закрыть, коснувшись мимо». Контекстное
+     меню — единственный случай, где перехват клика за собой уместен. */
+  background: transparent;
+}
+
+.track-ctx-menu {
+  position: fixed;
+  width: 230px;
+  background: rgba(24, 24, 24, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  animation: track-ctx-in 150ms var(--ease-out) both;
+  touch-action: none;
+  user-select: none;
+}
+
+@keyframes track-ctx-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+.track-ctx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 4px;
+}
+
+.track-ctx-title {
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-ctx-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.track-ctx-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.track-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  font-family: 'Unbounded', sans-serif;
+  font-size: var(--text-sm);
+  text-align: left;
+  border-radius: var(--radius-card);
+  cursor: pointer;
+}
+
+.track-ctx-item:hover:not([disabled]) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.track-ctx-item[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.track-ctx-item svg {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}

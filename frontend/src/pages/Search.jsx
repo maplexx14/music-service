@@ -7,6 +7,7 @@ import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { artistPath } from '../utils/artists'
@@ -29,6 +30,8 @@ function Search() {
   const artists = useSearchStore((state) => state.artists)
   const searchError = useSearchStore((state) => state.searchError)
   const [loading, setLoading] = useState(false)
+  // Long-press / правый клик на треке — контекстное меню (лайк и др.).
+  const trackMenu = useTrackContextMenu()
 
   useEffect(() => {
     const searchQuery = query.trim()
@@ -192,6 +195,7 @@ function Search() {
               className="track-item"
               onClick={() => handlePlayExternalTrack(track, tracks)}
               {...trackIntentHandlers(track)}
+              {...trackMenu.getProps(track)}
             >
               <img
                 src={resolveCoverUrl(track.cover_url) || defaultCover}
@@ -369,6 +373,7 @@ function Search() {
                     className="track-item"
                     onClick={() => handlePlayTrack(track)}
                     {...trackIntentHandlers(track)}
+                    {...trackMenu.getProps(track)}
                   >
                     <img
                       src={resolveCoverUrl(track.cover_url) || defaultCover}
@@ -431,6 +436,7 @@ function Search() {
           <p>Ищите треки, плейлисты и исполнителей</p>
         </div>
       )}
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

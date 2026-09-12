@@ -3,6 +3,45 @@
   min-height: 100%;
 }
 
+/* Pull-to-refresh: маленький системного вида индикатор под шапкой.
+   Появляется по мере жеста (opacity/transform управляются инлайном из
+   usePullToRefresh), на освежении крутится. */
+.ptr-indicator {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  margin-left: -14px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(24, 24, 24, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  z-index: 60;
+  pointer-events: none;
+}
+
+.ptr-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--brand-accent);
+}
+
+.ptr-spinner.spinning {
+  animation: ptr-rotate 0.7s linear infinite;
+}
+
+@keyframes ptr-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Единый сегментированный блок: общая рамка и скругление,
    карточки внутри без зазора, разделёны тонкой линией. */
 /* Цельный блок: одна общая обводка и скругление. */

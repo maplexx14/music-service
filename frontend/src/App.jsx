@@ -35,7 +35,7 @@ function App() {
   }, [isAuthenticated])
 
   return (
-    <Router>
+    <Router viewTransition>
       <Routes>
         <Route
           path="/login"

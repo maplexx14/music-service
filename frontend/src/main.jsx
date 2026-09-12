@@ -9,13 +9,15 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>,
 )
 
-// Снимаем аудио-SW, если он остался с прошлых версий. Он подставлял
-// tuna-skip-browser-warning к запросам <audio>, но туннель этого заголовка
-// не требует — а перехват ЛОМАЛ Range: пересобранный в SW Request теряет
-// его (Range — forbidden header name, плюс WebKit bug 189337), поэтому
-// бэкенд отдавал 200 со всем файлом и iOS Safari ждал последнего байта
-// вместо старта с первых килобайт. Удалённый файл сам SW не выключает —
-// он живёт в браузере до явного unregister.
-navigator.serviceWorker?.getRegistrations?.()
-  .then((regs) => regs.forEach((reg) => reg.unregister()))
-  .catch(() => {})
+// Service worker: app-shell (см. public/sw.js). Он кэширует только каркас
+// (HTML, /assets, шрифты, иконки) для мгновенного старта PWA; аудио, API и
+// медиа-файлы проходят насквозь, БЕЗ перехвата — прошлый аудио-SW ломал
+// Range-заголовки (пересобранный в SW Request теряет forbidden headers,
+// плюс WebKit bug 189337), и iOS Safari ждал последний байт вместо старта
+// с первых килобайт. register() сам вытесняет чужие/старые SW на своей
+// scope; отдельного unregister-прохода больше не нужно.
+if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}

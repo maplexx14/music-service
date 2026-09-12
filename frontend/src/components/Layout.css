@@ -12,6 +12,10 @@
   padding-bottom: 90px;
   background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
   transition: margin-left 0.3s ease;
+  /* Резинка отскролла не проваливается в системный pull-to-refresh —
+     на главной им управляет наш индикатор (usePullToRefresh). На остальных
+     страницах жест просто «гасится» контейнером, как в нативных списках. */
+  overscroll-behavior-y: contain;
 }
 
 @media (max-width: 768px) {

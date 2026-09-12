@@ -377,6 +377,24 @@
   /* Вырастает от плеера снизу-слева. */
   transform-origin: bottom left;
   transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  touch-action: pan-y;
+}
+
+/* Ручка bottom sheet — индикатор «тяни вниз, чтобы закрыть». Только на
+   таче: на десктопе ручка бессмысленна. */
+.playlist-add-grabber {
+  display: none;
+}
+
+@media (hover: none) {
+  .playlist-add-grabber {
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25);
+    margin: -4px auto 10px;
+  }
 }
 
 @starting-style {

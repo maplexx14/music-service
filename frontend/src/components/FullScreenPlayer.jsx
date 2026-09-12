@@ -7,8 +7,10 @@ import {
   usePlayerStore,
 } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
+import { useThemeColor } from '../hooks/useThemeColor'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { haptic, HAPTIC } from '../utils/haptics'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -97,6 +99,14 @@ function FullScreenPlayer() {
   const { syncedLines, plainText, loading: lyricsLoading } = useLyrics(currentTrack)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
 
+  const coverUrl = useMemo(
+    () => resolveCoverUrl(currentTrack?.cover_url, true) || defaultCover,
+    [currentTrack?.cover_url],
+  )
+
+  // Статус-бар Android в цвет обложки, пока плеер открыт (см. useThemeColor).
+  useThemeColor(true, coverUrl)
+
   const startClose = () => {
     if (isClosing) return
     setIsClosing(true)
@@ -133,9 +143,11 @@ function FullScreenPlayer() {
     setIsDragging(false)
     if (g.axis === 'x' && Math.abs(dx) >= 60) {
       setDragY(0)
+      haptic(HAPTIC.selection)
       if (dx < 0) handleSkipForward()
       else previousTrack()
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
+      haptic(HAPTIC.light)
       startClose()
     } else {
       setDragY(0)
@@ -163,11 +175,6 @@ function FullScreenPlayer() {
     nextTrack()
   }
 
-  const coverUrl = useMemo(
-    () => resolveCoverUrl(currentTrack?.cover_url, true) || defaultCover,
-    [currentTrack?.cover_url],
-  )
-
   useEffect(() => {
     const checkLikedStatus = async () => {
       if (!dbTrackId) return
@@ -188,6 +195,7 @@ function FullScreenPlayer() {
     if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
+    haptic(HAPTIC.success)
     postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
     invalidateFlowPreload()
     try {

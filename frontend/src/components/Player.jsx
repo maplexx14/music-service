@@ -11,6 +11,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
+import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -436,7 +437,20 @@ function PlayerInner() {
   const swipeHandlers = useSwipe({
     onSwipeLeft: handleSkipForward,
     onSwipeRight: previousTrack,
+    onSwipe: () => haptic(HAPTIC.selection),
     threshold: 60,
+  })
+
+  // Панель «добавить в плейлист» закрывается и свайпом вниз по ней —
+  // как нижний лист в нативных приложениях (крестик/«Отмена» остаются
+  // для десктопа, где тач-жестов нет). Зовётся здесь, до раннего
+  // `return null` — как и swipeHandlers выше.
+  const playlistPanelSwipe = useSwipe({
+    onSwipeDown: () => setShowAddToPlaylist(false),
+    onSwipe: (dir) => {
+      if (dir === 'down') haptic(HAPTIC.light)
+    },
+    threshold: 48,
   })
 
   useEffect(() => {
@@ -1827,6 +1841,7 @@ function PlayerInner() {
     if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
+    haptic(HAPTIC.success)
     postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
     invalidateFlowPreload()
     try {
@@ -1854,6 +1869,7 @@ function PlayerInner() {
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
+    haptic(HAPTIC.light)
     // «Был ли дизлайк» решаем ДО сети. У трека без db_id дизлайка быть не
     // могло — метка ставится только материализованным записям.
     const wasDislikedBefore = dbTrackId
@@ -1885,6 +1901,7 @@ function PlayerInner() {
   const handleOpenAddToPlaylist = async () => {
     if (!canInteract) return
     setShowAddToPlaylist((prev) => !prev)
+    haptic(HAPTIC.selection)
     setAddError('')
 
     if (playlists.length === 0 && !loadingPlaylists) {
@@ -1913,6 +1930,7 @@ function PlayerInner() {
         return
       }
       await api.post(`/playlists/${selectedPlaylistId}/tracks/${id}`)
+      haptic(HAPTIC.success)
       setShowAddToPlaylist(false)
     } catch (error) {
       setAddError(error.response?.data?.detail || 'Не удалось добавить трек')
@@ -2100,7 +2118,10 @@ function PlayerInner() {
       </div>
 
       {showAddToPlaylist && (
-        <div className="playlist-add-panel">
+        <div className="playlist-add-panel" {...playlistPanelSwipe}>
+          {/* Ручка листа: визуальный аффорданс «можно утянуть вниз»,
+              как у системных bottom sheets. */}
+          <div className="playlist-add-grabber" aria-hidden="true" />
           <div className="playlist-add-title">Добавить в плейлист</div>
           {loadingPlaylists ? (
             <div className="playlist-add-loading">Загрузка...</div>
