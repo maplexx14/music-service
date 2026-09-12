@@ -110,8 +110,9 @@ function FullScreenPlayer() {
 
   const startClose = () => {
     if (isClosing) return
-    // VT-путь: обложка морфится обратно в мини-плеер. uiTransition вернёт
-    // false без API/reduced-motion — тогда классический слайд вниз.
+    // VT-путь: плеер уезжает вниз отдельной VT-группой (страница под ним
+    // статична). uiTransition вернёт false без API/reduced-motion — тогда
+    // классический слайд вниз через .is-closing.
     if (uiTransition(() => closeFullScreen())) return
     setIsClosing(true)
     setTimeout(closeFullScreen, 350)
@@ -297,6 +298,12 @@ function FullScreenPlayer() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
+        // Отдельная VT-группа: плеер не попадает в снапшот рута, и его
+        // закрытие не кроссфейдит «тёмный экран → страница» (на iOS PWA
+        // это выглядело как затемнение). Плеер уезжает вниз отдельной
+        // группой — см. ::view-transition-old/new(fullscreen-player)
+        // в index.css.
+        viewTransitionName: 'fullscreen-player',
         transform: dragY && !isClosing ? `translateY(${dragY}px)` : undefined,
         opacity: dragY && !isClosing ? dragOpacity : undefined,
         transition: isDragging ? 'none' : undefined,
@@ -327,7 +334,6 @@ function FullScreenPlayer() {
               src={coverUrl}
               alt={currentTrack.title}
               onError={handleCoverError}
-              style={{ viewTransitionName: 'player-cover' }}
             />
           </div>
 

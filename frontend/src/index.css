@@ -191,20 +191,28 @@ input[type='range']:active {
     mix-blend-mode: normal;
   }
 
-  /* Shared-element морф обложки мини-плеер ⇄ фуллскрин: имя
-     (view-transition-name: player-cover) вешается инлайном в Player.jsx
-     и FullScreenPlayer.jsx. Группа морфится между прямоугольниками
-     автоматически; здесь только тайминг — чуть дольше кроссфейда рута,
-     в такт drawer-кривой. */
-  ::view-transition-group(player-cover) {
+  /* Полноэкранный плеер — отдельная VT-группа (view-transition-name вешается
+     инлайном в FullScreenPlayer.jsx): в снапшот рута плеер не попадает, и
+     закрытие больше не кроссфейдит «тёмный плеер на весь экран → страница».
+     Тот кроссфейд на iOS PWA читался как затемнение: mix-blend-mode:
+     plus-lighter внутри ::view-transition Safari не применяет, в середине
+     перехода оба снапшота полупрозрачны и сквозь них виден тёмный канвас.
+     Теперь плеер выезжает/уезжает как drawer поверх статичной страницы. */
+  ::view-transition-group(fullscreen-player) {
     animation-duration: 340ms;
     animation-timing-function: var(--ease-drawer);
+  }
+  ::view-transition-old(fullscreen-player) {
+    animation: 340ms var(--ease-drawer) both vt-drawer-out;
+  }
+  ::view-transition-new(fullscreen-player) {
+    animation: 340ms var(--ease-drawer) both vt-drawer-in;
   }
 }
 
 /* Дерево ::view-transition лежит в top layer поверх страницы и по умолчанию
    участвует в hit-тесте: пока идёт морф закрытия фуллскрина (340ms по
-   группе player-cover) тап уходит в снапшот, и экран кажется мёртвым.
+   группе fullscreen-player) тап уходит в снапшот, и экран кажется мёртвым.
    pointer-events наследуется, так что корня дерева достаточно; правило для
    (*) — страховка, если UA выставит свойство детям явно. Отдельными
    правилами: неизвестный селектор в общем списке уронил бы всё правило
@@ -229,6 +237,18 @@ input[type='range']:active {
 @keyframes vt-fade-in {
   from {
     opacity: 0;
+  }
+}
+
+@keyframes vt-drawer-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes vt-drawer-in {
+  from {
+    transform: translateY(100%);
   }
 }
 

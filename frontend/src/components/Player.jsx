@@ -268,10 +268,7 @@ function PlayerInner() {
   const setDuration = usePlayerStore((s) => s.setDuration)
   const setVolume = usePlayerStore((s) => s.setVolume)
   const openFullScreen = usePlayerStore((s) => s.openFullScreen)
-  // Имя shared-element-морфа обложки (view-transition-name) в каждый момент
-  // должно жить ровно на ОДНОМ элементе, иначе браузер отменяет переход.
-  // Пока фуллскрин закрыт — оно на обложке мини-плеера; когда открыт —
-  // мини-плеер его отдаёт обложке фуллскрина (см. FullScreenPlayer).
+  // Фуллскрин открыт/закрыт: мини-плеер скрывается, пока открыт фуллскрин.
   const isFullScreen = usePlayerStore((s) => s.isFullScreen)
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
   const isShuffle = usePlayerStore((s) => s.isShuffle)
@@ -459,14 +456,15 @@ function PlayerInner() {
     threshold: 48,
   })
 
-  // Открытие фуллскрина под снапшот view transition: обложка морфится из
-  // мини-плеера. Сначала дожидаемся чанка фуллскрин-плеера (тот же модуль,
-  // что лениво грузит Layout, — Vite отдаст из кэша): если внутри свапа
-  // чанка нет, Suspense-фолбэк попал бы в «новый» снапшот пустотой.
-  // Затем — hi-res обложку: фуллскрин показывает её в увеличенном виде, и
-  // без прогрева снапшот ловил бы ещё не декодированную картинку (пустую
-  // заглушку → скачок после морфа). Таймаут внутри preloadCover страхует
-  // от блокировки открытия на холодной сети.
+  // Открытие фуллскрина под снапшот view transition: плеер выезжает вверх
+  // отдельной VT-группой, страница под ним статична. Сначала дожидаемся
+  // чанка фуллскрин-плеера (тот же модуль, что лениво грузит Layout, —
+  // Vite отдаст из кэша): если внутри свапа чанка нет, Suspense-фолбэк
+  // попал бы в «новый» снапшот пустотой. Затем — hi-res обложку:
+  // фуллскрин показывает её в увеличенном виде, и без прогрева снапшот
+  // ловил бы ещё не декодированную картинку (пустую заглушку → скачок
+  // после выезда). Таймаут внутри preloadCover страхует от блокировки
+  // открытия на холодной сети.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
@@ -479,7 +477,7 @@ function PlayerInner() {
     uiTransition(() => openFullScreen(karaoke))
   }
 
-  // Hi-res обложка нужна фуллскрину при открытии (морф из мини-плеера) —
+  // Hi-res обложка нужна фуллскрину при открытии (выезд поверх страницы) —
   // качаем её заранее, в простое после смены трека, чтобы открытие не
   // ждало сети. Таймаут в preloadCover не даёт прогреву копить промисы.
   useEffect(() => {
@@ -2084,7 +2082,6 @@ function PlayerInner() {
             loading="lazy"
             decoding="async"
             onError={handleCoverError}
-            style={{ viewTransitionName: isFullScreen ? 'none' : 'player-cover' }}
           />
           {isExternalTrack && isBuffering && (
             <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
