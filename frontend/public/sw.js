@@ -13,7 +13,12 @@
 //   * прочая статика (шрифты, иконки, сплэши, манифест) — stale-while-
 //     revalidate: отдаём из кэша мгновенно, фоном обновляем.
 
-const CACHE_VERSION = 'bolt-shell-v1'
+// Версию бампаем при смене состава кэшируемого каркаса: activate удаляет все
+// кэши с другими именами. v2 — чтобы выселить два мастер-PNG по 331 КБ
+// (favicon-64.png и apple-touch-icon.png), которые index.html больше не
+// запрашивает: сами по себе они безвредны, но занимают квоту Cache Storage,
+// а на iOS она самая тесная из всех платформ.
+const CACHE_VERSION = 'bolt-shell-v2'
 const PRECACHE = ['/', '/manifest.webmanifest']
 
 const ASSET_CACHE_RE = /^\/assets\//
