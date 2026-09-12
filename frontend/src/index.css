@@ -180,6 +180,18 @@ input[type='range']:active {
     animation: 200ms var(--ease-out) both vt-fade-in;
   }
 
+  /* UA гоняет свой кроссфейд рута парой анимаций: fade-out/fade-in ПЛЮС
+     служебная, включающая mix-blend-mode: plus-lighter. Переопределив
+     animation выше, мы сбили и её: в середине перехода старый и новый
+     снапшот оба полупрозрачны, суммарная альфа < 1, и сквозь них
+     просвечивает чёрный фон канваса — экран на пару сотен ms
+     «затемняется». Заметнее всего на закрытии фуллскрина, где старый
+     слой сам тёмный. Возвращаем блендинг явным свойством. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    mix-blend-mode: plus-lighter;
+  }
+
   /* Shared-element морф обложки мини-плеер ⇄ фуллскрин: имя
      (view-transition-name: player-cover) вешается инлайном в Player.jsx
      и FullScreenPlayer.jsx. Группа морфится между прямоугольниками
@@ -189,6 +201,21 @@ input[type='range']:active {
     animation-duration: 340ms;
     animation-timing-function: var(--ease-drawer);
   }
+}
+
+/* Дерево ::view-transition лежит в top layer поверх страницы и по умолчанию
+   участвует в hit-тесте: пока идёт морф закрытия фуллскрина (340ms по
+   группе player-cover) тап уходит в снапшот, и экран кажется мёртвым.
+   pointer-events наследуется, так что корня дерева достаточно; правило для
+   (*) — страховка, если UA выставит свойство детям явно. Отдельными
+   правилами: неизвестный селектор в общем списке уронил бы всё правило
+   целиком в браузерах без поддержки (*). */
+::view-transition {
+  pointer-events: none;
+}
+
+::view-transition-group(*) {
+  pointer-events: none;
 }
 
 /* На время view-transition реальный DOM скрыт под снапшотами — и его

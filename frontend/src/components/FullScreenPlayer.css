@@ -20,9 +20,13 @@
     transform: translateY(100%);
   }
 }
+/* Фолбэк-закрытие (нет View Transitions / reduced-motion): плеер уезжает
+   вниз 300ms, но fixed inset:0 всё это время перекрывает страницу и глотает
+   тапы. Пока едет — он уже «не существует» для ввода. */
 .fullscreen-player.is-closing {
   transform: translateY(100%);
   opacity: 0.4;
+  pointer-events: none;
   transition: transform 0.3s var(--ease-drawer), opacity 0.3s var(--ease-drawer);
 }
 

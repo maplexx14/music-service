@@ -28,8 +28,27 @@ export function uiTransition(update) {
   const vt = document.startViewTransition(() => {
     flushSync(update)
   })
+  // Пока идёт морф, страница нарисована снапшотами и не перерисовывается:
+  // клик доходит до живого DOM (pointer-events: none у ::view-transition,
+  // см. index.css), но visual feedback отстаёт на длину анимации. Поэтому
+  // любой ввод трактуем как «анимацию досмотрели»: снапшоты снимаются
+  // сразу, дальше страница живая. Тап, которым закрытие начали, случился
+  // до startViewTransition — сам себя он не обрывает.
+  const skip = () => {
+    try {
+      vt.skipTransition()
+    } catch {
+      /* переход уже завершился */
+    }
+  }
+  window.addEventListener('pointerdown', skip, { capture: true, once: true })
+  window.addEventListener('keydown', skip, { capture: true, once: true })
   vt.finished
     .catch(() => {})
-    .finally(() => document.documentElement.classList.remove('vt-swap'))
+    .finally(() => {
+      window.removeEventListener('pointerdown', skip, { capture: true })
+      window.removeEventListener('keydown', skip, { capture: true })
+      document.documentElement.classList.remove('vt-swap')
+    })
   return true
 }
