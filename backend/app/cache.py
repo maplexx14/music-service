@@ -107,6 +107,28 @@ async def set_cache_async(key: str, value: Any, expire: int = 3600):
     await asyncio.to_thread(set_cache, key, value, expire)
 
 
+def acquire_rate_slot(key: str, interval: float) -> float:
+    """Занять слот rate-лимита на interval секунд.
+
+    Возвращает 0, если слот взят (можно идти), иначе — сколько секунд
+    осталось ждать. Одна атомарная SET NX PX вместо пары GET+SET: под
+    параллельными воркерами read-modify-write пропускает несколько
+    запросов в один слот, а NX отдаёт слот ровно одному.
+
+    Redis недоступен — fail open (0): лимитер не должен ронять выдачу.
+    """
+    try:
+        if redis_client.set(key, "1", nx=True, px=int(interval * 1000)):
+            return 0
+        # -2 (ключ исчез между SET и PTTL) и -1 (ключ без TTL) — ждать нечего.
+        remaining = redis_client.pttl(key)
+        if remaining is None or remaining < 0:
+            return 0
+        return remaining / 1000
+    except Exception:
+        return 0
+
+
 def delete_cache(key: str):
     """Delete value from cache"""
     try:
