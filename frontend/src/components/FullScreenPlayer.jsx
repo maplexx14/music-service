@@ -11,6 +11,7 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -87,6 +88,9 @@ function FullScreenPlayer() {
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
+  // Обложка скрыта, пока летит её морф-клон (мини-плеер ⇄ фуллскрин) —
+  // иначе под клоном была бы вторая картинка.
+  const [coverHidden, setCoverHidden] = useState(isCoverMorphActive)
   const [lyricsMode, setLyricsMode] = useState(false)
   const gestureRef = useRef(null)
 
@@ -108,14 +112,16 @@ function FullScreenPlayer() {
   useThemeColor(true, coverUrl)
 
   // Закрытие — чистый CSS-drawer (.is-closing уезжает вниз, страница под
-  // ним живая). Без View Transitions: на iOS PWA VT-снапшоты стабильно
-  // давали затемнение экрана после закрытия, а визуально VT-слайд ничем
-  // не лучше обычного.
+  // ним живая), обложка морфится обратно в мини-плеер клоном поверх слайда
+  // (FLIP, без View Transitions — на iOS PWA VT-снапшоты затемняли экран).
   const startClose = () => {
     if (isClosing) return
     setIsClosing(true)
+    beginCloseMorph()
     setTimeout(closeFullScreen, 350)
   }
+
+  useEffect(() => subscribeCoverMorph((count) => setCoverHidden(count > 0)), [])
 
   // Пока фуллскрин открыт, страница под ним не прокручивается вовсе —
   // ни тачем, ни колесом, ни клавиатурой. Классический симптом «тяну
@@ -324,6 +330,7 @@ function FullScreenPlayer() {
               src={coverUrl}
               alt={currentTrack.title}
               onError={handleCoverError}
+              style={{ visibility: coverHidden ? 'hidden' : undefined }}
             />
           </div>
 

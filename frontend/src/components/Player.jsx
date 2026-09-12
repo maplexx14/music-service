@@ -10,6 +10,7 @@ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, T
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
+import { beginOpenMorph } from '../utils/coverMorph'
 import { useSwipe } from '../hooks/useSwipe'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
@@ -292,6 +293,8 @@ function PlayerInner() {
   const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
 
   const audioRef = useRef(null)
+  // Обложка мини-плеера — источник морфа при открытии фуллскрина.
+  const miniCoverRef = useRef(null)
   // Активный <audio> живёт не в JSX, а в модульном движке (services/audioEngine):
   // два элемента, второй заранее догружает следующий трек, чтобы переход в фоне
   // не требовал новой сетевой загрузки. audioRef остаётся указателем на
@@ -456,14 +459,16 @@ function PlayerInner() {
   })
 
   // Открытие фуллскрина — чистый CSS-drawer (@starting-style-слайд вверх,
-  // см. FullScreenPlayer.css). Без View Transitions: на iOS PWA VT-снапшоты
-  // давали затемнение экрана. Сначала дожидаемся чанка фуллскрин-плеера
-  // (тот же модуль, что лениво грузит Layout, — Vite отдаст из кэша):
-  // без чанка Suspense-фолбэк мелькнул бы на секунду до плеера. Затем —
-  // hi-res обложку: фуллскрин показывает её в увеличенном виде, и без
-  // прогрева она ловилась бы ещё не декодированной (пустая заглушка →
-  // скачок после выезда). Таймаут внутри preloadCover страхует от
-  // блокировки открытия на холодной сети.
+  // см. FullScreenPlayer.css), обложка морфится из мини-плеера клоном
+  // поверх слайда (FLIP, без View Transitions — на iOS PWA VT-снапшоты
+  // затемняли экран). Морф запускается ДО openFullScreen, чтобы плеер
+  // смонтировался сразу со скрытой обложкой. Сначала дожидаемся чанка
+  // фуллскрин-плеера (тот же модуль, что лениво грузит Layout, — Vite
+  // отдаст из кэша): без чанка Suspense-фолбэк мелькнул бы на секунду до
+  // плеера. Затем — hi-res обложку: фуллскрин показывает её в увеличенном
+  // виде, и без прогрева она ловилась бы ещё не декодированной (пустая
+  // заглушка → скачок после морфа). Таймаут внутри preloadCover страхует
+  // от блокировки открытия на холодной сети.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
@@ -473,6 +478,7 @@ function PlayerInner() {
     }
     const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
     if (hiRes) await preloadCover(hiRes)
+    beginOpenMorph(miniCoverRef.current, hiRes)
     openFullScreen(karaoke)
   }
 
@@ -2075,6 +2081,7 @@ function PlayerInner() {
           aria-label="Открыть плеер на весь экран"
         >
           <img
+            ref={miniCoverRef}
             src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
