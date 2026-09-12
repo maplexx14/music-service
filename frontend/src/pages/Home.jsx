@@ -140,6 +140,19 @@ function Home() {
     return () => cancel(handle)
   }, [])
 
+  // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
+  // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
+  // полки. Но сиды из preferred_artists юзера известны сразу, до всякой сети,
+  // поэтому запрос уходит параллельно с /recommendations. Если предпочтений
+  // нет, ждём треки как раньше (см. fetchSoundCloudPlaylists).
+  const scRequestedRef = useRef(false)
+  useEffect(() => {
+    if (scRequestedRef.current) return
+    if (!user?.preferred_artists?.length) return
+    scRequestedRef.current = true
+    fetchSoundCloudPlaylists([])
+  }, [user])
+
   const fetchData = () => {
     api
       // Локальный час клиента — для контекста времени суток в рекомендациях
@@ -152,7 +165,13 @@ function Home() {
           playlists: res.data?.playlists || [],
         }
         setRecommendations(data)
-        fetchSoundCloudPlaylists(data.tracks)
+        // Если сиды из preferred_artists уже ушли параллельным эффектом —
+        // второй раз не ходим: дедуп в api.get спасает только одновременные
+        // запросы, а этот пришёл бы позже и стоил бы ещё раунд-трипа.
+        if (!scRequestedRef.current) {
+          scRequestedRef.current = true
+          fetchSoundCloudPlaylists(data.tracks)
+        }
       })
       .catch((error) => console.error('Error fetching recommendations:', error))
       .finally(() => setLoading(false))
@@ -244,14 +263,11 @@ function Home() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="page-container">
-        <Spinner />
-      </div>
-    )
-  }
-
+  // Раньше здесь был ранний `return <Spinner/>` на всю страницу: пока шли
+  // холодные /recommendations (замер: 2.2с), юзер смотрел на пустой контейнер —
+  // хотя шапка, hero с кнопкой потока и вкладки не зависят от этого запроса
+  // вообще. Теперь оболочка рисуется сразу (FCP не ждёт сеть), а ожидание
+  // локализовано в той единственной полке, которой нужны данные.
   return (
     <div className="page-container">
       <div className="mobile-header">
@@ -417,17 +433,29 @@ function Home() {
         <>
           <div className="content-section content-section--tab-fade">
             <h2 className="section-title">Рекомендуемые треки</h2>
-            <Carousel
-              items={recommendations.tracks}
-              label="Рекомендуемые треки"
-              renderItem={(track) => (
-                <TrackCard
-                  key={track.id}
-                  track={track}
-                  queue={recommendations.tracks}
-                />
-              )}
-            />
+            {loading ? (
+              <div className="home-skeleton-row" aria-busy="true" aria-label="Загрузка рекомендаций">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <div className="home-skeleton-card" key={i}>
+                    <div className="home-skeleton-cover" />
+                    <div className="home-skeleton-line" />
+                    <div className="home-skeleton-line home-skeleton-line--short" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Carousel
+                items={recommendations.tracks}
+                label="Рекомендуемые треки"
+                renderItem={(track) => (
+                  <TrackCard
+                    key={track.id}
+                    track={track}
+                    queue={recommendations.tracks}
+                  />
+                )}
+              />
+            )}
           </div>
 
           {soundCloudPlaylists.length > 0 && (

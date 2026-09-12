@@ -119,7 +119,22 @@ _EXTERNAL_COOLDOWN_TTL = 120
 # 0.07с — пул и есть весь вес холодного ответа, поэтому он не должен сидеть
 # в критическом пути первого экрана. Фоновый пересчёт обновит кэш, так что
 # первый же промах через POOL_WAIT получит полную выдачу.
-_EXTERNAL_POOL_WAIT = 2.0
+#
+# Ждать секунды бессмысленно: пул НИКОГДА не успевает за это время (минимум
+# 5с сети до провайдеров), т.е. ожидание — это гарантированно потраченное
+# впустую время первого экрана. Замер холодного /recommendations: 2.23с при
+# WAIT=2.0 против 0.23с при WAIT=0.25 — выдача та же самая (локальная),
+# разница целиком в простое. Оставляем минимум на случай, когда пул уже
+# почти готов (тёплый Redis соседнего запроса).
+_EXTERNAL_POOL_WAIT = float(os.getenv("RECS_EXTERNAL_POOL_WAIT", "0.25"))
+
+# TTL деградировавшего (локального) ответа. Раньше он равнялся POOL_WAIT, но
+# это связывало две несвязанные величины: с WAIT=0.25 кэш деградации получил
+# бы int(0.25) = 0, т.е. «не кэшировать», и каждый запрос в окне прогрева
+# заново гонял бы полный локальный ранкер. Держим ответ ровно столько, сколько
+# реально нужно фоновой задаче, чтобы дописать пул.
+_DEGRADED_TTL = int(os.getenv("RECS_DEGRADED_TTL", "15"))
+
 # Сама фоновая задача живёт дольше request-таймаута клиента, поэтому помечаем
 # её «pending» в Redis и не запускаем вторую, пока первая не завершилась
 # (TTL страхует от зависшей навсегда метки).
@@ -700,6 +715,14 @@ async def _external_pool_cached(request, **pool_kwargs) -> tuple[list, bool]:
     cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**item) for item in cached], False
+
+    # Cooldown проверяется ЗДЕСЬ, а не только внутри _external_recommendation_pool.
+    # Там он тоже есть, но туда мы попадаем уже после взятия лока и создания
+    # задачи — и платим полный POOL_WAIT простоя за корутину, которая гарантированно
+    # вернёт []. Провайдеры уже признаны мёртвыми на _EXTERNAL_COOLDOWN_TTL,
+    # ждать от них нечего.
+    if await get_cache_async(_EXTERNAL_COOLDOWN_KEY):
+        return [], True
 
     # NX-лок, а не get+set: главная дёргает /recommendations и
     # /recommendations/playlists одновременно, и без атомарности оба запроса
@@ -1797,7 +1820,7 @@ def _compute_recommendations(
     set_cache(
         cache_key,
         response.model_dump(mode="json"),
-        expire=int(_EXTERNAL_POOL_WAIT) if external_degraded else _RECS_TTL,
+        expire=_DEGRADED_TTL if external_degraded else _RECS_TTL,
     )
     db.commit()
     return response
