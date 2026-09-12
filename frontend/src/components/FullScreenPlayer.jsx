@@ -11,7 +11,6 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { uiTransition } from '../utils/uiTransition'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -108,12 +107,12 @@ function FullScreenPlayer() {
   // Статус-бар Android в цвет обложки, пока плеер открыт (см. useThemeColor).
   useThemeColor(true, coverUrl)
 
+  // Закрытие — чистый CSS-drawer (.is-closing уезжает вниз, страница под
+  // ним живая). Без View Transitions: на iOS PWA VT-снапшоты стабильно
+  // давали затемнение экрана после закрытия, а визуально VT-слайд ничем
+  // не лучше обычного.
   const startClose = () => {
     if (isClosing) return
-    // VT-путь: плеер уезжает вниз отдельной VT-группой (страница под ним
-    // статична). uiTransition вернёт false без API/reduced-motion — тогда
-    // классический слайд вниз через .is-closing.
-    if (uiTransition(() => closeFullScreen())) return
     setIsClosing(true)
     setTimeout(closeFullScreen, 350)
   }
@@ -289,8 +288,6 @@ function FullScreenPlayer() {
     pendingLikeKeys.includes(trackLikeKey(currentTrack))
   const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
 
-  const dragOpacity = Math.max(0.4, 1 - dragY / 700)
-
   return (
     <div
       className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}`}
@@ -298,14 +295,7 @@ function FullScreenPlayer() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
-        // Отдельная VT-группа: плеер не попадает в снапшот рута, и его
-        // закрытие не кроссфейдит «тёмный экран → страница» (на iOS PWA
-        // это выглядело как затемнение). Плеер уезжает вниз отдельной
-        // группой — см. ::view-transition-old/new(fullscreen-player)
-        // в index.css.
-        viewTransitionName: 'fullscreen-player',
         transform: dragY && !isClosing ? `translateY(${dragY}px)` : undefined,
-        opacity: dragY && !isClosing ? dragOpacity : undefined,
         transition: isDragging ? 'none' : undefined,
       }}
     >
@@ -344,10 +334,6 @@ function FullScreenPlayer() {
               <ArtistLink
                 artist={currentTrack.artist}
                 className="fullscreen-artist"
-                // Прямое закрытие, без uiTransition: этот клик ещё и
-                // навигирует, и роутер сам завернёт переход в свой
-                // view transition — два конкурирующих startViewTransition
-                // в одном клике дают глитч.
                 onNavigate={closeFullScreen}
               />
             </div>

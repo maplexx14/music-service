@@ -171,7 +171,10 @@ input[type='range']:active {
 /* View Transitions API: Router(viewTransition) оборачивает смену роута в
    document.startViewTransition. Дефолтный кроссфейд Chrome/WebKit слишком
    резкий; здесь — мягкий, в такт остальным motion-токенам. Браузеры без
-   поддержки просто не видят этих правил (graceful degradation). */
+   поддержки просто не видят этих правил (graceful degradation).
+   Открытие/закрытие фуллскрин-плеера сюда НЕ входит: на iOS PWA VT-снапшоты
+   давали затемнение экрана после закрытия — плеер ездит чистым CSS-drawer
+   (@starting-style / .is-closing в FullScreenPlayer.css). */
 @media (prefers-reduced-motion: no-preference) {
   /* Кроссфейд «старый не гаснет, новый проявляется сверху»: старый снапшот
      остаётся непрозрачной подложкой все 200ms, новый плавно набирает
@@ -190,33 +193,14 @@ input[type='range']:active {
     animation: 200ms var(--ease-out) both vt-fade-in;
     mix-blend-mode: normal;
   }
-
-  /* Полноэкранный плеер — отдельная VT-группа (view-transition-name вешается
-     инлайном в FullScreenPlayer.jsx): в снапшот рута плеер не попадает, и
-     закрытие больше не кроссфейдит «тёмный плеер на весь экран → страница».
-     Тот кроссфейд на iOS PWA читался как затемнение: mix-blend-mode:
-     plus-lighter внутри ::view-transition Safari не применяет, в середине
-     перехода оба снапшота полупрозрачны и сквозь них виден тёмный канвас.
-     Теперь плеер выезжает/уезжает как drawer поверх статичной страницы. */
-  ::view-transition-group(fullscreen-player) {
-    animation-duration: 340ms;
-    animation-timing-function: var(--ease-drawer);
-  }
-  ::view-transition-old(fullscreen-player) {
-    animation: 340ms var(--ease-drawer) both vt-drawer-out;
-  }
-  ::view-transition-new(fullscreen-player) {
-    animation: 340ms var(--ease-drawer) both vt-drawer-in;
-  }
 }
 
 /* Дерево ::view-transition лежит в top layer поверх страницы и по умолчанию
-   участвует в hit-тесте: пока идёт морф закрытия фуллскрина (340ms по
-   группе fullscreen-player) тап уходит в снапшот, и экран кажется мёртвым.
-   pointer-events наследуется, так что корня дерева достаточно; правило для
-   (*) — страховка, если UA выставит свойство детям явно. Отдельными
-   правилами: неизвестный селектор в общем списке уронил бы всё правило
-   целиком в браузерах без поддержки (*). */
+   участвует в hit-тесте: пока идёт переход роута тап уходит в снапшот,
+   и экран кажется мёртвым. pointer-events наследуется, так что корня
+   дерева достаточно; правило для (*) — страховка, если UA выставит
+   свойство детям явно. Отдельными правилами: неизвестный селектор в общем
+   списке уронил бы всё правило целиком в браузерах без поддержки (*). */
 ::view-transition {
   pointer-events: none;
 }
@@ -225,30 +209,9 @@ input[type='range']:active {
   pointer-events: none;
 }
 
-/* На время view-transition реальный DOM скрыт под снапшотами — и его
-   собственные анимации входа/выхода (@starting-style-слайд фуллскрина,
-   .is-closing) шли бы «в столе» и выстреливали скачком на финише.
-   Класс ставит/снимает uiTransition(). */
-.vt-swap .fullscreen-player,
-.vt-swap .fullscreen-player.is-closing {
-  transition: none !important;
-}
-
 @keyframes vt-fade-in {
   from {
     opacity: 0;
-  }
-}
-
-@keyframes vt-drawer-out {
-  to {
-    transform: translateY(100%);
-  }
-}
-
-@keyframes vt-drawer-in {
-  from {
-    transform: translateY(100%);
   }
 }
 

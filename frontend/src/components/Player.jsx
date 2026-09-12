@@ -12,7 +12,6 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { useSwipe } from '../hooks/useSwipe'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { uiTransition } from '../utils/uiTransition'
 import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -456,15 +455,15 @@ function PlayerInner() {
     threshold: 48,
   })
 
-  // Открытие фуллскрина под снапшот view transition: плеер выезжает вверх
-  // отдельной VT-группой, страница под ним статична. Сначала дожидаемся
-  // чанка фуллскрин-плеера (тот же модуль, что лениво грузит Layout, —
-  // Vite отдаст из кэша): если внутри свапа чанка нет, Suspense-фолбэк
-  // попал бы в «новый» снапшот пустотой. Затем — hi-res обложку:
-  // фуллскрин показывает её в увеличенном виде, и без прогрева снапшот
-  // ловил бы ещё не декодированную картинку (пустую заглушку → скачок
-  // после выезда). Таймаут внутри preloadCover страхует от блокировки
-  // открытия на холодной сети.
+  // Открытие фуллскрина — чистый CSS-drawer (@starting-style-слайд вверх,
+  // см. FullScreenPlayer.css). Без View Transitions: на iOS PWA VT-снапшоты
+  // давали затемнение экрана. Сначала дожидаемся чанка фуллскрин-плеера
+  // (тот же модуль, что лениво грузит Layout, — Vite отдаст из кэша):
+  // без чанка Suspense-фолбэк мелькнул бы на секунду до плеера. Затем —
+  // hi-res обложку: фуллскрин показывает её в увеличенном виде, и без
+  // прогрева она ловилась бы ещё не декодированной (пустая заглушка →
+  // скачок после выезда). Таймаут внутри preloadCover страхует от
+  // блокировки открытия на холодной сети.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
@@ -474,7 +473,7 @@ function PlayerInner() {
     }
     const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
     if (hiRes) await preloadCover(hiRes)
-    uiTransition(() => openFullScreen(karaoke))
+    openFullScreen(karaoke)
   }
 
   // Hi-res обложка нужна фуллскрину при открытии (выезд поверх страницы) —
