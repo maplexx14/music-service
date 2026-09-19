@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import aiofiles
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
@@ -1876,14 +1876,62 @@ def _enforce_cache_limit() -> None:
             break
 
 
-async def _serve_file(path: str, media_type: str, request: Request) -> StreamingResponse:
-    """Отдаёт локальный файл с поддержкой Range (перемотка/докачка)."""
+async def _serve_file(path: str, media_type: str, request: Request) -> Response:
+    """Отдаёт локальный файл с поддержкой Range (перемотка/докачка).
+
+    Общий путь для диск-кэша провайдеров (ytmusic/soundcloud) и для уже
+    докачанного файла Soulseek.
+    """
     size = os.path.getsize(path)
     has_range = bool(request.headers.get("range"))
-    start, end = _parse_range(request.headers.get("range"), size)
+
+    if size == 0:
+        # Пустой/оборванный кэш-файл: 200 с нулевым телом плеер читает как
+        # «трек кончился», а не как «файл битый» — честнее 416.
+        return Response(
+            status_code=416,
+            headers={"Accept-Ranges": "bytes", "Content-Range": "bytes */0"},
+        )
+
+    # ETag даёт условные запросы: Safari на iOS ревалидирует медиа-кэш
+    # агрессивно, и без 304 он тянул бы байты заново (тот же приём и та же
+    # причина, что в storage.audio_common_headers). Размер+mtime: байты для
+    # данного cache_id неизменны, а перезаливка меняет и то, и другое.
+    etag = f'"{size:x}-{int(os.path.getmtime(path)):x}"'
+    common = {
+        "Accept-Ranges": "bytes",
+        # Кэш-файл неизменен для данного video_id — разрешаем браузеру кэшировать
+        # (повторное прослушивание не бьёт по бэку вовсе).
+        "Cache-Control": "public, max-age=86400",
+        "ETag": etag,
+    }
+    if storage.if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=common)
+
+    # Объект перезалили после того, как клиент закэшировал кусок — старый
+    # Range под новые байты не режем, отдаём целиком.
+    if has_range and not storage.if_range_allows_206(request, etag):
+        has_range = False
+
+    start, end = _parse_range(request.headers.get("range") if has_range else None, size)
     if end is None:
         end = size - 1
     end = min(end, size - 1)
+    if start >= size:
+        # Range за концом файла — настоящий 416. _parse_range границы не
+        # проверяет, и раньше отсюда уезжало тело нулевой длины с
+        # ОТРИЦАТЕЛЬНЫМ Content-Length (напр. "bytes=999999-" при size=1000 —
+        # "-998999"), т.е. невалидный заголовок и ошибка у клиента.
+        return Response(
+            status_code=416,
+            headers={**common, "Content-Range": f"bytes */{size}"},
+        )
+    if start > end:
+        # last-byte-pos < first-byte-pos: по RFC 7233 §2.1 такой диапазон
+        # невалиден, и его положено игнорировать (отдать 200 целиком), а не
+        # отвечать ошибкой. Раньше здесь был отрицательный Content-Length.
+        has_range = False
+        start, end = 0, size - 1
 
     async def gen():
         async with aiofiles.open(path, "rb") as fh:
@@ -1896,13 +1944,7 @@ async def _serve_file(path: str, media_type: str, request: Request) -> Streaming
                 remaining -= len(chunk)
                 yield chunk
 
-    headers = {
-        "Accept-Ranges": "bytes",
-        # Кэш-файл неизменен для данного video_id — разрешаем браузеру кэшировать
-        # (повторное прослушивание не бьёт по бэку вовсе).
-        "Cache-Control": "public, max-age=86400",
-        "Content-Length": str(end - start + 1),
-    }
+    headers = {**common, "Content-Length": str(end - start + 1)}
     status_code = 200
     if has_range:
         status_code = 206

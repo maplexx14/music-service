@@ -594,6 +594,34 @@ async def stream_soulseek(token: str, request: Request, vid: str = Query(default
         except Exception:  # noqa: BLE001 — объект мог удалиться, играем по обычному пути
             logger.warning("slsk archived object unusable for %s", filename, exc_info=True)
 
+    def _schedule_archive() -> None:
+        """Уносит файл в MinIO, когда (и если) трансфер завершится."""
+        if not storage.is_minio_backend() or filename in _adopt_inflight:
+            return
+        if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or ""):
+            source, external_id = "ytmusic", vid
+        else:
+            source, external_id = "soulseek", token
+        _adopt_inflight.add(filename)
+        asyncio.create_task(_adopt_when_done(source, external_id, username, filename))
+
+    # Файл уже докачан целиком (повторное прослушивание, в т.ч. после рестарта
+    # бэкенда) — отдаём его как обычный файл: Range, Content-Length, кэш.
+    # Chunked-поток ниже нужен только для ЖИВОГО докачивания: без
+    # Content-Length плеер не умеет перематывать, а iOS не включает системный
+    # скраббер (см. комментарий про 206 в tracks.py), плюс no-store гонит
+    # полную повторную загрузку через узкий канал.
+    #
+    # Критерий «докачан» — тот же `size`, по которому останавливается сам
+    # стример ниже (`while sent < size`), так что новых допущений о размере
+    # файла здесь не появляется.
+    ready_path = _find_local_path(filename)
+    if ready_path and size > 0 and os.path.getsize(ready_path) >= size:
+        from app.routers.ytdlp import _serve_file
+
+        _schedule_archive()
+        return await _serve_file(ready_path, media_type, request)
+
     # Общий клиент (см. _slskd_client): не закрываем его в finally —
     # он живёт на модуль и переиспользует соединения между стримами.
     client = _slskd_client
@@ -636,16 +664,8 @@ async def stream_soulseek(token: str, request: Request, vid: str = Query(default
     # Архивация: пир уйдёт в оффлайн, а трек должен остаться. Трансфер живёт
     # в slskd независимо от нашего стрима, поэтому ждём его завершения
     # фоновой задачей (в т.ч. после ухода клиента) и уносим файл в MinIO под
-    # исходным идентификатором: ytmusic/{vid} для подмены ytmusic-трека
-    # (archive:path подхватит stream_cached_audio) или soulseek/{token}.
-    if storage.is_minio_backend():
-        if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid or ""):
-            source, external_id = "ytmusic", vid
-        else:
-            source, external_id = "soulseek", token
-        if filename not in _adopt_inflight:
-            _adopt_inflight.add(filename)
-            asyncio.create_task(_adopt_when_done(source, external_id, username, filename))
+    # исходным идентификатором (см. _schedule_archive).
+    _schedule_archive()
 
     async def streamer():
         sent = 0
