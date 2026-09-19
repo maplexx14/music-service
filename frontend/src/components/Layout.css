@@ -86,15 +86,21 @@
     height: 40px;
   }
 
+  /* Геометрия один в один с iOS-приложением (MainTabView.swift): высота 72,
+     по 6px от краёв экрана, ячейки идут от самого торца капсулы, а подсветка
+     вписана в ячейку с зазором 5 со всех сторон. Зазор одинаковый всюду
+     именно потому, что подсветка — та же капсула, уменьшенная на 5: её дуги
+     концентричны дугам бара. Эллипс в тех же рамках оставлял бы на углах
+     больше воздуха, чем сверху и снизу. */
   .mobile-nav-global {
     position: fixed;
-    left: 12px;
-    right: 12px;
+    left: 6px;
+    right: 6px;
     bottom: calc(env(safe-area-inset-bottom, 0px) - 2px);
     height: 72px;
-    padding: 0 8px;
-    background: rgba(10, 10, 14, 0.65);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    padding: 0;
+    background: rgba(10, 10, 14, 0.55);
+    border: none;
     border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
     /* Как у .player: нижняя навигация висит поверх анимированного hero, блюр
@@ -103,12 +109,69 @@
     -webkit-backdrop-filter: blur(12px) saturate(160%);
     display: flex;
     align-items: center;
-    justify-content: space-between;
     z-index: 1002;
+  }
+
+  /* Обводка светлым градиентом сверху вниз — как у капсулы бара в приложении.
+     Обычной рамкой такой градиент не задать, поэтому 1px-кольцо: заливка
+     маскируется по content-box, остаётся только пиксель по краю. */
+  .mobile-nav-global::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Плавающая подсветка. Ширина — ровно ячейка (25% на четыре пункта),
+     положение — номер ячейки × своя ширина, поэтому сдвиг в процентах
+     попадает в цель без вычислений. */
+  .mobile-nav-global-pill {
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 0;
+    width: 25%;
+    transform: translateX(calc(var(--nav-index, 0) * 100%));
+    transition: transform 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+    pointer-events: none;
+  }
+
+  .mobile-nav-global-pill-inner {
+    position: absolute;
+    inset: 0 5px;
+    border-radius: 999px;
+    background: rgba(168, 85, 247, 0.22);
+  }
+
+  /* Растяжение на ходу: в покое подсветка вписана в ячейку, в полёте
+     вытягивается по X и сжимается по Y — капля тянется к цели. */
+  .mobile-nav-global-pill.moving .mobile-nav-global-pill-inner {
+    animation: nav-pill-squash 0.4s ease-in-out;
+  }
+
+  @keyframes nav-pill-squash {
+    0%,
+    100% {
+      transform: scale(1, 1);
+    }
+    50% {
+      transform: scale(1.14, 0.92);
+    }
   }
 
   .mobile-nav-global-item {
     flex: 1;
+    /* Относительное позиционирование — чтобы иконка рисовалась поверх
+       подсветки, а не под ней. */
+    position: relative;
+    z-index: 1;
     color: rgba(255, 255, 255, 0.55);
     display: flex;
     align-items: center;
@@ -124,21 +187,14 @@
     place-items: center;
     width: 52px;
     height: 44px;
-    border-radius: 999px;
-    transition: background 0.2s ease, color 0.2s ease;
   }
 
   .mobile-nav-global-item:active {
     transform: scale(0.92);
   }
 
-  /* Активный пункт: акцентная пилюля под иконкой + подсветка. */
+  /* Активный пункт: цвет иконки поверх плавающей подсветки. */
   .mobile-nav-global-item.active {
-    color: #c084fc;
-  }
-
-  .mobile-nav-global-item.active .mobile-nav-global-icon {
-    background: rgba(168, 85, 247, 0.22);
     color: #c084fc;
   }
 

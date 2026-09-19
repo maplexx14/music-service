@@ -278,6 +278,8 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+  /* Класс носят и <button>, и ссылка на /upload — у ссылки снимаем подчёркивание. */
+  text-decoration: none;
   transition: background-color var(--duration-base) var(--ease-out),
               transform var(--duration-base) var(--ease-out);
 }

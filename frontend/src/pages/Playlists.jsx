@@ -197,6 +197,12 @@ function Playlists() {
       <div className="playlists-header">
         <h1>Моя музыка</h1>
         <div className="playlists-header-actions">
+          {/* Загрузка своего трека: в нижней навигации на мобильном её больше
+              нет, а страница /upload осталась — ссылка на неё живёт здесь. */}
+          <Link to="/upload" className="import-playlist-btn">
+            <Upload size={20} />
+            Загрузить трек
+          </Link>
           <button
             className="import-playlist-btn"
             onClick={() => { setShowImportForm(!showImportForm); setShowCreateForm(false) }}

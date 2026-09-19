@@ -1,6 +1,6 @@
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Home, Search, Library, Heart, Upload, ArrowLeft } from 'lucide-react'
+import { Home, Search, Library, Heart, ArrowLeft } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import Sidebar from './Sidebar'
 import Player from './Player'
@@ -35,6 +35,16 @@ function prefetchRouteChunk(path) {
 }
 
 export { prefetchRouteChunk }
+
+// Пункты нижней навигации на мобильном. Загрузка трека здесь была пятым
+// пунктом, но под неё хватает кнопки в «Моей музыке» — на десктопе она
+// по-прежнему живёт отдельной строкой в сайдбаре.
+const MOBILE_NAV = [
+  { to: '/', icon: Home, label: 'Главная' },
+  { to: '/search', icon: Search, label: 'Поиск' },
+  { to: '/liked', icon: Heart, label: 'Любимое' },
+  { to: '/playlists', icon: Library, label: 'Моя музыка' },
+]
 
 function Layout({ children }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -92,6 +102,28 @@ function Layout({ children }) {
 
   const showMobileBack = isMobile && location.pathname !== '/'
 
+  // Подсветка активного пункта — одна плавающая капсула на всю навигацию, как
+  // в iOS-приложении: она едет между ячейками и на ходу растягивается. Индекс
+  // активной ячейки считается один раз на рендер, положение — в CSS.
+  const activeNavIndex = Math.max(
+    0,
+    MOBILE_NAV.findIndex(({ to }) =>
+      to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
+    )
+  )
+  // Деформация включается только на смене вкладки: на первом рендере капсула
+  // должна стоять на месте, а не пульсировать.
+  const [navDeform, setNavDeform] = useState(false)
+  const lastNavIndex = useRef(activeNavIndex)
+
+  useEffect(() => {
+    if (lastNavIndex.current === activeNavIndex) return
+    lastNavIndex.current = activeNavIndex
+    setNavDeform(true)
+    const timer = setTimeout(() => setNavDeform(false), 400)
+    return () => clearTimeout(timer)
+  }, [activeNavIndex])
+
   return (
     <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
       <Sidebar />
@@ -128,13 +160,14 @@ function Layout({ children }) {
       )}
       {isMobile && (
         <nav className="mobile-nav-global" aria-label="Нижняя навигация">
-          {[
-            { to: '/', icon: Home, label: 'Главная' },
-            { to: '/search', icon: Search, label: 'Поиск' },
-            { to: '/upload', icon: Upload, label: 'Загрузка' },
-            { to: '/liked', icon: Heart, label: 'Любимое' },
-            { to: '/playlists', icon: Library, label: 'Моя музыка' },
-          ].map(({ to, icon: Icon, label }) => {
+          <span
+            className={`mobile-nav-global-pill ${navDeform ? 'moving' : ''}`}
+            style={{ '--nav-index': activeNavIndex }}
+            aria-hidden="true"
+          >
+            <span className="mobile-nav-global-pill-inner" />
+          </span>
+          {MOBILE_NAV.map(({ to, icon: Icon, label }) => {
             const isActive =
               to === '/'
                 ? location.pathname === '/'
