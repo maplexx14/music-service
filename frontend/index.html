@@ -3,14 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <!-- Иконки: только реально нужных размеров. favicon-64.png и
-         apple-touch-icon.png — это один и тот же мастер 1024×1024 на 331 КБ
+         apple-touch-icon.png — это один и тот же мастер 1025×1025 на 331 КБ
          каждый (файлы когда-то разъехались с именами), и оба тянулись из
          <head> на каждой холодной загрузке. На iOS цена вдвое выше: WebKit —
          единственный движок, который вообще запрашивает apple-touch-icon,
          то есть 331 КБ, которых не платит ни один другой браузер, плюс
          apple-touch-startup-image ниже. Здесь ссылки на корректные варианты:
-         64×64 (3.6 КБ) и 180×180 (18 КБ). -->
-    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-641.png" />
+         favicon-64-64.png — даунскейл мастера favicon-64.png, 64×64 (3.5 КБ),
+         и 180×180 (18 КБ). Мастер при смене картинки пересобрать:
+         python3 -c "from PIL import Image; Image.open('favicon-64.png').convert('RGBA').resize((64,64), Image.LANCZOS).save('favicon-64-64.png', optimize=True)" -->
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64-64.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon1.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
