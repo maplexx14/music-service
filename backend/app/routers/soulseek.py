@@ -91,6 +91,51 @@ def _slskd_unreachable() -> None:
     )
 
 
+# Второй предохранитель — про ПУСТОТУ от пиров. slskd здесь жив и отвечает
+# (в отличие от _slskd_unreachable): поиск завершается, но ни один пир не
+# ответил — типично, когда slskd потерял связь с сетью Soulseek. Такой поиск
+# не «недоступен», а бесполезен: замер на проде 2026-09-23 — каждый поиск
+# идёт 6.4–7.8 с и отдаёт []. При этом стрим ждёт известный матч до 3 с
+# (await_soulseek_match), а матчер греет верхушку каждой выдачи — всё это
+# чистое ожидание. После _UNPRODUCTIVE_STREAK пустых поисков подряд помечаем
+# источник бесполезным на _UNPRODUCTIVE_TTL: новые поиски не запускаем вовсе
+# (стрим получает None мгновенно), но уже найденные матчи из кэша по-прежнему
+# играются. Первый же поиск с ответами снимает метку.
+_UNPRODUCTIVE_STREAK = int(os.getenv("SLSK_UNPRODUCTIVE_STREAK", "3"))
+_UNPRODUCTIVE_TTL = float(os.getenv("SLSK_UNPRODUCTIVE_TTL", "600"))
+_unproductive_until = 0.0
+_empty_streak = 0
+
+
+def soulseek_productive() -> bool:
+    """False, пока Soulseek признан бесполезным (пиры молчат)."""
+    return time.monotonic() >= _unproductive_until
+
+
+def _note_search_result(responses: Optional[List[dict]]) -> None:
+    """Обновляет счётчик пустых поисков по фактическому ответу slskd."""
+    global _unproductive_until, _empty_streak
+    if responses is None:
+        return  # недоступность хоста — отдельный предохранитель
+    if responses:
+        if _empty_streak or not soulseek_productive():
+            logger.info(
+                "soulseek productive again: %d responses (после %d пустых)",
+                len(responses), _empty_streak,
+            )
+        _empty_streak = 0
+        _unproductive_until = 0.0
+        return
+    _empty_streak += 1
+    if _empty_streak >= _UNPRODUCTIVE_STREAK:
+        _unproductive_until = time.monotonic() + _UNPRODUCTIVE_TTL
+        logger.warning(
+            "soulseek: %d пустых поисков подряд, пауза %.0fs (slskd отвечает, "
+            "но пиры молчат)",
+            _empty_streak, _UNPRODUCTIVE_TTL,
+        )
+
+
 def _token_encode(username: str, filename: str, size: int) -> str:
     raw = f"{username}\n{filename}\n{size}".encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")
@@ -270,6 +315,11 @@ async def find_soulseek_equivalent(
     # ytmusic-поиск/стрим не бился в несуществующий хост.
     if not SOULSEEK_USERNAME:
         return None
+    if not soulseek_productive():
+        # Пиры молчат (см. _unproductive_until): поиск заведомо вернёт пусто,
+        # а стоит несколько секунд. Уже найденные матчи живут в кэше по
+        # video_id и до сюда вообще не доходят — они отдаются выше.
+        return None
     key = f"ytmusic:slskmatch:{video_id}"
     cached = await get_cache_async(key)
     if cached:
@@ -289,6 +339,7 @@ async def find_soulseek_equivalent(
         _match_sem = asyncio.Semaphore(_MATCH_CONCURRENCY)
     async with _match_sem:
         responses = await _slskd_search_responses(f"{artist} {want_title}")
+    _note_search_result(responses)
     if responses is None:
         # Поиск недоступен: промах не доказан — не кэшируем, следующий вызов
         # попробует снова.
