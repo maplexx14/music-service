@@ -352,9 +352,17 @@ services:
     logging: *default-logging
     environment:
       DOMAIN: ${DOMAIN}
+    # Порты хоста настраиваемые: на VPS :80 и :443 занимает системный nginx
+    # (apt-овский nginx/1.18.0), из-за чего контейнер не мог забиндиться и
+    # `deploy.sh` падал с "address already in use" на endpoint music_nginx.
+    # Значения по умолчанию (8080/8443) конфликтуют с ним заведомо меньше;
+    # какой именно порт слушает хост — задаётся в .env.prod.
+    # ВАЖНО: ACME http-01 выпускает/продлевает сертификат стуком на :80,
+    # поэтому при нестандартном HTTP_PORT хостовый nginx должен проксировать
+    # /.well-known/acme-challenge/ на контейнер, иначе renew сломается.
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
     volumes:
       - certbot_conf:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
