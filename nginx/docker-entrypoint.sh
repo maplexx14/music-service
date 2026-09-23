@@ -9,6 +9,10 @@
 set -eu
 
 : "${DOMAIN:?DOMAIN must be set (e.g. music.example.com)}"
+# Порт, на котором браузер видит HTTPS. Нужен для редиректа с HTTP: `$host`
+# порт не содержит, и при нестандартном проброшенном порту редирект уводил бы
+# клиента на :443 (см. app.conf.template). По умолчанию штатный 443.
+HTTPS_PORT="${HTTPS_PORT:-443}"
 
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 OUT="/etc/nginx/conf.d/app.conf"
@@ -17,7 +21,7 @@ TEMPLATES="/etc/nginx/templates"
 # envsubst без списка переменных сожрал бы и nginx'овые $host/$scheme и т.п.
 # Ограничиваем ровно теми, что подставляем сами.
 render() {
-    envsubst '${DOMAIN}' < "$1" > "$OUT"
+    envsubst '${DOMAIN} ${HTTPS_PORT}' < "$1" > "$OUT"
 }
 
 if [ -f "${CERT_DIR}/fullchain.pem" ] && [ -f "${CERT_DIR}/privkey.pem" ]; then

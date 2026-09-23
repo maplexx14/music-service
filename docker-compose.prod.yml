@@ -352,6 +352,11 @@ services:
     logging: *default-logging
     environment:
       DOMAIN: ${DOMAIN}
+      # Нужен шаблону виртхоста для редиректа с HTTP: `$host` порт не
+      # содержит, и без явного значения редирект уводил бы клиента на :443
+      # (см. nginx/conf.d/app.conf.template). Должен совпадать с HTTPS_PORT
+      # в пробросe ниже.
+      HTTPS_PORT: ${HTTPS_PORT:-8443}
     # Порты хоста настраиваемые: на VPS :80 и :443 занимает системный nginx
     # (apt-овский nginx/1.18.0), из-за чего контейнер не мог забиндиться и
     # `deploy.sh` падал с "address already in use" на endpoint music_nginx.
