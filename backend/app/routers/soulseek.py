@@ -590,7 +590,9 @@ async def stream_soulseek(token: str, request: Request, vid: str = Query(default
             )
             archived = await archived_music_path(archive_key)
             if archived:
-                return await storage.minio_range_response_async(archived, request)
+                return await storage.minio_range_response_async(
+                    archived, request, quality=request.query_params.get("quality")
+                )
         except Exception:  # noqa: BLE001 — объект мог удалиться, играем по обычному пути
             logger.warning("slsk archived object unusable for %s", filename, exc_info=True)
 

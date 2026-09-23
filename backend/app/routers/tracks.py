@@ -290,7 +290,11 @@ async def stream_track(
     # localhost с другого устройства указывает на сам клиент. Внутренний клиент
     # (minio:9000) доступен из контейнера всегда. Range поддерживаем вручную.
     if storage.is_minio_path(track.file_path):
-        return await storage.minio_range_response_async(track.file_path, request)
+        return await storage.minio_range_response_async(
+            track.file_path,
+            request,
+            quality=request.query_params.get("quality"),
+        )
 
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
     if track.source and track.source != "local":

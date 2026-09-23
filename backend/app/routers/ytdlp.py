@@ -2051,7 +2051,9 @@ async def stream_cached_audio(
     archived = await archived_music_path(archive_key)
     if archived:
         try:
-            return await storage.minio_range_response_async(archived, request)
+            return await storage.minio_range_response_async(
+                archived, request, quality=request.query_params.get("quality")
+            )
         except Exception:  # noqa: BLE001 — объект мог быть удалён; играем по обычному пути
             logger.warning("archived object unusable for %s", cache_id, exc_info=True)
 
