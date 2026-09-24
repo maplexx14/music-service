@@ -69,6 +69,11 @@ RUN sed -i 's/^worker_processes .*/worker_processes auto;/' /etc/nginx/nginx.con
     && sed -i 's/worker_connections .*/worker_connections 8192;/' /etc/nginx/nginx.conf \
     && sed -i '/^events {/i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
 
+# Каталог disk-кэша обложек (proxy_cache_path в conf.d/00-upstreams.conf и
+# nginx.conf). nginx сам создаёт только подуровни levels=1:2, базовый каталог
+# должен существовать; воркер (пользователь nginx) пишет в него файлы.
+RUN mkdir -p /var/cache/nginx/covers && chown -R nginx:nginx /var/cache/nginx/covers
+
 
 # ─────────────────────────── prod ───────────────────────────
 # Собирается только явным `target: prod` (см. docker-compose.prod.yml).

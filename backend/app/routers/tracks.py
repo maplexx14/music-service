@@ -138,9 +138,10 @@ def get_tracks(
 _COVER_CDN_HOSTS = (
     "i.ytimg.com",
     "yt3.googleusercontent.com",
-    "lh3.googleusercontent.com",
+    "yt3.ggpht.com",
     "lh1.googleusercontent.com",
     "lh2.googleusercontent.com",
+    "lh3.googleusercontent.com",
     "lh4.googleusercontent.com",
     "lh5.googleusercontent.com",
     "lh6.googleusercontent.com",
@@ -150,12 +151,24 @@ _COVER_CDN_HOSTS = (
     "i4.sndcdn.com",
     "i.sndcdn.com",
     "cf-media.sndcdn.com",
+    # Spotify-обложки (i.scdn.co) и аватары Yandex Music: фронт заворачивает
+    # ВСЕ http(s)-cover_url в этот прокси (utils/media.js), без хоста в списке
+    # такие обложки получали 400 и падали в заглушку.
+    "i.scdn.co",
+    "thisis-images.scdn.co",
+    "avatars.yandex.net",
+    "avatars.mds.yandex.net",
 )
 _COVER_PROXY_MAX_BYTES = 10 * 1024 * 1024  # 10 MB — потолок на одну обложку
 _COVER_CACHE_TTL = 24 * 3600
 # Негативный кэш короче: CDN может отдать 403/timeout мигом, а через минуту
 # ответить 200 — не выпарываем обложку на сутки из-за одного флапа.
 _COVER_NEGATIVE_TTL = 300
+# Таймауты fetch'а: короткий connect — недоступный/зафильтрованный CDN должен
+# отваливаться быстро (залп обложек стартовой страницы иначе виснет по 15с),
+# read длиннее — на медленный канал прокси-выхода: обложка — десятки килобайт.
+_COVER_CONNECT_TIMEOUT = 3.0
+_COVER_READ_TIMEOUT = 8.0
 
 
 def _cover_cache_key(url: str) -> str:
@@ -173,38 +186,71 @@ def _is_allowed_cover_url(url: str) -> bool:
     )
 
 
-@router.get("/cover-proxy")
-async def proxy_external_cover(url: str):
-    """Отдаёт внешнюю обложку CDN через бэкенд-прокси с кэшем в Redis."""
-    if not _is_allowed_cover_url(url):
-        raise HTTPException(status_code=400, detail="Unsupported cover URL")
+# Переиспользуемый httpx-клиент с keep-alive. Создание клиента на каждый
+# запрос означало TCP+TLS-хендшейк до прокси-выхода на КАЖДУЮ обложку —
+# полоса из 20 карточек стоила 20 хендшейков; переиспользование соединения
+# убирает его (и накладные расходы на создание пула). Пересоздаётся только
+# при смене прокси: soundcloud_proxy() перечитывает файл по mtime, и запросы
+# после ротации должны идти через новый выход.
+_cover_http: Optional[httpx.AsyncClient] = None
+_cover_http_proxy: Optional[str] = None
+_cover_http_lock = asyncio.Lock()
+
+
+async def _get_cover_http() -> httpx.AsyncClient:
+    global _cover_http, _cover_http_proxy
 
     from app.routers.soundcloud import soundcloud_proxy
 
-    cache_key = _cover_cache_key(url)
+    proxy = soundcloud_proxy()
+    proxy_key = proxy or ""
+    if _cover_http is not None and _cover_http_proxy == proxy_key:
+        return _cover_http
+    async with _cover_http_lock:
+        if _cover_http is not None and _cover_http_proxy == proxy_key:
+            return _cover_http
+        old = _cover_http
+        if old is not None:
+            # aclose() асинхронен — закрываем в фоне, не тормозя запрос.
+            closing = asyncio.ensure_future(old.aclose())
 
-    cached = await get_cache_async(cache_key)
-    if cached is not None:
-        if cached.get("error"):
-            raise HTTPException(status_code=502, detail="Cover fetch failed")
-        return Response(
-            content=base64.b64decode(cached["data_b64"]),
-            media_type=cached.get("content_type") or "image/jpeg",
-            headers={"Cache-Control": f"public, max-age={_COVER_CACHE_TTL}"},
-        )
+            def _discard_close(t, *, client=old):
+                try:
+                    t.exception()
+                except asyncio.CancelledError:
+                    pass
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, read=15.0),
+            closing.add_done_callback(_discard_close)
+        _cover_http = httpx.AsyncClient(
+            timeout=httpx.Timeout(_COVER_READ_TIMEOUT, connect=_COVER_CONNECT_TIMEOUT),
             follow_redirects=True,
-            proxy=soundcloud_proxy(),
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            body = resp.content
-            if len(body) > _COVER_PROXY_MAX_BYTES:
-                raise ValueError("cover too large")
-            content_type = resp.headers.get("content-type", "image/jpeg")
+            proxy=proxy,
+        )
+        _cover_http_proxy = proxy_key
+    return _cover_http
+
+
+# Single-flight: стартовая загрузка страницы — залп из десятков обложек, и до
+# прогрева Redis-кэша каждая дёргала CDN отдельно (плюс параллельный запрос
+# извлечения цвета темы). Одна задача на cache_key: конкурентные запросы
+# ждут её результат, сетевой вызов — один.
+_cover_inflight: dict[str, asyncio.Task] = {}
+
+
+async def _fetch_cover_to_cache(url: str, cache_key: str) -> Response:
+    """Скачивает обложку, кладёт в Redis и отдаёт Response.
+
+    Выполняется единой задачей на cache_key (см. _cover_inflight): все
+    конкурентные запросы того же URL await'ят её вместо параллельного fetch.
+    """
+    try:
+        client = await _get_cover_http()
+        resp = await client.get(url)
+        resp.raise_for_status()
+        body = resp.content
+        if len(body) > _COVER_PROXY_MAX_BYTES:
+            raise ValueError("cover too large")
+        content_type = resp.headers.get("content-type", "image/jpeg")
     except Exception:
         logger.warning("cover-proxy: fetch failed for %s", url[:120])
         await set_cache_async(
@@ -226,6 +272,42 @@ async def proxy_external_cover(url: str):
         media_type=content_type,
         headers={"Cache-Control": f"public, max-age={_COVER_CACHE_TTL}"},
     )
+
+
+@router.get("/cover-proxy")
+async def proxy_external_cover(url: str):
+    """Отдаёт внешнюю обложку CDN через бэкенд-прокси с кэшем в Redis."""
+    if not _is_allowed_cover_url(url):
+        raise HTTPException(status_code=400, detail="Unsupported cover URL")
+
+    cache_key = _cover_cache_key(url)
+
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        if cached.get("error"):
+            raise HTTPException(status_code=502, detail="Cover fetch failed")
+        return Response(
+            content=base64.b64decode(cached["data_b64"]),
+            media_type=cached.get("content_type") or "image/jpeg",
+            headers={"Cache-Control": f"public, max-age={_COVER_CACHE_TTL}"},
+        )
+
+    task = _cover_inflight.get(cache_key)
+    if task is None:
+        task = asyncio.create_task(_fetch_cover_to_cache(url, cache_key))
+        _cover_inflight[cache_key] = task
+
+        def _release(t, *, key=cache_key):
+            # Клиент мог отключиться до await: без чтения .exception() uvicorn
+            # шумит «exception was never retrieved». Сама ошибка уже залогирована.
+            try:
+                t.exception()
+            except asyncio.CancelledError:
+                pass
+            _cover_inflight.pop(key, None)
+
+        task.add_done_callback(_release)
+    return await task
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
