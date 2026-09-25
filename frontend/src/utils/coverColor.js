@@ -1,10 +1,26 @@
 // Цвета фона главной выводятся из обложки текущего трека. Здесь — чистая
 // арифметика (её можно проверять в отрыве от DOM), загрузка картинки и сам
 // хук живут в hooks/useCoverColors.js.
+//
+// Палитра — три стопа: светлый угол градиента, основной тон и тёмный угол.
+// Основной тон и тёмный угол строятся по ДОМИНИРУЮЩЕМУ цвету обложки, светлый
+// угол — по ВТОРОМУ по доминантности (раньше там стоял почти белый оттенок
+// основного тона, и угол градиента читался как белое пятно). Обложки без цвета
+// вовсе — чёрные, серые, белые — получают градиент из собственной светлоты:
+// чёрная обложка даёт тёмный градиент, а не дефолтную фиолетовую палитру.
 
 // Размер выборки: 16×16 = 256 пикселей. Усредняет их сам браузер при
 // drawImage — это дешевле любого ручного прохода по полноразмерной обложке.
 export const SAMPLE = 16
+
+// Корзины тона по 15°.
+const HUE_BINS = 24
+// Второй цвет ищем не ближе этого угла (в корзинах) от первого: соседняя
+// корзина — это тот же цвет, а не второй.
+const SECOND_MIN_BINS = 3
+// Второй цвет должен быть заметным, а не одной цветной точкой на обложке.
+const SECOND_MIN_WEIGHT = 0.6
+const SECOND_MIN_SHARE = 0.25
 
 // Ниже этой насыщенности пиксель считаем серым и на тон не пускаем: формально
 // тон у серого есть, но он случаен (шум сжатия), и ч/б обложка красила бы фон
@@ -12,10 +28,8 @@ export const SAMPLE = 16
 const MIN_SATURATION = 0.22
 // Совсем тёмные и совсем светлые пиксели тоже выбрасываем: их тон либо не
 // читается, либо это блики и рамки, а не цвет обложки.
-const MIN_LIGHTNESS = 0.12
-const MAX_LIGHTNESS = 0.92
-// Корзины тона по 15°.
-const HUE_BINS = 24
+const MIN_LIGHTNESS = 0.08
+const MAX_LIGHTNESS = 0.95
 // Меньше этого суммарного веса — считаем, что выраженного цвета у обложки нет.
 // 2.5 ≈ десяток насыщенных пикселей из 256.
 const MIN_WEIGHT = 2.5
@@ -24,28 +38,25 @@ const MIN_WEIGHT = 2.5
 const MIN_VIVID_PIXELS = SAMPLE
 
 // Мягкий проход: пороги для обложек, у которых выраженного цвета нет, но цвет
-// всё-таки есть. Тёмные и пастельные обложки на уменьшенной копии теряют
+// всё-таки есть. Пастельные и приглушённые обложки на уменьшенной копии теряют
 // насыщенность (усреднение по ячейке съедает её), и строгие пороги выше
-// отправляли их в дефолтный фиолетовый. Со стороны это выглядит как «фон не
-// обновился под новый трек», поэтому во втором проходе пороги опущены, а тон
-// считается средним по всем цветным пикселям, а не по победившей корзине.
+// отправляли их в ч/б палитру.
 const SOFT_MIN_SATURATION = 0.1
-const SOFT_MIN_LIGHTNESS = 0.06
-const SOFT_MAX_LIGHTNESS = 0.96
 const SOFT_MIN_WEIGHT = 0.8
 const SOFT_MIN_VIVID_PIXELS = 8
 
-// От обложки берём ТОЛЬКО тон. Три стопа задают дефолтную фиолетовую палитру
-// hero (#d2adff / #943dff / #4d287b) по светлоте и насыщенности — поэтому фон
-// всегда выглядит тем же градиентом, но в цвете трека, а белая кнопка «поток»
-// остаётся контрастной на любом оттенке. Светлота подобрана так, чтобы фон
-// оставался тёмным: шейдер ещё раз поднимает контраст (uContrast = 1.5), и
-// светлые стопы на экране заметно светлее, чем здесь.
-const STOPS = [
-  { s: 1, l: 0.84 },
-  { s: 1, l: 0.62 },
-  { s: 0.51, l: 0.32 },
-]
+// Пределы светлоты стопов. Верхние сознательно ниже единицы: шейдер ещё раз
+// поднимает контраст (uContrast = 1.5), и светлый стоп на экране заметно
+// светлее, чем в палитре, — белый угол градиента выглядел заливкой поверх фона.
+// Нижние не дают совсем тёмной обложке уйти в чёрный прямоугольник.
+const MID_LIGHTNESS = [0.26, 0.58]
+const LIGHT_LIGHTNESS = [0.42, 0.72]
+const DARK_LIGHTNESS = [0.1, 0.29]
+// Насколько светлый угол поднимается над основным тоном, когда второго цвета
+// у обложки нет.
+const LIGHT_LIFT = 0.18
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
 export function rgbToHsl(r, g, b) {
   const rn = r / 255
@@ -75,96 +86,155 @@ export function hslToHex(h, s, l) {
   return `#${to(f(0))}${to(f(8))}${to(f(4))}`
 }
 
-// Доминирующий ТОН обложки, а не средний цвет: среднее по картинке почти
-// всегда уходит в серый (взаимно дополнительные цвета гасят друг друга), и
-// градиент из него получался бы грязным. Поэтому пиксели уменьшенной копии
-// раскладываются по корзинам тона с весом по насыщенности — побеждает самый
-// цветной участок обложки, а не самый большой (иначе фон уводило бы в цвет
-// фона фотографии или полей постера).
-export function dominantHue(data) {
-  return pickHue(data, {
-    minSaturation: MIN_SATURATION,
-    minLightness: MIN_LIGHTNESS,
-    maxLightness: MAX_LIGHTNESS,
-    minWeight: MIN_WEIGHT,
-    minVivid: MIN_VIVID_PIXELS,
-    pickBin: true,
-  })
-}
-
-// Тон обложки без выраженного доминирующего участка: средний по всем цветным
-// пикселям (мягкие пороги выше). Возвращает null, если цвета в обложке нет
-// вовсе — ч/б фотографию фон по-прежнему не красит.
-export function averageHue(data) {
-  return pickHue(data, {
-    minSaturation: SOFT_MIN_SATURATION,
-    minLightness: SOFT_MIN_LIGHTNESS,
-    maxLightness: SOFT_MAX_LIGHTNESS,
-    minWeight: SOFT_MIN_WEIGHT,
-    minVivid: SOFT_MIN_VIVID_PIXELS,
-    pickBin: false,
-  })
-}
-
-// Пиксели уменьшенной копии → палитра градиента (или null, если цвета нет).
-// Два прохода: сначала строгий доминирующий тон, затем мягкий средний. Без
-// второго прохода часть обложек (тёмные, пастельные) проваливалась в дефолтную
-// палитру, и на смене трека казалось, что фон не обновился.
-export function paletteFromPixels(data) {
-  const hue = dominantHue(data) ?? averageHue(data)
-  return hue == null ? null : paletteFromHue(hue)
-}
-
-function pickHue(data, { minSaturation, minLightness, maxLightness, minWeight, minVivid, pickBin }) {
-  if (!data) return null
-  const bins = new Float64Array(HUE_BINS)
-  // Средний тон внутри победившей корзины считаем через сумму синусов и
-  // косинусов: обычное среднее ломается на переходе через 0°/360° (красный).
+// Разбор выборки обложки в одну статистику: корзины тона (вес — насыщенность),
+// тон цветных пикселей через суммы синусов и косинусов (обычное среднее ломается
+// на переходе через 0°/360°, то есть на красном) и общая светлота картинки.
+function analyse(data) {
+  const weight = new Float64Array(HUE_BINS)
   const sin = new Float64Array(HUE_BINS)
   const cos = new Float64Array(HUE_BINS)
-  let vivid = 0
+  const sSum = new Float64Array(HUE_BINS)
+  const lSum = new Float64Array(HUE_BINS)
+  const count = new Float64Array(HUE_BINS)
+  let strictCount = 0
+  let softWeight = 0
+  let softSin = 0
+  let softCos = 0
+  let softSSum = 0
+  let softLSum = 0
+  let softCount = 0
+  let lTotal = 0
+  let pixels = 0
 
   for (let i = 0; i < data.length; i += 4) {
     const [h, s, l] = rgbToHsl(data[i], data[i + 1], data[i + 2])
-    if (s < minSaturation || l < minLightness || l > maxLightness) continue
-    vivid += 1
-    const bin = Math.min(HUE_BINS - 1, Math.floor((h / 360) * HUE_BINS))
+    pixels += 1
+    lTotal += l
     const rad = (h * Math.PI) / 180
-    bins[bin] += s
+    if (s >= SOFT_MIN_SATURATION) {
+      softWeight += s
+      softSin += Math.sin(rad) * s
+      softCos += Math.cos(rad) * s
+      softSSum += s
+      softLSum += l
+      softCount += 1
+    }
+    if (s < MIN_SATURATION || l < MIN_LIGHTNESS || l > MAX_LIGHTNESS) continue
+    strictCount += 1
+    const bin = Math.min(HUE_BINS - 1, Math.floor((h / 360) * HUE_BINS))
+    weight[bin] += s
     sin[bin] += Math.sin(rad) * s
     cos[bin] += Math.cos(rad) * s
+    sSum[bin] += s
+    lSum[bin] += l
+    count[bin] += 1
   }
 
+  return {
+    weight, sin, cos, sSum, lSum, count,
+    strictCount, softWeight, softSin, softCos, softSSum, softLSum, softCount,
+    lTotal, pixels,
+  }
+}
+
+const binsApart = (a, b) => {
+  const d = Math.abs(a - b)
+  return Math.min(d, HUE_BINS - d)
+}
+
+function clusterOf(stats, bin) {
+  const hue = (Math.atan2(stats.sin[bin], stats.cos[bin]) * 180) / Math.PI
+  const n = stats.count[bin]
+  return {
+    bin,
+    hue: (hue + 360) % 360,
+    s: stats.sSum[bin] / n,
+    l: stats.lSum[bin] / n,
+    weight: stats.weight[bin],
+  }
+}
+
+// Самый весомый тон среди корзин. excludeBin — корзина уже выбранного цвета:
+// тогда берётся самый весомый тон в стороне от неё (это и есть «второй по
+// доминантности»), и он должен быть заметным, а не единичной точкой.
+function pickCluster(stats, excludeBin = -1) {
   let best = -1
-  let weight = 0
   for (let i = 0; i < HUE_BINS; i += 1) {
-    weight += bins[i]
-    if (best < 0 || bins[i] > bins[best]) best = i
+    if (stats.weight[i] <= 0) continue
+    if (excludeBin >= 0 && binsApart(i, excludeBin) < SECOND_MIN_BINS) continue
+    if (best < 0 || stats.weight[i] > stats.weight[best]) best = i
   }
-  if (best < 0 || vivid < minVivid) return null
-  if (pickBin && bins[best] < minWeight) return null
-  if (!pickBin && weight < minWeight) return null
-
-  const bin = pickBin ? best : null
-  let sumSin = 0
-  let sumCos = 0
-  for (let i = 0; i < HUE_BINS; i += 1) {
-    if (bin !== null && i !== bin) continue
-    sumSin += sin[i]
-    sumCos += cos[i]
+  if (best < 0) return null
+  if (excludeBin < 0) {
+    if (stats.weight[best] < MIN_WEIGHT || stats.strictCount < MIN_VIVID_PIXELS) return null
+  } else {
+    const minWeight = Math.max(SECOND_MIN_WEIGHT, stats.weight[excludeBin] * SECOND_MIN_SHARE)
+    if (stats.weight[best] < minWeight) return null
   }
-  if (sumSin === 0 && sumCos === 0) return null
-  const hue = (Math.atan2(sumSin, sumCos) * 180) / Math.PI
-  return (hue + 360) % 360
+  return clusterOf(stats, best)
 }
 
-
-// Три стопа градиента по доминирующему тону обложки.
-export function paletteFromHue(hue) {
-  return STOPS.map(({ s, l }) => hslToHex(hue, s, l))
+// Приглушённый, но всё-таки цветной тон — для пастельных обложек.
+function softCluster(stats) {
+  if (stats.softCount < SOFT_MIN_VIVID_PIXELS || stats.softWeight < SOFT_MIN_WEIGHT) return null
+  const hue = (Math.atan2(stats.softSin, stats.softCos) * 180) / Math.PI
+  return {
+    hue: (hue + 360) % 360,
+    s: stats.softSSum / stats.softCount,
+    l: stats.softLSum / stats.softCount,
+  }
 }
 
-// Палитра по умолчанию — те же цвета, что были зашиты в hero (и в CSS-заглушку
-// .hero-grainient-static), на случай серой обложки или её отсутствия. Совпадает
-// с paletteFromHue(267) — тоном прежней фиолетовой палитры.
-export const DEFAULT_HERO_COLORS = ['#d2adff', '#943dff', '#4d287b']
+function paletteFromClusters(dominant, second) {
+  const sat = clamp(dominant.s, 0.35, 1)
+  const midL = clamp(Math.min(dominant.l, MID_LIGHTNESS[1]), MID_LIGHTNESS[0], MID_LIGHTNESS[1])
+  const light = second
+    ? hslToHex(
+        second.hue,
+        clamp(second.s, 0.35, 1),
+        clamp(Math.min(second.l, LIGHT_LIGHTNESS[1]), LIGHT_LIGHTNESS[0], LIGHT_LIGHTNESS[1]),
+      )
+    : hslToHex(dominant.hue, sat, clamp(midL + LIGHT_LIFT, LIGHT_LIGHTNESS[0], LIGHT_LIGHTNESS[1]))
+
+  return [
+    light,
+    hslToHex(dominant.hue, sat, midL),
+    hslToHex(
+      dominant.hue,
+      clamp(dominant.s * 0.8, 0.3, 0.75),
+      clamp(midL * 0.5, DARK_LIGHTNESS[0], DARK_LIGHTNESS[1]),
+    ),
+  ]
+}
+
+// Ч/б обложка: цвета брать неоткуда, берём её собственную светлоту. Чёрная
+// обложка даёт почти чёрный градиент (раньше такие обложки проваливались в
+// дефолтную фиолетовую палитру — со стороны это выглядело как «для чёрного
+// цвета градиента нет»).
+function neutralPalette(stats) {
+  const l = stats.pixels > 0 ? stats.lTotal / stats.pixels : 0
+  const gray = (value) => hslToHex(0, 0, value)
+  return [
+    gray(clamp(l * 1.6 + 0.12, 0.14, 0.52)),
+    gray(clamp(l * 1.05 + 0.05, 0.07, 0.38)),
+    gray(clamp(l * 0.45, 0.02, 0.2)),
+  ]
+}
+
+// Пиксели уменьшенной копии обложки → палитра градиента. null означает «цвета
+// взять неоткуда» (canvas недоступен) — вызывающий остаётся на дефолтной палитре.
+export function paletteFromPixels(data) {
+  if (!data) return null
+  const stats = analyse(data)
+  const dominant = pickCluster(stats)
+  if (dominant) return paletteFromClusters(dominant, pickCluster(stats, dominant.bin))
+  const soft = softCluster(stats)
+  if (soft) return paletteFromClusters(soft, null)
+  return neutralPalette(stats)
+}
+
+// Палитра по умолчанию — для трека без обложки и на время разбора. Это тот же
+// фиолетовый, что и прежний фон hero, сведённый к тем же пределам светлоты, что
+// и палитры из обложек (см. MID_LIGHTNESS/LIGHT_LIGHTNESS/DARK_LIGHTNESS), —
+// иначе фон мигал бы на дефолт другим по светлоте.
+export const DEFAULT_HERO_COLORS = ['#b070ff', '#8929ff', '#440f85']

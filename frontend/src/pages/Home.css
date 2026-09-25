@@ -164,9 +164,9 @@
      инлайном под доминирующий тон обложки текущего трека (см. useCoverColors) —
      это нужно CSS-заглушке, которая рисуется в lite mode и на время загрузки
      WebGL. */
-  --hero-c1: #d2adff;
-  --hero-c2: #943dff;
-  --hero-c3: #4d287b;
+  --hero-c1: #b070ff;
+  --hero-c2: #8929ff;
+  --hero-c3: #440f85;
 }
 
 .hero-grainient {

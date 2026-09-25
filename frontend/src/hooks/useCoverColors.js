@@ -2,19 +2,24 @@ import { useEffect, useState } from 'react'
 import { resolveCoverUrl } from '../utils/media'
 import { SAMPLE, paletteFromPixels } from '../utils/coverColor'
 
-// Хук отдаёт три цвета градиента hero под доминирующий тон обложки текущего
-// трека. Возвращает null, пока цвета нет (обложка серая, ещё не загрузилась
-// или canvas недоступен) — вызывающий в этом случае остаётся на дефолтной
-// палитре.
+// Хук отдаёт три цвета градиента hero по обложке текущего трека. Возвращает
+// null, только когда цвета взять неоткуда (обложка не загрузилась или canvas
+// недоступен) — вызывающий в этом случае остаётся на дефолтной палитре.
+// Ч/б и чёрные обложки дают свою палитру (см. neutralPalette в utils/coverColor).
 
 // Результат разбора кэшируется по URL: треки ходят по кругу (поток, очередь,
 // возврат назад), а разбор — это загрузка картинки и чтение пикселей.
-// Ключ — тот же URL, что у <img> диска (resolveCoverUrl с highQuality), так
-// что картинка берётся из кэша браузера и второй раз по сети не идёт.
-// Хранится именно результат (done/hue), а не промис: разобранный цвет нужен
-// синхронно, в том же рендере, где сменился трек (см. cachedPalette).
+// Хранится именно результат (done/colors), а не промис: разобранный цвет нужен
+// синхронно, в том же рендере, где сменился трек (см. cachedColors).
 const hueCache = new Map()
 const HUE_CACHE_LIMIT = 64
+
+// URL обложки для разбора — БЕЗ апскейла CDN (resolveCoverUrl без highQuality).
+// Для выборки 16×16 апскейл до 1200×1200 не нужен: он стоит лишней сетевой
+// загрузки и тяжёлого декода на каждый трек, а на цвет не влияет. Обычный URL
+// обложки — тот же, что у карточек треков на странице, так что чаще всего он
+// уже в кэше браузера.
+const sampleUrl = (coverUrl) => (coverUrl ? resolveCoverUrl(coverUrl) : null)
 
 function isCrossOrigin(src) {
   try {
@@ -41,13 +46,19 @@ function loadCoverImage(src) {
 }
 
 // Пиксели уменьшенной копии обложки. Уменьшение делает сам браузер при
-// drawImage — это и есть усреднение по ячейке.
+// drawImage — это и есть усреднение по ячейке. Canvas один на модуль: разбор
+// идёт на каждой смене трека, и заводить под него новый элемент с буфером
+// каждый раз незачем.
+let sampleCanvas = null
+
 function samplePixels(img) {
   try {
-    const canvas = document.createElement('canvas')
-    canvas.width = SAMPLE
-    canvas.height = SAMPLE
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!sampleCanvas) {
+      sampleCanvas = document.createElement('canvas')
+      sampleCanvas.width = SAMPLE
+      sampleCanvas.height = SAMPLE
+    }
+    const ctx = sampleCanvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) return null
     ctx.imageSmoothingEnabled = true
     ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE)
@@ -97,13 +108,14 @@ function cachedColors(src) {
 // отставал бы на трек. Кладём в тот же кэш, поэтому сама смена трека берёт
 // готовую палитру синхронно.
 export function prefetchCoverColors(coverUrl) {
-  if (!coverUrl) return
-  cacheEntry(resolveCoverUrl(coverUrl, true))
+  const src = sampleUrl(coverUrl)
+  if (!src) return
+  cacheEntry(src)
 }
 
 export function useCoverColors(coverUrl) {
   const [colors, setColors] = useState(null)
-  const src = coverUrl ? resolveCoverUrl(coverUrl, true) : null
+  const src = sampleUrl(coverUrl)
   // Разобранный цвет отдаётся сразу, не дожидаясь эффекта: обложка могла быть
   // разобрана раньше (возврат к треку, повтор в потоке), а промис кэша может
   // резолвиться уже после того, как трек сменился, — и тогда результат
