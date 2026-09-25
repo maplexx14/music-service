@@ -17,6 +17,7 @@ import { usePullToRefresh } from '../hooks/usePullToRefresh'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
+import HeroDisc from '../components/HeroDisc'
 import { toast } from '../store/toastStore'
 import './Home.css'
 
@@ -388,6 +389,10 @@ function Home() {
             </Suspense>
           )}
         </div>
+        {/* Диск с обложкой текущего трека — слой между градиентом и кнопкой
+            потока: кнопка остаётся в центре диска, как на макете. Сам диск
+            подписан на currentTrack, главная от его тиков не перерисовывается. */}
+        <HeroDisc />
         <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
           <div className="wave-center">
             {waveGif ? (

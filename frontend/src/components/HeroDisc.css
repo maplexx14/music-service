@@ -1,0 +1,82 @@
+/* Диск-пластинка в hero главной: обложка текущего трека на фоне градиента.
+   Лежит между фоновым Grainient (z-index 0) и кнопкой потока (z-index 2),
+   поэтому кнопка оказывается в центре диска, как на макете. */
+
+.hero-disc {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  /* Размер взят с макета: диск занимает ~77% высоты hero (34vw на широком
+     экране). 54vh — потолок по высоте hero (70vh минус паддинги), иначе
+     диск обрезался бы по краям; 520px — потолок на очень широких окнах. */
+  width: min(520px, 34vw, 54vh);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  z-index: 1;
+  /* Жест поворота: браузер не должен увести его в скролл страницы, иначе
+     pointermove оборвётся на pointercancel и диск «залипнет». */
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Долгое нажатие на iOS иначе открывает системное меню картинки поверх
+     жеста поворота. */
+  -webkit-touch-callout: none;
+  /* Тень и кант живут на некрутящемся корне: вращать их незачем, а при
+     быстром повороте тень на вращающемся слое читалась бы как артефакт. */
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  outline: none;
+}
+
+.hero-disc::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.hero-disc.is-dragging {
+  cursor: grabbing;
+}
+
+.hero-disc:focus-visible {
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(255, 255, 255, 0.55);
+}
+
+.hero-disc-cover {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  /* Угол пишет rAF-цикл прямо в transform (см. HeroDisc.jsx) — промотируем
+     слой заранее, чтобы поворот не пересобирал раскладку. */
+  will-change: transform;
+  transition: transform 0.25s ease-out;
+  -webkit-user-drag: none;
+  /* События указателя слушает корень: на картинке они не нужны, а её
+     собственный drag-and-drop в браузере перебивал бы поворот. */
+  pointer-events: none;
+}
+
+/* Пока палец/мышь ведут диск, угол должен идти за рукой без сглаживания —
+   transition здесь читался бы как люфт. */
+.hero-disc.is-dragging .hero-disc-cover {
+  transition: none;
+}
+
+@media (max-width: 768px) {
+  .hero-disc {
+    width: min(300px, 64vw, 44vh);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-disc-cover {
+    transition: none;
+  }
+}

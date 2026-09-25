@@ -48,6 +48,14 @@ export function usePullToRefresh({ onRefresh, reachTop, maxPull = 90, threshold 
         gesture.current = null
         return
       }
+      // Элементы-«крутилки» (диск на главной) помечены data-no-pull: жест,
+      // начатый на них, — это поворот, а не потягивание списка. Без этой
+      // проверки вращение диска вниз на самом верху страницы одновременно
+      // дёргало бы обновление рекомендаций.
+      if (e.target?.closest?.('[data-no-pull]')) {
+        gesture.current = null
+        return
+      }
       const t = e.touches[0]
       gesture.current = { x: t.clientX, y: t.clientY, pulling: false }
     }
