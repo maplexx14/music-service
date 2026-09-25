@@ -159,13 +159,14 @@
   position: relative;
   overflow: hidden;
   gap: 32px;
-  /* Цвета градиента hero. Дефолт совпадает с палитрой Grainient по умолчанию;
-     главная переопределяет их инлайном под доминирующий тон обложки текущего
-     трека (см. useCoverColors) — это нужно CSS-заглушке, которая рисуется в
-     lite mode и на время загрузки WebGL. */
-  --hero-c1: #e0c3ff;
-  --hero-c2: #a259ff;
-  --hero-c3: #6a3093;
+  /* Цвета градиента hero. Дефолт совпадает с палитрой Grainient по умолчанию
+     (DEFAULT_HERO_COLORS в utils/coverColor.js); главная переопределяет их
+     инлайном под доминирующий тон обложки текущего трека (см. useCoverColors) —
+     это нужно CSS-заглушке, которая рисуется в lite mode и на время загрузки
+     WebGL. */
+  --hero-c1: #d2adff;
+  --hero-c2: #943dff;
+  --hero-c3: #4d287b;
 }
 
 .hero-grainient {

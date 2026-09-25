@@ -18,7 +18,7 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
-import { useCoverColors } from '../hooks/useCoverColors'
+import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import { toast } from '../store/toastStore'
 import './Home.css'
@@ -151,6 +151,16 @@ function Home() {
     const handle = idle(() => usePlayerStore.getState().preloadFlow())
     return () => cancel(handle)
   }, [])
+
+  // Разбор обложки следующего трека — заранее. Разбор идёт через сеть и декод
+  // картинки, поэтому без прогрева фон докрашивался бы уже во время трека, а на
+  // быстрых переключениях цвет отставал бы на один трек. Следующий трек известен
+  // из очереди, а кэш разбора общий с useCoverColors — так что в момент смены
+  // трека палитра уже готова и берётся синхронно.
+  useEffect(() => {
+    const next = usePlayerStore.getState().getNextTrack(1)
+    prefetchCoverColors(next?.cover_url)
+  }, [currentTrack])
 
   // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
   // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
