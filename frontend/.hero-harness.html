@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>cover color harness</title>
+<link rel="stylesheet" href="./src/pages/Home.css" />
+<link rel="stylesheet" href="./src/components/HeroDisc.css" />
+<style>
+  :root {
+    --text-xs: 11px; --text-sm: 12px; --text-md: 16px; --text-lg: 18px; --text-xl: 24px;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  html, body { margin: 0; background: #111; font-family: sans-serif; color: #eee; }
+  .page-container { padding: 16px; }
+  .hero-section { min-height: 300px; margin-bottom: 8px; }
+  .hero-disc { width: min(200px, 20vw, 40vh); }
+  .label { font: 12px monospace; padding: 4px 8px 16px; color: #9f9; }
+  .cover-mini { width: 40px; height: 40px; vertical-align: middle; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="page-container" id="root"></div>
+<script type="module">
+import { SAMPLE, dominantHue, paletteFromHue, DEFAULT_HERO_COLORS } from './src/utils/coverColor.js'
+
+const svg = (body) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`,
+  )}`
+
+const COVERS = [
+  ['ночное небо + солнце', svg(`<rect width="100" height="100" fill="#0b1b3a"/><circle cx="70" cy="30" r="18" fill="#ff7a18"/><rect y="72" width="100" height="28" fill="#0a1230"/>`)],
+  ['зелёный постер', svg(`<rect width="100" height="100" fill="#1f7a3d"/><rect width="100" height="14" fill="#ffffff"/>`)],
+  ['красный постер в чёрной рамке', svg(`<rect width="100" height="100" fill="#111111"/><rect x="10" y="10" width="80" height="80" fill="#d12d1f"/>`)],
+  ['ч/б фото', svg(`<rect width="100" height="100" fill="#8a8a8a"/><rect x="20" y="20" width="60" height="60" fill="#d0d0d0"/>`)],
+  ['маджента', svg(`<rect width="100" height="100" fill="#7a1fa2"/><rect x="15" y="15" width="70" height="70" fill="#c026d3"/>`)],
+  ['пастель (почти серая)', svg(`<rect width="100" height="100" fill="#efe7ea"/><rect x="20" y="20" width="60" height="60" fill="#f7f2f4"/>`)],
+]
+
+const load = (src) =>
+  new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+  })
+
+const extract = async (src) => {
+  const img = await load(src)
+  if (!img) return null
+  const canvas = document.createElement('canvas')
+  canvas.width = SAMPLE
+  canvas.height = SAMPLE
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE)
+  return dominantHue(ctx.getImageData(0, 0, SAMPLE, SAMPLE).data)
+}
+
+const root = document.getElementById('root')
+for (const [name, src] of COVERS) {
+  const hue = await extract(src)
+  const palette = hue == null ? DEFAULT_HERO_COLORS : paletteFromHue(hue)
+  const fallback = hue == null ? ' (дефолт)' : ''
+  const el = document.createElement('div')
+  el.innerHTML = `
+    <div class="hero-section" style="--hero-c1:${palette[0]};--hero-c2:${palette[1]};--hero-c3:${palette[2]}">
+      <div class="hero-grainient"><div class="hero-grainient-static"></div></div>
+      <div class="hero-disc"><img class="hero-disc-cover" src="${src}" alt="" /></div>
+      <div class="wave-widget"><div class="wave-center"><button type="button" class="wave-title"><span>поток</span></button></div></div>
+    </div>
+    <div class="label"><img class="cover-mini" src="${src}" />${name} | hue=${hue == null ? 'null' : hue.toFixed(1)}${fallback} | ${palette.join(' ')}</div>`
+  root.appendChild(el)
+}
+document.title = 'ready'
+</script>
+</body>
+</html>

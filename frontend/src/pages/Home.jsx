@@ -18,6 +18,8 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
+import { useCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import { toast } from '../store/toastStore'
 import './Home.css'
 
@@ -114,6 +116,14 @@ function Home() {
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const source = usePlayerStore((s) => s.source)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
+  // Текущий трек нужен главной только ради цвета фона под его обложку:
+  // подписка добавляет перерисовку на смену трека (событие редкое), тиков
+  // времени в ней нет.
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const coverColors = useCoverColors(currentTrack?.cover_url)
+  // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
+  // дефолтная фиолетовая пара, как было зашито в hero раньше.
+  const heroColors = coverColors ?? DEFAULT_HERO_COLORS
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
@@ -355,16 +365,27 @@ function Home() {
           </div>
         </div>
       </div>
-      <div className="hero-section">
+      <div
+        className="hero-section"
+        // Цвета градиента hero: тройка под доминирующий тон обложки текущего
+        // трека. Здесь они нужны ради CSS-заглушки (.hero-grainient-static —
+        // lite mode и фолбэк Suspense), сам WebGL-градиент получает те же
+        // цвета пропсами ниже.
+        style={{
+          '--hero-c1': heroColors[0],
+          '--hero-c2': heroColors[1],
+          '--hero-c3': heroColors[2],
+        }}
+      >
         <div className="hero-grainient">
           {liteMode ? (
             <div className="hero-grainient-static" />
           ) : (
             <Suspense fallback={<div className="hero-grainient-static" />}>
               <Grainient
-                color1="#e0c3ff"
-                color2="#a259ff"
-                color3="#6a3093"
+                color1={heroColors[0]}
+                color2={heroColors[1]}
+                color3={heroColors[2]}
                 timeSpeed={5}
                 colorBalance={-0.32}
                 warpStrength={1.4}

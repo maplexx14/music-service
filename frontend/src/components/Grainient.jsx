@@ -152,8 +152,18 @@ const Grainient = ({
   const activeRef = useRef(active);
   activeRef.current = active;
 
+  // Цвета читаются из ref, а не из пропсов напрямую: они меняются на лету
+  // (фон главной окрашивается под обложку текущего трека), а пересобирать
+  // ради смены цвета весь контекст нельзя — браузер держит жёсткий лимит
+  // живых WebGL-контекстов, и эффект ниже сознательно освобождает свой при
+  // размонтировании. Живое обновление цветов — отдельным эффектом в конце.
+  const colorsRef = useRef({ color1, color2, color3 });
+  colorsRef.current = { color1, color2, color3 };
+  const applyColorsRef = useRef(null);
+
   useEffect(() => {
     if (!containerRef.current) return;
+    const { color1: c1, color2: c2, color3: c3 } = colorsRef.current;
 
     // prefers-reduced-motion: анимацию не крутим — рендерим один статичный
     // кадр градиента и останавливаемся (доступность + экономия GPU).
@@ -216,9 +226,9 @@ const Grainient = ({
         uSaturation: { value: saturation },
         uCenterOffset: { value: new Float32Array([centerX, centerY]) },
         uZoom: { value: zoom },
-        uColor1: { value: new Float32Array(hexToRgb(color1)) },
-        uColor2: { value: new Float32Array(hexToRgb(color2)) },
-        uColor3: { value: new Float32Array(hexToRgb(color3)) }
+        uColor1: { value: new Float32Array(hexToRgb(c1)) },
+        uColor2: { value: new Float32Array(hexToRgb(c2)) },
+        uColor3: { value: new Float32Array(hexToRgb(c3)) }
       }
     });
 
@@ -281,6 +291,17 @@ const Grainient = ({
       if (!running) return;
       running = false;
       cancelAnimationFrame(raf);
+    };
+
+    // Смена цветов без пересборки контекста (см. colorsRef выше). Если цикл
+    // рендера сейчас стоит (reduced motion, скрытая вкладка, контейнер вне
+    // вьюпорта), дорисовываем один кадр вручную — иначе новый цвет не был бы
+    // виден до следующего запуска цикла.
+    applyColorsRef.current = (nextC1, nextC2, nextC3) => {
+      program.uniforms.uColor1.value = new Float32Array(hexToRgb(nextC1));
+      program.uniforms.uColor2.value = new Float32Array(hexToRgb(nextC2));
+      program.uniforms.uColor3.value = new Float32Array(hexToRgb(nextC3));
+      if (!running) renderer.render({ scene: mesh });
     };
 
     const loop = (t) => {
@@ -352,6 +373,7 @@ const Grainient = ({
 
     return () => {
       stopLoop();
+      applyColorsRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
       io.disconnect();
       ro.disconnect();
@@ -387,11 +409,17 @@ const Grainient = ({
     centerX,
     centerY,
     zoom,
-    color1,
-    color2,
-    color3,
+    // color1..color3 здесь сознательно НЕ в зависимостях: эффект строит
+    // WebGL-контекст и программу, а цвета пишутся в юниформы отдельным
+    // эффектом ниже — смена цвета не должна пересобирать контекст.
     renderScale
   ]);
+
+  // Живое обновление цветов. Объявлен после основного эффекта, поэтому к
+  // моменту вызова программа уже создана (а на размонтировании ref обнулён).
+  useEffect(() => {
+    applyColorsRef.current?.(color1, color2, color3);
+  }, [color1, color2, color3]);
 
   return <div ref={containerRef} className={`grainient-container ${className}`.trim()} />;
 };
