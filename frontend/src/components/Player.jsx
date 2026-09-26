@@ -19,6 +19,7 @@ import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
+import { noteStarvation, noteStartup, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
@@ -81,6 +82,10 @@ const DIRECT_STREAM_PREFIX = {
 
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
 // текущего трека, и для ленивой подгрузки следующего.
+// Ссылки на СВОЙ стрим проходят через withQuality: на медленном канале он
+// дописывает ?quality=low (см. utils/streamQuality). Точка сборки на весь плеер
+// одна, поэтому текущий трек и прогрев следующего всегда получают одно и то же
+// качество — иначе прогрев качал бы не то, что заиграет.
 function resolveRawUrl(track, isExternal) {
   if (!track) return undefined
   // Материализованный в БД трек (числовой id) — всегда через свой бэкенд-эндпоинт
@@ -94,12 +99,12 @@ function resolveRawUrl(track, isExternal) {
     // куда редиректит бэк). Фолбэк на старый путь, если external_id нет.
     const directPrefix = DIRECT_STREAM_PREFIX[track.source]
     if (directPrefix && track.external_id) {
-      return `${API_URL}${directPrefix}${track.external_id}`
+      return withQuality(`${API_URL}${directPrefix}${track.external_id}`)
     }
-    return `${API_URL}/tracks/${track.id}/stream`
+    return withQuality(`${API_URL}/tracks/${track.id}/stream`)
   }
-  if (isExternal) return track.stream_url
-  if (track.id) return `${API_URL}/tracks/${track.id}/stream`
+  if (isExternal) return withQuality(track.stream_url)
+  if (track.id) return withQuality(`${API_URL}/tracks/${track.id}/stream`)
   if (track.file_path?.startsWith('http')) return track.file_path
   if (track.file_path) {
     return `${SERVER_URL}${track.file_path.startsWith('/') ? '' : '/'}${track.file_path}`
@@ -353,6 +358,11 @@ function PlayerInner() {
   // kick качает трек с нуля — на честно медленной сети бесконечные рестарты
   // сделали бы только хуже. Сбрасывается на 'playing' и на смене трека.
   const stallKickCountRef = useRef(0)
+  // Момент старта загрузки текущего src. Время до первого звука — вход для
+  // автовыбора качества потока (utils/streamQuality): именно оно говорит, тянет
+  // ли канал текущий битрейт. Ставится в двух местах, где реально назначается
+  // src (эффект audioSource и playAdjacentNow), снимается на первом 'playing'.
+  const loadStartedAtRef = useRef(0)
   // Таймер проверки «подменённый элемент реально поехал» (см. verifySwapStarted).
   const swapVerifyTimerRef = useRef(null)
   // Страховочный таймер отпускания предыдущего элемента, если 'playing' на
@@ -894,6 +904,13 @@ function PlayerInner() {
     const handleWaiting = () => {
       if (!isLive()) return
       setIsBuffering(true)
+      // Перебуферизация — прямой сигнал «канал не тянет текущий битрейт».
+      // Не считаем старт (currentTime === 0 — у него отдельный замер), перемотку
+      // (пустой буфер там ожидаем) и фон: WebKit тормозит фоновую загрузку сам,
+      // и к полосе канала это отношения не имеет.
+      if (audio.currentTime > 0 && !audio.seeking && !document.hidden) {
+        noteStarvation()
+      }
     }
     // Один именованный обработчик 'playing' вместо анонимной стрелки: снять
     // с элемента можно только ту же ссылку, что вешал. Раньше вешалась стрелка,
@@ -903,6 +920,15 @@ function PlayerInner() {
     // висящий слушатель поверх старых.
     const handlePlayingSync = () => {
       if (!isLive()) return
+      // Первый звук после назначения src — это и есть замер канала для
+      // автовыбора качества (utils/streamQuality). В скрытой вкладке не
+      // измеряем: WebKit откладывает там саму загрузку, и на быстром канале
+      // вышло бы «медленно». Ref гасим в любом случае — иначе поздний
+      // 'playing' (после возврата на экран) измерил бы чужой старт.
+      if (loadStartedAtRef.current && !document.hidden) {
+        noteStartup(performance.now() - loadStartedAtRef.current)
+      }
+      loadStartedAtRef.current = 0
       handlePlaying()
       setIsBuffering(false)
       // syncPositionState на playing: iOS требует setPositionState ДО того,
@@ -1043,7 +1069,10 @@ function PlayerInner() {
     }
     const abs = new URL(audioSource.url, window.location.href).href
     const srcChanged = audio.src !== abs
-    if (srcChanged) audio.src = abs
+    if (srcChanged) {
+      audio.src = abs
+      loadStartedAtRef.current = performance.now()
+    }
     // iOS Safari: explicit load() is required to start downloading.
     // Without it, iOS may not begin fetching the audio data.
     if (srcChanged && isIOS) {
@@ -1211,6 +1240,7 @@ function PlayerInner() {
     pendingAdvanceRef.current = false
     diag('swap:start', { offset, ...snapshotAudio(audio) })
     audio.src = url
+    loadStartedAtRef.current = performance.now()
     audio.load()
     playWithDiag(audio, `swap:${offset > 0 ? 'next' : 'prev'}`)
     // Мост держал сессию, пока элемент перезагружался с нуля, и отпускаем мы его
@@ -1380,6 +1410,25 @@ function PlayerInner() {
       clearTimeout(swapReleaseTimerRef.current)
     }
   }, [])
+
+  // Смена выбранного качества потока (utils/streamQuality — реакция на канал).
+  // Само качество вшивается в URL при сборке (см. resolveRawUrl), поэтому здесь
+  // нужно одно: выкинуть уже заряженный прогрев — он набран в прежнем качестве
+  // и на узком канале продолжает тянуть байты, которые никто не услышит (ровно
+  // та причина, по которой существует clearStalePreload).
+  //
+  // Активный трек не трогаем сознательно: на iOS load() вне жеста рвёт
+  // аудиосессию и виджет на экране блокировки (см. audioEngine), а низкий
+  // вариант к тому же собирается на бэкенде при первом запросе — перезагрузка
+  // посреди трека дала бы тишину вместо экономии. Новое качество подхватит
+  // следующий трек.
+  useEffect(
+    () =>
+      subscribeQuality(() => {
+        engine.clearStalePreload(nextTrackUrl(1))
+      }),
+    []
+  )
 
   useEffect(() => {
     const audio = audioRef.current
