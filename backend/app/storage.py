@@ -257,16 +257,17 @@ def ensure_buckets() -> None:
 # ─────────────────────────── операции ───────────────────────────
 
 
-def upload_music_file(local_path: str, key: str, content_type: str) -> str:
-    """Заливает аудиофайл в приватный бакет. Возвращает file_path для БД."""
+def upload_music_file(local_path: str, key: str, content_type: str) -> tuple[str, int]:
+    """Заливает аудиофайл в приватный бакет. Возвращает (file_path, size) для БД."""
     ensure_buckets()
+    size = os.path.getsize(local_path)
     _get_internal_client().fput_object(
         MUSIC_BUCKET, key, local_path, content_type=content_type
     )
     # Ключ мог существовать (re-archive внешнего трека) — stat-кэш больше
     # не валиден, ETag перезалитого объекта другой.
     _stat_cache_invalidate(MUSIC_BUCKET, key)
-    return make_object_path(MUSIC_BUCKET, key)
+    return make_object_path(MUSIC_BUCKET, key), size
 
 
 def download_music_file(file_path: str, local_path: str) -> None:
@@ -396,12 +397,27 @@ def stat_music_object(file_path: str) -> tuple[int, str, str]:
     return value
 
 
-async def stat_music_object_async(file_path: str) -> tuple[int, str, str]:
-    """Async-двойник stat_music_object (hot-path, см. init_async_client)."""
+async def stat_music_object_async(file_path: str, db_size: int = None, db_content_type: str = None) -> tuple[int, str, str]:
+    """Async-двойник stat_music_object (hot-path, см. init_async_client).
+
+    db_size/db_content_type из БД (Track.file_size) минуют HEAD в MinIO —
+    байты объекта практически неизменны для ключа, и размер известен при upload.
+    """
     bucket, key = parse_object_path(file_path)
     cached = _stat_cache_get(bucket, key)
     if cached is not None:
         return cached
+
+    # Быстрый путь: размер уже в БД, HEAD не нужен
+    if db_size is not None and db_size > 0:
+        # content_type угадываем по расширению, ETag оставляем пустым (не критичен)
+        if not db_content_type:
+            ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+            db_content_type = {"m4a": "audio/mp4", "opus": "audio/opus", "webm": "audio/webm"}.get(ext, "audio/mpeg")
+        value = (db_size, db_content_type, "")
+        _stat_cache_put(bucket, key, value)
+        return value
+
     resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
     value = (
         resp["ContentLength"],
@@ -413,7 +429,7 @@ async def stat_music_object_async(file_path: str) -> tuple[int, str, str]:
 
 
 def iter_music_object(
-    file_path: str, offset: int = 0, length: int = 0, chunk_size: int = 256 * 1024
+    file_path: str, offset: int = 0, length: int = 0, chunk_size: int = 64 * 1024
 ) -> Iterator[bytes]:
     """Стримит байты аудио из MinIO. length=0 → до конца объекта.
 
@@ -434,7 +450,7 @@ async def iter_music_object_async(
     file_path: str,
     offset: Optional[int] = None,
     length: Optional[int] = None,
-    chunk_size: int = 256 * 1024,
+    chunk_size: int = 64 * 1024,
 ) -> AsyncIterator[bytes]:
     """Async-двойник iter_music_object.
 
@@ -730,7 +746,7 @@ def _build_low_variant(file_path: str, low_key: str) -> bool:
 
 
 async def minio_range_response_async(
-    file_path: str, request: Request, quality: Optional[str] = None
+    file_path: str, request: Request, quality: Optional[str] = None, db_size: int = None, db_content_type: str = None
 ) -> Response:
     """Async-двойник minio_range_response — hot-path, не держит OS-тред на стрим.
 
@@ -742,13 +758,16 @@ async def minio_range_response_async(
     ``ensure_low_variant_async``): подменяется ТОЛЬКО имя объекта, поэтому
     Range/206/ETag/304/If-Range работают один в один, а у варианта свои
     размер и ETag — браузер кладёт его в отдельную ячейку кэша по своему URL.
+
+    ``db_size`` из Track.file_size минует HEAD-запрос в MinIO (размер известен при upload).
     """
     if quality == "low":
         low_path = await ensure_low_variant_async(file_path)
         if low_path:
             file_path = low_path
+            db_size = None  # у low-варианта размер другой
 
-    file_size, mime_type, etag = await stat_music_object_async(file_path)
+    file_size, mime_type, etag = await stat_music_object_async(file_path, db_size, db_content_type)
     common_headers = audio_common_headers(etag)
 
     if if_none_match_matches(request, etag):

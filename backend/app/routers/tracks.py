@@ -376,6 +376,7 @@ async def stream_track(
             track.file_path,
             request,
             quality=request.query_params.get("quality"),
+            db_size=track.file_size,
         )
 
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
@@ -694,7 +695,7 @@ async def upload_track(
         # Use AAC content type for transcoded files
         if file_ext == AAC_EXT:
             audio_mime = AAC_CONTENT_TYPE
-        relative_path = storage.upload_music_file(
+        relative_path, file_size = storage.upload_music_file(
             str(file_path), filename, audio_mime or "audio/mp4"
         )
         file_path.unlink(missing_ok=True)
@@ -704,6 +705,8 @@ async def upload_track(
                 str(cover_path), cover_filename, cover_mime or "image/jpeg"
             )
             cover_path.unlink(missing_ok=True)
+    else:
+        file_size = file_path.stat().st_size if file_path.exists() else None
 
     # Create track record
     db_track = Track(
@@ -713,6 +716,7 @@ async def upload_track(
         genre=genre,
         duration=duration,
         file_path=relative_path,
+        file_size=file_size,
         cover_url=cover_url,
         acoustic_features=acoustic_features,
         acoustic_analyzed_at=(
@@ -909,10 +913,12 @@ async def complete_chunked_upload(
         audio_mime, _ = mimetypes.guess_type(str(assembled_path))
         if file_ext == AAC_EXT:
             audio_mime = AAC_CONTENT_TYPE
-        relative_path = storage.upload_music_file(
+        relative_path, file_size = storage.upload_music_file(
             str(assembled_path), filename, audio_mime or "audio/mp4"
         )
         assembled_path.unlink(missing_ok=True)
+    else:
+        file_size = assembled_path.stat().st_size if assembled_path.exists() else None
 
     db_track = Track(
         title=payload.title,
@@ -921,6 +927,7 @@ async def complete_chunked_upload(
         genre=payload.genre,
         duration=duration,
         file_path=relative_path,
+        file_size=file_size,
         cover_url=None,
         acoustic_features=acoustic_features,
         acoustic_analyzed_at=(

@@ -215,6 +215,7 @@ class Track(Base):
     album = Column(String, nullable=True)
     duration = Column(Integer, nullable=False)  # Duration in seconds
     file_path = Column(String, nullable=True)  # null для внешних (ytmusic/soulseek)
+    file_size = Column(Integer, nullable=True)  # размер файла в байтах (для быстрого stat)
     cover_url = Column(String, nullable=True)
     # Источник трека: 'local' | 'ytmusic' | 'soulseek' | ...
     source = Column(String, nullable=False, default="local", server_default="local", index=True)
