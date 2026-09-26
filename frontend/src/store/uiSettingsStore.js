@@ -21,10 +21,9 @@ const isMobileDevice = () => {
   }
 }
 
-// На мобильных по умолчанию 64 kbps: канал там чаще узкий, а HE-AAC на этом
-// битрейте на слух почти не отличается. Выбор пользователя хранится и
-// переживает перезагрузку.
-const defaultQualityMode = () => (isMobileDevice() ? 'low' : 'auto')
+// Все устройства по умолчанию запрашивают 128 kbps ('high'). Выбор пользователя
+// хранится и переживает перезагрузку.
+const defaultQualityMode = () => 'high'
 
 const defaultSettings = () => ({ liteMode: false, streamQuality: defaultQualityMode() })
 
