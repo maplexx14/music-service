@@ -8,9 +8,17 @@ import TrustedDevices from '../components/TrustedDevices'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import './Settings.css'
 
+// Режимы качества потока: значение из стора + подпись. 'auto' оставляет решение
+// за измерениями канала (utils/streamQuality).
+const QUALITY_OPTIONS = [
+  ['auto', 'Авто'],
+  ['low', '64 кбит/с'],
+  ['high', '128 кбит/с'],
+]
+
 function Settings() {
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
-  const { liteMode, toggleLiteMode } = useUiSettingsStore()
+  const { liteMode, toggleLiteMode, streamQuality, setStreamQuality } = useUiSettingsStore()
   const { user, updatePreferences } = useAuthStore()
   const [gifError, setGifError] = useState('')
 
@@ -179,6 +187,29 @@ function Settings() {
         </div>
 
     
+        <div className="settings-row settings-row-quality">
+          <div>
+            <div className="settings-label">Качество звука</div>
+            <div className="settings-hint">
+              64 кбит/с — вдвое меньше трафика. Смена применится со следующего
+              трека: играющий не перезагружается, чтобы не рвать звук
+            </div>
+          </div>
+          <div className="settings-seg" role="group" aria-label="Качество звука">
+            {QUALITY_OPTIONS.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`settings-seg-btn ${streamQuality === value ? 'active' : ''}`}
+                aria-pressed={streamQuality === value}
+                onClick={() => setStreamQuality(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="settings-row">
           <div className="settings-label">GIF вместо текста</div>
           <div className="settings-gif">

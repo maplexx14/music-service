@@ -14,6 +14,11 @@
 //      не годится.
 //   2) Измерения самой игры — работают везде. Долгий старт и перебуферизация
 //      посреди трека означают, что канал не тянет текущий битрейт.
+//   3) Явный выбор в настройках (Настройки → Качество звука): 'low' и 'high'
+//      перебивают и API, и измерения. На мобильных умолчание — 'low'
+//      (store/uiSettingsStore): канал там чаще узкий, а разница между 64 и
+//      128 kbps при HE-AAC на слух невелика. 'auto' возвращает устройство к
+//      измерениям.
 //
 // Качество применяется на ГРАНИЦЕ трека (URL вшивается в момент сборки ссылки
 // на стрим) и никогда не меняется посреди трека. Причины:
@@ -26,6 +31,7 @@
 // не для играющего.
 
 import { diag } from './playerDiag'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 
 const STORAGE_KEY = 'stream_quality_v1'
 // Запомненное измерение переживает перезагрузку: иначе после каждого запуска
@@ -122,19 +128,32 @@ function loadEvidence() {
 
 // Итоговый вердикт. Порог зависит от текущего состояния — это и есть гистерезис:
 // выйти из низкого качества можно только по явно здоровому каналу, а не по краю
-// того же порога, на котором в него вошли. Жёсткое решение (saveData) перебивает
-// всё.
+// того же порога, на котором в него вошли. Жёсткие решения перебивают всё:
+// saveData и ручной выбор в настройках.
 function derive() {
-  if (network.forced) return true
+  if (mode === 'high') return false
+  if (mode === 'low' || network.forced) return true
   const total = network.score + evidence
   return low ? total < UPGRADE_THRESHOLD : total <= LOW_THRESHOLD
 }
 
+// Ручной режим из настроек ('auto' — решает измерение). Читается из стора, а не
+// из своего ключа: значение задаёт UI, и второй источник правды разъехался бы с
+// ним на первой же правке формата хранения.
+function readMode(state) {
+  const value = (state || useUiSettingsStore.getState()).streamQuality
+  return value === 'low' || value === 'high' ? value : 'auto'
+}
+
 let evidence = loadEvidence()
 let network = networkScore()
+let mode = readMode()
 // Стартовое состояние считается по порогу ухудшения: предыдущего вердикта в этой
-// сессии ещё нет, а из памяти приходит только отрицательное измерение.
-let low = network.forced || network.score + evidence <= LOW_THRESHOLD
+// сессии ещё нет, а из памяти приходит только отрицательное измерение. Так как
+// derive() смотрит на low как на «предыдущий вердикт», расчёт с false даёт ровно
+// этот порог.
+let low = false
+low = derive()
 const listeners = new Set()
 
 function persist() {
@@ -206,6 +225,16 @@ export function withQuality(url) {
   if (!QUALITY_AWARE.some((re) => re.test(url))) return url
   return `${url}${url.includes('?') ? '&' : '?'}quality=low`
 }
+
+// Смена режима в настройках — тоже сразу, не дожидаясь следующего трека: UI
+// ожидает реакции на клик. Сам играющий трек при этом не перезагружается (см.
+// выше), качество подхватит следующий.
+useUiSettingsStore.subscribe((state) => {
+  const next = readMode(state)
+  if (next === mode) return
+  mode = next
+  apply('setting')
+})
 
 // Смена сети в Chrome/Android приходит событием — пересчитываем сразу, не
 // дожидаясь следующего трека. На iOS события нет, там решение обновляют

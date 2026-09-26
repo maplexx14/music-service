@@ -337,3 +337,62 @@
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* --- Переключатель качества потока ------------------------------------------
+   Три варианта в одной капсуле: тумблера на два состояния здесь мало, а три
+   отдельные кнопки читались бы как три независимых действия. Активный цвет —
+   тот же акцент, что у чипов предпочтений. */
+.settings-row-quality {
+  align-items: flex-start;
+}
+
+.settings-seg {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #2a2a33;
+  border-radius: 999px;
+  background: #1a1a20;
+}
+
+.settings-seg-btn {
+  padding: 7px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #b3b3b3;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.settings-seg-btn:hover {
+  color: #ffffff;
+}
+
+.settings-seg-btn.active {
+  background: #a259ff;
+  color: #ffffff;
+}
+
+/* На телефоне подпись с подсказкой и три кнопки в строку не влезают —
+   переносим управление под текст и растягиваем по ширине. */
+@media (max-width: 560px) {
+  .settings-row-quality {
+    flex-wrap: wrap;
+  }
+
+  .settings-row-quality .settings-seg {
+    flex: 1 1 100%;
+  }
+
+  .settings-row-quality .settings-seg-btn {
+    flex: 1;
+    padding: 8px 6px;
+  }
+}
