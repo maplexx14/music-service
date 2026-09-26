@@ -9,6 +9,7 @@ MinIO, поэтому тесты фиксируют три вещи, котор�
 """
 
 import asyncio
+import os
 
 from fastapi import Request
 
@@ -46,7 +47,7 @@ class _MinioStub:
         with open(path, "rb") as fh:
             self.objects[(bucket, key)] = fh.read()
         self.uploads.append((key, content_type))
-        return storage.make_object_path(bucket, key)
+        return storage.make_object_path(bucket, key), os.path.getsize(path)
 
 
 def _wire(monkeypatch, stub, transcode_ok=True, transcode_calls=None):
@@ -54,7 +55,7 @@ def _wire(monkeypatch, stub, transcode_ok=True, transcode_calls=None):
     monkeypatch.setattr(storage, "_get_internal_client", lambda: stub)
     monkeypatch.setattr(storage, "upload_music_file", stub.upload)
 
-    async def fake_stat(file_path):
+    async def fake_stat(file_path, db_size=None, db_content_type=None):
         bucket, key = storage.parse_object_path(file_path)
         if (bucket, key) not in stub.objects:
             raise FileNotFoundError(file_path)
