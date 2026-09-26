@@ -71,7 +71,7 @@
 
 @media (max-width: 768px) {
   .hero-disc {
-    width: min(300px, 64vw, 44vh);
+    width: min(350px, 80vw, 60vh); 
   }
 }
 
