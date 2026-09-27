@@ -188,6 +188,13 @@ services:
       # Soulseek выключен целиком: поиск/матчер/харвест отдают пустоту без
       # попыток соединения (soulseek.py: find_soulseek_equivalent и роутеры).
       SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      # Фоновый сбор библиотеки из Soulseek (slsk_harvest.py). Интервал —
+      # как часто берётся следующий артист; concurrency — сколько slskd-
+      # поисков идёт одновременно (своя квота, не общая _match_sem).
+      # Больше concurrency = быстрее наполняется MinIO, но выше нагрузка
+      # на slskd и риск, что пиры начнут отказывать.
+      SLSK_HARVEST_INTERVAL_SEC: ${SLSK_HARVEST_INTERVAL_SEC:-300}
+      SLSK_HARVEST_CONCURRENCY: ${SLSK_HARVEST_CONCURRENCY:-3}
       SLSKD_URL: ${SLSKD_URL:-http://slskd:5030}
       # Должен совпадать с api_keys.default.key из slskd/slskd.yml.
       SLSKD_API_KEY: ${SLSKD_API_KEY:-}

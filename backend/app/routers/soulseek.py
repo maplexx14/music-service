@@ -258,12 +258,22 @@ def _is_remix_mismatch(filename: str, want_title: str) -> bool:
 
 
 async def find_soulseek_equivalent(
-    video_id: str, title: str, artist: str, duration: int
+    video_id: str,
+    title: str,
+    artist: str,
+    duration: int,
+    *,
+    sem_for_search: Optional[asyncio.Semaphore] = None,
 ) -> Optional[str]:
     """Токен файла-эквивалента в Soulseek для трека YouTube Music.
 
     None — точного совпадения нет (или slskd недоступен): вызывающий код
     откатывается на SoundCloud/YouTube.
+
+    sem_for_search — своя квота параллельных поисков вместо общей _match_sem.
+    Фоновый харвестер (slsk_harvest) передаёт сюда собственный семафор, чтобы
+    его длинная очередь (десятки треков подряд) не занимала оба слота общей
+    квоты и не морила матчи, запущенные пользовательским воспроизведением.
     """
     # Пустой SOULSEEK_USERNAME = Soulseek выключен целиком (например, в
     # прод-конфигурации без slskd): не ищем и не трогаем кэш, чтобы каждый
@@ -285,9 +295,11 @@ async def find_soulseek_equivalent(
         return None
 
     global _match_sem
-    if _match_sem is None:
-        _match_sem = asyncio.Semaphore(_MATCH_CONCURRENCY)
-    async with _match_sem:
+    if sem_for_search is None:
+        if _match_sem is None:
+            _match_sem = asyncio.Semaphore(_MATCH_CONCURRENCY)
+        sem_for_search = _match_sem
+    async with sem_for_search:
         responses = await _slskd_search_responses(f"{artist} {want_title}")
     if responses is None:
         # Поиск недоступен: промах не доказан — не кэшируем, следующий вызов

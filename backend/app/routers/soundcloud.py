@@ -789,17 +789,28 @@ def _match_key(text: str) -> str:
     return re.sub(r"[^a-z0-9а-яё]+", "", (text or "").lower())
 
 
-def _is_exact_match(candidate, title: str, artist: str, duration: int) -> bool:
+def _is_exact_match(
+    candidate,
+    title: str,
+    artist: str,
+    duration: int,
+    *,
+    tolerance: int = _MATCH_DURATION_TOLERANCE,
+) -> bool:
     """Точно ли ytmusic-кандидат — та же запись, что и DRM-трек SoundCloud.
 
     Требуем совпадения артиста, названия и длительности одновременно: любого
     из признаков по отдельности мало (у кавера то же название и тот же артист
     в метаданных, но другая длительность; у ремастера — та же длительность и
     другое название).
+
+    tolerance — окно по длительности в секундах. По умолчанию soundcloud-шное
+    ±5с; Soulseek передаёт шире (см. soulseek._MATCH_DURATION_TOLERANCE): у
+    пиров свои рипы, и прегэп/трим тишины расходятся сильнее.
     """
     if duration <= 0 or not candidate.duration:
         return False
-    if abs(candidate.duration - duration) > _MATCH_DURATION_TOLERANCE:
+    if abs(candidate.duration - duration) > tolerance:
         return False
 
     cand_artist = _match_key(candidate.artist)

@@ -132,6 +132,11 @@ services:
       SLSKD_URL: ${SLSKD_URL:-http://slskd:5030}
       SLSKD_API_KEY: ${SLSKD_API_KEY:-}
       SOULSEEK_USERNAME: ${SOULSEEK_USERNAME:-}
+      # Фоновый сбор библиотеки из Soulseek (slsk_harvest.py). Интервал —
+      # как часто берётся следующий артист; concurrency — сколько slskd-
+      # поисков идёт одновременно (своя квота, не общая _match_sem).
+      SLSK_HARVEST_INTERVAL_SEC: ${SLSK_HARVEST_INTERVAL_SEC:-300}
+      SLSK_HARVEST_CONCURRENCY: ${SLSK_HARVEST_CONCURRENCY:-3}
       SLSKD_DOWNLOADS_DIR: /app/slskd_downloads
       SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
       YTDLP_CACHE_DIR: /app/ytdlp_cache

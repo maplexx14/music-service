@@ -34,6 +34,13 @@ _MARK_PREFIX = "harvest:slsk:artist:"
 # за полчаса — но дольше ждать незачем, следующий проход доберёт.
 _WATCH_POLL = 10.0
 _WATCH_TIMEOUT = 45 * 60
+# Одновременных slskd-поисков в проходе: отдельная от пользовательской квоты
+# (_MATCH_CONCURRENCY=2) защёлка, чтобы долгий харвест не морил матчи стрима.
+_harvest_concurrency: int = 3
+_harvest_sem: Optional[asyncio.Semaphore] = None
+# Наблюдатели закачек живут в фоне прохода: сильная ссылка, иначе asyncio
+# может собрать задачу до завершения (см. _match_inflight в soulseek.py).
+_watch_inflight: set[asyncio.Task] = set()
 
 
 def _pick_artist(revisit_seconds: int) -> Optional[str]:
@@ -158,6 +165,58 @@ async def _watch_and_adopt(video_id: str, token: str, meta: dict) -> None:
         logger.info("harvest: %s — %s в MinIO", meta["artist"], meta["title"])
 
 
+def _get_harvest_sem() -> asyncio.Semaphore:
+    """Ленивый синглтон квоты поисков прохода (как _match_sem в soulseek.py)."""
+    global _harvest_sem
+    if _harvest_sem is None:
+        _harvest_sem = asyncio.Semaphore(_harvest_concurrency)
+    return _harvest_sem
+
+
+def _spawn_watch(video_id: str, token: str, meta: dict) -> None:
+    """Запускает наблюдатель закачки с сильной ссылкой до завершения."""
+    task = asyncio.create_task(_watch_and_adopt(video_id, token, meta))
+    _watch_inflight.add(task)
+    task.add_done_callback(_watch_inflight.discard)
+
+
+async def _harvest_one(artist: str, track) -> str:
+    """Один трек каталога: "matched" | "archived" | "" (пропуск/промах).
+
+    Изуролируется, чтобы отказавший трек не ронял весь проход.
+    """
+    from app.routers import soulseek, ytdlp
+
+    try:
+        video_id = track.external_id
+        if not video_id:
+            return ""
+        # Уже заархивировано (играли/собирали раньше) — байты на месте, нужно
+        # только убедиться, что запись в БД существует.
+        if await ytdlp.archived_music_path(f"ytmusic/{video_id}"):
+            await asyncio.to_thread(_materialize, _track_meta(track, artist))
+            return "archived"
+        token = await soulseek.find_soulseek_equivalent(
+            video_id,
+            track.title,
+            track.artist,
+            track.duration,
+            sem_for_search=_get_harvest_sem(),
+        )
+        if not token:
+            return ""
+        _spawn_watch(video_id, token, _track_meta(track, artist))
+        return "matched"
+    except Exception:  # noqa: BLE001 — один трек не должен ронять проход
+        logger.warning(
+            "harvest: сбой на %s из %s",
+            getattr(track, "external_id", "?"),
+            artist,
+            exc_info=True,
+        )
+        return ""
+
+
 async def _harvest_pass(artist: str, tracks_per_artist: int) -> bool:
     """Один проход: каталог артиста → матчи → закачки с наблюдателями.
 
@@ -177,28 +236,17 @@ async def _harvest_pass(artist: str, tracks_per_artist: int) -> bool:
         logger.info("harvest: каталог %s пуст", artist)
         return True
 
-    matched = 0
-    for track in catalog:
-        video_id = track.external_id
-        if not video_id:
-            continue
-        # Уже заархивировано (играли/собирали раньше) — байты на месте, нужно
-        # только убедиться, что запись в БД существует.
-        if await ytdlp.archived_music_path(f"ytmusic/{video_id}"):
-            await asyncio.to_thread(_materialize, _track_meta(track, artist))
-            continue
-        token = await soulseek.find_soulseek_equivalent(
-            video_id, track.title, track.artist, track.duration
-        )
-        if not token:
-            continue
-        matched += 1
-        asyncio.create_task(
-            _watch_and_adopt(video_id, token, _track_meta(track, artist))
-        )
+    # Параллельный матчинг с собственной квотой поисков (не общей _match_sem):
+    # серийный обход 30 треков по ~15с = 450с, это уже больше интервала.
+    results = await asyncio.gather(
+        *(_harvest_one(artist, track) for track in catalog),
+        return_exceptions=True,
+    )
+    matched = sum(1 for r in results if r == "matched")
+    archived = sum(1 for r in results if r == "archived")
     logger.info(
-        "harvest: %s — %d трек(ов) в каталоге, %d заматчено в soulseek",
-        artist, len(catalog), matched,
+        "harvest: %s — %d трек(ов) в каталоге, %d заматчено, %d уже в MinIO",
+        artist, len(catalog), matched, archived,
     )
     return True
 
@@ -214,11 +262,15 @@ async def start() -> None:
     if not soulseek.SOULSEEK_USERNAME:
         logger.info("slsk harvest disabled (Soulseek не настроен)")
         return
-    interval = int(os.getenv("SLSK_HARVEST_INTERVAL_SEC", "1800"))
+    global _harvest_concurrency
+    interval = int(os.getenv("SLSK_HARVEST_INTERVAL_SEC", "300"))
     if interval <= 0:
         logger.info("slsk harvest disabled (SLSK_HARVEST_INTERVAL_SEC <= 0)")
         return
     tracks_per_artist = int(os.getenv("SLSK_HARVEST_TRACKS_PER_ARTIST", "30"))
+    _harvest_concurrency = max(
+        1, int(os.getenv("SLSK_HARVEST_CONCURRENCY", "3"))
+    )
     revisit = max(1, int(os.getenv("SLSK_HARVEST_REVISIT_DAYS", "14"))) * 86400
 
     # Лидер-выборы с продлением — см. _artist_probe_loop в main.py: ключ
@@ -226,8 +278,10 @@ async def start() -> None:
     lock_key = "background:slsk_harvest:leader"
     token = f"{os.getpid()}:{uuid.uuid4().hex}"
     # Запас на длительность самого прохода: каталог + матчи могут тянуться
-    # минутами (slskd-поиски по 15с), терять лидерство посреди незачем.
-    lock_ttl = interval + max(300, interval)
+    # минутами. Худший холодный проход — tracks_per_artist / concurrency
+    # поисков по таймауту _slskd_search_responses; при интервале 300 это
+    # ровно старый TTL, поэтому снизу прижат к 900с.
+    lock_ttl = max(interval + max(300, interval), 900)
 
     def _acquire() -> bool:
         if redis_client.set(lock_key, token, nx=True, ex=lock_ttl):
@@ -253,6 +307,7 @@ async def start() -> None:
 
     asyncio.create_task(_loop())
     logger.info(
-        "slsk harvest loop started (interval=%ss, tracks/artist=%d, revisit=%dd)",
-        interval, tracks_per_artist, revisit // 86400,
+        "slsk harvest loop started (interval=%ss, tracks/artist=%d, "
+        "concurrency=%d, revisit=%dd)",
+        interval, tracks_per_artist, _harvest_concurrency, revisit // 86400,
     )
