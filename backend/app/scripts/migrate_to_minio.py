@@ -91,7 +91,7 @@ def migrate(dry_run: bool = False, keep_local: bool = False) -> None:
                     logger.info("[dry-run] audio #%s → minio://music/%s", track.id, key)
                 else:
                     mime, _ = mimetypes.guess_type(str(music_file))
-                    track.file_path = storage.upload_music_file(
+                    track.file_path, track.file_size = storage.upload_music_file(
                         str(music_file), key, mime or "audio/mpeg"
                     )
                     changed = True

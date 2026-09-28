@@ -502,3 +502,29 @@ def test_pot_provider_url_goes_to_extractor_args(monkeypatch):
 
     monkeypatch.setattr(ytdlp, "_POT_PROVIDER_URL", "")
     assert "youtubepot-bgutilhttp" not in ytdlp._ytdlp_extractor_args(["android_vr"])
+
+
+def test_archived_music_path_accepts_legacy_path_size_pair(monkeypatch):
+    # Архивация какое-то время писала в Redis пару (path, size) вместо строки.
+    async def cached_pair(_key):
+        return ["minio://music/external/ytmusic/vid.m4a", 4048725]
+
+    monkeypatch.setattr(ytdlp.storage, "is_minio_backend", lambda: True)
+    monkeypatch.setattr(ytdlp, "get_cache_async", cached_pair)
+
+    path = asyncio.run(ytdlp.archived_music_path("ytmusic/vid"))
+
+    assert path == "minio://music/external/ytmusic/vid.m4a"
+
+
+def test_pick_audio_format_prefers_m4a_over_higher_bitrate_webm():
+    # iOS Safari не стримит WebM: перекачивает файл целиком до старта звука.
+    info = {
+        "formats": [
+            {"format_id": "251", "ext": "webm", "acodec": "opus", "vcodec": "none",
+             "abr": 135, "protocol": "https", "url": "u251"},
+            {"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2", "vcodec": "none",
+             "abr": 129, "protocol": "https", "url": "u140"},
+        ]
+    }
+    assert ytdlp._pick_audio_format(info)["format_id"] == "140"

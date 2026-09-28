@@ -736,9 +736,14 @@ def _pick_audio_format(info: dict) -> Optional[dict]:
         audio_only = [f for f in formats if f.get("acodec") not in (None, "none")]
     if not audio_only:
         return None
-    # Больше abr (аудио-битрейт) → лучше; при равенстве предпочитаем m4a.
+    # m4a (AAC, itag 140) важнее битрейта: Opus/WebM (251) на ~5 kbps «лучше»,
+    # но iOS Safari играет WebM не потоком — AVFoundation его не берёт, и WebKit
+    # перекачивает файл целиком обычным GET (в логах nginx: 206-куски, затем 200
+    # на весь файл), а звук начинается только после этого: ~8 с на мобильной
+    # сети на каждом холодном треке. AAC iOS играет с первых Range-кусков, а
+    # Chrome/Firefox — оба формата одинаково. Внутри контейнера — по abr.
     audio_only.sort(
-        key=lambda f: (f.get("abr") or 0, 1 if f.get("ext") == "m4a" else 0),
+        key=lambda f: (1 if f.get("ext") == "m4a" else 0, f.get("abr") or 0),
         reverse=True,
     )
     return audio_only[0]
@@ -1994,6 +1999,11 @@ async def archived_music_path(archive_key: Optional[str]) -> Optional[str]:
     cache_key = f"archive:path:{archive_key}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
+        # С 2026-09-27 до починки архивация писала сюда пару (path, size)
+        # вместо строки — такие записи живут до суток. Берём путь из неё, а не
+        # роняем отдачу из MinIO обратно в холодный резолв.
+        if isinstance(cached, (list, tuple)):
+            cached = cached[0] if cached else ""
         return cached or None
     path = await asyncio.to_thread(storage.find_music_object, f"external/{archive_key}")
     await set_cache_async(

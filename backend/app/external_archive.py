@@ -193,7 +193,7 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
     acoustic_features = await asyncio.to_thread(analyze_file, local_path)
     try:
         storage.ensure_buckets()
-        file_path = await asyncio.to_thread(
+        file_path, file_size = await asyncio.to_thread(
             storage.upload_music_file, local_path, key, _audio_content_type(ext)
         )
     except Exception:  # noqa: BLE001 — трек уже играет с диска, архив не критичен
@@ -214,6 +214,7 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
         )
         if track is not None and not storage.is_minio_path(track.file_path):
             track.file_path = file_path
+            track.file_size = file_size
             if acoustic_features:
                 track.acoustic_features = acoustic_features
                 track.acoustic_analyzed_at = datetime.now(timezone.utc)
@@ -603,7 +604,9 @@ async def archive_track(
         acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
 
         try:
-            file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
+            file_path, file_size = storage.upload_music_file(
+                tmp_path, key, _audio_content_type(ext)
+            )
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -622,6 +625,7 @@ async def archive_track(
 
         # Обновляем запись атомарно: file_path → MinIO, source сохраняем.
         track.file_path = file_path
+        track.file_size = file_size
         if acoustic_features:
             track.acoustic_features = acoustic_features
             track.acoustic_analyzed_at = datetime.now(timezone.utc)
@@ -787,7 +791,9 @@ async def _archive_external_core(
         acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
 
         try:
-            file_path = storage.upload_music_file(tmp_path, key, _audio_content_type(ext))
+            file_path, file_size = storage.upload_music_file(
+                tmp_path, key, _audio_content_type(ext)
+            )
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -803,6 +809,7 @@ async def _archive_external_core(
         # просто лежит в MinIO и будет подхвачен при последующем импорте (find_music_object).
         if track is not None and not storage.is_minio_path(track.file_path):
             track.file_path = file_path
+            track.file_size = file_size
             if acoustic_features:
                 track.acoustic_features = acoustic_features
                 track.acoustic_analyzed_at = datetime.now(timezone.utc)
