@@ -18,6 +18,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "4380
 MFA_TOKEN_EXPIRE_MINUTES = int(os.getenv("MFA_TOKEN_EXPIRE_MINUTES", "5"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Стоимость bcrypt (log2 раундов). 12 — дефолт bcrypt, ~0.25 с на хэш: это и есть
+# защита от перебора при утечке БД, в проде не снижать. Тесты ставят 4 (см.
+# tests/conftest.py) — иначе каждый логин/регистрация/recovery-код стоит
+# четверть секунды, и тесты авторизации занимают больше трети прогона. Проверка
+# старых хэшей от значения не зависит: раунды записаны в самом хэше.
+BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 
 
 def _truncate_password(password: str) -> str:
@@ -59,7 +65,7 @@ def get_password_hash(password: str) -> str:
     truncated_password = _truncate_password(password)
     # Use bcrypt directly to avoid passlib's length check
     password_bytes = truncated_password.encode('utf-8')
-    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt(rounds=BCRYPT_ROUNDS))
     return hashed.decode('utf-8')
 
 

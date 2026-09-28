@@ -16,6 +16,10 @@ os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.05")
 # сразу тянет сеть (ytmusic-каталог + slskd). Присваивание, а не setdefault:
 # compose может протащить .env с включённым харвестом.
 os.environ["SLSK_HARVEST"] = "0"
+# Минимальная стоимость bcrypt: при боевых 12 раундах каждый хэш/проверка
+# пароля стоит ~0.25 с, а тесты 2FA/логина делают их десятками (см.
+# app/auth.BCRYPT_ROUNDS).
+os.environ.setdefault("BCRYPT_ROUNDS", "4")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,7 +28,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.main import app
+from app.main import _warmup_ytdlp, app
 from app.models import User
 from app.auth import get_password_hash
 
@@ -35,6 +39,12 @@ def pytest_configure(config):
         "real_external_pools: тест внутренних частей провайдерских пулов — "
         "conftest не подменяет их пустышками (см. _no_external_pool_network)",
     )
+
+# Прогрев yt-dlp (сборка YoutubeDL в отдельном потоке) шёл на КАЖДОМ старте
+# TestClient, то есть в каждом тесте с фикстурой client: ~65 мс из ~70 мс её
+# setup и примерно треть времени прогона. Тестам он не нужен — резолв в них
+# подменён или не вызывается.
+app.router.on_startup.remove(_warmup_ytdlp)
 
 engine = create_engine(
     "sqlite://",
