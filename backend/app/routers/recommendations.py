@@ -46,7 +46,7 @@ from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
 from app.discovery import discovery_ratio, effective_discovery_ratio
-from app.discovery_feedback import cached_acceptance_factor
+from app.discovery_feedback import discovery_acceptance
 from app.recommendation_cache import (
     claim_delivery,
     invalidate_recommendation_cache,
@@ -1300,11 +1300,20 @@ def _compute_recommendations(
     )
 
     # Тот же эффективный ползунок, что и в волне: запрошенная новизна,
-    # сжатая тем, как юзер реально принимает новых артистов.
-    library_discovery = effective_discovery_ratio(
-        discovery_ratio(current_user),
-        cached_acceptance_factor(db, current_user.id),
-    )
+    # сжатая тем, как юзер реально принимает новых артистов. Считается при
+    # первой оценке кандидата: число знакомых артистов (защита тонкого
+    # профиля) известно только после сбора сигналов вкуса ниже.
+    library_discovery_cache: list[float] = []
+
+    def _library_discovery() -> float:
+        if not library_discovery_cache:
+            library_discovery_cache.append(
+                effective_discovery_ratio(
+                    discovery_ratio(current_user),
+                    discovery_acceptance(db, current_user.id, len(artist_positive)),
+                )
+            )
+        return library_discovery_cache[0]
 
     def _is_excluded_artist(track) -> bool:
         return (
@@ -1361,7 +1370,7 @@ def _compute_recommendations(
         # ``discovery_ratio`` is a soft prior only.  It nudges the common
         # ranking toward or away from new names, but never reserves positions
         # for either familiar or unfamiliar artists.
-        score += (library_discovery - 0.2) * (
+        score += (_library_discovery() - 0.2) * (
             1.8 if is_novel_artist else -0.2
         )
         score_by_track[track.id] = score

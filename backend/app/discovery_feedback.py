@@ -41,6 +41,11 @@ GOOD_COMPLETION = 0.8
 BAD_COMPLETION = 0.25
 PRIOR_WEIGHT = 50.0
 MIN_FACTOR = 0.2
+# Меньше знакомых артистов — фактор не применяется. У тонкого профиля
+# «знакомые» — это горстка имён, выбранных самим юзером, и сравнение с ними
+# нечестно: новинки подобраны плохо просто потому, что угадывать не из чего.
+# Сжатие новизны здесь закрыло бы юзеру ровно тот путь, которым профиль растёт.
+MIN_FAMILIAR_ARTISTS = 10
 _CACHE_KEY = "discovery:acceptance:v1:{}"
 _CACHE_TTL = 3600
 _FEEDBACK_TYPES = ("listen", "like", "skip", "dislike")
@@ -256,3 +261,10 @@ def cached_acceptance_factor(db: Session, user_id: int) -> float:
         return 1.0
     set_cache(key, factor, expire=_CACHE_TTL)
     return factor
+
+
+def discovery_acceptance(db: Session, user_id: int, familiar_artist_count: int) -> float:
+    """Фактор приёма новизны с защитой тонкого профиля (см. MIN_FAMILIAR_ARTISTS)."""
+    if familiar_artist_count < MIN_FAMILIAR_ARTISTS:
+        return 1.0
+    return cached_acceptance_factor(db, user_id)

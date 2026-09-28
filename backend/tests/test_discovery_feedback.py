@@ -10,6 +10,7 @@ from app.discovery_feedback import (
     acceptance_counts,
     acceptance_factor,
     cached_acceptance_factor,
+    discovery_acceptance,
 )
 from app.models import (
     Playlist,
@@ -149,3 +150,12 @@ def test_recommendation_report_prints_segments(db, monkeypatch, capsys):
     assert "radio" in out and "favorite" in out
     assert "affinity" in out
     assert "hybrid-v8" in out
+
+
+def test_discovery_acceptance_skips_thin_profiles(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.discovery_feedback.cached_acceptance_factor", lambda _db, _user_id: 0.3
+    )
+    assert discovery_acceptance(db, 1, familiar_artist_count=4) == 1.0
+    assert discovery_acceptance(db, 1, familiar_artist_count=9) == 1.0
+    assert discovery_acceptance(db, 1, familiar_artist_count=10) == 0.3

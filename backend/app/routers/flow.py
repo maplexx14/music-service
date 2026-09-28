@@ -68,7 +68,7 @@ from app.discovery import (
     effective_discovery_ratio,
     liked_slots,
 )
-from app.discovery_feedback import cached_acceptance_factor
+from app.discovery_feedback import discovery_acceptance
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -2242,11 +2242,17 @@ async def get_flow(
     )
 
     requested_ratio = discovery_ratio(current_user)
-    # Ползунок — потолок новизны, а фактическая доля зависит от того, как юзер
-    # принимает новых артистов (см. app/discovery_feedback.py).
-    acceptance = await asyncio.to_thread(cached_acceptance_factor, db, user_id)
-    explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
+    # Ползунок — потолок новизны, а фактическая доля зависит от того, как юзер
+    # принимает новых артистов (см. app/discovery_feedback.py). Тонкий профиль
+    # защищён: там фактор не применяется.
+    acceptance = await asyncio.to_thread(
+        discovery_acceptance,
+        db,
+        user_id,
+        len(profile.get("artist_weight") or {}),
+    )
+    explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
     # Последовательно, а не в gather: Session не потокобезопасна, и обе функции
