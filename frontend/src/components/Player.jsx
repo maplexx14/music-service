@@ -50,6 +50,11 @@ const PRELOAD_MIN_BUFFER_SEC = 30
 // на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
 // успел наврать.
 const SWAP_VERIFY_MS = 2500
+// Пауза, после которой ▶ на системном виджете перезагружает элемент, а не
+// просто зовёт play(). За долгую паузу iOS освобождает декодер и соединение, но
+// readyState элемента может остаться прежним — needsFreshLoad этого не видит, и
+// play() «проходит» без звука (см. reloadAtPosition).
+const LONG_PAUSE_RELOAD_MS = 60 * 1000
 // Потолок handoff берём из движка (engine.SWAP_RELEASE_MAX_MS): принудительное
 // завершение просроченной подмены (engine.reconcile) сверяется с тем же
 // дедлайном, и разъезд двух констант означал бы, что таймер отпускает элемент
@@ -163,6 +168,27 @@ function resolveTrackDuration(audio, track) {
 function needsFreshLoad(audio) {
   if (!audio?.src) return false
   return audio.readyState === audio.HAVE_NOTHING && audio.networkState === audio.NETWORK_IDLE
+}
+
+// load() с возвратом на прежнюю позицию: сам load() сбрасывает currentTime в 0,
+// и продолжение после паузы начинало бы трек сначала. Позицию ставим на
+// loadedmetadata — раньше перемотка пустого элемента игнорируется. Звать только
+// в жестовом контексте (см. needsFreshLoad про load() вне жеста на iOS).
+function reloadAtPosition(audio) {
+  const position = audio.currentTime
+  audio.load()
+  if (!(position > 0)) return
+  audio.addEventListener(
+    'loadedmetadata',
+    () => {
+      try {
+        audio.currentTime = position
+      } catch {
+        /* элемент в несовместимом состоянии — играем с начала */
+      }
+    },
+    { once: true }
+  )
 }
 
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
@@ -358,6 +384,9 @@ function PlayerInner() {
   // kick качает трек с нуля — на честно медленной сети бесконечные рестарты
   // сделали бы только хуже. Сбрасывается на 'playing' и на смене трека.
   const stallKickCountRef = useRef(0)
+  // Момент последней паузы активного элемента (0 — играет). По нему ▶ на
+  // системном виджете решает, нужна ли перезагрузка (LONG_PAUSE_RELOAD_MS).
+  const pausedAtRef = useRef(0)
   // Момент старта загрузки текущего src. Время до первого звука — вход для
   // автовыбора качества потока (utils/streamQuality): именно оно говорит, тянет
   // ли канал текущий битрейт. Ставится в двух местах, где реально назначается
@@ -657,6 +686,12 @@ function PlayerInner() {
         // продвижение позиции, страховочный таймер), брошенный элемент всё ещё
         // звучит — и первый же play() ниже дал бы два трека одновременно.
         // Принудительное закрытие произошло выше, в reconcile.
+        //
+        // reconcile закрывает только подмену старше SWAP_RELEASE_MAX_MS и
+        // только ту, что записана в pendingRelease. На устройстве второй трек
+        // всё равно стартовал поверх текущего при возврате из фона, поэтому
+        // до любого play() ниже глушим всё, кроме активного слота.
+        engine.pauseInactive()
         // Вернулись на видимый экран с отложенным переходом (трек кончился в
         // фоне, буфера не было). Здесь старт с нуля уже безопасен — доигрываем.
         if (pendingAdvanceRef.current) {
@@ -754,6 +789,7 @@ function PlayerInner() {
     }
     const handlePause = () => {
       if (!isLive()) return
+      pausedAtRef.current = Date.now()
       syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     }
     // Источник сменился (audio.src = ... / load()) — элемент сброшен и ещё
@@ -920,6 +956,11 @@ function PlayerInner() {
     // висящий слушатель поверх старых.
     const handlePlayingSync = () => {
       if (!isLive()) return
+      pausedAtRef.current = 0
+      // Активный элемент реально заиграл — второго звучащего быть не должно
+      // (см. engine.pauseInactive). Если кого-то пришлось заглушить, его pause
+      // стала последним переходом для системы — переобъявляем «играю».
+      if (engine.pauseInactive()) reassertNowPlaying(audio, 'playing:pauseInactive')
       // Первый звук после назначения src — это и есть замер канала для
       // автовыбора качества (utils/streamQuality). В скрытой вкладке не
       // измеряем: WebKit откладывает там саму загрузку, и на быстром канале
@@ -1721,14 +1762,28 @@ function PlayerInner() {
           // play() вернёт тот же висящий промис. С данными в буфере лечит
           // микро-seek (как ручной тык в прогресс-бар), без данных — load()
           // в жестовом контексте (см. kickStalled в эффекте плеера).
-          if (needsFreshLoad(audio)) {
+          const longPause =
+            audio.paused &&
+            pausedAtRef.current > 0 &&
+            Date.now() - pausedAtRef.current > LONG_PAUSE_RELOAD_MS
+          if (needsFreshLoad(audio) || longPause) {
             // Долгая пауза (особенно в фоне): iOS освобождает буфер и сам
             // медиа-ресурс, элемент остаётся с src, но пустой. play() на пустом
             // элементе резолвится молча — звука нет, а виджет уже показывает
             // «играет» и крутит часы. Нужен load(), и здесь он законен: мы
             // внутри жеста (нажатие ▶ на виджете) — единственное место, где
             // load() в фоне и разрешён, и безопасен для аудиосессии.
-            audio.load()
+            //
+            // Одного needsFreshLoad мало: после паузы в несколько минут элемент
+            // на устройстве остаётся с прежним readyState, хотя декодер уже
+            // освобождён, и play() снова проходит без звука. Поэтому после
+            // LONG_PAUSE_RELOAD_MS перезагружаем безусловно — это ~секунда
+            // ожидания вместо тишины.
+            diag('widget:play:reload', {
+              pausedMs: pausedAtRef.current ? Date.now() - pausedAtRef.current : 0,
+              ...snapshotAudio(audio),
+            })
+            reloadAtPosition(audio)
           } else if (!audio.paused && audio.currentTime === 0) {
             if (audio.readyState >= audio.HAVE_CURRENT_DATA) {
               try {
