@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -385,6 +386,21 @@ def _stat_cache_invalidate(bucket: str, key: str) -> None:
     _stat_cache.pop(f"{bucket}/{key}", None)
 
 
+def music_etag(key: str, size: int) -> str:
+    """Сильный ETag аудио-объекта, одинаковый для любого пути stat.
+
+    Считаем из (ключ, размер), а не берём ETag MinIO: быстрый путь
+    stat_music_object_async знает размер из БД и HEAD не делает, так что
+    ETag MinIO ему недоступен. Пустой ETag там ломал кэш на медленных каналах:
+    браузер не хранит 206 без валидатора (повтор и перемотка качались заново),
+    а If-Range с ним никогда не совпадал — вместо запрошенного диапазона
+    уходил полный 200 с нулевого байта. Оба пути делят stat-кэш, поэтому
+    формула обязана быть одна: иначе ETag одного URL прыгал бы между воркерами.
+    """
+    digest = hashlib.sha1(f"{key}:{size}".encode()).hexdigest()[:20]
+    return f'"{digest}"'
+
+
 def stat_music_object(file_path: str) -> tuple[int, str, str]:
     """(size, content_type, etag) аудио-объекта по minio://bucket/key."""
     bucket, key = parse_object_path(file_path)
@@ -392,7 +408,7 @@ def stat_music_object(file_path: str) -> tuple[int, str, str]:
     if cached is not None:
         return cached
     st = _get_internal_client().stat_object(bucket, key)
-    value = (st.size, (st.content_type or "audio/mpeg"), (st.etag or ""))
+    value = (st.size, (st.content_type or "audio/mpeg"), music_etag(key, st.size))
     _stat_cache_put(bucket, key, value)
     return value
 
@@ -410,11 +426,11 @@ async def stat_music_object_async(file_path: str, db_size: int = None, db_conten
 
     # Быстрый путь: размер уже в БД, HEAD не нужен
     if db_size is not None and db_size > 0:
-        # content_type угадываем по расширению, ETag оставляем пустым (не критичен)
+        # content_type угадываем по расширению
         if not db_content_type:
             ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
             db_content_type = {"m4a": "audio/mp4", "opus": "audio/opus", "webm": "audio/webm"}.get(ext, "audio/mpeg")
-        value = (db_size, db_content_type, "")
+        value = (db_size, db_content_type, music_etag(key, db_size))
         _stat_cache_put(bucket, key, value)
         return value
 
@@ -422,7 +438,7 @@ async def stat_music_object_async(file_path: str, db_size: int = None, db_conten
     value = (
         resp["ContentLength"],
         (resp.get("ContentType") or "audio/mpeg"),
-        (resp.get("ETag") or ""),
+        music_etag(key, resp["ContentLength"]),
     )
     _stat_cache_put(bucket, key, value)
     return value
@@ -608,9 +624,22 @@ def minio_range_response(file_path: str, request: Request) -> Response:
 #
 # Клиент на медленном канале просит ?quality=low и получает HE-AAC 64 kbps
 # вместо 128 kbps — вдвое меньше байтов на тот же трек. Вариант живёт отдельным
-# объектом рядом с оригиналом и готовится по первому запросу: дальше это
+# объектом рядом с оригиналом и готовится ФОНОМ по первому запросу: дальше это
 # обычный объект MinIO, и весь путь стрима (Range/206/ETag/304) работает без
 # изменений.
+#
+# Первый запрос сборку НЕ ждёт — получает оригинал сразу. Раньше он ждал
+# скачивание + ffmpeg + fdkaac + заливку, и каждый новый трек на медленном
+# канале (а на мобильных low — умолчание) молчал 3-5 с до первого байта:
+# ровно та задержка, от которой вариант должен был спасать.
+#
+# Готовый вариант начинают отдавать не сразу, а через _LOW_SETTLE_SECONDS после
+# сборки. URL у обоих вариантов один (?quality=low), а размер и байты разные:
+# переключись он посреди прослушивания, следующий Range-запрос того же <audio>
+# получил бы чужие байты. Выдержка отделяет прослушивания, начатые на
+# оригинале, от прослушиваний на варианте; кэш браузера для оригинала под этим
+# URL живёт не дольше выдержки (см. low_variant_for_stream). Момент отсчёта —
+# LastModified объекта, он общий для всех воркеров.
 #
 # Дедуп здесь не косметика: iOS Safari шлёт на один трек десятки Range-запросов,
 # и без общего лока на ключ каждый запустил бы свой ffmpeg.
@@ -620,9 +649,20 @@ _LOW_TRANSCODE_CONCURRENCY = int(os.getenv("LOW_TRANSCODE_CONCURRENCY", "2"))
 # Range-запрос (битый исходник иначе стоил бы полного прогона ffmpeg десятки раз).
 _LOW_FAIL_TTL = float(os.getenv("LOW_TRANSCODE_FAIL_TTL", "600"))
 _LOW_FAIL_MAX = 4096
+# Выдержка свежего варианта перед первой отдачей (см. выше). С запасом длиннее
+# трека вместе с паузами посреди него.
+_LOW_SETTLE_SECONDS = float(os.getenv("LOW_VARIANT_SETTLE_SECONDS", "3600"))
+_LOW_READY_MAX = 8192
 
 _low_sem: Optional[asyncio.Semaphore] = None
 _low_locks: dict[str, asyncio.Lock] = {}
+# low_path → unix-время, с которого вариант можно отдавать. Только
+# положительные записи: объект варианта после сборки не меняется.
+_low_ready_at: dict[str, float] = {}
+# Ключи, чья фоновая сборка уже запущена в этом воркере, и сами задачи
+# (ссылка нужна, иначе GC может собрать задачу посреди работы).
+_low_build_pending: set[str] = set()
+_low_build_tasks: set[asyncio.Task] = set()
 _low_failed: dict[str, float] = {}
 
 
@@ -662,8 +702,8 @@ async def ensure_low_variant_async(file_path: str) -> Optional[str]:
     кодирования не должен ломать воспроизведение: на медленном канале лучше
     получить тяжёлые байты, чем ошибку.
 
-    Первый запрос ЖДЁТ кодирование (единицы секунд на пятиминутный трек): на
-    канале 30 КБ/с эти секунды окупаются сразу же — 2.3 МБ вместо 4.7 МБ.
+    Ждёт кодирование (единицы секунд), поэтому стрим зовёт её только фоном —
+    через low_variant_for_stream.
     """
     if not is_minio_backend() or not is_minio_path(file_path):
         return None
@@ -716,6 +756,80 @@ async def ensure_low_variant_async(file_path: str) -> Optional[str]:
         return low_path
 
 
+def _remember_low_ready(low_path: str, ready_at: float) -> None:
+    if len(_low_ready_at) >= _LOW_READY_MAX:
+        _low_ready_at.clear()  # дороже один лишний HEAD, чем неограниченный рост
+    _low_ready_at[low_path] = ready_at
+
+
+async def _low_variant_built_at(low_path: str) -> Optional[float]:
+    """Unix-время сборки варианта (LastModified) или None, если его нет."""
+    bucket, key = parse_object_path(low_path)
+    try:
+        resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
+    except Exception:  # noqa: BLE001 — объекта ещё нет, это нормальный путь
+        return None
+    modified = resp.get("LastModified")
+    # Без даты считаем вариант давним: объект есть, а момент сборки неизвестен.
+    return modified.timestamp() if modified is not None else 0.0
+
+
+async def _build_low_variant_bg(file_path: str, low_path: str) -> None:
+    try:
+        if await ensure_low_variant_async(file_path):
+            # Свой воркер знает момент сборки и без HEAD; остальные прочитают
+            # LastModified — расхождение в секунды заливки, не больше.
+            _remember_low_ready(low_path, time.time() + _LOW_SETTLE_SECONDS)
+    except Exception:  # noqa: BLE001 — фоновая сборка не должна шуметь в loop
+        logger.exception("MinIO: фоновая сборка низкого варианта %s упала", low_path)
+    finally:
+        _low_build_pending.discard(low_path)
+
+
+async def low_variant_for_stream(file_path: str) -> tuple[Optional[str], Optional[int]]:
+    """Что отдать на ?quality=low: ``(low_path, None)`` — готовый вариант;
+    ``(None, max_age)`` — оригинал, и кэшировать его браузеру не дольше
+    ``max_age`` секунд (дальше этот URL начнёт отдавать вариант);
+    ``(None, None)`` — варианта не бывает, оригинал как обычно.
+
+    Никогда не ждёт кодирования: недостающий вариант собирается фоном.
+    """
+    if not is_minio_backend() or not is_minio_path(file_path):
+        return None, None
+
+    from app.transcode import low_variant_key
+
+    bucket, key = parse_object_path(file_path)
+    if not key:
+        return None, None
+    low_path = make_object_path(bucket, low_variant_key(key))
+    settle = int(_LOW_SETTLE_SECONDS)
+
+    # Сборка уже идёт в этом воркере — объекта заведомо нет, HEAD не нужен.
+    if low_path in _low_build_pending:
+        return None, settle
+
+    ready_at = _low_ready_at.get(low_path)
+    if ready_at is None:
+        built_at = await _low_variant_built_at(low_path)
+        if built_at is not None:
+            ready_at = built_at + _LOW_SETTLE_SECONDS
+            _remember_low_ready(low_path, ready_at)
+
+    if ready_at is not None:
+        wait = ready_at - time.time()
+        if wait <= 0:
+            return low_path, None
+        return None, max(1, int(wait))
+
+    if not _low_failed_recently(low_path) and low_path not in _low_build_pending:
+        _low_build_pending.add(low_path)
+        task = asyncio.create_task(_build_low_variant_bg(file_path, low_path))
+        _low_build_tasks.add(task)
+        task.add_done_callback(_low_build_tasks.discard)
+    return None, settle
+
+
 def _build_low_variant(file_path: str, low_key: str) -> bool:
     """Блокирующая часть: скачать, перекодировать, залить — из тредпула."""
     from app.transcode import AAC_CONTENT_TYPE, transcode_to_low_aac
@@ -755,20 +869,34 @@ async def minio_range_response_async(
     невозможен).
 
     ``quality="low"`` отдаёт низкобитрейтный вариант того же трека (см.
-    ``ensure_low_variant_async``): подменяется ТОЛЬКО имя объекта, поэтому
+    ``low_variant_for_stream``): подменяется ТОЛЬКО имя объекта, поэтому
     Range/206/ETag/304/If-Range работают один в один, а у варианта свои
     размер и ETag — браузер кладёт его в отдельную ячейку кэша по своему URL.
+    Пока варианта нет, отдаётся оригинал — сразу, без ожидания сборки.
 
     ``db_size`` из Track.file_size минует HEAD-запрос в MinIO (размер известен при upload).
     """
+    stat = None
+    max_age = None
     if quality == "low":
-        low_path = await ensure_low_variant_async(file_path)
+        low_path, max_age = await low_variant_for_stream(file_path)
         if low_path:
-            file_path = low_path
-            db_size = None  # у low-варианта размер другой
+            try:
+                # Без db_size: у варианта свой размер.
+                stat = await stat_music_object_async(low_path)
+                file_path = low_path
+            except Exception:  # noqa: BLE001 — вариант пропал; играем оригинал
+                logger.warning("MinIO: низкий вариант %s недоступен", low_path, exc_info=True)
+                _low_ready_at.pop(low_path, None)
 
-    file_size, mime_type, etag = await stat_music_object_async(file_path, db_size, db_content_type)
+    if stat is None:
+        stat = await stat_music_object_async(file_path, db_size, db_content_type)
+    file_size, mime_type, etag = stat
     common_headers = audio_common_headers(etag)
+    if max_age is not None:
+        # Оригинал под URL варианта: кэш браузера не должен пережить момент,
+        # когда этот URL переключится на вариант (см. low_variant_for_stream).
+        common_headers["Cache-Control"] = f"private, max-age={max_age}"
 
     if if_none_match_matches(request, etag):
         return Response(status_code=304, headers=common_headers)
