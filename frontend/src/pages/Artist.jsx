@@ -127,8 +127,9 @@ function Artist() {
       const all = [...(data.tracks || []), ...(data.external || [])]
       setTracks(all)
       setAlbums(data.albums || [])
-      // Прогреваем резолв верхушки — старт воспроизведения без паузы.
-      usePlayerStore.getState().prefetchTracks(all, 6)
+      // Прогреваем резолв верхушки — старт воспроизведения без паузы. Немного:
+      // каждый ytmusic-прогрев — резолв в YouTube (лимит на IP, bot-check).
+      usePlayerStore.getState().prefetchTracks(all, 2)
     } catch (error) {
       console.error('Error fetching artist:', error)
       toast.error('Не удалось загрузить страницу исполнителя')

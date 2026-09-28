@@ -202,9 +202,14 @@ services:
       SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
       YTDLP_CACHE_DIR: /app/ytdlp_cache
       YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
-      INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
-      INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
-      INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # PO-token для yt-dlp (сервис bgutil-provider ниже): без него web-клиенты
+      # YouTube не отдают https-аудио, и анонимный запрос первым ловит bot-check.
+      YTDLP_POT_PROVIDER_URL: ${YTDLP_POT_PROVIDER_URL:-http://bgutil-provider:4416}
+      # Второй выход в YouTube — бесплатный Cloudflare WARP (сервис warp ниже).
+      # Основной выход поймал bot-check — резолв и скачивание переезжают сюда
+      # до конца бэкоффа. GOST в контейнере слушает HTTP и SOCKS5 на одном
+      # порту; HTTP — чтобы httpx обошёлся без socksio. Пусто — выход один.
+      YTDLP_WARP_PROXY: ${YTDLP_WARP_PROXY:-http://warp:1080}
       # Cookie-сессии YouTube против bot-check: анонимный датацентровый
       # трафик YouTube режет «Sign in to confirm you're not a bot», залогиненный
       # — нет. YTDLP_COOKIEFILE — Netscape-экспорт из браузера (положить файл
@@ -212,12 +217,11 @@ services:
       # oauth/browser-файл ytmusicapi. Пусто = анонимно, как раньше.
       YTDLP_COOKIEFILE: ${YTDLP_COOKIEFILE:-/app/secrets/ytdlp_cookies.txt}
       YTMUSIC_AUTH: ${YTMUSIC_AUTH:-/app/secrets/ytmusic_auth.json}
-      # Ссылки googlevideo привязаны к IP запросившего (подписанный параметр
-      # `ip` в sparams). Если Invidious-companion выходит через прокси
-      # (invidious/proxy-pool), то и качать аудио надо через тот же выход,
-      # иначе googlevideo отдаёт 403. Файл пишет rotate.sh при ротации, бэкенд
-      # перечитывает его по mtime — без перезапуска, чтобы не рвать стримы.
-      # Нет файла (обычный случай, прокси не нужен) — прямой выход.
+      # Прокси основного выхода в YouTube. Ссылки googlevideo привязаны к IP
+      # запросившего (подписанный параметр `ip` в sparams), поэтому резолв и
+      # скачивание идут через один выход. Бэкенд перечитывает файл по mtime —
+      # без перезапуска, чтобы не рвать стримы. Нет файла (обычный случай) —
+      # прямой адрес сервера.
       STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
       # Статическая альтернатива файлу: адрес прокси одной строкой.
       STREAM_PROXY: ${STREAM_PROXY:-}
@@ -268,15 +272,6 @@ services:
       # Cookie-сессии YouTube (bot-check): read-only каталог с секретами.
       # Код переживает отсутствие файлов — анонимный резолв, как раньше.
       - ./backend/secrets:/app/secrets:ro
-    # Invidious живёт отдельным compose-стеком (invidious/docker-compose.prod.yml)
-    # и публикует порт на хосте, поэтому INVIDIOUS_API_BASE указывает на
-    # host.docker.internal. На Docker Desktop это имя резолвится само, а на
-    # Linux-сервере — НЕТ: без строки ниже резолв через Invidious падал с
-    # «ConnectError: Name or service not known» на каждом треке, весь трафик
-    # уходил в yt-dlp, и при блокировке его IP отдавался bot-check
-    # (ytdlp.py:949-953) — при живом и работающем Invidious.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     expose:
       - "8000"
     depends_on:
@@ -290,6 +285,10 @@ services:
       # DNS-имя существует. Бэкенд не должен ждать готовности slskd —
       # недоступность переживает предохранитель (soulseek._slskd_unreachable).
       slskd:
+        condition: service_started
+      bgutil-provider:
+        condition: service_started
+      warp:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status==200 else 1)\""]
@@ -315,6 +314,42 @@ services:
   # docker run --network или публикация 127.0.0.1:5030:5030).
   # Soulseek требует, чтобы пользователь что-то раздавал (иначе сеть не
   # отдаёт результаты поиска) — шарим музыкальную библиотеку из volume.
+  # PO-token-провайдер для yt-dlp (плагин bgutil-ytdlp-pot-provider в
+  # backend/requirements.txt). Версия образа обязана совпадать с плагином.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
+    container_name: music_bgutil_provider
+    restart: unless-stopped
+    logging: *default-logging
+    init: true
+    expose:
+      - "4416"
+
+  # Cloudflare WARP — бесплатный второй выход в YouTube (YTDLP_WARP_PROXY).
+  # Проверка: docker exec music_backend curl -sx http://warp:1080
+  #   https://cloudflare.com/cdn-cgi/trace   → warp=on
+  # Новый адрес WARP, если YouTube заблокировал и его: удалить том warp_data
+  # и пересоздать контейнер — клиент зарегистрируется заново.
+  warp:
+    image: caomingjun/warp:2026.7.1377.0-2.12.0
+    container_name: music_warp
+    restart: unless-stopped
+    logging: *default-logging
+    # Правило, убранное из runc (opencontainers/runc#3468): WARP нужен /dev/net/tun.
+    device_cgroup_rules:
+      - 'c 10:200 rwm'
+    environment:
+      WARP_SLEEP: 2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - warp_data:/var/lib/cloudflare-warp
+    expose:
+      - "1080"
+
   slskd:
     image: slskd/slskd:latest
     container_name: music_slskd
@@ -411,5 +446,6 @@ volumes:
   slskd_downloads:
   slskd_incomplete:
   slskd_data:
+  warp_data:
   certbot_conf:
   certbot_www:

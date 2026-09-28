@@ -539,13 +539,14 @@ const usePlayerStore = create((set, get) => ({
   },
 
   // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы
-  // переключение началось мгновенно (без ожидания yt-dlp/Piped). Греем
+  // переключение началось мгновенно (без ожидания yt-dlp). Греем
   // PREFETCH_WINDOW треков вперёд — при быстром пролистывании очереди (не
   // только next-next) следующие треки тоже успевают попасть в Redis-кэш.
-  // Бэк сам ограничивает конкуренцию (_PREFETCH_SEM/_WARM_SEM в ytdlp.py),
-  // так что расширение окна безопасно и не перегружает воркеры.
+  // Окно небольшое: каждый ytmusic-прогрев — резолв в YouTube, а объём
+  // резолвов с одного IP и вызывает bot-check. Гейту скипа нужен только
+  // следующий трек, второй — запас на быстрое пролистывание.
   prefetchNext: () => {
-    const PREFETCH_WINDOW = 4
+    const PREFETCH_WINDOW = 2
     const upcoming = Array.from({ length: PREFETCH_WINDOW }, (_, i) => get().getNextTrack(i + 1)).filter(Boolean)
     get().prefetchTracks(upcoming, upcoming.length)
   },
@@ -645,7 +646,7 @@ const usePlayerStore = create((set, get) => ({
         // и так перемешан на бэке. Ничего не готово — стартуем с нулевого.
         const startIndex = Math.max(preload.tracks.findIndex(isTrackResolved), 0)
         get().playPlaylist(preload.tracks, startIndex, 'flow')
-        get().prefetchTracks(preload.tracks.slice(0, 4), 4)
+        get().prefetchTracks(preload.tracks.slice(0, 3), 3)
         set({ flowActive: true })
         return true
       }
@@ -658,7 +659,7 @@ const usePlayerStore = create((set, get) => ({
       // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
       // ожидания резолва на каждом переключении — это основной сценарий,
       // где скорость важнее всего.
-      get().prefetchTracks(data.slice(0, 4), 4)
+      get().prefetchTracks(data.slice(0, 3), 3)
       set({ flowActive: true })
       return true
     } finally {
@@ -686,7 +687,7 @@ const usePlayerStore = create((set, get) => ({
       const fresh = (data || []).filter((t) => !known.has(t.id))
       if (fresh.length === 0) return
 
-      get().prefetchTracks(fresh.slice(0, 4), 4)
+      get().prefetchTracks(fresh.slice(0, 2), 2)
 
       set((state) => {
         const startIdx = state.queue.length
@@ -1071,8 +1072,9 @@ const usePlayerStore = create((set, get) => ({
 // старт воспроизведения почти мгновенный. Дедуп: requestedPrefetchIds
 // на фронте + single-flight на бэке, так что повторные наведения бесплатны.
 //
-// hover дебаунсим (~120 мс), чтобы быстрое пролистывание списка мышью
-// не спамило бэк префетчами всех задетых строк. pointerdown — без
+// hover дебаунсим (~300 мс), чтобы пролистывание списка мышью не спамило
+// бэк префетчами всех задетых строк: каждый ytmusic-прогрев — резолв в
+// YouTube, лишние резолвы приближают bot-check. pointerdown — без
 // задержки: касание/нажатие почти всегда предшествует клику.
 let intentHoverTimer = null
 
@@ -1091,7 +1093,7 @@ function prefetchOnIntent(track, { immediate = false } = {}) {
   intentHoverTimer = setTimeout(() => {
     intentHoverTimer = null
     fire()
-  }, 120)
+  }, 300)
 }
 
 // Готовые пропсы для строки/карточки трека: распылить через

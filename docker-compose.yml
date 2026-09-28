@@ -141,9 +141,14 @@ services:
       SLSKD_INCOMPLETE_DIR: /app/slskd_incomplete
       YTDLP_CACHE_DIR: /app/ytdlp_cache
       YTDLP_CACHE_MAX_MB: ${YTDLP_CACHE_MAX_MB:-4096}
-      INVIDIOUS_ENABLED: ${INVIDIOUS_ENABLED:-0}
-      INVIDIOUS_API_BASE: ${INVIDIOUS_API_BASE:-}
-      INVIDIOUS_TIMEOUT: ${INVIDIOUS_TIMEOUT:-10}
+      # PO-token для yt-dlp (сервис bgutil-provider ниже): без него web-клиенты
+      # YouTube не отдают https-аудио, и анонимный запрос первым ловит bot-check.
+      YTDLP_POT_PROVIDER_URL: ${YTDLP_POT_PROVIDER_URL:-http://bgutil-provider:4416}
+      # Второй выход в YouTube — бесплатный Cloudflare WARP (сервис warp ниже).
+      # Основной выход поймал bot-check — резолв и скачивание переезжают сюда
+      # до конца бэкоффа. GOST в контейнере слушает HTTP и SOCKS5 на одном
+      # порту; HTTP — чтобы httpx обошёлся без socksio. Пусто — выход один.
+      YTDLP_WARP_PROXY: ${YTDLP_WARP_PROXY:-http://warp:1080}
       # Cookie-сессии YouTube против bot-check: анонимный датацентровый
       # трафик YouTube режет «Sign in to confirm you're not a bot», залогиненный
       # — нет. YTDLP_COOKIEFILE — Netscape-экспорт из браузера, подхватывается
@@ -151,9 +156,9 @@ services:
       # (поиск/каталог). Пусто = анонимно, как раньше.
       YTDLP_COOKIEFILE: ${YTDLP_COOKIEFILE:-}
       YTMUSIC_AUTH: ${YTMUSIC_AUTH:-}
-      # Прокси для скачивания googlevideo: ссылка привязана к IP выхода,
-      # который её выдал, поэтому при проксированном companion аудио надо
-      # качать через тот же прокси. Файла нет — прямой выход.
+      # Прокси основного выхода в YouTube (резолв и скачивание googlevideo:
+      # ссылка привязана к IP выхода, который её выдал). Файла нет — прямой
+      # адрес сервера.
       STREAM_PROXY_FILE: ${STREAM_PROXY_FILE:-/run/stream-proxy/active.url}
       STREAM_PROXY: ${STREAM_PROXY:-}
       # Прокси для МЕТАДАННЫХ SoundCloud (api-v2 и скрейп client_id).
@@ -200,12 +205,6 @@ services:
       # запас над таргетом 500 одновременных слушателей.
       THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-70}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-8}
-    # Invidious — отдельный compose-стек (invidious/), связи по сети между ними
-    # нет, поэтому INVIDIOUS_API_BASE ходит через host.docker.internal. Docker
-    # Desktop резолвит это имя сам, Linux — нет, и на Linux-хосте резолв через
-    # Invidious молча падал бы, оставляя только yt-dlp.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     volumes:
@@ -226,11 +225,49 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_started
+      warp:
+        condition: service_started
     # UvicornWorker обрабатывает proxy-заголовки по умолчанию, а gunicorn-флаг
     # --forwarded-allow-ips='*' разрешает доверять X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
     # (mixed active content).
     command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --forwarded-allow-ips='*'"
+
+  # PO-token-провайдер для yt-dlp (плагин bgutil-ytdlp-pot-provider в
+  # backend/requirements.txt). Версия образа обязана совпадать с плагином.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
+    container_name: music_bgutil_provider
+    restart: unless-stopped
+    init: true
+    expose:
+      - "4416"
+
+  # Cloudflare WARP — бесплатный второй выход в YouTube (YTDLP_WARP_PROXY).
+  # Проверка: docker exec music_backend curl -sx http://warp:1080
+  #   https://cloudflare.com/cdn-cgi/trace   → warp=on
+  # Новый адрес WARP, если YouTube заблокировал и его: удалить том warp_data
+  # и пересоздать контейнер — клиент зарегистрируется заново.
+  warp:
+    image: caomingjun/warp:2026.7.1377.0-2.12.0
+    container_name: music_warp
+    restart: unless-stopped
+    # Правило, убранное из runc (opencontainers/runc#3468): WARP нужен /dev/net/tun.
+    device_cgroup_rules:
+      - 'c 10:200 rwm'
+    environment:
+      WARP_SLEEP: 2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - warp_data:/var/lib/cloudflare-warp
+    expose:
+      - "1080"
 
   slskd:
     image: slskd/slskd:latest
@@ -316,3 +353,4 @@ volumes:
   slskd_downloads:
   slskd_incomplete:
   slskd_data:
+  warp_data:

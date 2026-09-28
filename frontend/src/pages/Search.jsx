@@ -106,7 +106,10 @@ function Search() {
         // кликов приходится на верх списка, и к моменту клика резолв уже тёплый.
         // Ограничиваем прогрев видимой верхушкой, чтобы поиск не создавал
         // всплеск фоновых запросов на слабом клиенте или под нагрузкой.
-        usePlayerStore.getState().prefetchTracks(grouped.ytmusic, 4)
+        // ytmusic — только первый: каждый прогрев это резолв в YouTube, а
+        // объём резолвов с нашего IP и вызывает bot-check. Остальное греет
+        // hover/pointerdown (prefetchOnIntent) перед реальным кликом.
+        usePlayerStore.getState().prefetchTracks(grouped.ytmusic, 1)
         usePlayerStore.getState().prefetchTracks(grouped.soundcloud, 2)
       })
       .catch((error) => {

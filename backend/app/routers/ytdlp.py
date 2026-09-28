@@ -820,6 +820,25 @@ def _ytdlp_cookie_opts() -> dict:
 _cookiefile_missing_logged = False
 
 
+# PO-token-провайдер (сайдкар bgutil-ytdlp-pot-provider, плагин ставится из
+# requirements.txt). YouTube выдаёт полноценные https-форматы web-клиентам
+# только с GVS PO Token, а анонимный запрос без аттестации BotGuard первым
+# попадает под "Sign in to confirm you're not a bot". Раньше токен выпускал
+# invidious-companion, и когда он застревал на «waiting for a valid potoken»,
+# резолв ломался целиком. Здесь токен запрашивает сам yt-dlp — только для
+# клиентов, которым он нужен (android_vr обходится без него). Пусто — плагин
+# ходит на свой дефолт 127.0.0.1:4416, а без сервера просто молчит.
+_POT_PROVIDER_URL = os.getenv("YTDLP_POT_PROVIDER_URL", "").strip()
+
+
+def _ytdlp_extractor_args(clients: List[str]) -> dict:
+    """extractor_args для YoutubeDL: набор клиентов + адрес PO-token-провайдера."""
+    args: dict = {"youtube": {"player_client": clients}}
+    if _POT_PROVIDER_URL:
+        args["youtubepot-bgutilhttp"] = {"base_url": [_POT_PROVIDER_URL]}
+    return args
+
+
 # Каждую попытку резолва ограничиваем по времени: без таймаута зависшее
 # соединение с YouTube тянет extract_info очень долго (жалобы «грузится вечно»).
 # Попытки хеджированы (см. _resolve_audio), а не все параллельно с самого
@@ -856,33 +875,33 @@ class BotCheckError(TransientResolveError):
     """
 
 
-# Invidious-инстанс (self-hosted, с companion-сервисом для PO-token) отдаёт
-# уже готовый прямой URL аудио-потока без локального n-sig/cipher-расчёта —
-# резолв через него на порядок быстрее yt-dlp. Используется как основной путь
-# резолва (см. _resolve_audio), yt-dlp остаётся фолбэком на случай
-# недоступности/пустого ответа инстанса.
-_INVIDIOUS_ENABLED = os.getenv("INVIDIOUS_ENABLED", "0") == "1"
-_INVIDIOUS_API_BASES = [
-    b.strip().rstrip("/") for b in os.getenv("INVIDIOUS_API_BASE", "").split(",") if b.strip()
-]
-_INVIDIOUS_TIMEOUT = float(os.getenv("INVIDIOUS_TIMEOUT", "10"))
-
-# ─────────────────── Прокси для скачивания с googlevideo ───────────────────
+# ─────────────────── Выходы (egress) в YouTube ───────────────────
 # Ссылки googlevideo привязаны к IP того, кто их запросил: параметр `ip` входит
-# в подписанный `sparams`, и запрос с другого адреса получает 403. Если
-# Invidious-companion выходит в YouTube через прокси (invidious/proxy-pool —
-# нужен, когда с адреса сервера не выпускается PO-token), то выданная им ссылка
-# привязана к адресу ПРОКСИ, и качать её надо через тот же выход.
+# в подписанный `sparams`, и запрос с другого адреса получает 403. Поэтому
+# резолв и скачивание ролика обязаны идти через ОДИН и тот же выход.
 #
-# Проксируется только скачивание аудио с googlevideo: резолв через Invidious
-# идёт внутрь стека, а обложки/метаданные другим хостам платного трафика не
-# стоят.
+# Выходов два:
+#   * direct — основной: адрес сервера или статический STREAM_PROXY(_FILE);
+#   * warp   — бесплатный Cloudflare WARP (контейнер warp, YTDLP_WARP_PROXY).
+# Bot-check YouTube — это лимит на IP, а не на ролик. Когда основной выход его
+# ловит, резолв переезжает на WARP (другой адрес, свой лимит) до конца
+# бэкоффа, а не стоит 3 минуты целиком (см. _resolve_audio).
 #
-# Пусто (по умолчанию) — прямой выход, поведение не меняется.
+# Выход, выдавший ссылку, записан в её фрагменте (#egress=warp): фрагмент не
+# уходит в HTTP-запрос, но переживает Redis-кэш резолва, архивацию и все
+# воркеры gunicorn — proxy_for_url читает его из самой ссылки. Ссылки без
+# фрагмента выданы основным выходом.
+#
+# Проксируется только googlevideo: обложки/метаданные к IP не привязаны.
+_EGRESS_DIRECT = "direct"
+_EGRESS_WARP = "warp"
+_EGRESS_TAG = "egress="
+
+_WARP_PROXY = os.getenv("YTDLP_WARP_PROXY", "").strip()
+
 _STREAM_PROXY_STATIC = os.getenv("STREAM_PROXY", "").strip()
-# Файл важнее переменной: ротацию выхода пишет rotate.sh, а бэкенд перечитывает
-# файл по mtime — смена прокси не требует перезапуска контейнера, который
-# оборвал бы активные стримы.
+# Файл важнее переменной: бэкенд перечитывает его по mtime — смена прокси не
+# требует перезапуска контейнера, который оборвал бы активные стримы.
 _STREAM_PROXY_FILE = os.getenv("STREAM_PROXY_FILE", "").strip()
 # (mtime, url) последнего прочтения файла; -1.0 — «ещё не читали».
 _stream_proxy_cache: tuple[float, Optional[str]] = (-1.0, None)
@@ -896,12 +915,12 @@ def _mask_proxy(url: Optional[str]) -> str:
 
 
 def stream_proxy() -> Optional[str]:
-    """Прокси для запросов к googlevideo или None (прямой выход).
+    """Прокси основного выхода (direct) или None — прямой адрес сервера.
 
     Читает файл ``STREAM_PROXY_FILE`` (первая непустая строка не с ``#``) и
     перечитывает его только при смене mtime — вызывается на каждый стрим, так
-    что дешёвый stat вместо открытия файла здесь принципиален. Если файла нет
-    (оверлей прокси не подключён), используется статический ``STREAM_PROXY``.
+    что дешёвый stat вместо открытия файла здесь принципиален. Если файла нет,
+    используется статический ``STREAM_PROXY``.
     """
     global _stream_proxy_cache
     if not _STREAM_PROXY_FILE:
@@ -927,24 +946,49 @@ def stream_proxy() -> Optional[str]:
     return cached or _STREAM_PROXY_STATIC or None
 
 
+def _egresses() -> List[str]:
+    """Выходы в порядке предпочтения: основной, затем WARP (если настроен)."""
+    return [_EGRESS_DIRECT, _EGRESS_WARP] if _WARP_PROXY else [_EGRESS_DIRECT]
+
+
+def _egress_proxy(egress: str) -> Optional[str]:
+    """Прокси выхода или None (прямой адрес сервера)."""
+    if egress == _EGRESS_WARP:
+        return _WARP_PROXY or None
+    return stream_proxy()
+
+
+def _tag_egress(url: str, egress: str) -> str:
+    """Помечает ссылку выходом, который её выдал (см. _EGRESS_TAG)."""
+    if egress == _EGRESS_DIRECT:
+        return url
+    return f"{url}#{_EGRESS_TAG}{egress}"
+
+
+def _url_egress(url: str) -> str:
+    fragment = urlsplit(url).fragment
+    if fragment.startswith(_EGRESS_TAG):
+        return fragment[len(_EGRESS_TAG):]
+    return _EGRESS_DIRECT
+
+
 def proxy_for_url(url: str) -> Optional[str]:
     """Прокси для скачивания ``url`` или None (прямой выход).
 
-    Проксируем ТОЛЬКО googlevideo. stream_cached_audio общий с SoundCloud
-    (soundcloud.stream_soundcloud), а у cf-media привязки к IP нет — гнать его
-    аудио и обложки через платный прокси незачем. Метаданные SoundCloud — другое
-    дело, они закрыты целиком и ходят через свой выход
+    Проксируем ТОЛЬКО googlevideo, и через тот выход, что выдал ссылку.
+    stream_cached_audio общий с SoundCloud (soundcloud.stream_soundcloud), а у
+    cf-media привязки к IP нет — гнать его аудио и обложки через прокси
+    незачем. Метаданные SoundCloud — другое дело, они ходят через свой выход
     (soundcloud.soundcloud_proxy).
     """
-    proxy = stream_proxy()
-    if not proxy:
-        return None
     host = (urlsplit(url).hostname or "").lower()
-    return proxy if host.endswith("googlevideo.com") else None
+    if not host.endswith("googlevideo.com"):
+        return None
+    return _egress_proxy(_url_egress(url))
 
 
 def record_stream_proxy_traffic(url: str, amount: int) -> None:
-    """Record bytes that actually crossed the paid googlevideo proxy."""
+    """Record bytes that actually crossed a googlevideo proxy."""
     record_proxy_traffic(proxy_for_url(url), amount)
 
 
@@ -959,79 +1003,6 @@ def _stream_client(timeout: httpx.Timeout, url: str) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, proxy=proxy_for_url(url)
     )
-
-
-# Один клиент с keep-alive на все резолвы: инстанс Invidious всегда один и
-# тот же, так что переиспользование соединения убирает TCP/TLS-хендшейк из
-# каждого резолва (и накладные расходы на создание клиента).
-_invidious_client: Optional[httpx.AsyncClient] = None
-
-
-def _get_invidious_client() -> httpx.AsyncClient:
-    global _invidious_client
-    if _invidious_client is None:
-        _invidious_client = httpx.AsyncClient(timeout=_INVIDIOUS_TIMEOUT)
-    return _invidious_client
-
-
-async def _resolve_via_invidious(video_id: str) -> tuple[str, str, Optional[int]]:
-    """Резолвит прямой URL аудио через Invidious API (/api/v1/videos/{id}).
-
-    Пробует настроенные инстансы по очереди (первый удачный ответ побеждает).
-    Любая ошибка Invidious, включая HTTP 404, считается временной: публичный
-    инстанс может вернуть 404 из-за своего прокси, региона или companion, хотя
-    ролик доступен на YouTube. Вызывающий код всегда проверит такой случай
-    через yt-dlp.
-    """
-    if not _INVIDIOUS_API_BASES:
-        raise TransientResolveError(video_id)
-
-    last_exc: Optional[Exception] = None
-    client = _get_invidious_client()
-    for base in _INVIDIOUS_API_BASES:
-        try:
-            resp = await client.get(f"{base}/api/v1/videos/{video_id}")
-        except httpx.HTTPError as exc:
-            last_exc = exc
-            continue
-        if resp.status_code == 404:
-            last_exc = RuntimeError(f"invidious {base} returned 404")
-            continue
-        if resp.is_error:
-            last_exc = RuntimeError(f"invidious {base} returned {resp.status_code}")
-            continue
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            last_exc = exc
-            continue
-        if data.get("error"):
-            # Инстанс жив, но явно сообщил о проблеме с видео (обычно
-            # companion недоступен или PO-token не провалидировался) —
-            # это сбой инстанса, а не факт недоступности ролика.
-            last_exc = RuntimeError(f"invidious error: {data['error']}")
-            continue
-        formats = data.get("adaptiveFormats") or []
-        streams = [
-            f for f in formats
-            if f.get("url") and str(f.get("type", "")).startswith("audio")
-        ]
-        if not streams:
-            last_exc = RuntimeError("invidious: no audio formats")
-            continue
-        streams.sort(key=lambda f: int(f.get("bitrate") or 0), reverse=True)
-        best = streams[0]
-        mime = str(best.get("type", "")).lower()
-        ext = ".m4a"
-        if "webm" in mime or "opus" in mime:
-            ext = ".opus" if "opus" in mime else ".webm"
-        elif "mp4" in mime or "m4a" in mime or "aac" in mime:
-            ext = ".m4a"
-        total = best.get("clen")
-        total = int(total) if isinstance(total, (int, float, str)) and str(total).isdigit() else None
-        return best["url"], ext, total
-
-    raise TransientResolveError(video_id) from last_exc
 
 
 # Маркеры в тексте ошибки yt-dlp, означающие ИМЕННО недоступность ролика, а не
@@ -1088,7 +1059,7 @@ def _needs_auth(info: dict) -> bool:
     т.к. YouTube требует авторизацию (availability=needs_auth, age_limit>=18).
     Без cookies это перманентно — ретрай бесполезен, поэтому такой трек надо
     отдавать как недоступный (404), а не временный (503, с бесконечным ретраем
-    на фронте). Invidious на такие ролики отвечает 500 «inappropriate…»."""
+    на фронте)."""
     if info.get("availability") == "needs_auth":
         return True
     try:
@@ -1142,7 +1113,7 @@ def _warmup_ydl_blocking() -> None:
         primary = _CLIENT_CANDIDATES[0]
         # Ключ как у _extract_with_clients (прокси входит в ключ), иначе
         # прогретый инстанс не переиспользуется первым же резолвом.
-        warm_proxy = stream_proxy()
+        warm_proxy = _egress_proxy(_EGRESS_DIRECT)
         cached_ydl(
             (tuple(primary), warm_proxy or ""),
             {
@@ -1154,7 +1125,7 @@ def _warmup_ydl_blocking() -> None:
                 "format": "bestaudio/best",
                 "ignore_no_formats_error": True,
                 "js_runtimes": _JS_RUNTIMES,
-                "extractor_args": {"youtube": {"player_client": primary}},
+                "extractor_args": _ytdlp_extractor_args(primary),
                 **({"proxy": warm_proxy} if warm_proxy else {}),
                 **_ytdlp_cookie_opts(),
             },
@@ -1199,9 +1170,9 @@ class _CapturingLogger:
 
 
 def _extract_with_clients(
-    video_id: str, clients: List[str]
+    video_id: str, clients: List[str], egress: str = _EGRESS_DIRECT
 ) -> tuple[Optional[dict], bool, bool]:
-    """Одна попытка резолва набором клиентов.
+    """Одна попытка резолва набором клиентов через выход ``egress``.
 
     Возвращает ``(info, transient, bot_check)``: ``info`` — результат или None;
     ``transient`` True, если неудача выглядит временной (таймаут/сеть/429), а не
@@ -1214,13 +1185,9 @@ def _extract_with_clients(
     import yt_dlp
 
     url = f"https://music.youtube.com/watch?v={video_id}"
-    # Резолв идёт через тот же egress, что и скачивание (см. proxy_for_url):
-    # URL googlevideo привязан к IP, который его выдал. Когда включён
-    # invidious/proxy-pool, Invidious-резолв уже выходит через активный прокси
-    # (companion), а yt-dlp-фолбэк ходил напрямую с адреса VDS — такие URL
-    # умирали на probe с 403 при скачивании через прокси. Пустой stream_proxy
-    # (= файл active.url отсутствует) — прямой выход, как раньше.
-    proxy = stream_proxy()
+    # Резолв идёт через тот же выход, что и скачивание (см. proxy_for_url):
+    # URL googlevideo привязан к IP, который его выдал.
+    proxy = _egress_proxy(egress)
     ydl = cached_ydl(
         # Прокси входит в ключ кэша: после ротации active.url старый инстанс
         # YoutubeDL продолжил бы резолвить через прежний выход.
@@ -1251,7 +1218,7 @@ def _extract_with_clients(
             # _pick_audio_format (нет — просто пробуем следующий клиент).
             "ignore_no_formats_error": True,
             "js_runtimes": _JS_RUNTIMES,
-            "extractor_args": {"youtube": {"player_client": clients}},
+            "extractor_args": _ytdlp_extractor_args(clients),
             **({"proxy": proxy} if proxy else {}),
             **_ytdlp_cookie_opts(),
         },
@@ -1268,8 +1235,8 @@ def _extract_with_clients(
         bot = is_bot_check_error(exc)
         transient = bot or not is_track_unavailable_error(exc)
         logger.info(
-            "resolve via %s failed for %s (%s): %s",
-            clients, video_id, _reason_label(transient, bot), exc,
+            "resolve via %s/%s failed for %s (%s): %s",
+            clients, egress, video_id, _reason_label(transient, bot), exc,
         )
         return None, transient, bot
 
@@ -1288,8 +1255,8 @@ def _extract_with_clients(
     else:
         transient = True
     logger.info(
-        "resolve via %s got no audio format for %s (%s): %s",
-        clients, video_id, _reason_label(transient, bot), reason or "no reason logged",
+        "resolve via %s/%s got no audio format for %s (%s): %s",
+        clients, egress, video_id, _reason_label(transient, bot), reason or "no reason logged",
     )
     return info, transient, bot
 
@@ -1301,78 +1268,36 @@ def _reason_label(transient: bool, bot: bool) -> str:
 
 
 async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
-    """Резолвит прямой URL через быстрый Invidious с hedged fallback yt-dlp.
+    """Резолвит прямой URL аудио через yt-dlp, перебирая выходы в YouTube.
 
-    Invidious обычно отвечает быстрее, поэтому получает короткую фору. Если
-    он зависает, yt-dlp стартует параллельно, а не после его 10-секундного
-    таймаута. Это сокращает паузу между появлением карточки трека и первыми
-    байтами аудио при проблемном Invidious.
+    Выходы пробуются по порядку (_egresses): основной, затем WARP. На следующий
+    переходим ТОЛЬКО по bot-check'у — это лимит на IP, и другой адрес его
+    обходит. Остальные исходы (успех, «недоступно», transient) — ответ про сам
+    ролик или разовый сбой, другой выход его не изменит, а лишний запрос к
+    YouTube приблизил бы блокировку и там.
 
-    Пока держится глобальный бэкофф по bot-check'у (см. _BOT_CHECK_GLOBAL_KEY),
-    yt-dlp не запускается вовсе: YouTube всё равно ответит тем же bot-check'ом,
-    а каждый такой запрос продлевает блокировку. Остаётся Invidious.
+    Выход под бэкоффом (см. _note_bot_check) пропускается без запроса: каждый
+    лишний запрос с заблокированного IP продлевает блокировку. Если заблокированы
+    все — BotCheckError без обращения к YouTube.
     """
-    blocked = bot_check_active()
-
-    if not _INVIDIOUS_ENABLED:
-        if blocked:
-            # Обходного пути нет — не ходим к YouTube до истечения бэкоффа.
-            raise BotCheckError(video_id)
-        return await _resolve_via_ytdlp(video_id)
-
-    if blocked:
+    last_exc: Optional[Exception] = None
+    for egress in _egresses():
+        if bot_check_active(egress):
+            continue
         try:
-            return await _resolve_via_invidious(video_id)
-        except TrackUnavailable:
-            raise
-        except Exception as exc:  # noqa: BLE001 — Invidious тоже не смог
-            # Именно BotCheckError, а не transient: 25-секундный TTL вернул бы
-            # быстрые повторы, которые здесь как раз и вредны.
-            logger.info(
-                "bot-check backoff active, invidious-only resolve failed for %s: %s",
-                video_id, exc,
-            )
-            raise BotCheckError(video_id) from exc
-
-    invidious_task = asyncio.create_task(_resolve_via_invidious(video_id))
-    try:
-        try:
-            return await asyncio.wait_for(asyncio.shield(invidious_task), timeout=_HEDGE_DELAY)
-        except asyncio.TimeoutError:
-            pass
-        except Exception as exc:  # noqa: BLE001 — сразу пробуем yt-dlp
-            logger.info("invidious resolve failed for %s: %s", video_id, exc)
-
-        ytdlp_task = asyncio.create_task(_resolve_via_ytdlp(video_id))
-        pending = {invidious_task, ytdlp_task}
-        failures: list[Exception] = []
-        while pending:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                try:
-                    return task.result()
-                except Exception as exc:  # noqa: BLE001 — второй источник ещё может сработать
-                    failures.append(exc)
-                    logger.info("audio resolver failed for %s: %s", video_id, exc)
-        # yt-dlp — авторитетный источник: если ОН сказал «недоступно» (age-gate/
-        # удалено/приватно), не понижаем это до transient (иначе фронт уйдёт в
-        # бесконечный ретрай по 503). Invidious же всегда кидает transient, так
-        # что его сбой сюда не попадёт как TrackUnavailable.
-        if any(isinstance(f, TrackUnavailable) for f in failures):
-            raise TrackUnavailable(video_id) from failures[-1]
-        # Bot-check сохраняем как есть: иначе он превратился бы в обычный
-        # transient с 25-секундным TTL, и быстрые повторы продлевали бы
-        # блокировку вместо длинного бэкоффа (_BOT_CHECK_TTL).
-        if any(isinstance(f, BotCheckError) for f in failures):
-            raise BotCheckError(video_id) from failures[-1]
-        raise TransientResolveError(video_id) from (failures[-1] if failures else None)
-    finally:
-        if not invidious_task.done():
-            invidious_task.cancel()
+            url, ext, total = await _resolve_via_ytdlp(video_id, egress)
+        except BotCheckError as exc:
+            logger.info("bot-check on egress %s for %s, trying next egress", egress, video_id)
+            last_exc = exc
+            continue
+        return _tag_egress(url, egress), ext, total
+    raise BotCheckError(video_id) from last_exc
 
 
-async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
-    """Через yt-dlp достаёт прямой URL аудио, расширение и размер.
+async def _resolve_via_ytdlp(
+    video_id: str, egress: str = _EGRESS_DIRECT
+) -> tuple[str, str, Optional[int]]:
+    """Через yt-dlp (выход ``egress``) достаёт прямой URL аудио, расширение и размер.
 
     Хеджирование вместо постоянного запуска всех наборов клиентов разом:
     сперва пробуем только первый (самый надёжный по опыту) набор; если он не
@@ -1386,7 +1311,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
     ненадолго, чтобы дать треку восстановиться).
     """
     primary, *rest = _CLIENT_CANDIDATES
-    pending = {asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, primary))}
+    pending = {asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, primary, egress))}
     hedged = False
     info = None
     saw_transient = False
@@ -1408,7 +1333,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                 # Хедж: первый набор не успел за _HEDGE_DELAY — подключаем остальных.
                 hedged = True
                 pending |= {
-                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients))
+                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients, egress))
                     for clients in rest
                 }
                 continue
@@ -1448,7 +1373,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
                 # available" из-за PO-token требований на некоторых клиентах).
                 hedged = True
                 pending |= {
-                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients))
+                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients, egress))
                     for clients in rest
                 }
     finally:
@@ -1465,7 +1390,7 @@ async def _resolve_via_ytdlp(video_id: str) -> tuple[str, str, Optional[int]]:
             # Маркер ставим здесь, а не в _resolve_and_cache: сюда приходят и
             # вызовы в обход кэша резолва (force=True из архивации), а бэкофф
             # нужен всем путям сразу.
-            _note_bot_check()
+            _note_bot_check(egress)
             raise BotCheckError(video_id)
         # Age-gate важнее «временного»: если хоть один клиент показал needs_auth,
         # это перманентная недоступность (→404, чистый скип), а не 503 с ретраем.
@@ -1526,10 +1451,9 @@ _BOT_CHECK_TTL = 180
 # каждый следующий трек — новый ключ, он честно шёл в yt-dlp, получал тот же
 # bot-check и добавлял запросов ровно тогда, когда их надо прекратить. Снаружи
 # это и выглядело как «блокировка не проходит, ошибка на каждом треке».
-# Глобальный бэкофф держит паузу сразу на все ролики: пока он жив, yt-dlp к
-# YouTube не ходит вовсе, а резолв идёт только через Invidious — у него свой
-# companion/PO-token и свой поток запросов, блокировка нашего yt-dlp его не
-# касается.
+# Бэкофф держит паузу сразу на все ролики, но на ОДНОМ выходе: пока он жив,
+# yt-dlp через этот IP к YouTube не ходит вовсе, а резолв переезжает на
+# следующий выход (WARP, см. _resolve_audio) — у того свой адрес и свой лимит.
 #
 # Маркер живёт В ПАМЯТИ процесса, а не в Redis: чтение из Redis стоило бы
 # лишний round-trip на КАЖДОМ резолве, а польза нужна лишь в редкие минуты
@@ -1537,18 +1461,25 @@ _BOT_CHECK_TTL = 180
 # GUNICORN_WORKERS «пробных» запросов вместо одного), но это на порядок меньше,
 # чем запрос на каждый трек, а межпроцессную часть добирает общая для воркеров
 # негативная запись по video_id в Redis.
-_bot_check_until = 0.0
+_bot_check_until: dict[str, float] = {}
 
 
-def _note_bot_check() -> None:
-    """Открывает глобальный бэкофф: YouTube ограничил наш IP."""
-    global _bot_check_until
-    _bot_check_until = time.monotonic() + _BOT_CHECK_TTL
+def _note_bot_check(egress: str = _EGRESS_DIRECT) -> None:
+    """Открывает бэкофф выхода: YouTube ограничил его IP."""
+    _bot_check_until[egress] = time.monotonic() + _BOT_CHECK_TTL
+    logger.warning("youtube bot-check on egress %s — backing off %ds", egress, _BOT_CHECK_TTL)
 
 
-def bot_check_active() -> bool:
-    """True, пока держится глобальный бэкофф по bot-check'у YouTube."""
-    return time.monotonic() < _bot_check_until
+def bot_check_active(egress: Optional[str] = None) -> bool:
+    """True, пока держится бэкофф по bot-check'у YouTube.
+
+    С ``egress`` — про один выход; без него — про все сразу (резолвить с
+    YouTube сейчас нечем).
+    """
+    now = time.monotonic()
+    if egress is not None:
+        return now < _bot_check_until.get(egress, 0.0)
+    return all(now < _bot_check_until.get(e, 0.0) for e in _egresses())
 
 
 # Однополётность резолва: с прогревом (prefetch текущего/следующих треков во
@@ -1608,7 +1539,7 @@ async def _resolve_cached(
             raise TransientResolveError(video_id)
         if cached.get("unavailable"):
             # Старые версии записывали сюда любой сбой резолва, включая ложные
-            # 404 от Invidious. Не доверяем такой записи и резолвим заново.
+            # ложные 404. Не доверяем такой записи и резолвим заново.
             logger.info("ignoring legacy unavailable cache entry for %s", video_id)
         if cached.get("url"):
             return cached["url"], cached.get("ext", ".m4a"), cached.get("total"), False
@@ -1705,10 +1636,9 @@ _WARM_BYTES = 2 * 1024 * 1024
 # прогреть сразу несколько треков очереди, и без лимита это означало бы залп
 # параллельных yt-dlp extract_info в сторону YouTube (риск 429). Реальные
 # /stream-запросы семафор не проходят — воспроизведение не троттлится.
-# С Invidious как основным резолвером (лёгкий локальный HTTP-запрос) прогрев
-# заметно дешевле, чем во времена чистого yt-dlp, — параллелизм чуть выше,
-# чтобы расширенное окно префетча (поиск/плейлисты) прогревалось быстрее.
-_PREFETCH_SEM = asyncio.Semaphore(3)
+# Каждый прогрев — резолв в YouTube, а их объём с одного IP и вызывает
+# bot-check, поэтому параллелизм низкий: прогрев подождёт, стрим — нет.
+_PREFETCH_SEM = asyncio.Semaphore(2)
 # Скачивание первых байт — просто GET к CDN, узкое место не оно: параллелизм
 # можно держать заметно выше, чем у yt-dlp-резолвов.
 _WARM_SEM = asyncio.Semaphore(8)
@@ -2101,7 +2031,7 @@ async def stream_cached_audio(
     # ссылку: кэшированный URL мог протухнуть (403) — тогда резолвим заново
     # и пробуем ещё раз, ДО отправки заголовков клиенту.
     #
-    # Проверяем даже свежий URL: Invidious/yt-dlp могут вернуть ссылку, которую
+    # Проверяем даже свежий URL: yt-dlp может вернуть ссылку, которую
     # CDN сразу закрывает пустым 206. Один range 0-0 дешевле, чем запускать
     # StreamingResponse с нерабочим источником и заставлять браузер повторять
     # запросы.
@@ -2116,7 +2046,7 @@ async def stream_cached_audio(
     warm_size = _warm_size(warm_path) if early_start == 0 else 0
     # Probe выполняем ВСЕГДА — и для кэшированных, и для свежих ссылок.
     # Кэшированные могли протухнуть за часы с момента прогрева, а свежие
-    # Invidious/yt-dlp иногда выдают ссылку, которую CDN сразу закрывает
+    # yt-dlp иногда выдаёт ссылку, которую CDN сразу закрывает
     # пустым 206. Раньше fast-path пропускал probe для свежих URL — мёртвая
     # ссылка обнаруживалась УЖЕ после отправки заголовков с Content-Length:
     # стрим обрывался, тело оказывалось короче заявленного и uvicorn падал
@@ -2400,6 +2330,38 @@ async def stream_cached_audio(
     )
 
 
+async def _has_local_copy(video_id: str) -> bool:
+    """Трек уже лежит на диске или в MinIO — играется без обращения к YouTube."""
+    if _cached_file(video_id):
+        return True
+    return bool(await archived_music_path(f"ytmusic/{video_id}"))
+
+
+async def _soundcloud_first_redirect(video_id: str) -> Optional[RedirectResponse]:
+    """307 на полноформатный SoundCloud-матч, если YouTube можно не трогать.
+
+    Своя копия (диск/MinIO) важнее: она быстрее и уже того самого ролика. vid в
+    редиректе — путь назад: SoundCloud не смог, и его стрим вернёт браузер
+    сюда с scfallback=1 (см. soundcloud.stream_soundcloud).
+    """
+    try:
+        if await _has_local_copy(video_id):
+            return None
+        from app.routers import soundcloud
+
+        match = await soundcloud.await_soundcloud_match(video_id, full_only=True)
+    except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+        logger.exception("soundcloud-first lookup failed for %s", video_id)
+        return None
+    if not match:
+        return None
+    track_id, permalink = match
+    return RedirectResponse(
+        f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}?vid={video_id}",
+        status_code=307,
+    )
+
+
 @router.get("/stream/{video_id}")
 async def stream_ytmusic(video_id: str, request: Request):
     if _ytmusic is None:
@@ -2407,15 +2369,17 @@ async def stream_ytmusic(video_id: str, request: Request):
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
     # ytmusic — только каталог метаданных: аудио той же записи берём по
-    # приоритету Soulseek (оригинальный релизный файл с пира) → YouTube
-    # (та же запись ytmusic) → SoundCloud (фолбэк на отказ YouTube). Матчи
-    # ищутся заранее из поисковых эндпоинтов и сборки потока (см.
-    # _schedule_audio_matches). Идущий поиск первого трека порции поток
-    # играет сразу после выдачи — коротко ждём его. Флаги-предохранители от
-    # зацикливания 307-редиректов: slskfallback=1 — пир Soulseek отказал
-    # (повторная проверка зациклит его же), YouTube и SoundCloud ещё не
-    # пробовались; scfallback=1 — это 307 из /api/soundcloud/stream после
-    # DRM-404: Soulseek и YouTube проверялись раньше, повторять их смысла нет.
+    # приоритету Soulseek (оригинальный релизный файл с пира) → SoundCloud,
+    # если он отдаёт трек целиком → YouTube (та же запись ytmusic) →
+    # SoundCloud-превью/прочие матчи (фолбэк на отказ YouTube). SoundCloud
+    # раньше YouTube — ради объёма запросов к YouTube: каждый резолв с нашего
+    # IP приближает bot-check. Матчи ищутся заранее из поисковых эндпоинтов и
+    # сборки потока (см. _schedule_audio_matches). Идущий поиск первого трека
+    # порции поток играет сразу после выдачи — коротко ждём его.
+    # Флаги-предохранители от зацикливания 307-редиректов: slskfallback=1 —
+    # пир Soulseek отказал (повторная проверка зациклит его же), SoundCloud и
+    # YouTube ещё не пробовались; scfallback=1 — 307 из /api/soundcloud/stream
+    # после его отказа: Soulseek и SoundCloud проверялись раньше.
     if request.query_params.get("scfallback") != "1" and (
         request.query_params.get("slskfallback") != "1"
     ):
@@ -2430,6 +2394,10 @@ async def stream_ytmusic(video_id: str, request: Request):
                 )
         except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
             logger.exception("soulseek redirect failed for %s", video_id)
+    if request.query_params.get("scfallback") != "1":
+        redirect = await _soundcloud_first_redirect(video_id)
+        if redirect is not None:
+            return redirect
     # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
     # имеют строковой id и играются напрямую через этот эндпоинт, минуя
     # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
@@ -2485,14 +2453,14 @@ async def prefetch_ytmusic(video_id: str):
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
-    # Приоритет прогрева — как у стрима: Soulseek → YouTube. Soulseek-матч
-    # греется постановкой закачки у пира (очередь пира может быть длинной),
-    # YouTube — резолвом в Redis и первыми байтами на диск. Поиск матча может
-    # ещё идти (первый трек порции потока) — коротко ждём: POST /prefetch
-    # фронт всё равно не ждёт для старта воспроизведения. SoundCloud не греем:
-    # это фолбэк на отказ YouTube, двойной прогрев — двойной трафик ради
-    # редкого случая (готовность SC-подмены /prefetch/ready и так увидит, если
-    # та была прогрета раньше).
+    # Приоритет прогрева — как у стрима: Soulseek → полноформатный SoundCloud
+    # → YouTube. Soulseek-матч греется постановкой закачки у пира (очередь
+    # пира может быть длинной), остальные — резолвом в Redis и первыми байтами
+    # на диск. Поиск Soulseek-матча может ещё идти (первый трек порции потока)
+    # — коротко ждём: POST /prefetch фронт всё равно не ждёт для старта
+    # воспроизведения. Запасной SoundCloud-матч (превью, DRM) не греем: он
+    # играет только после отказа YouTube, двойной прогрев — двойной трафик
+    # ради редкого случая.
     try:
         from app.routers import soulseek
 
@@ -2502,6 +2470,26 @@ async def prefetch_ytmusic(video_id: str):
         slsk_token = None
     if slsk_token:
         return {"status": "downloading"}
+    # Полноформатный SoundCloud-матч играет раньше YouTube (см. stream_ytmusic)
+    # — греем его, а не резолв в YouTube. Только кэш матча, без поиска.
+    try:
+        from app.routers import soundcloud
+
+        sc_match = None
+        if not await _has_local_copy(video_id):
+            sc_match = await soundcloud.soundcloud_match_for(video_id, full_only=True)
+        if sc_match:
+            track_id, permalink = sc_match
+            status = schedule_prefetch(
+                f"sc{track_id}",
+                lambda force=False: soundcloud._resolve_cached(track_id, permalink, force=force),
+                f"soundcloud:resolve:{track_id}",
+                soundcloud._RESOLVE_TTL,
+                archive_key=f"soundcloud/{track_id}",
+            )
+            return {"status": status}
+    except Exception:  # noqa: BLE001 — выбор источника прогрева не фатален
+        logger.warning("sc match lookup failed for %s", video_id, exc_info=True)
     status = schedule_prefetch(
         video_id,
         lambda force=False: _resolve_cached(video_id, force=force),

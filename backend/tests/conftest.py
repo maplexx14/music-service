@@ -112,13 +112,13 @@ def _reset_online_presence_markers():
 def _reset_ytdlp_bot_check_backoff():
     """Глобальный бэкофф bot-check'а YouTube живёт в памяти процесса 3 минуты
     и переживает конец теста. Без сброса тест, который его открыл, ломает все
-    последующие: резолв уходит в ветку «только Invidious» и не зовёт yt-dlp,
+    последующие: резолв пропускает заблокированный выход и не зовёт yt-dlp,
     хотя тест ждёт именно его."""
     from app.routers import ytdlp
 
-    ytdlp._bot_check_until = 0.0
+    ytdlp._bot_check_until.clear()
     yield
-    ytdlp._bot_check_until = 0.0
+    ytdlp._bot_check_until.clear()
 
 
 @pytest.fixture(autouse=True)

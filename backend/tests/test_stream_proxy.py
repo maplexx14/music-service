@@ -2,8 +2,8 @@
 
 Смысл этих тестов — зафиксировать инвариант, из-за нарушения которого
 воспроизведение отдавало 403: ссылка googlevideo привязана к IP выхода, через
-который её выдал Invidious-companion, поэтому качать её надо через ТОТ ЖЕ
-прокси, а всё остальное (SoundCloud, обложки) — напрямую.
+который её выдали, поэтому качать её надо через ТОТ ЖЕ прокси, а всё остальное
+(SoundCloud, обложки) — напрямую.
 """
 
 import httpx
@@ -112,3 +112,14 @@ def test_download_client_creates_proxied_client_for_googlevideo(proxy_file):
         # aclose корутинный, а pytest-asyncio в проекте не подключён (остальные
         # тесты тоже гоняют корутины через asyncio.run).
         asyncio.run(client.aclose())
+
+
+def test_warp_tagged_link_downloads_through_warp(proxy_file, monkeypatch):
+    """Ссылка, выданная через WARP, качается через WARP — даже когда основной
+    выход проксирован. Фрагмент-метка в запрос к googlevideo не уходит."""
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", "http://warp:1080")
+    tagged = ytdlp._tag_egress(_GV, ytdlp._EGRESS_WARP)
+
+    assert ytdlp.proxy_for_url(tagged) == "http://warp:1080"
+    assert ytdlp.proxy_for_url(_GV) == _PROXY
+    assert "#" not in str(httpx.Request("GET", tagged).url.raw_path, "ascii")

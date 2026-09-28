@@ -44,22 +44,6 @@ def test_ytdlp_explicitly_unavailable_track_is_not_negative_cached(monkeypatch):
     assert cached == []
 
 
-def test_invidious_unavailable_result_falls_back_to_ytdlp(monkeypatch):
-    async def invidious_unavailable(_video_id):
-        raise ytdlp.TrackUnavailable("video123")
-
-    async def ytdlp_resolve(_video_id):
-        return "https://cdn.example/audio.m4a", ".m4a", 123
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_unavailable)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", ytdlp_resolve)
-
-    assert asyncio.run(ytdlp._resolve_audio("video123")) == (
-        "https://cdn.example/audio.m4a", ".m4a", 123
-    )
-
-
 def test_needs_auth_detects_age_gated_video():
     # availability=needs_auth — прямой признак age-gate/login-only
     assert ytdlp._needs_auth({"availability": "needs_auth", "formats": []})
@@ -70,37 +54,6 @@ def test_needs_auth_detects_age_gated_video():
     # обычное публичное видео без форматов — это временный сбой, не age-gate
     assert not ytdlp._needs_auth({"availability": "public", "formats": []})
     assert not ytdlp._needs_auth({})
-
-
-def test_resolve_audio_propagates_ytdlp_unavailable_over_invidious_transient(monkeypatch):
-    """Age-gate: Invidious кидает transient (500), yt-dlp — TrackUnavailable.
-    Итог должен быть TrackUnavailable (→404, чистый скип), а не transient (503,
-    бесконечный ретрай на фронте)."""
-
-    async def invidious_transient(_video_id):
-        raise ytdlp.TransientResolveError("v")
-
-    async def ytdlp_unavailable(_video_id):
-        raise ytdlp.TrackUnavailable("v")
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_transient)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", ytdlp_unavailable)
-
-    with pytest.raises(ytdlp.TrackUnavailable):
-        asyncio.run(ytdlp._resolve_audio("v"))
-
-
-def test_resolve_audio_transient_when_both_sources_transient(monkeypatch):
-    async def transient(_video_id):
-        raise ytdlp.TransientResolveError("v")
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", transient)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", transient)
-
-    with pytest.raises(ytdlp.TransientResolveError):
-        asyncio.run(ytdlp._resolve_audio("v"))
 
 
 def test_single_flight_deduplicates_parallel_resolves():
@@ -341,24 +294,6 @@ def test_cached_bot_check_marker_short_circuits_resolve(monkeypatch):
         asyncio.run(ytdlp._resolve_cached("v"))
 
 
-def test_bot_check_survives_hedge_without_downgrade(monkeypatch):
-    """Invidious упал transient, yt-dlp вернул bot-check. Итог обязан остаться
-    BotCheckError — иначе бэкофф схлопнется в 25с и повторы продлят блокировку."""
-
-    async def invidious_transient(_video_id):
-        raise ytdlp.TransientResolveError("v")
-
-    async def ytdlp_bot_check(_video_id):
-        raise ytdlp.BotCheckError("v")
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_transient)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", ytdlp_bot_check)
-
-    with pytest.raises(ytdlp.BotCheckError):
-        asyncio.run(ytdlp._resolve_audio("v"))
-
-
 def test_client_candidates_are_valid_ytdlp_clients():
     """Регрессия на первопричину: primary-набор был "android_music", которого
     в yt-dlp уже нет — слот молча пустовал ("Skipping unsupported client"),
@@ -368,68 +303,6 @@ def test_client_candidates_are_valid_ytdlp_clients():
     for client_set in ytdlp._CLIENT_CANDIDATES:
         for client in client_set:
             assert client in INNERTUBE_CLIENTS, f"unknown yt-dlp client: {client}"
-
-
-def test_global_bot_check_backoff_skips_ytdlp_for_other_videos(monkeypatch):
-    """Bot-check — ограничение по нашему IP, а не по ролику. Пока бэкофф жив,
-    ДРУГОЙ трек тоже не должен ходить в yt-dlp: раньше каждый следующий трек в
-    очереди был новым ключом кэша, честно шёл к YouTube и продлевал блокировку.
-    Остаётся Invidious — у него свой companion/PO-token."""
-    ytdlp_calls = []
-
-    async def must_not_run(video_id):
-        ytdlp_calls.append(video_id)
-        raise AssertionError("yt-dlp must not be called during global backoff")
-
-    async def invidious_ok(_video_id):
-        return "https://inv.example/audio.m4a", ".m4a", 42
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_ok)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", must_not_run)
-    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
-
-    ytdlp._note_bot_check()
-    assert ytdlp.bot_check_active()
-
-    assert asyncio.run(ytdlp._resolve_audio("другой-ролик")) == (
-        "https://inv.example/audio.m4a", ".m4a", 42
-    )
-    assert ytdlp_calls == []
-
-
-def test_global_bot_check_backoff_without_invidious_fails_fast(monkeypatch):
-    """Обходного пути нет — отдаём BotCheckError, но к YouTube всё равно не
-    идём: блокировка снимается тишиной, и лишний запрос её только продлевает."""
-
-    async def must_not_run(_video_id):
-        raise AssertionError("yt-dlp must not be called during global backoff")
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", False)
-    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", must_not_run)
-    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
-
-    ytdlp._note_bot_check()
-
-    with pytest.raises(ytdlp.BotCheckError):
-        asyncio.run(ytdlp._resolve_audio("v"))
-
-
-def test_global_backoff_invidious_failure_keeps_long_backoff(monkeypatch):
-    """Под бэкоффом Invidious тоже не смог → BotCheckError, а не transient:
-    25-секундный TTL вернул бы быстрые повторы, которые здесь и вредны."""
-
-    async def invidious_down(_video_id):
-        raise ytdlp.TransientResolveError("v")
-
-    monkeypatch.setattr(ytdlp, "_INVIDIOUS_ENABLED", True)
-    monkeypatch.setattr(ytdlp, "_resolve_via_invidious", invidious_down)
-    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
-
-    ytdlp._note_bot_check()
-
-    with pytest.raises(ytdlp.BotCheckError):
-        asyncio.run(ytdlp._resolve_audio("v"))
 
 
 def test_pick_audio_format_rejects_hls_manifest():
@@ -462,3 +335,113 @@ def test_pick_audio_format_rejects_hls_manifest():
         ]
     }
     assert ytdlp._pick_audio_format(android_vr)["format_id"] == "140"
+
+
+# ─── Выходы в YouTube: основной и WARP ───
+
+_WARP = "http://warp:1080"
+
+
+def _egress_resolver(results, calls):
+    """_resolve_via_ytdlp, отвечающий по выходу: results[egress] — кортеж или исключение."""
+
+    async def resolve(video_id, egress=ytdlp._EGRESS_DIRECT):
+        calls.append(egress)
+        outcome = results[egress]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return resolve
+
+
+def test_bot_check_on_direct_moves_resolve_to_warp(monkeypatch):
+    """Bot-check — лимит на IP основного выхода: тот же ролик резолвится через
+    WARP, а ссылка помечена выходом, чтобы скачивание пошло тем же адресом."""
+    calls = []
+    gv = "https://rr1---sn-abc.googlevideo.com/videoplayback?ip=1.2.3.4"
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"direct": ytdlp.BotCheckError("v"), "warp": (gv, ".m4a", 42)}, calls,
+    ))
+
+    url, ext, total = asyncio.run(ytdlp._resolve_audio("v"))
+
+    assert calls == ["direct", "warp"]
+    assert (ext, total) == (".m4a", 42)
+    assert url.startswith(gv) and url.endswith("#egress=warp")
+    assert ytdlp.proxy_for_url(url) == _WARP
+
+
+def test_direct_backoff_skips_straight_to_warp(monkeypatch):
+    """Пока основной выход под бэкоффом, к YouTube с него не ходим вовсе."""
+    calls = []
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"warp": ("https://x.googlevideo.com/a", ".m4a", 1)}, calls,
+    ))
+    ytdlp._note_bot_check(ytdlp._EGRESS_DIRECT)
+
+    asyncio.run(ytdlp._resolve_audio("другой-ролик"))
+
+    assert calls == ["warp"]
+    assert ytdlp.bot_check_active(ytdlp._EGRESS_DIRECT)
+    assert not ytdlp.bot_check_active()
+
+
+@pytest.mark.parametrize(
+    "error", [ytdlp.TransientResolveError("v"), ytdlp.TrackUnavailable("v")]
+)
+def test_non_bot_check_failure_does_not_switch_egress(monkeypatch, error):
+    """Таймаут или «ролик недоступен» — не про IP: другой выход ответ не
+    изменит, а лишний запрос к YouTube приблизил бы блокировку и там."""
+    calls = []
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"direct": error}, calls,
+    ))
+
+    with pytest.raises(type(error)):
+        asyncio.run(ytdlp._resolve_audio("v"))
+    assert calls == ["direct"]
+
+
+def test_all_egresses_blocked_fail_fast_without_youtube(monkeypatch):
+    """Все выходы под бэкоффом — BotCheckError без единого запроса: блокировка
+    снимается тишиной, и лишний запрос её только продлевает."""
+
+    async def must_not_run(*_a, **_kw):
+        raise AssertionError("yt-dlp must not be called during backoff")
+
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", must_not_run)
+    ytdlp._note_bot_check(ytdlp._EGRESS_DIRECT)
+    ytdlp._note_bot_check(ytdlp._EGRESS_WARP)
+
+    assert ytdlp.bot_check_active()
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_audio("v"))
+
+
+def test_without_warp_bot_check_propagates(monkeypatch):
+    """WARP не настроен — выход один, и его bot-check уходит наружу как есть
+    (длинный бэкофф, а не 25-секундный transient)."""
+    calls = []
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", "")
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"direct": ytdlp.BotCheckError("v")}, calls,
+    ))
+
+    with pytest.raises(ytdlp.BotCheckError):
+        asyncio.run(ytdlp._resolve_audio("v"))
+    assert calls == ["direct"]
+
+
+def test_pot_provider_url_goes_to_extractor_args(monkeypatch):
+    monkeypatch.setattr(ytdlp, "_POT_PROVIDER_URL", "http://bgutil-provider:4416")
+    args = ytdlp._ytdlp_extractor_args(["android_vr"])
+    assert args["youtube"] == {"player_client": ["android_vr"]}
+    assert args["youtubepot-bgutilhttp"] == {"base_url": ["http://bgutil-provider:4416"]}
+
+    monkeypatch.setattr(ytdlp, "_POT_PROVIDER_URL", "")
+    assert "youtubepot-bgutilhttp" not in ytdlp._ytdlp_extractor_args(["android_vr"])

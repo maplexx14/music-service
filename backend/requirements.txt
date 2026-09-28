@@ -38,6 +38,10 @@ yt-dlp==2026.7.4
 # закреплённый yt-dlp (yt_dlp...jsc._builtin.vendor.VERSION == 0.8.0):
 # при апгрейде yt-dlp проверять и её.
 yt-dlp-ejs==0.8.0
+# Плагин PO-token для yt-dlp: берёт токены у сервиса bgutil-provider (см.
+# docker-compose, YTDLP_POT_PROVIDER_URL). Версия обязана совпадать с образом
+# brainicism/bgutil-ytdlp-pot-provider. Проверено с yt-dlp 2026.7.4.
+bgutil-ytdlp-pot-provider==2.0.0
 ytmusicapi==1.8.2
 # Нативный API клиент для Yandex Music (обход CAPTCHA через OAuth)
 yandex-music==2.1.1

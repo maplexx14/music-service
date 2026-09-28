@@ -33,7 +33,7 @@ def _no_formats(**extra):
 def test_no_reason_reported_is_transient(monkeypatch):
     """Форматов нет, но ни один клиент не назвал причину → 503, не 404."""
     with pytest.raises(ytdlp.TransientResolveError):
-        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, False))
+        _resolve(monkeypatch, lambda vid, clients, egress: (_no_formats(), True, False))
 
 
 def test_confirmed_marker_wins_over_other_clients_failure(monkeypatch):
@@ -45,7 +45,7 @@ def test_confirmed_marker_wins_over_other_clients_failure(monkeypatch):
     """
     primary = ytdlp._CLIENT_CANDIDATES[0]
 
-    def extract(vid, clients):
+    def extract(vid, clients, egress):
         if clients == primary:
             return _no_formats(), False, False  # маркер найден
         return _no_formats(), True, False  # чужой сбой
@@ -59,25 +59,25 @@ def test_needs_auth_is_unavailable(monkeypatch):
     with pytest.raises(ytdlp.TrackUnavailable):
         _resolve(
             monkeypatch,
-            lambda vid, clients: (_no_formats(availability="needs_auth"), True, False),
+            lambda vid, clients, egress: (_no_formats(availability="needs_auth"), True, False),
         )
 
 
 def test_bot_check_beats_unavailable(monkeypatch):
     """Bot-check — rate-limit по IP, а не свойство ролика: длинный бэкофф."""
     with pytest.raises(ytdlp.BotCheckError):
-        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, True))
+        _resolve(monkeypatch, lambda vid, clients, egress: (_no_formats(), True, True))
 
 
 def test_bot_check_opens_global_backoff(monkeypatch):
     """Bot-check закрывает доступ к yt-dlp для ВСЕХ роликов, а не только для
     текущего: ограничение выдано нашему IP, и следующий трек в очереди получил
     бы то же самое, попутно продлив блокировку."""
-    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+    monkeypatch.setattr(ytdlp, "_bot_check_until", {})
     assert not ytdlp.bot_check_active()
 
     with pytest.raises(ytdlp.BotCheckError):
-        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, True))
+        _resolve(monkeypatch, lambda vid, clients, egress: (_no_formats(), True, True))
 
     assert ytdlp.bot_check_active()
 
@@ -85,10 +85,10 @@ def test_bot_check_opens_global_backoff(monkeypatch):
 def test_transient_failure_does_not_open_global_backoff(monkeypatch):
     """Обычный сбой (таймаут/сеть) лечится коротким ретраем — глобальную паузу
     на все ролики он открывать не должен."""
-    monkeypatch.setattr(ytdlp, "_bot_check_until", 0.0)
+    monkeypatch.setattr(ytdlp, "_bot_check_until", {})
 
     with pytest.raises(ytdlp.TransientResolveError):
-        _resolve(monkeypatch, lambda vid, clients: (_no_formats(), True, False))
+        _resolve(monkeypatch, lambda vid, clients, egress: (_no_formats(), True, False))
 
     assert not ytdlp.bot_check_active()
 
