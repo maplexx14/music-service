@@ -107,6 +107,18 @@ def _reset_password_tokens():
 
 
 @pytest.fixture(autouse=True)
+def _reset_recommendation_delivery_dedup():
+    """Ключи дедупликации выдачи живут 60 с в общем Redis, а id юзеров
+    повторяются между тестами — без очистки тест получил бы request_id
+    выдачи из предыдущего теста и не записал бы свои показы."""
+    from app.cache import clear_pattern
+
+    clear_pattern("recs:*:delivery")
+    yield
+    clear_pattern("recs:*:delivery")
+
+
+@pytest.fixture(autouse=True)
 def _reset_online_presence_markers():
     """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
     id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого

@@ -47,8 +47,10 @@ from app.artist_genre import artists_matching_keywords
 from app.cooccurrence import pair_scores, similar_track_ids
 from app.discovery import discovery_ratio
 from app.recommendation_cache import (
+    claim_delivery,
     invalidate_recommendation_cache,
     recommendation_cache_key,
+    remember_delivery,
 )
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
 from app.artist_utils import (
@@ -838,6 +840,11 @@ def _compute_recommendations(
         # A cached candidate list is reusable, but a delivery is not.  Give
         # every response its own request id/positions so feedback can be
         # attributed to the actual viewport session rather than the cache fill.
+        # Повторная отдача в окне DELIVERY_DEDUP_TTL — та же выдача: берём её
+        # request_id и строк показа не пишем (см. recommendation_cache).
+        existing_request_id = claim_delivery(cache_key, request_id)
+        if existing_request_id:
+            request_id = existing_request_id
         cached_payload = dict(cached)
         cached_tracks = []
         cached_scores = {}
@@ -867,16 +874,17 @@ def _compute_recommendations(
             if item.get("id") is not None and item.get("recommendation_score") is not None:
                 cached_scores[item["id"]] = item["recommendation_score"]
         cached_payload["tracks"] = cached_tracks
-        record_delivery(
-            db,
-            user_id=current_user.id,
-            items=cached_tracks,
-            surface="library",
-            request_id=request_id,
-            scores=cached_scores,
-            algorithm_version=ALGORITHM_VERSION,
-        )
-        db.commit()
+        if not existing_request_id:
+            record_delivery(
+                db,
+                user_id=current_user.id,
+                items=cached_tracks,
+                surface="library",
+                request_id=request_id,
+                scores=cached_scores,
+                algorithm_version=ALGORITHM_VERSION,
+            )
+            db.commit()
         return RecommendationResponse(**cached_payload)
 
     # Get user's liked tracks and frequently played tracks
@@ -1823,6 +1831,7 @@ def _compute_recommendations(
         expire=_DEGRADED_TTL if external_degraded else _RECS_TTL,
     )
     db.commit()
+    remember_delivery(cache_key, request_id)
     return response
 
 
