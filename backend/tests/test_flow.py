@@ -8,6 +8,8 @@ _local_candidates и к current_user.id — если закрытие что-т�
 падает на пустой выдаче или на DetachedInstanceError.
 """
 
+import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -153,6 +155,42 @@ def test_flow_uses_one_score_instead_of_source_slots(client, db, monkeypatch):
     ), tracks
     assert bonuses["favorite0"] == pytest.approx(0.12)
     assert bonuses["lfm0"] == pytest.approx(0.08)
+
+
+def test_flow_does_not_wait_for_slow_provider_past_budget(client, db, monkeypatch):
+    """Зависший провайдер не держит клик по «потоку»: по истечении бюджета
+    ранжируется то, что успело прийти, а этапы видны в Server-Timing."""
+    user = create_user(db, username="budget-user")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _slow_lastfm(request, artist, title):
+        await asyncio.sleep(1.5)
+        return [_external("Slow", "slow", "slow0")]
+
+    async def _favorite(request, artist):
+        return [
+            _external("LovedArtist", f"catalog-{i}", f"favorite{i}")
+            for i in range(20)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._FLOW_NETWORK_BUDGET", 0.1)
+    monkeypatch.setattr("app.routers.flow._FLOW_STAGE_GRACE", 0.05)
+    monkeypatch.setattr("app.routers.flow._lastfm_pool", _slow_lastfm)
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    started = time.monotonic()
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="budget-user"),
+    )
+    elapsed = time.monotonic() - started
+
+    assert resp.status_code == 200, resp.text
+    assert elapsed < 1.0, elapsed
+    ids = {track.get("external_id") for track in resp.json()}
+    assert "slow0" not in ids
+    assert any(str(i).startswith("favorite") for i in ids), ids
+    assert "pools;dur=" in resp.headers.get("server-timing", "")
 
 
 def test_flow_spreads_comparable_catalog_candidates_across_artists(

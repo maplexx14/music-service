@@ -1701,6 +1701,56 @@ def _pool_single_flight(key: str, factory):
     return task
 
 
+# Общий бюджет сетевой разведки одного запроса /flow. Раньше этапы (каталоги +
+# радио + Last.fm → граф артистов → SoundCloud → теги) шли без дедлайна, а у
+# ytmusicapi таймаута нет вовсе: один зависший провайдер держал клик по
+# «потоку» столько, сколько висел сам. По истечении бюджета ранжируем то, что
+# успело прийти; недождавшиеся пулы доделываются в фоне и кладут результат в
+# Redis — следующая порция получит их из кэша.
+_FLOW_NETWORK_BUDGET = 2.5
+# Этап, начатый уже после бюджета, всё равно получает короткое окно: пулы из
+# Redis отвечают за миллисекунды, отбрасывать их вместе с холодными незачем.
+_FLOW_STAGE_GRACE = 0.3
+# Сильные ссылки на недождавшиеся задачи: event loop держит только слабые, и
+# без этого фоновый прогрев кэша мог бы собрать GC посреди работы.
+_background_pools: set = set()
+
+
+def _forget_background_pool(task: asyncio.Future) -> None:
+    _background_pools.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("flow background pool failed: %r", task.exception())
+
+
+async def _gather_within(aws, deadline: float) -> list:
+    """Как asyncio.gather, но не дольше deadline (loop.time()).
+
+    Результаты в порядке aws; не успевший или упавший пул — пустой список.
+    Недождавшиеся задачи НЕ отменяются: они дорабатывают в фоне и греют кэш.
+    """
+    tasks = [asyncio.ensure_future(aw) for aw in aws]
+    if not tasks:
+        return []
+    remaining = max(deadline - asyncio.get_running_loop().time(), _FLOW_STAGE_GRACE)
+    await asyncio.wait(tasks, timeout=remaining)
+    results = []
+    for task in tasks:
+        if not task.done():
+            _background_pools.add(task)
+            task.add_done_callback(_forget_background_pool)
+            results.append([])
+        elif task.cancelled() or task.exception() is not None:
+            if not task.cancelled():
+                logger.warning("flow pool failed: %r", task.exception())
+            results.append([])
+        else:
+            results.append(task.result())
+    late = sum(1 for task in tasks if not task.done())
+    if late:
+        logger.info("flow network budget: %d/%d pools left to background", late, len(tasks))
+    return results
+
+
 async def _lastfm_pool(
     request: Request, artist: str, title: str
 ) -> List[ExternalTrackResponse]:
@@ -2436,6 +2486,16 @@ async def get_flow(
     # именно эта копия, со своим bonus. Синхронно сравнение НЕ запускаем —
     # каталоги кандидатов стоят до шести сетевых вызовов, а это прямая задержка
     # запроса; нет посчитанного пика — поток работает ровно как раньше.
+    loop = asyncio.get_running_loop()
+    network_started = loop.time()
+    network_deadline = network_started + _FLOW_NETWORK_BUDGET
+    # Длительность этапов разведки уходит в Server-Timing: видно в DevTools,
+    # какой провайдер съел время клика.
+    stage_timings: list = []
+
+    def _mark_stage(name: str, started: float) -> None:
+        stage_timings.append((name, (loop.time() - started) * 1000))
+
     probe_pick = await artist_probe.cached_pick(user_id)
     if probe_pick is not None:
         _add_explore([probe_pick], probe_explore)
@@ -2507,9 +2567,12 @@ async def get_flow(
     # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
     # брать нельзя, это чужая библиотека (см. _taste_profile).
     if not seeds and similar_artists:
-        resolved = await asyncio.gather(
-            *(_artist_seed_videos(request, a) for a in similar_artists)
+        stage_started = loop.time()
+        resolved = await _gather_within(
+            [_artist_seed_videos(request, a) for a in similar_artists],
+            network_deadline,
         )
+        _mark_stage("seeds", stage_started)
         seeds = [v for videos in resolved for v in videos][:_PROFILE_SEEDS]
 
     logger.debug(
@@ -2630,7 +2693,11 @@ async def get_flow(
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
     discovery = [_radio_pool(seed) for seed in seeds]
     if favorite_jobs or lastfm_jobs or discovery:
-        pools = await asyncio.gather(*favorite_jobs, *lastfm_jobs, *discovery)
+        stage_started = loop.time()
+        pools = await _gather_within(
+            [*favorite_jobs, *lastfm_jobs, *discovery], network_deadline
+        )
+        _mark_stage("pools", stage_started)
         favorite_count = len(favorite_jobs)
         lastfm_count = len(lastfm_jobs)
         # По артисту отдельным вызовом: бюджет favorite_window должен считаться
@@ -2663,7 +2730,11 @@ async def get_flow(
     # разведки выполнена; при повышенном ползунке он остаётся нужен, пока цель
     # новых имён не закрыта.
     if similar_artists and _needs_more_pools():
-        graph_pools = await asyncio.gather(*(_similar_pool(a) for a in similar_artists))
+        stage_started = loop.time()
+        graph_pools = await _gather_within(
+            [_similar_pool(a) for a in similar_artists], network_deadline
+        )
+        _mark_stage("graph", stage_started)
         _add_explore(
             t for pool in graph_pools for t in pool if _matches_related(t)
         )
@@ -2688,9 +2759,11 @@ async def get_flow(
     # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT уже
     # дал достаточно широкий свежий пул.
     if sc_artists and _needs_more_pools():
-        sc_pools = await asyncio.gather(
-            *(_soundcloud_pool(request, a) for a in sc_artists)
+        stage_started = loop.time()
+        sc_pools = await _gather_within(
+            [_soundcloud_pool(request, a) for a in sc_artists], network_deadline
         )
+        _mark_stage("soundcloud", stage_started)
         _add_explore(
             t for pool in sc_pools for t in pool if _matches_related(t)
         )
@@ -2742,11 +2815,17 @@ async def get_flow(
                 keywords=list(dict.fromkeys(query.split())),
             )
         )
-        _add_explore(
-            t
-            for t in await _tag_pool(request, query)
-            if tag_check(t)
+        stage_started = loop.time()
+        (tag_pool,) = await _gather_within(
+            [_tag_pool(request, query)], network_deadline
         )
+        _mark_stage("tags", stage_started)
+        _add_explore(t for t in tag_pool if tag_check(t))
+
+    _mark_stage("network", network_started)
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={duration:.0f}" for name, duration in stage_timings
+    )
 
     logger.debug(
         "flow explore user=%s favorite=%d similar=%d probe=%d fresh_candidates=%d excluded_external=%d",
