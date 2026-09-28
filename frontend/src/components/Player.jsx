@@ -19,7 +19,7 @@ import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
-import { noteStarvation, noteStartup, subscribeQuality, withQuality } from '../utils/streamQuality'
+import { noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
@@ -1068,7 +1068,10 @@ function PlayerInner() {
       return
     }
     const abs = new URL(audioSource.url, window.location.href).href
-    const srcChanged = audio.src !== abs
+    // Отличие только в ?quality — тот же трек, собранный после смены вердикта
+    // качества (см. sameStream). Играющий элемент не трогаем: новое качество
+    // подхватит следующий трек.
+    const srcChanged = audio.src !== abs && !sameStream(audio.src, abs)
     if (srcChanged) {
       audio.src = abs
       loadStartedAtRef.current = performance.now()

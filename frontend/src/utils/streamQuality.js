@@ -226,6 +226,28 @@ export function withQuality(url) {
   return `${url}${url.includes('?') ? '&' : '?'}quality=low`
 }
 
+// Один и тот же поток с точностью до ?quality. Вердикт меняется посреди трека
+// (измерение старта, перебуферизация), а ссылку на играющий трек плеер может
+// пересобрать в любой момент — достаточно пересоздать объект currentTrack
+// (материализация внешнего трека, лайк). Без этой проверки пересборка давала бы
+// другой src, и эффект переназначал его живому элементу: загрузка с нуля
+// посреди трека, а в фоне на iOS — тишина до ручного ▶. Ровно то, что обещано
+// не делать в шапке модуля.
+function stripQuality(url) {
+  try {
+    const parsed = new URL(url, window.location.href)
+    parsed.searchParams.delete('quality')
+    return parsed.href
+  } catch {
+    return url
+  }
+}
+
+export function sameStream(a, b) {
+  if (!a || !b) return false
+  return stripQuality(a) === stripQuality(b)
+}
+
 // Смена режима в настройках — тоже сразу, не дожидаясь следующего трека: UI
 // ожидает реакции на клик. Сам играющий трек при этом не перезагружается (см.
 // выше), качество подхватит следующий.
