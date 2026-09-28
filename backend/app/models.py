@@ -95,6 +95,9 @@ recommendation_impressions = Table(
     Column('session_id', String, nullable=True, index=True),
     Column('shown_at', DateTime(timezone=True), server_default=func.now(), nullable=False, index=True),
     Column('visible', Boolean, nullable=False, server_default='false', default=False),
+    # Происхождение кандидата, новизна артиста и компоненты score на момент
+    # отдачи — для офлайн-анализа точности (см. scripts/recommendation_report.py).
+    Column('features', JSON, nullable=True),
 )
 
 # Feedback for both local and not-yet-materialized provider tracks.  Keeping

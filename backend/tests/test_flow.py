@@ -2309,3 +2309,66 @@ def test_undislike_lets_the_track_back_into_the_flow(client, db, monkeypatch):
     delivered = {track["external_id"] for track in resp.json()}
     assert "cat0" in delivered, delivered
 
+
+
+def test_flow_discovery_quota_shrinks_when_new_artists_are_rejected(
+    client, db, monkeypatch
+):
+    """Ползунок — потолок: при плохом приёме новых артистов их квота сжимается.
+
+    Замер на проде: при ползунке 0.55 новые артисты занимали ~43% волны и
+    дослушивались в 3 раза реже знакомых. Здесь приём новых в 5 раз хуже
+    (фактор 0.2): вместо 15 новых из 15 порция отдаёт 5 — discovery_slots от
+    эффективной доли 0.2 + 0.8 * 0.2 = 0.36.
+    """
+    from sqlalchemy import select
+    from app.models import recommendation_impressions
+
+    user = _rich_familiar_profile(db, "adaptive-discovery-user")
+    user.discovery_ratio = 1.0
+    db.commit()
+
+    async def _similar(artist):
+        return [
+            _external(
+                f"NeighbourArtist-{artist}-{index}",
+                f"новый трек {artist}-{index}",
+                f"adaptive-new-{artist}-{index}",
+            )
+            for index in range(10)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+    monkeypatch.setattr(
+        "app.routers.flow.cached_acceptance_factor", lambda _db, _user_id: 0.2
+    )
+
+    def _score(item, **_kwargs):
+        artist = getattr(item, "artist", "")
+        return 100.0 if artist.startswith(("OwnArtist", "GoodArtist")) else 0.0
+
+    monkeypatch.setattr("app.routers.flow.score_track", _score)
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="adaptive-discovery-user"),
+    )
+    assert response.status_code == 200, response.text
+    tracks = response.json()
+    familiar = {f"ownartist{i}" for i in range(10)} | {"goodartist"}
+    novel = [track for track in tracks if track["artist"].lower() not in familiar]
+    assert len(tracks) == 15
+    assert len(novel) == 5, [track["artist"] for track in tracks]
+
+    rows = db.execute(
+        select(recommendation_impressions.c.artist, recommendation_impressions.c.features)
+        .where(recommendation_impressions.c.user_id == user.id)
+    ).all()
+    assert len(rows) == 15
+    for artist, features in rows:
+        assert features["discovery_requested"] == 1.0
+        assert features["discovery_effective"] == 0.36
+        assert features["novel"] == (artist.lower() not in familiar)
+        assert "affinity" in features["components"]
+        if features["novel"]:
+            assert features["origin"] == "artist_graph"

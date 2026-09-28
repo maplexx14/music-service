@@ -65,3 +65,20 @@ def liked_slots(limit: int, ratio: float) -> int:
         return 0
     share = LIKED_MAX_SHARE * (1.0 - min(1.0, max(0.0, ratio)))
     return min(limit, round(limit * share))
+
+
+def effective_discovery_ratio(ratio: float, acceptance_factor: float = 1.0) -> float:
+    """Ползунок как потолок: фактическая доля новизны по ответам самого юзера.
+
+    ``acceptance_factor`` — во сколько раз новые артисты принимаются хуже
+    знакомых (1.0 — одинаково, см. ``discovery_feedback``). Сжимается только
+    часть ползунка ВЫШЕ дефолта: дефолтный мягкий prior не трогаем, а явно
+    попрошенная новизна отдаётся в той мере, в какой юзер её реально слушает.
+    Замер на проде: новые артисты в волне дослушивались в 3 раза реже знакомых
+    при ползунке 0.55, то есть половина порции уходила в скипы.
+    """
+    ratio = min(1.0, max(0.0, float(ratio)))
+    if ratio <= DEFAULT_DISCOVERY_RATIO:
+        return ratio
+    factor = min(1.0, max(0.0, float(acceptance_factor)))
+    return DEFAULT_DISCOVERY_RATIO + (ratio - DEFAULT_DISCOVERY_RATIO) * factor

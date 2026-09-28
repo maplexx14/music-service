@@ -44,6 +44,7 @@ def record_delivery(
     request_id: Optional[str] = None,
     session_id: Optional[str] = None,
     scores: Optional[dict[Any, float]] = None,
+    features: Optional[dict[Any, dict]] = None,
     algorithm_version: str = ALGORITHM_VERSION,
 ) -> str:
     """Append one immutable row per delivered item.
@@ -62,6 +63,9 @@ def record_delivery(
         score = None
         if scores is not None:
             score = scores.get(item_id, scores.get(local_id))
+        item_features = None
+        if features is not None:
+            item_features = features.get(item_id, features.get(local_id))
         rows.append(
             {
                 "user_id": user_id,
@@ -80,6 +84,7 @@ def record_delivery(
                 # ``impression`` event after IntersectionObserver/audio proves
                 # that the item was actually visible.
                 "visible": False,
+                "features": item_features,
             }
         )
     if rows:

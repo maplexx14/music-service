@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from app.acoustic_features import acoustic_similarity
 
-ALGORITHM_VERSION = "hybrid-v7"
+ALGORITHM_VERSION = "hybrid-v8"
 
 # Popularity must never overpower a user's explicit signal or a content match,
 # but it does have to separate a genuine hit from a no-name upload.  The weight
@@ -203,7 +203,17 @@ def content_match(track: Any, genres: Iterable[str] = ()) -> float:
     return 0.45 if any(value in genre or genre in value for value in wanted) else 0.0
 
 
-def score_track(
+def score_track(track: Any, **kwargs: Any) -> float:
+    """Compute a bounded, explainable score for one candidate.
+
+    All inputs are normalized before weighting.  The function is intentionally
+    pure, which makes offline replay and regression tests straightforward.
+    The weighted terms are available from ``score_components``.
+    """
+    return float(sum(score_components(track, **kwargs).values()))
+
+
+def score_components(
     track: Any,
     *,
     user_id: Any = None,
@@ -226,11 +236,11 @@ def score_track(
     context_bonus: float = 0.0,
     population_quality: float = 0.0,
     now: Optional[datetime] = None,
-) -> float:
-    """Compute a bounded, explainable score for one candidate.
+) -> dict[str, float]:
+    """Weighted terms of ``score_track``; their sum is the score.
 
-    All inputs are normalized before weighting.  The function is intentionally
-    pure, which makes offline replay and regression tests straightforward.
+    Delivery telemetry stores them so offline analysis can tell which feature
+    actually predicts a listen instead of guessing from the total alone.
     """
     affinity = math.tanh(float(artist_affinity or 0.0) / 8.0)
     match = max(0.0, min(1.0, content_match(track, genres) + float(content_bonus or 0.0)))
@@ -268,21 +278,20 @@ def score_track(
     novelty_bonus = _NOVELTY_WEIGHT if novelty else 0.0
     context_fit = max(-1.0, min(1.0, float(context_bonus or 0.0)))
     population_fit = max(-1.0, min(1.0, float(population_quality or 0.0)))
-    score = (
-        _AFFINITY_WEIGHT * affinity
-        + _CONTENT_WEIGHT * match
-        + _ACOUSTIC_WEIGHT * acoustic_fit
-        + _POPULARITY_WEIGHT * popularity
-        + _FRESHNESS_WEIGHT * freshness
-        + _SOURCE_WEIGHT * source_fit
-        + novelty_bonus
-        + _CONTEXT_WEIGHT * context_fit
-        + _POPULATION_QUALITY_WEIGHT * population_fit
-        + completion_fit
-        - skip_penalty
-        - fatigue_penalty
-    )
-    return float(score)
+    return {
+        "affinity": _AFFINITY_WEIGHT * affinity,
+        "content": _CONTENT_WEIGHT * match,
+        "acoustic": _ACOUSTIC_WEIGHT * acoustic_fit,
+        "popularity": _POPULARITY_WEIGHT * popularity,
+        "freshness": _FRESHNESS_WEIGHT * freshness,
+        "source": _SOURCE_WEIGHT * source_fit,
+        "novelty": novelty_bonus,
+        "context": _CONTEXT_WEIGHT * context_fit,
+        "population": _POPULATION_QUALITY_WEIGHT * population_fit,
+        "completion": completion_fit,
+        "skip": -skip_penalty,
+        "fatigue": -fatigue_penalty,
+    }
 
 
 def rank_items(

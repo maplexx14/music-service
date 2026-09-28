@@ -65,8 +65,10 @@ from app.discovery import (
     DEFAULT_DISCOVERY_RATIO,
     discovery_ratio,
     discovery_slots,
+    effective_discovery_ratio,
     liked_slots,
 )
+from app.discovery_feedback import cached_acceptance_factor
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -90,6 +92,7 @@ from app.recommendation_scoring import (
     popularity_score,
     population_quality_score,
     population_rejects,
+    score_components,
     score_track,
     stable_jitter,
 )
@@ -2238,7 +2241,11 @@ async def get_flow(
         + "|".join(str(value) for value in list(history.get("ids") or [])[-50:])
     )
 
-    explore_ratio = discovery_ratio(current_user)
+    requested_ratio = discovery_ratio(current_user)
+    # Ползунок — потолок новизны, а фактическая доля зависит от того, как юзер
+    # принимает новых артистов (см. app/discovery_feedback.py).
+    acceptance = await asyncio.to_thread(cached_acceptance_factor, db, user_id)
+    explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
@@ -2258,6 +2265,7 @@ async def get_flow(
     db.close()
 
     score_by_item: dict[str, float] = {}
+    score_inputs_by_item: dict[str, tuple] = {}
     selected_scores: dict[str, float] = {}
     content_bonus_by_identity: dict[str, float] = {}
     external_population: dict[str, dict] = {}
@@ -2326,8 +2334,7 @@ async def get_flow(
             if is_external
             else 0.0
         )
-        score = score_track(
-            item,
+        score_inputs = dict(
             user_id=user_id,
             artist_affinity=(profile.get("artist_weight") or {}).get(key, 0.0),
             genres=profile.get("genres") or (),
@@ -2340,13 +2347,38 @@ async def get_flow(
             population_quality=population.get("quality", 0.0),
             now=ranking_now,
         )
+        score = score_track(item, **score_inputs)
         is_novel_artist = key not in (profile.get("artist_weight") or {})
         # Keep the score itself continuous. A higher discovery target is
         # enforced after ranking, so relevance still decides which new tracks
         # fill the requested new-artist portion.
-        score += (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
+        discovery_term = (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
+        score += discovery_term
         score_by_item[score_key] = score
+        # Компоненты считаются только для отданных позиций (см. телеметрию
+        # ниже) — входы запоминаем, а не пересчитываем весь пул.
+        score_inputs_by_item[score_key] = (item, score_inputs, discovery_term)
         return score
+
+    def _score_features(item) -> dict:
+        identity = _item_identity(item)
+        content_bonus = content_bonus_by_identity.get(identity, 0.0)
+        cached = score_inputs_by_item.get(f"{identity}:{content_bonus:.3f}")
+        artist, _title = _item_artist_title(item)
+        features = {
+            "origin": origin_by_identity.get(identity, "unknown"),
+            "novel": artist_key(artist) not in (profile.get("artist_weight") or {}),
+            "discovery_requested": round(requested_ratio, 3),
+            "discovery_effective": round(explore_ratio, 3),
+        }
+        if cached is not None:
+            source_item, inputs, discovery_term = cached
+            components = score_components(source_item, **inputs)
+            components["discovery"] = discovery_term
+            features["components"] = {
+                name: round(value, 4) for name, value in components.items()
+            }
+        return features
 
     def _rank_pool(items, *, label: str):
         indexed = list(enumerate(items))
@@ -2431,11 +2463,16 @@ async def get_flow(
         liked_slots(limit, explore_ratio), max(0, limit - discovery_target)
     )
 
+    # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
+    # было видно, какой генератор новинок работает, а какой отдаёт скипы.
+    origin_by_identity: dict[str, str] = {}
+
     def _add_explore(
         tracks,
         target: Optional[List[ExternalTrackResponse]] = None,
         *,
         accept_limit: Optional[int] = None,
+        origin: str,
     ) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
         # ещё волна радио» должно приниматься по числу свежих кандидатов.
@@ -2479,6 +2516,7 @@ async def get_flow(
             if t.source == "ytmusic":
                 t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
             (explore if target is None else target).append(t)
+            origin_by_identity.setdefault(_item_identity(t), origin)
             accepted += 1
 
     # Пик фонового сравнения — первым, до сетевых источников: он уже посчитан,
@@ -2498,7 +2536,7 @@ async def get_flow(
 
     probe_pick = await artist_probe.cached_pick(user_id)
     if probe_pick is not None:
-        _add_explore([probe_pick], probe_explore)
+        _add_explore([probe_pick], probe_explore, origin="probe")
 
     # YT Music радио — это чужой алгоритм "похожести" от YouTube, никак не
     # завязанный на наши жанр/тег-фильтры. Когда у пользователя уже есть
@@ -2708,6 +2746,7 @@ async def get_flow(
                 _favorite_order(artist, pool),
                 favorite_explore,
                 accept_limit=favorite_window,
+                origin="favorite",
             )
         _add_explore(
             (
@@ -2717,12 +2756,16 @@ async def get_flow(
                 if _matches_related(t)
             ),
             similar_explore,
+            origin="lastfm_similar",
         )
         _add_explore(
-            t
-            for pool in pools[favorite_count + lastfm_count :]
-            for t in pool
-            if _matches_related(t)
+            (
+                t
+                for pool in pools[favorite_count + lastfm_count :]
+                for t in pool
+                if _matches_related(t)
+            ),
+            origin="radio",
         )
 
     # Граф артистов YT Music — дополнительный генератор кандидатов. Его можно
@@ -2736,7 +2779,8 @@ async def get_flow(
         )
         _mark_stage("graph", stage_started)
         _add_explore(
-            t for pool in graph_pools for t in pool if _matches_related(t)
+            (t for pool in graph_pools for t in pool if _matches_related(t)),
+            origin="artist_graph",
         )
 
     # SoundCloud-разведка: ищем по нескольким любимым артистам. Источник радио
@@ -2765,7 +2809,8 @@ async def get_flow(
         )
         _mark_stage("soundcloud", stage_started)
         _add_explore(
-            t for pool in sc_pools for t in pool if _matches_related(t)
+            (t for pool in sc_pools for t in pool if _matches_related(t)),
+            origin="soundcloud",
         )
 
     # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
@@ -2820,7 +2865,7 @@ async def get_flow(
             [_tag_pool(request, query)], network_deadline
         )
         _mark_stage("tags", stage_started)
-        _add_explore(t for t in tag_pool if tag_check(t))
+        _add_explore((t for t in tag_pool if tag_check(t)), origin="tag")
 
     _mark_stage("network", network_started)
     response.headers["Server-Timing"] = ", ".join(
@@ -2903,6 +2948,7 @@ async def get_flow(
         excl_ids.add(t.id)
         liked_candidates.append(t)
         liked_identities.add(_item_identity(t))
+        origin_by_identity.setdefault(_item_identity(t), "liked")
     local_candidates: List[Track] = []
     for t in local:
         effective_artist, effective_title = effective_track_artist_title(t)
@@ -2916,6 +2962,7 @@ async def get_flow(
         seen_keys.add(key)
         excl_ids.add(t.id)
         local_candidates.append(t)
+        origin_by_identity.setdefault(_item_identity(t), "local")
 
     def _candidate_payload(candidate) -> dict:
         if isinstance(candidate, dict):
@@ -3094,6 +3141,7 @@ async def get_flow(
     # written before the response so the client can confirm a real impression
     # and later feedback without materialising provider tracks first.
     delivery_scores = {}
+    delivery_features = {}
     for position, item in enumerate(mix):
         identity = _item_identity(item)
         score = selected_scores.get(identity, _flow_score(item))
@@ -3107,6 +3155,10 @@ async def get_flow(
             }
         )
         delivery_scores[item.get("id")] = score
+        try:
+            delivery_features[item.get("id")] = _score_features(item)
+        except Exception:  # noqa: BLE001 — телеметрия не должна ронять выдачу
+            logger.exception("flow score features failed user=%s", user_id)
 
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
@@ -3152,6 +3204,7 @@ async def get_flow(
             surface="flow",
             request_id=request_id,
             scores=delivery_scores,
+            features=delivery_features,
             algorithm_version=ALGORITHM_VERSION,
         )
         telemetry_db.commit()
