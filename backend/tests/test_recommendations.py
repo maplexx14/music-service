@@ -594,3 +594,367 @@ def test_recommendations_use_real_artist_for_legacy_soundcloud_scope(
     ids = {track["id"] for track in response.json()["tracks"]}
     assert candidate.id in ids
     assert uploader_catalog.id not in ids
+
+
+def _liked_playlist(db, user):
+    liked_pl = Playlist(
+        name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id
+    )
+    db.add(liked_pl)
+    db.commit()
+    db.refresh(liked_pl)
+    return liked_pl
+
+
+def _stub_external_pool(monkeypatch, tracks):
+    async def _external_pool(*_args, **_kwargs):
+        return list(tracks)
+
+    monkeypatch.setattr(
+        "app.routers.recommendations._external_recommendation_pool",
+        _external_pool,
+    )
+
+
+def _external(external_id, *, title=None, artist="ExternalArtist", play_count=0):
+    return ExternalTrackResponse(
+        id=f"ytmusic:{external_id}",
+        source="ytmusic",
+        external_id=external_id,
+        title=title or f"song {external_id}",
+        artist=artist,
+        duration=190,
+        stream_url="",
+        play_count=play_count,
+    )
+
+
+def test_acoustic_candidates_respect_excluded_artists(client, db):
+    """Акустический путь не обходит исключённых юзером артистов.
+
+    Регрессия: акустический кандидат проходил в выдачу мимо keep_track, а
+    вместе с ним — мимо проверки excluded_artists.
+    """
+    user = create_user(db, username="acoustic-excluded-user")
+    user.excluded_artists = ["BannedArtist"]
+    liked_pl = _liked_playlist(db, user)
+    seed = Track(
+        title="seed", artist="KnownArtist", duration=100, source="local",
+        file_path="minio://music/ex-seed.mp3",
+        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
+    )
+    banned = Track(
+        title="banned close", artist="BannedArtist", duration=100, source="local",
+        file_path="minio://music/ex-banned.mp3",
+        acoustic_features=_features(tempo=0.21, brightness=0.2, bass=0.8),
+    )
+    allowed = Track(
+        title="allowed close", artist="NewArtist", duration=100, source="local",
+        file_path="minio://music/ex-allowed.mp3",
+        acoustic_features=_features(tempo=0.22, brightness=0.21, bass=0.79),
+    )
+    db.add_all([seed, banned, allowed])
+    db.commit()
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_pl.id, track_id=seed.id, position=0))
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="acoustic-excluded-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    ids = {track["id"] for track in response.json()["tracks"]}
+    assert allowed.id in ids
+    assert banned.id not in ids
+
+
+def test_acoustic_pool_skips_only_private_foreign_collections(client, db):
+    """Трек из чужого ПУБЛИЧНОГО плейлиста — не приватная коллекция.
+
+    Раньше акустический путь исключал любой трек из любого чужого плейлиста,
+    и кандидатов почти не оставалось.
+    """
+    user = create_user(db, username="acoustic-privacy-user")
+    other = create_user(db, username="acoustic-privacy-other")
+    liked_pl = _liked_playlist(db, user)
+    public_pl = Playlist(name="Public", is_public=True, owner_id=other.id)
+    private_pl = Playlist(name="Private", is_public=False, owner_id=other.id)
+    seed = Track(
+        title="seed", artist="KnownArtist", duration=100, source="local",
+        file_path="minio://music/pr-seed.mp3",
+        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
+    )
+    in_public = Track(
+        title="in public", artist="PublicArtist", duration=100, source="local",
+        file_path="minio://music/pr-public.mp3",
+        acoustic_features=_features(tempo=0.21, brightness=0.2, bass=0.8),
+    )
+    in_private = Track(
+        title="in private", artist="PrivateArtist", duration=100, source="local",
+        file_path="minio://music/pr-private.mp3",
+        acoustic_features=_features(tempo=0.22, brightness=0.21, bass=0.79),
+    )
+    db.add_all([public_pl, private_pl, seed, in_public, in_private])
+    db.commit()
+    db.execute(playlist_tracks.insert(), [
+        {"playlist_id": liked_pl.id, "track_id": seed.id, "position": 0},
+        {"playlist_id": public_pl.id, "track_id": in_public.id, "position": 0},
+        {"playlist_id": private_pl.id, "track_id": in_private.id, "position": 0},
+    ])
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="acoustic-privacy-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    ids = {track["id"] for track in response.json()["tracks"]}
+    assert in_public.id in ids
+    assert in_private.id not in ids
+
+
+def test_candidate_window_is_not_frozen_on_oldest_rows(client, db, monkeypatch):
+    """Новые треки любимого артиста доходят до ранжирования.
+
+    Регрессия: окно `ORDER BY id LIMIT 500` после SQL-предфильтра, который
+    пропускает ВСЕ soundcloud-треки, целиком занимали старейшие чужие
+    загрузки, а новый трек любимого артиста в выборку не попадал. Внешних
+    кандидатов достаточно, чтобы добор популярным не спасал его сам.
+    """
+    _stub_external_pool(
+        monkeypatch, [_external(f"filler-{index}") for index in range(12)]
+    )
+    user = create_user(db, username="window-user")
+    liked_pl = _liked_playlist(db, user)
+    seed = _track(db, "fav seed", "FavArtist", play_count=1)
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_pl.id, track_id=seed.id, position=0))
+    db.add_all([
+        Track(
+            title=f"junk upload {index}", artist=f"Uploader{index}",
+            duration=100, source="soundcloud", external_id=f"junk-{index}",
+        )
+        for index in range(600)
+    ])
+    db.commit()
+    newest = _track(db, "fav newest", "FavArtist", play_count=1)
+
+    response = client.get(
+        "/api/recommendations/?limit=5",
+        headers=auth_headers(client, username="window-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert newest.id in {track["id"] for track in response.json()["tracks"]}
+
+
+def test_external_popularity_uses_provider_scale(client, db, monkeypatch):
+    """Просмотры провайдера оцениваются на своей шкале, а не на локальной.
+
+    Регрессия: при локальной шкале (400 прослушиваний) трек с 500 и с
+    2 млн просмотров получали одинаковую, максимальную популярность.
+    """
+    _stub_external_pool(monkeypatch, [
+        _external("viral", play_count=2_000_000),
+        _external("nobody", play_count=500),
+    ])
+    user = create_user(db, username="external-popularity-user")
+    liked_pl = _liked_playlist(db, user)
+    seed = _track(db, "seed", "SeedArtist", play_count=1)
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_pl.id, track_id=seed.id, position=0))
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="external-popularity-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    scores = {
+        track.get("external_id"): track["recommendation_score"]
+        for track in response.json()["tracks"]
+    }
+    assert scores["viral"] > scores["nobody"]
+
+
+def test_undisliked_external_track_returns(client, db, monkeypatch):
+    """Снятый дизлайк внешнего трека снимает и исключение из выдачи."""
+    from datetime import datetime, timedelta, timezone
+
+    _stub_external_pool(monkeypatch, [
+        _external("forgiven"),
+        _external("still-disliked"),
+    ])
+    user = create_user(db, username="undislike-user")
+    liked_pl = _liked_playlist(db, user)
+    seed = _track(db, "seed", "SeedArtist", play_count=1)
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=liked_pl.id, track_id=seed.id, position=0))
+    now = datetime.now(timezone.utc)
+    for external_id, event_type, age in (
+        ("forgiven", "dislike", 2),
+        ("forgiven", "undislike", 1),
+        ("still-disliked", "dislike", 1),
+    ):
+        db.execute(recommendation_events.insert().values(
+            user_id=user.id, source="ytmusic", external_id=external_id,
+            title=f"song {external_id}", artist="ExternalArtist",
+            event_type=event_type, surface="library",
+            occurred_at=now - timedelta(minutes=age),
+        ))
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="undislike-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    external_ids = {track.get("external_id") for track in response.json()["tracks"]}
+    assert "forgiven" in external_ids
+    assert "still-disliked" not in external_ids
+
+
+def test_external_pool_excludes_whole_collection(client, db, monkeypatch):
+    """Внешний трек из коллекции не возвращается, даже если он за пределами
+    первых _TASTE_QUERY_LIMIT строк сигналов вкуса (большой импорт)."""
+    from datetime import datetime, timedelta, timezone
+    from app.routers import recommendations as recommendations_router
+
+    monkeypatch.setattr(recommendations_router, "_TASTE_QUERY_LIMIT", 5)
+    _stub_external_pool(monkeypatch, [
+        _external("old-owned", title="old owned song", artist="OwnedArtist"),
+        _external("fresh", title="fresh song", artist="OwnedArtist"),
+    ])
+    user = create_user(db, username="big-import-user")
+    imported = Playlist(
+        name="Imported", origin="imported", is_public=False, owner_id=user.id
+    )
+    db.add(imported)
+    db.commit()
+    tracks = [
+        Track(
+            title="old owned song" if index == 0 else f"owned {index}",
+            artist="OwnedArtist", duration=100, source="ytmusic",
+            external_id="old-owned" if index == 0 else f"owned-{index}",
+        )
+        for index in range(10)
+    ]
+    db.add_all(tracks)
+    db.commit()
+    now = datetime.now(timezone.utc)
+    db.execute(playlist_tracks.insert(), [
+        {
+            "playlist_id": imported.id,
+            "track_id": track.id,
+            "position": index,
+            # Трек 0 добавлен раньше всех — за пределами лимита.
+            "added_at": now - timedelta(days=100 - index),
+        }
+        for index, track in enumerate(tracks)
+    ])
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="big-import-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    external_ids = {track.get("external_id") for track in response.json()["tracks"]}
+    assert "fresh" in external_ids
+    assert "old-owned" not in external_ids
+    returned_ids = {track["id"] for track in response.json()["tracks"]}
+    assert not returned_ids & {track.id for track in tracks}, (
+        "свои треки из коллекции вернулись в выдачу"
+    )
+
+
+def test_recommendations_limit_is_bounded(client, db):
+    create_user(db, username="limit-user")
+    headers = auth_headers(client, username="limit-user")
+
+    assert client.get("/api/recommendations/?limit=10000", headers=headers).status_code == 422
+    assert client.get("/api/recommendations/?limit=0", headers=headers).status_code == 422
+    assert client.get("/api/recommendations/tracks?limit=10000", headers=headers).status_code == 422
+
+
+def test_playlist_recommendations_skip_own_and_empty(client, db):
+    """В рекомендациях плейлистов нет своих и пустых, и эндпоинт не пишет
+    строк выдачи треков, которых никто не видел."""
+    from sqlalchemy import func, select
+    from app.models import recommendation_impressions
+
+    user = create_user(db, username="playlist-recs-user")
+    other = create_user(db, username="playlist-recs-other")
+    own = Playlist(name="Own public", is_public=True, owner_id=user.id)
+    empty = Playlist(name="Empty", is_public=True, owner_id=other.id)
+    filled = Playlist(name="Filled", is_public=True, owner_id=other.id)
+    db.add_all([own, empty, filled])
+    db.commit()
+    track = _track(db, "some song", "SomeArtist", play_count=1)
+    db.execute(playlist_tracks.insert(), [
+        {"playlist_id": own.id, "track_id": track.id, "position": 0},
+        {"playlist_id": filled.id, "track_id": track.id, "position": 0},
+    ])
+    db.commit()
+
+    headers = auth_headers(client, username="playlist-recs-user")
+    playlists = client.get("/api/recommendations/playlists", headers=headers)
+    assert playlists.status_code == 200, playlists.text
+    assert [p["id"] for p in playlists.json()] == [filled.id]
+    assert db.execute(
+        select(func.count()).select_from(recommendation_impressions)
+    ).scalar() == 0
+
+    home = client.get("/api/recommendations/", headers=headers)
+    assert home.status_code == 200, home.text
+    assert [p["id"] for p in home.json()["playlists"]] == [filled.id]
+
+
+def test_artist_skips_lower_score_of_untrusted_artist(client, db, monkeypatch):
+    """Скипы артиста снижают score его треков и не делают его «новым».
+
+    Регрессия: штраф артисту за скипы участвовал только в решении о доверии,
+    а недоверенный артист считался новым и получал бонус новизны — у
+    заскипанного артиста score оказывался ВЫШЕ, чем у такого же без скипов.
+    """
+    from app.routers import recommendations as recommendations_router
+
+    monkeypatch.setattr(
+        recommendations_router, "build_keyword_filters", lambda *_args, **_kwargs: []
+    )
+    _stub_external_pool(monkeypatch, [])
+    user = create_user(db, username="artist-skips-user")
+    user.preferred_genres = ["rock"]
+    db.commit()
+
+    skipped_seed = _track(db, "s played", "SkippedArtist", play_count=1, genre="rock")
+    skipped_other = _track(db, "s skipped", "SkippedArtist", play_count=1, genre="rock")
+    skipped_candidate = _track(db, "s candidate", "SkippedArtist", play_count=1, genre="rock")
+    clean_seed = _track(db, "t played", "CleanArtist", play_count=1, genre="rock")
+    clean_candidate = _track(db, "t candidate", "CleanArtist", play_count=1, genre="rock")
+    db.execute(user_track_plays.insert(), [
+        {"user_id": user.id, "track_id": skipped_seed.id, "play_count": 2},
+        {"user_id": user.id, "track_id": clean_seed.id, "play_count": 2},
+    ])
+    db.execute(user_track_skips.insert().values(
+        user_id=user.id, track_id=skipped_other.id, skip_count=3))
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/",
+        headers=auth_headers(client, username="artist-skips-user"),
+    )
+
+    assert response.status_code == 200, response.text
+    scores = {
+        track["id"]: track["recommendation_score"]
+        for track in response.json()["tracks"]
+    }
+    assert clean_candidate.id in scores
+    assert scores.get(skipped_candidate.id, float("-inf")) < scores[clean_candidate.id]

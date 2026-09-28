@@ -60,6 +60,7 @@ from app.artist_utils import (
 )
 from app.recommendation_scoring import (
     ALGORITHM_VERSION,
+    SERVICE_POPULARITY_REFERENCE,
     fatigue_score,
     score_track,
     stable_jitter,
@@ -241,6 +242,21 @@ _NEIGHBOR_SCORE_FLOOR = 0.05
 # снова и снова, пока юзер не сыграет их «случайно».
 _IMPRESSION_FATIGUE_THRESHOLD = 4
 
+# Верхняя граница limit: окно кандидатов растёт как limit*100, и каждый limit —
+# отдельная запись кэша. Без границы один запрос с limit=10000 сканировал
+# миллион строк.
+_MAX_TRACK_LIMIT = 100
+_MAX_PLAYLIST_LIMIT = 50
+
+# --- Окно кандидатов из локального каталога ---
+# Сколько строк максимум сканируется лёгким (без ORM-объектов) запросом, прежде
+# чем выбрать окно кандидатов. SQL-предфильтр пропускает ВСЕ soundcloud-треки
+# (их реальный артист живёт в названии, lower(artist) его не видит), поэтому
+# без скана и Python-проверки скоупа окно `ORDER BY id LIMIT N` целиком
+# занимали старейшие чужие SoundCloud-загрузки, а новые треки нужных артистов
+# до ранжирования не доходили никогда.
+_CANDIDATE_SCAN_LIMIT = int(os.getenv("RECS_CANDIDATE_SCAN_LIMIT", "20000"))
+
 # --- Время суток ---
 # Половина людей слушает разное утром и перед сном. События прослушивания в
 # том же временном интервале, что текущий запрос (client_hour с фронта),
@@ -258,6 +274,7 @@ def _varied_popular(
     restrict_artists: Optional[set] = None,
     excluded_artists: Optional[set] = None,
     user_id: Optional[int] = None,
+    exclude_select=None,
 ) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
     Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
@@ -296,6 +313,8 @@ def _varied_popular(
         )
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
+    if exclude_select is not None:
+        q = q.filter(~Track.id.in_(exclude_select))
     # С предикатом вкуса отсев жёстче, поэтому берём пул с большим запасом.
     window = max(need * (40 if keep else 5), 100)
     pool = [
@@ -409,21 +428,65 @@ def _rank_public_playlists(
     Python so the same code works on SQLite and PostgreSQL.
     """
     pool_limit = max(limit * 20, 100)
-    rows = (
-        db.query(
-            Playlist,
-            func.count(playlist_tracks.c.track_id).label("track_count"),
-            func.coalesce(func.sum(Track.play_count), 0).label("engagement"),
-            func.max(playlist_tracks.c.added_at).label("last_added"),
+    wanted_genres = {str(value).strip().lower() for value in (preferred_genres or []) if value}
+    wanted_artists = set(preferred_artist_keys or ())
+    last_added_expr = func.max(playlist_tracks.c.added_at)
+
+    def _aggregate_query():
+        # Только чужие непустые плейлисты: свой плейлист рекомендовать
+        # бессмысленно, а пустой выигрывал на свежести, не имея содержимого.
+        return (
+            db.query(
+                Playlist,
+                func.count(playlist_tracks.c.track_id).label("track_count"),
+                func.coalesce(func.sum(Track.play_count), 0).label("engagement"),
+                last_added_expr.label("last_added"),
+            )
+            .join(playlist_tracks, playlist_tracks.c.playlist_id == Playlist.id)
+            .join(Track, Track.id == playlist_tracks.c.track_id)
+            .filter(
+                Playlist.is_public.is_(True),
+                Playlist.is_liked.is_(False),
+                Playlist.owner_id != current_user.id,
+            )
+            .group_by(Playlist.id)
         )
-        .outerjoin(playlist_tracks, playlist_tracks.c.playlist_id == Playlist.id)
-        .outerjoin(Track, Track.id == playlist_tracks.c.track_id)
-        .filter(Playlist.is_public.is_(True), Playlist.is_liked.is_(False))
-        .group_by(Playlist.id)
-        .order_by(Playlist.id)
+
+    # Два источника пула вместо первых pool_limit по id (старейшие плейлисты,
+    # новые не попадали никогда): недавно пополнявшиеся и те, где есть
+    # артисты/жанры вкуса. Окончательный порядок всё равно решает _playlist_score.
+    rows = (
+        _aggregate_query()
+        .order_by(desc(func.coalesce(last_added_expr, Playlist.created_at)), desc(Playlist.id))
         .limit(pool_limit)
         .all()
     )
+    taste_filters = []
+    if wanted_artists:
+        taste_filters.append(func.lower(Track.artist).in_(wanted_artists))
+    if wanted_genres:
+        taste_filters.append(func.lower(Track.genre).in_(wanted_genres))
+    if taste_filters:
+        seen_ids = {playlist.id for playlist, *_ in rows}
+        taste_ids = [
+            playlist_id
+            for (playlist_id,) in db.query(playlist_tracks.c.playlist_id)
+            .join(Track, Track.id == playlist_tracks.c.track_id)
+            .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+            .filter(
+                Playlist.is_public.is_(True),
+                Playlist.is_liked.is_(False),
+                Playlist.owner_id != current_user.id,
+                or_(*taste_filters),
+            )
+            .group_by(playlist_tracks.c.playlist_id)
+            .order_by(desc(func.count()), desc(playlist_tracks.c.playlist_id))
+            .limit(pool_limit)
+            .all()
+            if playlist_id not in seen_ids
+        ]
+        if taste_ids:
+            rows += _aggregate_query().filter(Playlist.id.in_(taste_ids)).all()
     if not rows:
         return []
 
@@ -451,8 +514,6 @@ def _rank_public_playlists(
         )
         by_playlist.setdefault(playlist_id, []).append((effective_artist, genre))
 
-    wanted_genres = {str(value).strip().lower() for value in (preferred_genres or []) if value}
-    wanted_artists = set(preferred_artist_keys or ())
     now = datetime.now(timezone.utc)
 
     def _playlist_score(row) -> tuple:
@@ -481,6 +542,41 @@ def _rank_public_playlists(
         return (-score, stable_jitter(current_user.id, f"playlist:{playlist.id}"), playlist.id)
 
     return [playlist for playlist, *_ in sorted(rows, key=_playlist_score)[:limit]]
+
+
+def _playlist_taste_artist_keys(db: Session, user: User) -> set[str]:
+    """Артисты вкуса для ранжирования плейлистов без полного расчёта треков."""
+    keys = {artist_key(name) for name in (user.preferred_artists or [])}
+    rows = (
+        db.query(Track.artist, Track.title, Track.source, Track.album)
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user.id)
+        .order_by(desc(playlist_tracks.c.added_at))
+        .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
+    rows += (
+        db.query(Track.artist, Track.title, Track.source, Track.album)
+        .join(user_track_plays, user_track_plays.c.track_id == Track.id)
+        .filter(
+            user_track_plays.c.user_id == user.id,
+            user_track_plays.c.play_count >= 2,
+        )
+        .order_by(desc(user_track_plays.c.last_played))
+        .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
+    for artist, title, source, album in rows:
+        keys.add(
+            artist_key(
+                effective_artist_title(
+                    title or "", artist or "", source=source or "", album=album or ""
+                )[0]
+            )
+        )
+    excluded = {artist_key(name) for name in (user.excluded_artists or [])}
+    return {key for key in keys if key and key not in excluded}
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -810,6 +906,73 @@ def _collection_exclude_select(user_id: int):
     return union(own_playlists, plays, skips)
 
 
+def _scoped_window(
+    db: Session,
+    query,
+    *,
+    scope_keys: Optional[set],
+    window: int,
+    context: str,
+) -> list:
+    """Окно кандидатов из запроса без смещения к старым id.
+
+    Сначала лёгкий скан колонок (без ORM и acoustic_features), проверка скоупа
+    по ЭФФЕКТИВНОМУ артисту — та же, что раньше шла уже после LIMIT, — и только
+    потом отбор окна и загрузка объектов. Порядок окна — стабильный хэш от
+    контекста (юзер + день): выдачу можно воспроизвести офлайн, но набор
+    ротируется, а не застывает на первых N id таблицы.
+    """
+    rows = (
+        query.with_entities(
+            Track.id, Track.artist, Track.title, Track.source, Track.album
+        )
+        .order_by(desc(Track.id))
+        .limit(_CANDIDATE_SCAN_LIMIT)
+        .all()
+    )
+    ids = [
+        track_id
+        for track_id, artist, title, source, album in rows
+        if not scope_keys
+        or artist_key(
+            effective_artist_title(
+                title or "", artist or "", source=source or "", album=album or ""
+            )[0]
+        )
+        in scope_keys
+    ]
+    if len(ids) > window:
+        ids = sorted(ids, key=lambda track_id: stable_jitter(context, track_id))[:window]
+    if not ids:
+        return []
+    return db.query(Track).filter(Track.id.in_(ids)).order_by(Track.id).all()
+
+
+def _acoustic_window(db: Session, query, profile, *, window: int) -> list:
+    """Самые близкие к профилю треки, а не первые ``window`` id с признаками.
+
+    Вектор признаков — несколько чисел, поэтому похожесть дешевле посчитать по
+    всему скану, чем брать произвольное окно и надеяться, что близкое в него
+    попало.
+    """
+    rows = (
+        query.with_entities(Track.id, Track.acoustic_features)
+        .order_by(desc(Track.id))
+        .limit(_CANDIDATE_SCAN_LIMIT)
+        .all()
+    )
+    scored = []
+    for track_id, features in rows:
+        similarity = acoustic_similarity(features, profile)
+        if similarity >= MIN_RECOMMENDATION_SIMILARITY:
+            scored.append((similarity, track_id))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    ids = [track_id for _similarity, track_id in scored[:window]]
+    if not ids:
+        return []
+    return db.query(Track).filter(Track.id.in_(ids)).order_by(Track.id).all()
+
+
 def _compute_recommendations(
     request: Request,
     current_user: User,
@@ -1026,6 +1189,7 @@ def _compute_recommendations(
     artist_keys = []
     known_artist_keys = set()
     artist_positive = {}
+    artist_skip_penalty = {}
     genres = list(preferred_genres)
     score_by_track = {}
     context_profile = build_context_profile(db, current_user.id, bucket, now=ranking_now)
@@ -1055,59 +1219,63 @@ def _compute_recommendations(
 
     excluded_external: set[tuple[str, str]] = set()
     excluded_track_keys: set[tuple[str, str]] = set()
-    for track, *_ in (*liked, *playlisted, *played):
-        source = getattr(track, "source", None)
-        external_id = getattr(track, "external_id", None)
+    def _exclude_identity(source, external_id, artist, title, album=None) -> None:
         if source and external_id:
             excluded_external.add((source, external_id))
-        track_key = flow_router._norm_key(*effective_track_artist_title(track))
+        track_key = flow_router._norm_key(
+            *effective_artist_title(
+                title or "", artist or "", source=source or "", album=album or ""
+            )
+        )
         if all(track_key):
             excluded_track_keys.add(track_key)
-    external_skip_rows = db.execute(
+
+    # Вся коллекция (плейлисты, повторные прослушивания, скипы), а не первые
+    # _TASTE_QUERY_LIMIT строк сигналов вкуса: у юзера с большим импортом
+    # внешний пул иначе возвращал треки, которые уже лежат у него в плейлистах.
+    # Лёгкие колонки, без ORM-объектов — строк могут быть тысячи.
+    # Тот же набор id исключает и локальные кандидаты: user_track_ids ниже
+    # собран из урезанных лимитом списков, и добор популярным возвращал юзеру
+    # его же старые треки из большого импорта.
+    collection_track_ids: set[int] = set()
+    for track_id, source, external_id, artist, title, album in (
+        db.query(
+            Track.id, Track.source, Track.external_id, Track.artist, Track.title, Track.album
+        )
+        .filter(Track.id.in_(_collection_exclude_select(current_user.id)))
+        .all()
+    ):
+        collection_track_ids.add(track_id)
+        _exclude_identity(source, external_id, artist, title, album)
+    # Нематериализованные внешние треки: решает ПОСЛЕДНЕЕ событие по треку.
+    # Раньше учитывались только skip/dislike, и снятый дизлайк (undislike) или
+    # последующий лайк не возвращали трек в выдачу.
+    external_feedback_rows = db.execute(
         select(
             recommendation_events.c.source,
             recommendation_events.c.external_id,
             recommendation_events.c.artist,
             recommendation_events.c.title,
+            recommendation_events.c.event_type,
         ).where(
             recommendation_events.c.user_id == current_user.id,
-            recommendation_events.c.event_type.in_(("skip", "dislike")),
+            recommendation_events.c.event_type.in_(
+                ("skip", "dislike", "undislike", "like")
+            ),
             recommendation_events.c.source.isnot(None),
             recommendation_events.c.external_id.isnot(None),
-        ).order_by(recommendation_events.c.occurred_at.desc()).limit(_TASTE_QUERY_LIMIT)
+        ).order_by(
+            recommendation_events.c.occurred_at.desc(),
+            recommendation_events.c.id.desc(),
+        ).limit(_TASTE_QUERY_LIMIT)
     ).all()
-    for source, external_id, artist, title in external_skip_rows:
-        excluded_external.add((source, external_id))
-        effective_artist, effective_title = effective_artist_title(
-            title,
-            artist,
-            source=source or "",
-        )
-        track_key = flow_router._norm_key(effective_artist, effective_title)
-        if all(track_key):
-            excluded_track_keys.add(track_key)
-    materialized_external_skips = (
-        db.query(Track.source, Track.external_id, Track.artist, Track.title)
-        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
-        .filter(
-            user_track_skips.c.user_id == current_user.id,
-            Track.source != "local",
-            Track.external_id.isnot(None),
-        )
-        .order_by(user_track_skips.c.last_skipped.desc())
-        .limit(_TASTE_QUERY_LIMIT)
-        .all()
-    )
-    for source, external_id, artist, title in materialized_external_skips:
-        excluded_external.add((source, external_id))
-        effective_artist, effective_title = effective_artist_title(
-            title,
-            artist,
-            source=source or "",
-        )
-        track_key = flow_router._norm_key(effective_artist, effective_title)
-        if all(track_key):
-            excluded_track_keys.add(track_key)
+    latest_feedback_seen: set[tuple[str, str]] = set()
+    for source, external_id, artist, title, event_type in external_feedback_rows:
+        if (source, external_id) in latest_feedback_seen:
+            continue
+        latest_feedback_seen.add((source, external_id))
+        if event_type in ("skip", "dislike"):
+            _exclude_identity(source, external_id, artist, title)
     # Release the request's read connection while providers/Redis are queried.
     # Keep loaded ORM attributes alive because the same session continues with
     # local ranking and telemetry after retrieval completes.
@@ -1130,18 +1298,38 @@ def _compute_recommendations(
         user_id=current_user.id,
     )
 
+    def _is_excluded_artist(track) -> bool:
+        return (
+            artist_key(effective_track_artist_title(track)[0]) in excluded_artist_keys
+        )
+
     def _candidate_score(track, content_bonus: Optional[float] = None) -> float:
+        is_external = not isinstance(getattr(track, "id", None), int)
         if content_bonus is None:
-            content_bonus = 0.08 if not isinstance(getattr(track, "id", None), int) else 0.0
+            content_bonus = 0.08 if is_external else 0.0
         row = skip_by_track.get(track.id)
         completion = completion_by_track.get(track.id)
         effective_artist, _effective_title = effective_track_artist_title(track)
         effective_key = artist_key(effective_artist)
-        is_novel_artist = effective_key not in known_artist_keys
+        # «Новый» — артист, по которому у юзера нет НИКАКОГО сигнала. Раньше
+        # новым считался любой недоверенный, и артист, недобравший доверия
+        # из-за скипов, получал бонусы новизны и discovery_ratio.
+        is_novel_artist = (
+            effective_key not in artist_positive
+            and effective_key not in artist_skip_penalty
+        )
+        # Скипы артиста режут близость, пока он не доверенный. У доверенного
+        # (см. artist_keys) скипы работают только на уровне трека — так же, как
+        # при отборе сида. Сами скипнутые треки исключены из выдачи, поэтому
+        # per-track skip_count ниже для кандидатов почти всегда 0 и штраф
+        # артисту до этого в score не доходил вовсе.
+        affinity = artist_positive.get(effective_key, 0.0)
+        if effective_key not in known_artist_keys:
+            affinity -= artist_skip_penalty.get(effective_key, 0.0)
         score = score_track(
             track,
             user_id=current_user.id,
-            artist_affinity=artist_positive.get(effective_key, 0.0),
+            artist_affinity=affinity,
             genres=genres,
             completion=completion[0] if completion else None,
             skip_count=row[2] if row else 0,
@@ -1151,6 +1339,12 @@ def _compute_recommendations(
             novelty=is_novel_artist,
             source=getattr(track, "source", None),
             listener_count=getattr(track, "unique_listener_count", 0) or 0,
+            # play_count внешнего кандидата — просмотры провайдера, а не наши
+            # прослушивания: на локальной шкале (400) любой трек с 400+
+            # просмотрами получал максимальную популярность.
+            popularity_reference=(
+                SERVICE_POPULARITY_REFERENCE if is_external else None
+            ),
             content_bonus=content_bonus,
             context_bonus=context_bonus(track, context_profile),
             acoustic_profile=acoustic_profile,
@@ -1441,7 +1635,7 @@ def _compute_recommendations(
         # исключение выжигало пул у активных юзеров (у одного — 191 трек из 300
         # показанных), после чего выдача добивалась чем попало. Релевантный
         # повтор лучше нерелевантной новинки.
-        exclude_ids = set(user_track_ids) | skipped_track_ids
+        exclude_ids = set(user_track_ids) | skipped_track_ids | collection_track_ids
         exclude_select = _collection_exclude_select(current_user.id)
         candidate_pool: dict[object, object] = {}
         if taste_filters:
@@ -1469,8 +1663,19 @@ def _compute_recommendations(
             # нет в выборке.
             # Fetch a generous deterministic candidate window and rank it in
             # Python.  ORDER BY RANDOM() made the same query impossible to
-            # replay and could hide niche tracks behind a small random sample.
-            pool = q.order_by(Track.id).limit(max(limit * 100, 500)).all()
+            # replay; ORDER BY id LIMIT N froze the window on the oldest rows
+            # (mostly foreign SoundCloud uploads let through by the SQL
+            # prefilter).  _scoped_window checks the scope before the window
+            # and rotates it by a stable per-user/per-day hash.
+            window_context = f"{current_user.id}:{ranking_now.date().isoformat()}"
+            window = max(limit * 100, 500)
+            pool = _scoped_window(
+                db,
+                q,
+                scope_keys=scope_artist_keys,
+                window=window,
+                context=window_context,
+            )
             # Гарантируем, что треки доверенных артистов (из плейлистов)
             # попадают в пул, даже если их play_count низкий и они не
             # прошли в limit*8 по популярности. Иначе плейлисты с нишевыми
@@ -1496,17 +1701,21 @@ def _compute_recommendations(
             _new_priority_keys = priority_artist_keys - _played_liked_keys
             if _new_priority_keys:
                 # Порядок по play_count не нужен: ниже пул всё равно
-                # перефильтровывается и ранжируется заново в Python.
-                extra = (
-                    db.query(Track)
-                    .filter(
+                # перефильтровывается и ранжируется заново в Python. Без
+                # _scoped_window запрос был без LIMIT и из-за OR по soundcloud
+                # грузил ORM-объектами весь SoundCloud-каталог на каждый пересчёт.
+                extra = _scoped_window(
+                    db,
+                    db.query(Track).filter(
                         or_(
                             func.lower(Track.artist).in_(_new_priority_keys),
                             Track.source == "soundcloud",
                         ),
                         ~Track.id.in_(exclude_select),
-                    )
-                    .all()
+                    ),
+                    scope_keys=_new_priority_keys,
+                    window=window,
+                    context=window_context + ":priority",
                 )
                 for t in extra:
                     if (
@@ -1565,34 +1774,51 @@ def _compute_recommendations(
                     provenance_trusted=True,
                 )
             )
-            other_owner_tracks = (
+            # Приватная коллекция — это ЗАКРЫТЫЕ плейлисты других юзеров
+            # (включая их «Понравившиеся»). Раньше исключался любой трек из
+            # любого чужого плейлиста, в том числе публичного, и акустический
+            # путь оставался почти пустым. Трек, который есть и в публичном
+            # плейлисте, приватным не считается.
+            private_other_tracks = (
                 select(playlist_tracks.c.track_id)
                 .select_from(
                     playlist_tracks.join(
                         Playlist, Playlist.id == playlist_tracks.c.playlist_id
                     )
                 )
-                .where(Playlist.owner_id != current_user.id)
+                .where(
+                    Playlist.owner_id != current_user.id,
+                    Playlist.is_public.is_not(True),
+                )
+            )
+            public_tracks = (
+                select(playlist_tracks.c.track_id)
+                .select_from(
+                    playlist_tracks.join(
+                        Playlist, Playlist.id == playlist_tracks.c.playlist_id
+                    )
+                )
+                .where(Playlist.is_public.is_(True))
             )
             acoustic_query = (
                 db.query(Track)
                 .filter(
                     Track.acoustic_features.isnot(None),
                     ~Track.id.in_(exclude_select),
-                    ~Track.id.in_(other_owner_tracks),
+                    or_(
+                        ~Track.id.in_(private_other_tracks),
+                        Track.id.in_(public_tracks),
+                    ),
                 )
             )
-            acoustic_pool = acoustic_query.order_by(Track.id).limit(
-                max(limit * 100, 500)
-            ).all()
+            acoustic_pool = _acoustic_window(
+                db, acoustic_query, acoustic_profile, window=max(limit * 100, 500)
+            )
             for track in acoustic_pool:
                 if (
                     track.id in candidate_pool
+                    or _is_excluded_artist(track)
                     or not acoustic_keep(track)
-                    or acoustic_similarity(
-                        track.acoustic_features, acoustic_profile
-                    )
-                    < MIN_RECOMMENDATION_SIMILARITY
                 ):
                     continue
                 candidate_pool[track.id] = track
@@ -1667,8 +1893,11 @@ def _compute_recommendations(
                 # Track.id.in_(): Postgres ронял запрос ошибкой "invalid input
                 # syntax for type integer", эндпоинт отвечал 500, кэш не
                 # писался и каждый заход на главную платил полный холодный путь.
-                exclude_ids | {tid for tid in candidate_pool if isinstance(tid, int)},
+                # Коллекция исключается подзапросом (exclude_select), в
+                # литеральный IN идут только уже набранные кандидаты.
+                {tid for tid in candidate_pool if isinstance(tid, int)},
                 max(limit * 4, limit),
+                exclude_select=exclude_select,
                 keep=keep_unrelated,
                 restrict_artists=scope_artist_keys or None,
                 excluded_artists=excluded_artist_keys,
@@ -1681,6 +1910,10 @@ def _compute_recommendations(
             track
             for track in candidate_pool.values()
             if track.id not in exclude_ids
+            # Исключённый юзером артист не проходит ни одним путём: раньше
+            # акустический кандидат обходил keep_track, а вместе с ним и
+            # проверку excluded_artists.
+            and not _is_excluded_artist(track)
             and (
                 not isinstance(track.id, int)
                 or keep_track(track)
@@ -1759,7 +1992,11 @@ def _compute_recommendations(
 
     # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
     # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
-    recommended_tracks = interleave_artists(recommended_tracks, min_gap=4)[:limit]
+    recommended_tracks = interleave_artists(
+        recommended_tracks,
+        artist_getter=lambda track: effective_track_artist_title(track)[0],
+        min_gap=4,
+    )[:limit]
 
     # Фиксируем показы (для сигнала «показан N раз — не сыгран»). Пока ответ
     # живёт в кэше, повторные отдачи того же списка показом не считаются —
@@ -1838,7 +2075,7 @@ def _compute_recommendations(
 @router.get("/", response_model=RecommendationResponse)
 async def get_recommendations(
     request: Request,
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=_MAX_TRACK_LIMIT),
     hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1956,7 +2193,7 @@ def get_recommendation_metrics(
 @router.get("/tracks", response_model=List[TrackResponse | ExternalTrackResponse])
 async def get_recommended_tracks(
     request: Request,
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=_MAX_TRACK_LIMIT),
     hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1972,20 +2209,21 @@ async def get_recommended_tracks(
 
 
 @router.get("/playlists", response_model=List[PlaylistResponse])
-async def get_recommended_playlists(
-    request: Request,
-    limit: int = 10,
+def get_recommended_playlists(
+    limit: int = Query(10, ge=1, le=_MAX_PLAYLIST_LIMIT),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    recommendations = await get_recommendations(
-        request=request,
-        limit=limit,
-        # Вызываем get_recommendations напрямую, а не через FastAPI, поэтому
-        # дефолты параметров НЕ разрешаются: без явного hour внутрь уехал бы
-        # объект Query(...) и _hour_bucket падал с TypeError (HTTP 500).
-        hour=None,
-        current_user=current_user,
-        db=db,
-    )
-    return recommendations.playlists
+    # Раньше эндпоинт гонял полный расчёт треков (с limit плейлистов в ключе
+    # кэша) и писал строки выдачи для треков, которых никто не видел. Для
+    # ранжирования плейлистов нужен только набор артистов вкуса.
+    return [
+        PlaylistResponse.model_validate(playlist)
+        for playlist in _rank_public_playlists(
+            db,
+            current_user=current_user,
+            preferred_genres=list(current_user.preferred_genres or []),
+            preferred_artist_keys=_playlist_taste_artist_keys(db, current_user),
+            limit=limit,
+        )
+    ]
