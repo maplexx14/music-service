@@ -437,6 +437,63 @@ def test_without_warp_bot_check_propagates(monkeypatch):
     assert calls == ["direct"]
 
 
+def test_dead_direct_proxy_moves_resolve_to_warp(monkeypatch):
+    """Прокси основного выхода не пускает (кончилась квота) — это отказ выхода,
+    а не ролика: резолв уходит на WARP, бэкофф основного не включается."""
+    calls = []
+    gv = "https://rr1---sn-abc.googlevideo.com/videoplayback"
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"direct": ytdlp.EgressUnreachable("v"), "warp": (gv, ".m4a", 7)}, calls,
+    ))
+
+    url, _, _ = asyncio.run(ytdlp._resolve_audio("v"))
+
+    assert calls == ["direct", "warp"]
+    assert url.endswith("#egress=warp")
+    assert not ytdlp.bot_check_active(ytdlp._EGRESS_DIRECT)
+
+
+def test_all_egresses_unreachable_is_transient_not_bot_check(monkeypatch):
+    """Мёртвы все выходы — короткий transient (наш сбой), а не 3-минутный
+    bot-check бэкофф."""
+    calls = []
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {"direct": ytdlp.EgressUnreachable("v"), "warp": ytdlp.EgressUnreachable("v")},
+        calls,
+    ))
+
+    with pytest.raises(ytdlp.TransientResolveError) as exc_info:
+        asyncio.run(ytdlp._resolve_audio("v"))
+    assert not isinstance(exc_info.value, ytdlp.BotCheckError)
+    assert calls == ["direct", "warp"]
+
+
+def test_proxy_error_in_extract_raises_egress_unreachable(monkeypatch):
+    """Реальный текст отказа прокси из прода превращается в EgressUnreachable,
+    а не в обычный transient по ролику."""
+    import yt_dlp
+
+    msg = (
+        "ERROR: [youtube] v: Unable to download API page: ('Unable to connect to "
+        "proxy', OSError('Tunnel connection failed: 429 Monthly traffic quota "
+        "exceeded. Buy more traffic or prolong in the bot.'))"
+    )
+
+    class FakeYdl:
+        params: dict = {}
+
+        def extract_info(self, *_a, **_kw):
+            raise yt_dlp.utils.DownloadError(msg)
+
+    monkeypatch.setattr(ytdlp, "cached_ydl", lambda *_a, **_kw: FakeYdl())
+    monkeypatch.setattr(ytdlp, "stream_proxy", lambda: "http://u:p@1.2.3.4:1")
+
+    with pytest.raises(ytdlp.EgressUnreachable):
+        ytdlp._extract_with_clients("v", ["android_vr"], ytdlp._EGRESS_DIRECT)
+
+
 def test_pot_provider_url_goes_to_extractor_args(monkeypatch):
     monkeypatch.setattr(ytdlp, "_POT_PROVIDER_URL", "http://bgutil-provider:4416")
     args = ytdlp._ytdlp_extractor_args(["android_vr"])

@@ -875,6 +875,16 @@ class BotCheckError(TransientResolveError):
     """
 
 
+class EgressUnreachable(TransientResolveError):
+    """Прокси выхода не пускает (кончилась квота, упал, отказ в CONNECT).
+
+    Это отказ НАШЕГО выхода, а не YouTube и не ролика: все клиенты через этот
+    выход упадут так же, а другой выход ролик отдаст. Поэтому резолв сразу
+    переходит на следующий выход (см. _resolve_audio). Подтип transient: если
+    выходов больше нет — 503 с коротким Retry-After, как обычный сбой.
+    """
+
+
 # ─────────────────── Выходы (egress) в YouTube ───────────────────
 # Ссылки googlevideo привязаны к IP того, кто их запросил: параметр `ip` входит
 # в подписанный `sparams`, и запрос с другого адреса получает 403. Поэтому
@@ -1052,6 +1062,24 @@ def is_bot_check_error(text) -> bool:
     в доступе к конкретному ролику."""
     msg = (text if isinstance(text, str) else str(text)).lower()
     return any(m in msg for m in _BOT_CHECK_MARKERS)
+
+
+# Отказ прокси выхода: yt-dlp заворачивает его в DownloadError с ProxyError
+# внутри. Реальный случай: платный прокси в active.url исчерпал месячную квоту
+# и отвечал на CONNECT "429 Monthly traffic quota exceeded" — каждый резолв
+# падал как transient, до рабочего WARP дело не доходило, и не играл ни один
+# холодный трек.
+_PROXY_ERROR_MARKERS = (
+    "unable to connect to proxy",
+    "tunnel connection failed",
+    "proxyerror",
+)
+
+
+def is_proxy_error(text) -> bool:
+    """True, если запрос не прошёл через прокси выхода (до YouTube не дошли)."""
+    msg = (text if isinstance(text, str) else str(text)).lower()
+    return any(m in msg for m in _PROXY_ERROR_MARKERS)
 
 
 def _needs_auth(info: dict) -> bool:
@@ -1232,6 +1260,13 @@ def _extract_with_clients(
     try:
         info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as exc:
+        if proxy and is_proxy_error(exc):
+            # Выход мёртв целиком — другие клиенты через него упадут так же.
+            logger.warning(
+                "egress %s proxy %s unreachable for %s: %s",
+                egress, _mask_proxy(proxy), video_id, exc,
+            )
+            raise EgressUnreachable(video_id) from exc
         bot = is_bot_check_error(exc)
         transient = bot or not is_track_unavailable_error(exc)
         logger.info(
@@ -1271,10 +1306,11 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
     """Резолвит прямой URL аудио через yt-dlp, перебирая выходы в YouTube.
 
     Выходы пробуются по порядку (_egresses): основной, затем WARP. На следующий
-    переходим ТОЛЬКО по bot-check'у — это лимит на IP, и другой адрес его
-    обходит. Остальные исходы (успех, «недоступно», transient) — ответ про сам
-    ролик или разовый сбой, другой выход его не изменит, а лишний запрос к
-    YouTube приблизил бы блокировку и там.
+    переходим по bot-check'у (лимит на IP, другой адрес его обходит) и по отказу
+    прокси выхода (EgressUnreachable — до YouTube запрос не дошёл вовсе).
+    Остальные исходы (успех, «недоступно», transient) — ответ про сам ролик или
+    разовый сбой, другой выход его не изменит, а лишний запрос к YouTube
+    приблизил бы блокировку и там.
 
     Выход под бэкоффом (см. _note_bot_check) пропускается без запроса: каждый
     лишний запрос с заблокированного IP продлевает блокировку. Если заблокированы
@@ -1290,7 +1326,15 @@ async def _resolve_audio(video_id: str) -> tuple[str, str, Optional[int]]:
             logger.info("bot-check on egress %s for %s, trying next egress", egress, video_id)
             last_exc = exc
             continue
+        except EgressUnreachable as exc:
+            logger.info("egress %s unreachable for %s, trying next egress", egress, video_id)
+            last_exc = exc
+            continue
         return _tag_egress(url, egress), ext, total
+    # Хоть один выход был мёртв (а не под bot-check) — это наш сбой, а не лимит
+    # YouTube: короткий transient, без 3-минутного бэкоффа.
+    if isinstance(last_exc, EgressUnreachable):
+        raise last_exc
     raise BotCheckError(video_id) from last_exc
 
 
