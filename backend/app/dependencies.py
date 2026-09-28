@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -16,6 +17,26 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_er
 # минуты ничего не даёт — только лишний UPDATE на каждый запрос.
 LAST_SEEN_WRITE_INTERVAL = 60.0
 
+# Маркер онлайна (users:online:<id>) живёт в Redis ONLINE_MARKER_TTL секунд,
+# а обновлять его достаточно раз в ONLINE_MARKER_INTERVAL: ключ не успевает
+# истечь. Раньше SETEX шёл на каждый авторизованный запрос — под нагрузкой это
+# ~20% времени треда на сетевой round-trip ради записи, которая ничего не
+# меняет. Память процесса, не Redis: у каждого gunicorn-воркера своя, так что
+# на юзера выходит до GUNICORN_WORKERS записей в минуту вместо одной — всё
+# равно на порядки меньше, чем по записи на запрос. Гонка тредов безвредна:
+# худшее — лишний SETEX.
+ONLINE_MARKER_TTL = 120
+ONLINE_MARKER_INTERVAL = 60.0
+_online_marked_at: dict[int, float] = {}
+
+
+def _mark_online(user_id: int) -> None:
+    now = time.monotonic()
+    if now - _online_marked_at.get(user_id, float("-inf")) < ONLINE_MARKER_INTERVAL:
+        return
+    _online_marked_at[user_id] = now
+    set_cache(f"users:online:{user_id}", True, expire=ONLINE_MARKER_TTL)
+
 
 def _touch_last_seen(db: Session, user: User) -> None:
     now = datetime.now(timezone.utc)
@@ -33,7 +54,13 @@ def _touch_last_seen(db: Session, user: User) -> None:
     db.commit()
 
 
-async def get_current_user(
+# Именно def, а не async def: внутри блокирующие SELECT, UPDATE last_seen и
+# запись в Redis. В async-версии они шли прямо в event loop и останавливали
+# воркер целиком, а когда пул соединений кончался, loop висел в
+# QueuePool.get и сам же не давал вернуть соединения — после ~50 параллельных
+# запросов RPS падал вместо того, чтобы выйти на плато. Как def FastAPI
+# выполняет зависимость в threadpool, и ожидание пула блокирует только тред.
+def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
@@ -50,16 +77,17 @@ async def get_current_user(
         raise credentials_exception
     # Presence marker used by the admin dashboard. Short TTL means stale
     # browser tabs disappear automatically without a logout request.
-    set_cache(f"users:online:{user.id}", True, expire=120)
+    _mark_online(user.id)
     _touch_last_seen(db, user)
     return user
 
 
-async def get_current_user_optional(
+def get_current_user_optional(
     token: str | None = Depends(oauth2_scheme_optional),
     db: Session = Depends(get_db)
 ) -> User | None:
     # Как get_current_user, но без 401 — для эндпоинтов, доступных и анонимно.
+    # def по той же причине: SELECT блокирующий.
     if not token:
         return None
     username = verify_token(token)

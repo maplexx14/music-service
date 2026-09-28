@@ -110,11 +110,16 @@ def _reset_password_tokens():
 def _reset_online_presence_markers():
     """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
     id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого
-    теста оставался онлайн в следующем."""
+    теста оставался онлайн в следующем. Заодно сбрасываем память процесса о
+    том, когда маркер ставился: иначе троттлинг решит, что он ещё свежий, и
+    не поставит его заново после очистки Redis."""
     from app.cache import clear_pattern
+    from app.dependencies import _online_marked_at
 
+    _online_marked_at.clear()
     clear_pattern("users:online:*")
     yield
+    _online_marked_at.clear()
     clear_pattern("users:online:*")
 
 

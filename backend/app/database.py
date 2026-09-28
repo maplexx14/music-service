@@ -31,7 +31,12 @@ if not DATABASE_URL:
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
 DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
 
-engine_options = {"pool_pre_ping": True}
+# pool_pre_ping выключен: это лишний SELECT 1 на каждый checkout, под
+# нагрузкой ~17% времени треда. Мёртвые соединения всё равно отсеиваются:
+# pool_recycle ниже закрывает их по возрасту, а на обрыве (рестарт Postgres)
+# SQLAlchemy по ошибке disconnect инвалидирует весь пул — цена этого один
+# неудачный запрос на воркер, а не пинг на каждый запрос.
+engine_options = {"pool_pre_ping": False}
 if not DATABASE_URL.startswith("sqlite"):
     engine_options.update(
         pool_size=DB_POOL_SIZE,
