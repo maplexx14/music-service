@@ -1754,6 +1754,51 @@ async def _gather_within(aws, deadline: float) -> list:
     return results
 
 
+# Среди скольких первых треков порции ищем тот, что стартует без резолва.
+# Небольшое окно: перестановка не должна заметно ломать порядок ранжирования
+# и разнос артистов, это только выбор «открывающего» трека.
+_INSTANT_START_WINDOW = 5
+# Потолок на проверку своих копий: она идёт из Redis (miss — один запрос в
+# MinIO), но клик по потоку не должен ждать её дольше этого ни при каком раскладе.
+_INSTANT_START_TIMEOUT = 0.3
+
+
+async def _starts_instantly(item: dict) -> bool:
+    """Играется без внешнего резолва: локальный файл или своя копия ytmusic-трека."""
+    source = item.get("source")
+    if source == "local":
+        return True
+    external_id = item.get("external_id")
+    if source == "ytmusic" and external_id:
+        return await ytdlp._has_local_copy(external_id)
+    return False
+
+
+async def _front_instant_start(mix: List[dict]) -> List[dict]:
+    """Ставит первым трек, который начнёт играть сразу.
+
+    Холодный ytmusic-трек на старте — это резолв yt-dlp и медленный выход до
+    YouTube, то есть секунды тишины после клика по «потоку». Если в начале
+    порции есть трек с локальной/архивной копией, открываем им; остальной
+    порядок не трогаем.
+    """
+    if not mix:
+        return mix
+    window = mix[:_INSTANT_START_WINDOW]
+    try:
+        flags = await asyncio.wait_for(
+            asyncio.gather(*(_starts_instantly(item) for item in window)),
+            _INSTANT_START_TIMEOUT,
+        )
+    except Exception:  # noqa: BLE001 — таймаут/сбой хранилища: порядок как есть
+        logger.info("flow instant start check skipped", exc_info=True)
+        return mix
+    if flags[0] or not any(flags):
+        return mix
+    index = flags.index(True)
+    return [mix[index], *mix[:index], *mix[index + 1:]]
+
+
 async def _lastfm_pool(
     request: Request, artist: str, title: str
 ) -> List[ExternalTrackResponse]:
@@ -3142,6 +3187,12 @@ async def get_flow(
         artist_getter=lambda item: _item_artist_title(item)[0],
         min_gap=_MIN_ARTIST_GAP,
     )
+
+    # Первая порция (очередь пуста, exclude не пришёл) — это клик по «потоку»:
+    # открываем её треком, который заиграет без резолва. Подгрузки не трогаем —
+    # их треки прогреваются задолго до того, как до них дойдёт очередь.
+    if not exclude:
+        mix = await _front_instant_start(mix)
 
     # Attach one stable attribution envelope to every delivered item. It is
     # written before the response so the client can confirm a real impression

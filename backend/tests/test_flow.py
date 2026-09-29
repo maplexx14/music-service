@@ -2441,3 +2441,31 @@ def test_flow_thin_profile_keeps_requested_discovery(client, db, monkeypatch):
         .where(recommendation_impressions.c.user_id == user.id)
     ).scalars().all()
     assert effective and all(f["discovery_effective"] == 1.0 for f in effective)
+
+
+def test_first_portion_opens_with_instant_track(monkeypatch):
+    """Клик по «потоку» открывается треком со своей копией, а не холодным."""
+    from app.routers import flow, ytdlp
+
+    archived = {"warm"}
+
+    async def fake_local_copy(video_id):
+        return video_id in archived
+
+    monkeypatch.setattr(ytdlp, "_has_local_copy", fake_local_copy)
+    mix = [
+        {"source": "ytmusic", "external_id": "cold1"},
+        {"source": "soundcloud", "external_id": "sc1"},
+        {"source": "ytmusic", "external_id": "warm"},
+        {"source": "ytmusic", "external_id": "cold2"},
+    ]
+    result = asyncio.run(flow._front_instant_start(mix))
+    assert [item["external_id"] for item in result] == ["warm", "cold1", "sc1", "cold2"]
+
+    # Ничего тёплого — порядок ранжирования не трогаем.
+    archived.clear()
+    assert asyncio.run(flow._front_instant_start(mix)) == mix
+
+    # Локальный трек уже первым — перестановки нет.
+    local_first = [{"source": "local", "id": 1}, *mix]
+    assert asyncio.run(flow._front_instant_start(local_first)) == local_first

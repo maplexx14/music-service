@@ -2442,7 +2442,17 @@ async def stream_ytmusic(video_id: str, request: Request):
     # пир Soulseek отказал (повторная проверка зациклит его же), SoundCloud и
     # YouTube ещё не пробовались; scfallback=1 — 307 из /api/soundcloud/stream
     # после его отказа: Soulseek и SoundCloud проверялись раньше.
-    if request.query_params.get("scfallback") != "1" and (
+    #
+    # Своя копия (диск/MinIO, в т.ч. усыновлённый файл с пира — он ложится под
+    # тот же ключ ytmusic/{id}) проверяется ДО ожидания матчей: иначе уже
+    # заархивированный трек стоял до 3 с на идущем поиске Soulseek, а это
+    # ровно первый трек свежей порции потока — задержка клика по «потоку».
+    try:
+        has_local = await _has_local_copy(video_id)
+    except Exception:  # noqa: BLE001 — проверка best-effort, стрим не ломаем
+        logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
+        has_local = False
+    if not has_local and request.query_params.get("scfallback") != "1" and (
         request.query_params.get("slskfallback") != "1"
     ):
         try:
@@ -2456,7 +2466,7 @@ async def stream_ytmusic(video_id: str, request: Request):
                 )
         except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
             logger.exception("soulseek redirect failed for %s", video_id)
-    if request.query_params.get("scfallback") != "1":
+    if not has_local and request.query_params.get("scfallback") != "1":
         redirect = await _soundcloud_first_redirect(video_id)
         if redirect is not None:
             return redirect
@@ -2523,6 +2533,17 @@ async def prefetch_ytmusic(video_id: str):
     # воспроизведения. Запасной SoundCloud-матч (превью, DRM) не греем: он
     # играет только после отказа YouTube, двойной прогрев — двойной трафик
     # ради редкого случая.
+    #
+    # Своя копия уже есть — греть нечего: stream_ytmusic отдаст её сразу, мимо
+    # матчей. Без этой проверки прогрев стоял до 3 с на поиске Soulseek и ставил
+    # у пира ненужную закачку, а ready-поллинг фронта ждал всё это время.
+    try:
+        has_local = await _has_local_copy(video_id)
+    except Exception:  # noqa: BLE001 — проверка best-effort
+        logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
+        has_local = False
+    if has_local:
+        return {"status": "cached"}
     try:
         from app.routers import soulseek
 
@@ -2537,9 +2558,7 @@ async def prefetch_ytmusic(video_id: str):
     try:
         from app.routers import soundcloud
 
-        sc_match = None
-        if not await _has_local_copy(video_id):
-            sc_match = await soundcloud.soundcloud_match_for(video_id, full_only=True)
+        sc_match = await soundcloud.soundcloud_match_for(video_id, full_only=True)
         if sc_match:
             track_id, permalink = sc_match
             status = schedule_prefetch(
