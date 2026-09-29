@@ -24,13 +24,18 @@ YouTube Music (см. importer.py). Отсюда нужны названия, а�
 import asyncio
 import logging
 import os
+import itertools
 import re
+import time
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+
+from app.cache import get_cache_async, set_cache_async
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +51,18 @@ _client = None
 
 _API_BASE = "https://api.music.yandex.net"
 _API_TIMEOUT = httpx.Timeout(10.0, read=30.0)
-# Необязательный HTTP-прокси для запросов к Yandex (http://user:pass@host:port).
-# Метаданные api.music.yandex.net отдаются и зарубежным IP; прокси нужен, только
-# если адрес сервера всё же отрезали — тогда хватит выхода из РФ/СНГ.
-_API_PROXY = os.getenv("YANDEX_MUSIC_PROXY", "").strip() or None
+# Прокси для запросов к Yandex. api.music.yandex.net отвечает 451 части
+# зарубежных IP (прод в Польше отрезан, как и выходы Tor и WARP), поэтому с
+# такого сервера без прокси импорт не работает.
+#
+# YANDEX_MUSIC_PROXY — один или несколько через запятую; YANDEX_MUSIC_PROXY_FILE
+# — по одному в строке (# — комментарий), перечитывается по mtime, то есть
+# смена прокси не требует перезапуска. Формат: URL (http://user:pass@host:port,
+# socks5://…) или строка пула host:port[:user:pass][|пометка].
+_PROXY_STATIC = os.getenv("YANDEX_MUSIC_PROXY", "").strip()
+_PROXY_FILE = os.getenv("YANDEX_MUSIC_PROXY_FILE", "").strip()
+# Сколько отдыхает прокси после отказа (сеть, 451, 429, капча).
+_PROXY_COOLDOWN = 300
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -63,6 +76,11 @@ _ARTIST_PAGE = 100
 # Сколько плейлистов профиля отдаём в импорт: у редакционных аккаунтов их
 # тысячи, а импорт каждого — это матчинг всех треков в YouTube Music.
 MAX_PROFILE_PLAYLISTS = 100
+# Сколько живут в Redis ответы Yandex: превью и следующий за ним импорт тянут
+# одну и ту же коллекцию, а с зарубежного сервера каждый запрос идёт через
+# YANDEX_MUSIC_PROXY — кэш вдвое режет трафик через него. Свежесть в пределах
+# 10 минут для импорта не важна.
+_CACHE_TTL = 600
 
 _UNAVAILABLE_DETAIL = (
     "Yandex Music не отдал данные. Возможные причины:\n"
@@ -161,6 +179,105 @@ def _extract_track_info(track) -> Optional[YandexMusicTrack]:
 # ─── Публичный путь: без токена ───
 
 
+def _parse_proxy(raw: str) -> Optional[str]:
+    """Строка конфига → URL прокси для httpx. None — пустая/комментарий/мусор."""
+    raw = raw.split("|", 1)[0].strip()
+    if not raw or raw.startswith("#"):
+        return None
+    if "://" in raw:
+        return raw
+    parts = raw.split(":")
+    if len(parts) == 2:
+        return f"http://{raw}"
+    if len(parts) == 4:
+        host, port, user, password = parts
+        return f"http://{user}:{password}@{host}:{port}"
+    logger.warning("YANDEX_MUSIC_PROXY: не разобрана строка вида %s", _mask_proxy(raw))
+    return None
+
+
+def _mask_proxy(proxy: Optional[str]) -> str:
+    """Прокси для логов и сообщений юзеру: без логина и пароля."""
+    if not proxy:
+        return "direct"
+    scheme, _, rest = proxy.rpartition("://")
+    host = rest.rsplit("@", 1)[-1]
+    if "://" not in proxy and rest.count(":") >= 3:
+        host = ":".join(rest.split(":")[:2])  # host:port:user:pass
+    return f"{scheme}://{host}" if scheme else host
+
+
+# (mtime, прокси) последнего чтения файла; -1.0 — «ещё не читали».
+_proxy_file_cache: Tuple[float, List[str]] = (-1.0, [])
+_proxy_turn = itertools.count()
+# прокси → monotonic-время, до которого он считается сбойным.
+_proxy_down: Dict[str, float] = {}
+
+
+def yandex_proxies() -> List[str]:
+    """Все настроенные прокси: сначала из файла, затем из переменной."""
+    global _proxy_file_cache
+    from_file: List[str] = []
+    if _PROXY_FILE:
+        try:
+            mtime = os.path.getmtime(_PROXY_FILE)
+        except OSError:
+            mtime = None
+        if mtime is not None:
+            cached_mtime, from_file = _proxy_file_cache
+            if mtime != cached_mtime:
+                from_file = []
+                try:
+                    with open(_PROXY_FILE, encoding="utf-8") as fh:
+                        from_file = [p for p in map(_parse_proxy, fh) if p]
+                except OSError as exc:
+                    logger.warning("YANDEX_MUSIC_PROXY_FILE не читается: %s", exc)
+                _proxy_file_cache = (mtime, from_file)
+                logger.info(
+                    "Yandex proxies reloaded: %s",
+                    ", ".join(map(_mask_proxy, from_file)) or "none",
+                )
+    from_env = [p for p in map(_parse_proxy, re.split(r"[,\s]+", _PROXY_STATIC)) if p]
+    return list(dict.fromkeys(from_file + from_env))
+
+
+def _proxy_order() -> List[Optional[str]]:
+    """Порядок попыток для одного запроса. [None] — прокси нет, идём напрямую.
+
+    По кругу, чтобы нагрузка делилась между IP (у анонимного API лимиты на
+    адрес); сбойные в последнюю очередь, но не выкидываем — если отдыхают все,
+    лучше попробовать, чем сразу отказать.
+    """
+    proxies = yandex_proxies()
+    if not proxies:
+        return [None]
+    start = next(_proxy_turn) % len(proxies)
+    ordered = proxies[start:] + proxies[:start]
+    now = time.monotonic()
+    alive = [p for p in ordered if _proxy_down.get(p, 0.0) <= now]
+    return alive + [p for p in ordered if p not in alive]
+
+
+# Отказы _api в рамках текущего запроса — чтобы импорт показал юзеру настоящую
+# причину (геоблок, 404, приватность), а не общий список догадок. Список, а не
+# строка: дочерние задачи gather получают копию контекста, но объект общий.
+_api_errors: ContextVar[Optional[List[str]]] = ContextVar("yandex_api_errors", default=None)
+
+
+def track_errors() -> List[str]:
+    """Начинает сбор отказов API для текущего запроса; возвращает их список."""
+    errors: List[str] = []
+    _api_errors.set(errors)
+    return errors
+
+
+def _fail(message: str, *args: Any) -> None:
+    logger.warning(message, *args)
+    errors = _api_errors.get()
+    if errors is not None:
+        errors.append(message % args)
+
+
 async def _api(
     path: str,
     params: Optional[Dict[str, Any]] = None,
@@ -177,30 +294,50 @@ async def _api(
         "Accept": "application/json",
         "Accept-Language": "ru",
     }
-    try:
-        async with httpx.AsyncClient(
-            timeout=_API_TIMEOUT, follow_redirects=True, proxy=_API_PROXY
-        ) as client:
-            if data is None:
-                resp = await client.get(url, params=params, headers=headers)
-            else:
-                resp = await client.post(url, params=params, data=data, headers=headers)
-    except Exception as exc:  # noqa: BLE001 — сеть
-        logger.warning("Yandex API %s недоступен: %s", path, exc)
-        return None
+    for proxy in _proxy_order():
+        via = f" через {_mask_proxy(proxy)}" if proxy else ""
+        try:
+            async with httpx.AsyncClient(
+                timeout=_API_TIMEOUT, follow_redirects=True, proxy=proxy
+            ) as client:
+                if data is None:
+                    resp = await client.get(url, params=params, headers=headers)
+                else:
+                    resp = await client.post(url, params=params, data=data, headers=headers)
+        except Exception as exc:  # noqa: BLE001 — сеть или сам прокси
+            # Текст исключения не показываем: у ошибок прокси там бывает URL
+            # с паролем, а _fail уходит юзеру в тост.
+            _fail("Yandex API %s%s недоступен: %s", path, via, type(exc).__name__)
+            _mark_down(proxy)
+            continue
 
-    try:
-        payload = resp.json()
-    except ValueError:
-        logger.warning("Yandex API %s → HTTP %s, не JSON", path, resp.status_code)
-        return None
+        try:
+            payload = resp.json()
+        except ValueError:
+            # HTML вместо JSON — капча или заглушка: виноват выход, а не ссылка.
+            _fail("Yandex API %s%s → HTTP %s, не JSON", path, via, resp.status_code)
+            _mark_down(proxy)
+            continue
 
-    if resp.status_code != 200 or not isinstance(payload, dict) or "result" not in payload:
-        # 404 playlist-not-found, 401 для несуществующего логина, 403 приватное.
-        error = payload.get("error") if isinstance(payload, dict) else None
-        logger.warning("Yandex API %s → HTTP %s %s", path, resp.status_code, error)
-        return None
-    return payload["result"]
+        if resp.status_code != 200 or not isinstance(payload, dict) or "result" not in payload:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            name = error.get("name") if isinstance(error, dict) else error
+            _fail("Yandex API %s%s → HTTP %s %s", path, via, resp.status_code, name or "")
+            if resp.status_code in (429, 451):
+                # Отказ по IP выхода — другой прокси может пройти.
+                _mark_down(proxy)
+                continue
+            # 404 playlist-not-found, 401 чужой логин, 403 приватное — это про
+            # саму коллекцию, другой выход ответ не изменит.
+            return None
+        _proxy_down.pop(proxy, None)
+        return payload["result"]
+    return None
+
+
+def _mark_down(proxy: Optional[str]) -> None:
+    if proxy:
+        _proxy_down[proxy] = time.monotonic() + _PROXY_COOLDOWN
 
 
 def _track_from_web(obj: dict) -> Optional[YandexMusicTrack]:
@@ -384,6 +521,11 @@ async def fetch_profile(owner: str) -> Optional[Tuple[str, List[YandexCollection
     Сначала «Мне нравится» (если открыто), затем плейлисты владельца
     (не больше MAX_PROFILE_PLAYLISTS). None — профиль не найден или всё закрыто.
     """
+    cache_key = f"yandex:profile:{owner}"
+    cached = await get_cache_async(cache_key)
+    if cached:
+        return cached["name"], [YandexCollection(**c) for c in cached["collections"]]
+
     playlists, like_ids = await asyncio.gather(
         _api(f"users/{owner}/playlists/list"),
         _likes_ids(owner),
@@ -418,6 +560,11 @@ async def fetch_profile(owner: str) -> Optional[Tuple[str, List[YandexCollection
 
     if not collections:
         return None
+    await set_cache_async(
+        cache_key,
+        {"name": name, "collections": [c.model_dump() for c in collections]},
+        expire=_CACHE_TTL,
+    )
     return name, collections
 
 
@@ -532,11 +679,26 @@ async def _fetch_public(
 async def fetch_entity(
     request: Optional[Request], kind: str, params: Dict[str, str]
 ) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    """(kind, параметры) → (название, обложка, треки). None — оба пути отказали."""
+    """(kind, параметры) → (название, обложка, треки). None — оба пути отказали.
+
+    Удачные ответы кэшируются на _CACHE_TTL (см. там же зачем).
+    """
+    cache_key = "yandex:" + kind + ":" + ",".join(f"{k}={params[k]}" for k in sorted(params))
+    cached = await get_cache_async(cache_key)
+    if cached:
+        return cached["title"], cached["cover"], [YandexMusicTrack(**t) for t in cached["tracks"]]
+
     result = await _fetch_with_token(request, kind, params)
+    if not (result and result[2]):
+        result = await _fetch_public(kind, params)
     if result and result[2]:
-        return result
-    return await _fetch_public(kind, params)
+        title, cover, tracks = result
+        await set_cache_async(
+            cache_key,
+            {"title": title, "cover": cover, "tracks": [t.model_dump() for t in tracks]},
+            expire=_CACHE_TTL,
+        )
+    return result
 
 
 async def fetch_by_url(

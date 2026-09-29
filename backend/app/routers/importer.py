@@ -209,6 +209,24 @@ def _extract_yandex_likes_url(url: str) -> Optional[str]:
     return None
 
 
+def _yandex_failure_hint(errors: List[str]) -> str:
+    """Причина отказа Yandex Music для юзера: по последнему ответу API."""
+    if not errors:
+        return "Yandex Music не отдал данные. Проверьте, что ссылка открывается и коллекция публичная."
+    last = errors[-1]
+    if any(code in last for code in (" 404 ", "not-found")):
+        hint = "Коллекция не найдена или скрыта настройками приватности."
+    elif any(code in last for code in (" 401 ", " 403 ")):
+        hint = "Коллекция приватная — сделайте её публичной или задайте YANDEX_MUSIC_TOKEN."
+    elif " через " in last:
+        # Прокси настроены, но Yandex отказал и через них.
+        hint = "Yandex не пускает прокси из YANDEX_MUSIC_PROXY — проверьте их или замените."
+    else:
+        # Сеть, 451, HTML вместо JSON — так выглядит отказ по IP сервера.
+        hint = "Похоже, Yandex не пускает IP сервера — задайте YANDEX_MUSIC_PROXY (выход из РФ/СНГ)."
+    return f"{hint}\nОтвет Yandex: {last}"
+
+
 def _clean_match_title(title: str) -> str:
     """Очищает название трека от мусора перед матчингом.
 
@@ -310,7 +328,10 @@ async def _extract_collection(
         return await _extract_spotify(url)
 
     # Для Yandex Music сначала пробуем нативный API (обходит CAPTCHA)
+    yandex_errors: List[str] = []
     if source == "yandex":
+        if HAS_YANDEX_MUSIC_NATIVE:
+            yandex_errors = yandex_music_native.track_errors()
         native_result = await _extract_yandex_native(request, url, kind)
         if native_result is not None:
             return native_result
@@ -340,12 +361,7 @@ async def _extract_collection(
         logger.warning("import extract failed for %s: %s", url, exc)
         detail = "Не удалось прочитать ссылку. "
         if source == "yandex":
-            detail += (
-                "Публичные данные Yandex Music тоже не отдались. Возможные причины:\n"
-                "1. Сервис недоступен с IP сервера (геоблокировка вне РФ/РБ) — нужен прокси\n"
-                "2. Yandex показал капчу — загрузите cookies через /api/import/cookies\n"
-                "3. Коллекция приватная — задайте YANDEX_MUSIC_TOKEN в .env"
-            )
+            detail += _yandex_failure_hint(yandex_errors)
         else:
             detail += "Проверьте ссылку и доступность сервиса."
         raise HTTPException(status_code=502, detail=detail) from exc

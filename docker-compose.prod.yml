@@ -242,6 +242,7 @@ services:
       # SOUNDCLOUD_PROXY: ${SOUNDCLOUD_PROXY:-}
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
       YANDEX_MUSIC_PROXY: ${YANDEX_MUSIC_PROXY:-}
+      YANDEX_MUSIC_PROXY_FILE: ${YANDEX_MUSIC_PROXY_FILE:-}
       # Похожие треки по названию для потока рекомендаций (см.
       # app/beets_similar.py). Пусто = источник выключен.
       LASTFM_API_KEY: ${LASTFM_API_KEY:-}

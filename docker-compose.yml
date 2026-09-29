@@ -179,6 +179,7 @@ services:
       # OAuth-токен для обхода CAPTCHA. Получить: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
       YANDEX_MUSIC_TOKEN: ${YANDEX_MUSIC_TOKEN:-}
       YANDEX_MUSIC_PROXY: ${YANDEX_MUSIC_PROXY:-}
+      YANDEX_MUSIC_PROXY_FILE: ${YANDEX_MUSIC_PROXY_FILE:-}
       # ─── Last.fm (похожие треки для потока рекомендаций) ───
       # Ключ нужен только источнику «похожие по названию трека»
       # (app/beets_similar.py → flow._lastfm_pool). Пусто = источник выключен,

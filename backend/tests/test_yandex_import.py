@@ -523,3 +523,229 @@ def test_import_yandex_without_token_matches_in_ytmusic(client, db, monkeypatch)
     assert body["matched"] == 1
     assert body["playlist"]["name"] == "Свежее"
     assert body["playlist"]["description"] == "Импортировано из Yandex Music"
+
+
+def test_import_error_shows_real_yandex_reason(client, db, monkeypatch):
+    """Отказ API доходит до юзера как есть, а не общим списком догадок."""
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+
+    class _Resp:
+        status_code = 451
+        headers = {"content-type": "text/html"}
+
+        def json(self):
+            raise ValueError
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return _Resp()
+
+    def ytdlp_fails(url, cookies_file=None):
+        raise RuntimeError("yt-dlp: unsupported")
+
+    monkeypatch.setattr(ym.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(importer, "_extract_blocking", ytdlp_fails)
+
+    resp = client.post(
+        "/api/import/preview",
+        json={"url": "https://music.yandex.ru/playlists/a1a55745-6175-e5b7-bee5-f622bfd70222"},
+        headers=headers,
+    )
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "YANDEX_MUSIC_PROXY" in detail
+    assert "HTTP 451" in detail
+
+
+def test_failure_hint_by_status():
+    assert "приватности" in importer._yandex_failure_hint(["Yandex API p → HTTP 404 playlist-not-found"])
+    assert "YANDEX_MUSIC_TOKEN" in importer._yandex_failure_hint(["Yandex API p → HTTP 403 "])
+    assert "публичная" in importer._yandex_failure_hint([])
+
+
+def test_fetch_entity_caches_between_preview_and_import(monkeypatch):
+    """Превью и импорт тянут одну коллекцию — второй раз Yandex не спрашиваем."""
+    _no_token(monkeypatch)
+    calls = []
+
+    async def fake_public(kind, params):
+        calls.append(kind)
+        return "T", None, [ym.YandexMusicTrack(id="1", title="One", artist="A")]
+
+    monkeypatch.setattr(ym, "_fetch_public", fake_public)
+
+    first = asyncio.run(ym.fetch_entity(None, "album", {"album_id": "7"}))
+    second = asyncio.run(ym.fetch_entity(None, "album", {"album_id": "7"}))
+    assert first == second
+    assert calls == ["album"]
+
+
+def test_fetch_entity_does_not_cache_failures(monkeypatch):
+    _no_token(monkeypatch)
+    calls = []
+
+    async def fake_public(kind, params):
+        calls.append(kind)
+        return None
+
+    monkeypatch.setattr(ym, "_fetch_public", fake_public)
+
+    assert asyncio.run(ym.fetch_entity(None, "album", {"album_id": "8"})) is None
+    assert asyncio.run(ym.fetch_entity(None, "album", {"album_id": "8"})) is None
+    assert calls == ["album", "album"]
+
+
+def test_fetch_profile_is_cached(monkeypatch):
+    calls = _profile_api(monkeypatch)
+    first = asyncio.run(ym.fetch_profile("someone"))
+    n = len(calls)
+    second = asyncio.run(ym.fetch_profile("someone"))
+    assert first == second
+    assert len(calls) == n
+
+
+# ─── Прокси ───
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("http://u:p@h:1", "http://u:p@h:1"),
+        ("socks5://h:1080", "socks5://h:1080"),
+        ("h.example:8000", "http://h.example:8000"),
+        # Формат пула proxy-pool/proxies.list.
+        ("1.2.3.4:11455:user_a:secret|100GB", "http://user_a:secret@1.2.3.4:11455"),
+        ("# comment", None),
+        ("", None),
+        ("garbage", None),
+    ],
+)
+def test_parse_proxy(raw, expected):
+    assert ym._parse_proxy(raw) == expected
+
+
+def test_mask_proxy_hides_credentials():
+    assert ym._mask_proxy("http://user:secret@1.2.3.4:8000") == "http://1.2.3.4:8000"
+    assert ym._mask_proxy("1.2.3.4:8000:user:secret") == "1.2.3.4:8000"
+    assert ym._mask_proxy(None) == "direct"
+
+
+def _proxies(monkeypatch, value):
+    monkeypatch.setattr(ym, "_PROXY_STATIC", value)
+    monkeypatch.setattr(ym, "_PROXY_FILE", "")
+    monkeypatch.setattr(ym, "_proxy_down", {})
+    monkeypatch.setattr(ym, "_proxy_turn", __import__("itertools").count())
+
+
+def test_proxy_order_rotates_and_demotes_failed(monkeypatch):
+    _proxies(monkeypatch, "h1:1, h2:2")
+    assert ym._proxy_order() == ["http://h1:1", "http://h2:2"]
+    assert ym._proxy_order() == ["http://h2:2", "http://h1:1"]
+    ym._mark_down("http://h2:2")
+    assert ym._proxy_order() == ["http://h1:1", "http://h2:2"]
+    assert ym._proxy_order() == ["http://h1:1", "http://h2:2"]
+
+
+def test_proxy_order_without_proxies_is_direct(monkeypatch):
+    _proxies(monkeypatch, "")
+    assert ym._proxy_order() == [None]
+
+
+def test_proxy_file_is_read(monkeypatch, tmp_path):
+    path = tmp_path / "yandex.proxies"
+    path.write_text("# выходы\nh1:1:u:p\n\nsocks5://h2:2\n", encoding="utf-8")
+    _proxies(monkeypatch, "h3:3")
+    monkeypatch.setattr(ym, "_PROXY_FILE", str(path))
+    monkeypatch.setattr(ym, "_proxy_file_cache", (-1.0, []))
+    assert ym.yandex_proxies() == ["http://u:p@h1:1", "socks5://h2:2", "http://h3:3"]
+
+
+class _FakeResp:
+    def __init__(self, status, payload):
+        self.status_code = status
+        self._payload = payload
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError
+        return self._payload
+
+
+def _fake_client(monkeypatch, by_proxy):
+    """httpx.AsyncClient, отвечающий по прокси; фиксирует порядок попыток."""
+    tried = []
+
+    class _Client:
+        def __init__(self, *args, proxy=None, **kwargs):
+            self.proxy = proxy
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *args, **kwargs):
+            tried.append(self.proxy)
+            answer = by_proxy[self.proxy]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    monkeypatch.setattr(ym.httpx, "AsyncClient", _Client)
+    return tried
+
+
+def test_api_fails_over_to_next_proxy_on_451(monkeypatch):
+    _proxies(monkeypatch, "h1:1,h2:2")
+    tried = _fake_client(monkeypatch, {
+        "http://h1:1": _FakeResp(451, {"error": {"name": "Unavailable For Legal Reasons"}}),
+        "http://h2:2": _FakeResp(200, {"result": {"ok": True}}),
+    })
+    errors = ym.track_errors()
+
+    assert asyncio.run(ym._api("playlist/x")) == {"ok": True}
+    assert tried == ["http://h1:1", "http://h2:2"]
+    assert "http://h1:1" in ym._proxy_down
+    # В сообщении для юзера — адрес прокси без пароля.
+    assert "через http://h1:1" in errors[0]
+
+
+def test_api_fails_over_on_network_error_without_leaking_password(monkeypatch):
+    _proxies(monkeypatch, "http://u:secret@h1:1,h2:2")
+    _fake_client(monkeypatch, {
+        "http://u:secret@h1:1": ym.httpx.ProxyError("boom http://u:secret@h1:1"),
+        "http://h2:2": _FakeResp(200, {"result": 1}),
+    })
+    errors = ym.track_errors()
+
+    assert asyncio.run(ym._api("x")) == 1
+    assert "secret" not in errors[0]
+
+
+def test_api_does_not_retry_content_errors(monkeypatch):
+    """404/403 — про саму коллекцию: другой прокси ответ не изменит."""
+    _proxies(monkeypatch, "h1:1,h2:2")
+    tried = _fake_client(monkeypatch, {
+        "http://h1:1": _FakeResp(404, {"error": {"name": "playlist-not-found"}}),
+        "http://h2:2": _FakeResp(200, {"result": 1}),
+    })
+    assert asyncio.run(ym._api("x")) is None
+    assert tried == ["http://h1:1"]
+    assert ym._proxy_down == {}
+
+
+def test_failure_hint_when_proxies_refused():
+    hint = importer._yandex_failure_hint(["Yandex API x через http://h:1 → HTTP 451 "])
+    assert "YANDEX_MUSIC_PROXY" in hint and "не пускает прокси" in hint

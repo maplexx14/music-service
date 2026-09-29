@@ -131,6 +131,18 @@ def _reset_admin_dashboard_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_yandex_cache():
+    """Ответы Yandex Music кэшируются на 10 мин (yandex_music._CACHE_TTL), а
+    тесты подменяют API под одни и те же ссылки — без очистки следующий тест
+    получил бы коллекцию из предыдущего."""
+    from app.cache import clear_pattern
+
+    clear_pattern("yandex:*")
+    yield
+    clear_pattern("yandex:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_online_presence_markers():
     """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
     id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого
