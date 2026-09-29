@@ -119,6 +119,18 @@ def _reset_recommendation_delivery_dedup():
 
 
 @pytest.fixture(autouse=True)
+def _reset_admin_dashboard_cache():
+    """Профили вкуса админки (admin:taste:<id>, 10 мин) и счётчики каталога
+    живут в общем Redis, а id юзеров повторяются между тестами — без очистки
+    дашборд отдал бы detected_* и счётчики из предыдущего теста."""
+    from app.cache import clear_pattern
+
+    clear_pattern("admin:*")
+    yield
+    clear_pattern("admin:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_online_presence_markers():
     """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
     id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого
