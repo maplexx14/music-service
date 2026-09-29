@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Plus, Heart } from 'lucide-react'
-import { usePlayerStore, trackIntentHandlers, trackLikeKey } from '../store/playerStore'
+import { Play, Plus } from 'lucide-react'
+import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
+import TrackTableRow from '../components/TrackTableRow'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
-import { formatDuration } from '../utils/format'
 import './PlaylistDetail.css'
 
 // Тип релиза от провайдера — по-русски. Незнакомый оставляем как пришёл: это
@@ -174,6 +174,17 @@ function Album() {
     }
   }
 
+  // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
+  // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const rowActions = useRef(null)
+  rowActions.current = {
+    play: (track, index) => handlePlayTrack(index),
+    toggleLike: handleToggleLike,
+    openMenu: handleOpenMenu,
+    addToPlaylist: handleAddToPlaylist,
+  }
+  const likedSet = useMemo(() => new Set(likedTrackIds), [likedTrackIds])
+
   if (loading) {
     return (
       <div className="page-container">
@@ -255,80 +266,22 @@ function Album() {
                 const isCurrent = currentTrack?.id === track.id
                 const dbId = typeof track.db_id === 'number' ? track.db_id : null
                 const isLiked =
-                  (dbId !== null && likedTrackIds.includes(dbId)) ||
+                  (dbId !== null && likedSet.has(dbId)) ||
                   pendingLikeKeys.includes(trackLikeKey(track))
+                const menuOpen = menuTrackId === track.id
                 return (
-                  <tr
+                  <TrackTableRow
                     key={track.id}
-                    className={`track-row${isCurrent ? ' playing' : ''}`}
-                    onClick={() => handlePlayTrack(index)}
-                    {...trackIntentHandlers(track)}
-                  >
-                    <td className="track-number">
-                      {isCurrent ? (
-                        <span className={`now-playing-bars${isPlaying ? '' : ' paused'}`}>
-                          <span /><span /><span />
-                        </span>
-                      ) : (
-                        index + 1
-                      )}
-                    </td>
-                    <td className="track-name-cell">
-                      <img
-                        src={resolveCoverUrl(track.cover_url) || defaultCover}
-                        alt={track.title}
-                        className="track-table-cover"
-                        loading="lazy"
-                        decoding="async"
-                        onError={handleCoverError}
-                      />
-                      <div>
-                        <div className="track-name">{track.title}</div>
-                        <ArtistLink artist={track.artist} className="track-artist" />
-                      </div>
-                    </td>
-                    <td className="track-duration">{formatDuration(track.duration)}</td>
-                    <td className="track-actions-cell">
-                      <button
-                        type="button"
-                        className={`track-action-btn${isLiked ? ' liked' : ''}`}
-                        onClick={(e) => handleToggleLike(track, e)}
-                        title={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
-                        aria-label={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
-                      >
-                        <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
-                      </button>
-                      <div className="add-to-playlist">
-                        <button
-                          type="button"
-                          className="track-action-btn"
-                          onClick={(e) => handleOpenMenu(track, e)}
-                          title="Добавить в плейлист"
-                          aria-label="Добавить в плейлист"
-                        >
-                          <Plus size={18} />
-                        </button>
-                        {menuTrackId === track.id && (
-                          <div className="add-to-playlist-menu" onClick={(e) => e.stopPropagation()}>
-                            {myPlaylists.length > 0 ? (
-                              myPlaylists.map((p) => (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  className="add-to-playlist-option"
-                                  onClick={(e) => handleAddToPlaylist(track, p, e)}
-                                >
-                                  {p.name}
-                                </button>
-                              ))
-                            ) : (
-                              <div className="add-to-playlist-empty">Нет плейлистов</div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                    track={track}
+                    index={index}
+                    isCurrent={isCurrent}
+                    isPlaying={isCurrent && isPlaying}
+                    isLiked={isLiked}
+                    menuOpen={menuOpen}
+                    menuPlaylists={menuOpen ? myPlaylists : null}
+                    showAlbum={false}
+                    actionsRef={rowActions}
+                  />
                 )
               })}
             </tbody>
