@@ -560,8 +560,10 @@ def test_import_spotify_matches_tracks_in_ytmusic(client, db, monkeypatch):
     assert listens == []
     assert imported_track.play_count == 0
     assert imported_track.unique_listener_count == 0
-    # Матчим по основному артисту и очищенному от «(Remix)» названию.
-    assert queries[0] == "A One"
+    # Матчим по основному артисту и очищенному от «(Remix)» названию. Треки
+    # матчатся параллельно (и сначала сверяются с кэшем в потоке), поэтому
+    # порядок запросов между треками не задан — смотрим первый запрос трека One.
+    assert [q for q in queries if "One" in q][0] == "A One"
 
 
 def test_reimport_never_creates_listening_signals(client, db, monkeypatch):
