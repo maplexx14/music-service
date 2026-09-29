@@ -143,6 +143,17 @@ def _reset_yandex_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_import_cache():
+    """Кэш подбора треков (import:match:*, 30 дней) и прогресс импорта
+    (import:progress:*) — те же id источника и юзеров между тестами."""
+    from app.cache import clear_pattern
+
+    clear_pattern("import:*")
+    yield
+    clear_pattern("import:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_online_presence_markers():
     """Presence-маркеры админки живут 120 с в общем Redis, а sqlite выдаёт
     id юзеров с 1 в каждом тесте — без очистки юзер «онлайн» из прошлого

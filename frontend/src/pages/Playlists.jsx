@@ -8,6 +8,7 @@ import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
 } from '../components/ImportCollectionPicker'
+import ImportProgressModal, { newImportId } from '../components/ImportProgressModal'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -30,6 +31,8 @@ function Playlists() {
   const [importing, setImporting] = useState(false)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
+  // Окно прогресса: { id, title } идущего импорта или null.
+  const [importProgress, setImportProgress] = useState(null)
 
   // Cookies для Yandex Music
   const [showCookiesForm, setShowCookiesForm] = useState(false)
@@ -112,6 +115,9 @@ function Playlists() {
     setImporting(true)
     try {
       const body = { url: importUrl.trim() }
+      const importId = newImportId()
+      body.import_id = importId
+      setImportProgress({ id: importId, title: preview?.title })
       if (isProfilePreview) body.collections = [...selectedCollections]
       const { data } = await api.post('/import', body)
       const created = data.playlists?.length || (data.playlist ? 1 : 0)
@@ -129,6 +135,7 @@ function Playlists() {
       toast.error(detail)
     } finally {
       setImporting(false)
+      setImportProgress(null)
     }
   }
 
@@ -209,6 +216,13 @@ function Playlists() {
 
   return (
     <div className="page-container">
+      {importProgress && (
+        <ImportProgressModal
+          importId={importProgress.id}
+          title={importProgress.title}
+          onClose={() => setImportProgress(null)}
+        />
+      )}
       <div className="playlists-header">
         <h1>Моя музыка</h1>
         <div className="playlists-header-actions">

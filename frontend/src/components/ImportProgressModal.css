@@ -1,0 +1,127 @@
+.import-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.import-progress-modal {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  border-radius: 12px;
+  background-color: #1a1a1a;
+  border: 1px solid rgba(162, 89, 255, 0.25);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.import-progress-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+
+.import-progress-close:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 28px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+.import-progress-head svg {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}
+
+.import-progress-stage {
+  font-size: 14px;
+  color: #e0e0e0;
+}
+
+.import-progress-collection {
+  font-size: 13px;
+  color: #b3b3b3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: #333;
+}
+
+.import-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background-color: var(--brand-accent);
+  transition: width 0.4s ease;
+}
+
+.import-progress-bar.indeterminate .import-progress-fill {
+  width: 35%;
+  animation: import-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes import-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-progress-bar.indeterminate .import-progress-fill {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
+.import-progress-percent {
+  align-self: flex-end;
+  font-size: 12px;
+  color: #888;
+}
+
+.import-progress-error {
+  font-size: 13px;
+  color: #ff6b6b;
+  white-space: pre-line;
+}
+
+.import-progress-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8b8b8b;
+}

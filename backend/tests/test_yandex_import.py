@@ -749,3 +749,108 @@ def test_api_does_not_retry_content_errors(monkeypatch):
 def test_failure_hint_when_proxies_refused():
     hint = importer._yandex_failure_hint(["Yandex API x через http://h:1 → HTTP 451 "])
     assert "YANDEX_MUSIC_PROXY" in hint and "не пускает прокси" in hint
+
+
+# ─── Кэш подбора и прогресс ───
+
+
+def test_match_is_cached_by_source_track_id(monkeypatch):
+    calls = []
+
+    async def fake_search(_request, query, limit=3):
+        calls.append(query)
+        return [importer.ExternalTrackImport(
+            source="ytmusic", external_id="yt1", title="One", artist="A",
+            duration=200, stream_url="https://example.test/stream/yt1",
+        )]
+
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", fake_search)
+    entry = {"id": "42", "title": "One", "artists": ["A"], "duration": 200}
+
+    first = asyncio.run(importer._entry_to_import(None, "yandex", entry))
+    second = asyncio.run(importer._entry_to_import(None, "yandex", dict(entry)))
+    assert first[0].external_id == second[0].external_id == "yt1"
+    assert second[1] is True
+    assert len(calls) == 1
+    # Тот же id из другого источника — другой трек, кэш не общий.
+    asyncio.run(importer._entry_to_import(None, "spotify", dict(entry)))
+    assert len(calls) == 2
+
+
+def test_match_miss_is_cached_but_search_failure_is_not(monkeypatch):
+    calls = []
+
+    async def not_found(_request, query, limit=3):
+        calls.append(query)
+        return []
+
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", not_found)
+    entry = {"id": "7", "title": "Nothing", "artists": ["Nobody"]}
+    assert asyncio.run(importer._entry_to_import(None, "yandex", entry)) == (None, True)
+    n = len(calls)
+    assert asyncio.run(importer._entry_to_import(None, "yandex", dict(entry))) == (None, True)
+    assert len(calls) == n
+
+    async def broken(_request, query, limit=3):
+        calls.append(query)
+        raise RuntimeError("ytmusic down")
+
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", broken)
+    entry = {"id": "8", "title": "Other", "artists": ["X"]}
+    assert asyncio.run(importer._entry_to_import(None, "yandex", entry)) == (None, False)
+    assert asyncio.run(importer._entry_to_import(None, "yandex", dict(entry))) == (None, False)
+    assert len(calls) == n + 2
+
+
+def test_import_reports_progress(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    _profile_api(monkeypatch)
+    _ytmusic_echo(monkeypatch)
+
+    resp = client.post(
+        "/api/import",
+        json={"url": "https://music.yandex.ru/users/someone", "import_id": "imp-12345678"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    progress = client.get("/api/import/progress/imp-12345678", headers=headers)
+    assert progress.status_code == 200
+    state = progress.json()
+    assert state["stage"] == "done"
+    assert state["done"] == state["total"] == 4
+    assert state["collections_done"] == state["collections_total"] == 2
+
+
+def test_import_progress_records_error(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    fake, _ = _fake_api({})
+    monkeypatch.setattr(ym, "_api", fake)
+
+    resp = client.post(
+        "/api/import",
+        json={"url": "https://music.yandex.ru/users/ghost", "import_id": "imp-err-0001"},
+        headers=headers,
+    )
+    assert resp.status_code == 502
+    state = client.get("/api/import/progress/imp-err-0001", headers=headers).json()
+    assert state["stage"] == "error"
+    assert "приватности" in state["error"]
+
+
+def test_import_progress_is_per_user(client, db):
+    create_user(db)
+    create_user(db, "bob")
+    from app.cache import set_cache
+
+    set_cache("import:progress:1:imp-12345678", {"stage": "matching"}, expire=60)
+    mine = client.get("/api/import/progress/imp-12345678", headers=auth_headers(client))
+    assert mine.status_code == 200
+    other = client.get("/api/import/progress/imp-12345678", headers=auth_headers(client, "bob"))
+    assert other.status_code == 404
+    bad = client.get("/api/import/progress/x", headers=auth_headers(client))
+    assert bad.status_code == 422

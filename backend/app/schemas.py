@@ -355,6 +355,9 @@ class ImportRequest(BaseModel):
     # Для профиля: ключи коллекций из превью (likes, playlist:<kind>).
     # None — импортировать все.
     collections: Optional[List[str]] = None
+    # Id от клиента: под ним окно импорта опрашивает прогресс
+    # (GET /api/import/progress/{import_id}).
+    import_id: Optional[str] = None
 
 
 class ImportPreviewTrack(BaseModel):

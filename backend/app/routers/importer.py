@@ -20,7 +20,8 @@ import asyncio
 import logging
 import os
 import re
-from typing import List, Optional, Tuple
+import time
+from typing import Awaitable, Callable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
@@ -28,6 +29,7 @@ from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app.artist_utils import split_title_artist
+from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
@@ -61,6 +63,18 @@ router = APIRouter()
 _MAX_TRACKS = 10_000
 # Одновременных резолвов/матчей — чтобы большой плейлист не завалил yt-dlp/ytmusic.
 _CONCURRENCY = 8
+
+# Кэш подбора: id трека в источнике → найденный в YouTube Music трек. Поиск —
+# самая дорогая часть импорта (~0.6 с на трек), а популярные треки импортируют
+# многие юзеры и повторно. Промах живёт сутки: каталог ytmusic пополняется.
+_MATCH_TTL = 30 * 24 * 3600
+_MATCH_MISS_TTL = 24 * 3600
+
+# Прогресс импорта для окна на фронте (GET /progress/{import_id}). Импорт идёт
+# одним запросом, окно опрашивает этот ключ параллельно.
+_PROGRESS_TTL = 3600
+_PROGRESS_EVERY = 0.5  # не чаще раза в полсекунды — Redis на каждый трек не дёргаем
+_IMPORT_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
 # Директория для хранения cookies файлов (для обхода CAPTCHA на Yandex Music)
 _COOKIES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "cookies")
@@ -414,6 +428,11 @@ async def _extract_collection(
     return info.get("title"), _cover_of(info), entries
 
 
+def _match_cache_key(source: str, entry: dict) -> Optional[str]:
+    entry_id = entry.get("id")
+    return f"import:match:{source}:{entry_id}" if entry_id else None
+
+
 async def _entry_to_import(
     request: Request, source: str, entry: dict
 ) -> Tuple[Optional[ExternalTrackImport], bool]:
@@ -421,12 +440,34 @@ async def _entry_to_import(
 
     Возвращает (payload, matched): matched=True, если трек подобран матчингом в
     YouTube Music (не нативный). payload=None — не удалось сделать играбельным.
+    Результат матчинга кэшируется по id трека в источнике (см. _MATCH_TTL).
     """
     if source == "soundcloud":
         payload = soundcloud.entry_to_import(request, entry)
         return payload, False
 
-    # Yandex, Spotify и прочее: матчим по «артист + название» в YouTube Music.
+    key = _match_cache_key(source, entry)
+    if key:
+        cached = await get_cache_async(key)
+        if cached is not None:
+            track = cached.get("track")
+            return (ExternalTrackImport(**track) if track else None), True
+
+    payload, matched = await _match_entry(request, entry)
+    # matched=False с payload=None — сбой поиска, а не «не нашли»: не кэшируем.
+    if key and matched:
+        await set_cache_async(
+            key,
+            {"track": payload.model_dump() if payload else None},
+            expire=_MATCH_TTL if payload else _MATCH_MISS_TTL,
+        )
+    return payload, matched
+
+
+async def _match_entry(
+    request: Request, entry: dict
+) -> Tuple[Optional[ExternalTrackImport], bool]:
+    """Подбор entry в YouTube Music по «артист + название» (без кэша)."""
     title = entry.get("title") or entry.get("track") or ""
     artist = _artist_of(entry)
     if not title:
@@ -698,6 +739,57 @@ async def check_cookies(
     }
 
 
+class _Progress:
+    """Прогресс одного импорта в Redis: {stage, total, done, collection, …}.
+
+    stage: fetching (читаем источник) → matching (подбираем треки) → saving →
+    done | error. Без import_id — пустышка: старые клиенты работают как раньше.
+    """
+
+    def __init__(self, user_id: int, import_id: Optional[str]):
+        self.key = (
+            f"import:progress:{user_id}:{import_id}"
+            if import_id and _IMPORT_ID_RE.match(import_id)
+            else None
+        )
+        self.state = {
+            "stage": "fetching",
+            "total": 0,
+            "done": 0,
+            "collection": None,
+            "collections_done": 0,
+            "collections_total": 0,
+        }
+        self._written = 0.0
+
+    async def update(self, **fields) -> None:
+        self.state.update(fields)
+        await self._write()
+
+    async def step(self) -> None:
+        """Ещё один трек подобран; пишем не чаще _PROGRESS_EVERY."""
+        self.state["done"] += 1
+        if time.monotonic() - self._written >= _PROGRESS_EVERY:
+            await self._write()
+
+    async def _write(self) -> None:
+        if not self.key:
+            return
+        self._written = time.monotonic()
+        await set_cache_async(self.key, self.state, expire=_PROGRESS_TTL)
+
+
+@router.get("/progress/{import_id}")
+async def import_progress(import_id: str, current_user=Depends(get_current_active_user)):
+    """Прогресс импорта, запущенного с этим import_id (только своего)."""
+    if not _IMPORT_ID_RE.match(import_id):
+        raise HTTPException(status_code=422, detail="Некорректный import_id")
+    state = await get_cache_async(f"import:progress:{current_user.id}:{import_id}")
+    if state is None:
+        raise HTTPException(status_code=404, detail="Импорт не найден")
+    return state
+
+
 async def _yandex_profile(url: str):
     """Ссылка на профиль Yandex → (имя, коллекции). 502, если ничего не отдалось."""
     parsed = yandex_music_native.parse_url(url) if HAS_YANDEX_MUSIC_NATIVE else None
@@ -791,7 +883,11 @@ async def import_preview(
 
 
 async def _resolve_entries(
-    request: Request, source: str, entries: List[dict], cache: Optional[dict] = None
+    request: Request,
+    source: str,
+    entries: List[dict],
+    cache: Optional[dict] = None,
+    on_done: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> Tuple[List[ExternalTrackImport], int, int]:
     """Entries → (imports, matched, skipped), в исходном порядке.
 
@@ -815,9 +911,15 @@ async def _resolve_entries(
             cache[key] = asyncio.ensure_future(resolve(entry))
         tasks.append(cache[key])
 
+    async def counted(task):
+        result = await task
+        if on_done is not None:
+            await on_done()
+        return result
+
     imports: List[ExternalTrackImport] = []
     matched = skipped = 0
-    for imp, was_matched in await asyncio.gather(*tasks):
+    for imp, was_matched in await asyncio.gather(*(counted(t) for t in tasks)):
         if imp is None:
             skipped += 1  # нативно не резолвится или матч в ytmusic не нашёлся
             continue
@@ -882,7 +984,7 @@ def _save_playlist(
 
 
 async def _import_yandex_profile(
-    payload: ImportRequest, request: Request, url: str, user, db: Session
+    payload: ImportRequest, request: Request, url: str, user, db: Session, progress: "_Progress"
 ) -> ImportResult:
     """Профиль Yandex Music → по плейлисту на каждую выбранную коллекцию."""
     name, collections = await _yandex_profile(url)
@@ -896,15 +998,26 @@ async def _import_yandex_profile(
     cache: dict = {}
     created: List[Playlist] = []
     imported = matched = skipped = 0
+    # total по превью; реальные размеры коллекций уточняем по мере загрузки.
+    await progress.update(
+        total=sum(c.track_count for c in collections),
+        collections_total=len(collections),
+    )
 
-    for coll in collections:
+    for index, coll in enumerate(collections):
+        await progress.update(stage="fetching", collection=coll.title, collections_done=index)
         result = await yandex_music_native.fetch_entity(request, coll.kind, coll.params)
         if not result or not result[2]:
             logger.warning("yandex profile %s: коллекция %s не отдалась", name, coll.key)
+            await progress.update(total=progress.state["total"] - coll.track_count)
             continue
         _, cover, tracks = result
+        await progress.update(
+            stage="matching",
+            total=progress.state["total"] - coll.track_count + len(tracks),
+        )
         imports, coll_matched, coll_skipped = await _resolve_entries(
-            request, "yandex", _tracks_to_entries(tracks), cache
+            request, "yandex", _tracks_to_entries(tracks), cache, on_done=progress.step
         )
         matched += coll_matched
         skipped += coll_skipped
@@ -912,6 +1025,7 @@ async def _import_yandex_profile(
             continue
 
         is_likes = coll.kind == "likes"
+        await progress.update(stage="saving")
         playlist, count = _save_playlist(
             db,
             user,
@@ -930,6 +1044,7 @@ async def _import_yandex_profile(
         )
 
     invalidate_recommendation_cache(user.id)
+    await progress.update(stage="done", collections_done=len(collections))
     playlists = [PlaylistResponse.model_validate(p) for p in created]
     return ImportResult(
         playlist=playlists[0],
@@ -952,11 +1067,26 @@ async def import_collection(
 
     Профиль Yandex Music — несколько плейлистов разом (см. _import_yandex_profile).
     """
+    progress = _Progress(current_user.id, payload.import_id)
+    await progress.update()
+    try:
+        return await _import(payload, request, current_user, db, progress)
+    except HTTPException as exc:
+        await progress.update(stage="error", error=str(exc.detail))
+        raise
+    except Exception:
+        await progress.update(stage="error", error="Внутренняя ошибка импорта")
+        raise
+
+
+async def _import(
+    payload: ImportRequest, request: Request, current_user, db: Session, progress: _Progress
+) -> ImportResult:
     url = await _normalize_url(payload.url)
     source, kind = _detect(url)
 
     if source == "yandex" and kind == "profile":
-        return await _import_yandex_profile(payload, request, url, current_user, db)
+        return await _import_yandex_profile(payload, request, url, current_user, db, progress)
 
     imports: List[ExternalTrackImport] = []
     matched = 0
@@ -973,7 +1103,10 @@ async def import_collection(
         title, cover, entries = await _extract_collection(request, url, source, kind)
         if not entries:
             raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
-        imports, matched, skipped = await _resolve_entries(request, source, entries)
+        await progress.update(stage="matching", total=len(entries), collection=title)
+        imports, matched, skipped = await _resolve_entries(
+            request, source, entries, on_done=progress.step
+        )
 
     if not imports:
         raise HTTPException(
@@ -981,6 +1114,7 @@ async def import_collection(
             detail="Не удалось сделать играбельным ни один трек из коллекции",
         )
 
+    await progress.update(stage="saving", total=progress.state["total"] or len(imports))
     new_playlist, imported = _save_playlist(
         db,
         current_user,
@@ -991,6 +1125,7 @@ async def import_collection(
         imports,
     )
     invalidate_recommendation_cache(current_user.id)
+    await progress.update(stage="done", done=progress.state["total"])
     playlist = PlaylistResponse.model_validate(new_playlist)
 
     return ImportResult(

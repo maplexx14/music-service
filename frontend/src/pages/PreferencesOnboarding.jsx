@@ -10,6 +10,7 @@ import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
 } from '../components/ImportCollectionPicker'
+import ImportProgressModal, { newImportId } from '../components/ImportProgressModal'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import './PreferencesOnboarding.css'
@@ -53,6 +54,8 @@ function PreferencesOnboarding() {
   const [imported, setImported] = useState(0)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
+  // Окно прогресса: { id, title } идущего импорта или null.
+  const [importProgress, setImportProgress] = useState(null)
   const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
 
   // Вкус, выведенный из прослушиваний: у пришедшего по инвайту юзера история
@@ -142,6 +145,9 @@ function PreferencesOnboarding() {
     setImporting(true)
     try {
       const body = { url }
+      const importId = newImportId()
+      body.import_id = importId
+      setImportProgress({ id: importId, title: preview?.title })
       if (isProfilePreview) body.collections = [...selectedCollections]
       const { data } = await api.post('/import', body)
       const parts = [`Импортировано треков: ${data.imported}`]
@@ -156,6 +162,7 @@ function PreferencesOnboarding() {
       toast.error(error.response?.data?.detail || 'Не удалось импортировать')
     } finally {
       setImporting(false)
+      setImportProgress(null)
     }
   }
 
@@ -172,6 +179,13 @@ function PreferencesOnboarding() {
 
   return (
     <div className="onboarding-container">
+      {importProgress && (
+        <ImportProgressModal
+          importId={importProgress.id}
+          title={importProgress.title}
+          onClose={() => setImportProgress(null)}
+        />
+      )}
       <div className="onboarding-card">
         <div className="onboarding-steps" aria-label={`Шаг ${step + 1} из ${STEPS.length}`}>
           {STEPS.map((_, index) => (
