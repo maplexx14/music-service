@@ -1,4 +1,4 @@
-"""Импорт из Yandex Music: разбор ссылок и публичный путь без токена."""
+"""Импорт из Yandex Music: разбор ссылок, публичный путь без токена, профили."""
 
 import asyncio
 
@@ -48,6 +48,21 @@ def _web_track(track_id: str, title: str, artist: str = "A", **extra) -> dict:
             "https://music.yandex.ru/users/music-blog/playlists/2136",
             ("playlist", {"owner": "music-blog", "kind": "2136"}),
         ),
+        # Новый сайт: плейлист (и «Мне нравится») по uuid.
+        (
+            "https://music.yandex.ru/playlists/ea7570c7-d248-83ef-cb5b-a5586bfd81d3",
+            ("playlist", {"uuid": "ea7570c7-d248-83ef-cb5b-a5586bfd81d3"}),
+        ),
+        (
+            "https://music.yandex.ru/playlists/lk.b133eab3-42b6-498b-8855-18aafa130456",
+            ("playlist", {"uuid": "lk.b133eab3-42b6-498b-8855-18aafa130456"}),
+        ),
+        # Профиль: без номера плейлиста.
+        ("https://music.yandex.ru/users/music-blog", ("profile", {"owner": "music-blog"})),
+        (
+            "https://music.yandex.ru/users/music-blog/playlists/",
+            ("profile", {"owner": "music-blog"}),
+        ),
     ],
 )
 def test_parse_url_extracts_kind_and_ids(url, expected):
@@ -67,11 +82,14 @@ def test_detect_uses_yandex_parser():
     assert importer._detect("https://music.yandex.ru/users/123456/likes/tracks") == (
         "yandex", "likes",
     )
+    assert importer._detect("https://music.yandex.ru/users/music-blog") == (
+        "yandex", "profile",
+    )
     # Неразобранная ссылка Yandex всё равно уходит в импорт (дальше yt-dlp).
     assert importer._detect("https://music.yandex.ru/something/else") == ("yandex", "playlist")
 
 
-# ─── Разбор ответов веб-хендлеров ───
+# ─── Разбор ответов API ───
 
 
 def test_cover_url_substitutes_size_template():
@@ -127,19 +145,29 @@ def _no_token(monkeypatch):
     monkeypatch.setattr(ym, "_get_client", lambda: None)
 
 
-def test_public_playlist_maps_response(monkeypatch):
-    async def fake_handler(name, params, referer_path="/", data=None):
-        assert name == "playlist.jsx"
-        assert params["owner"] == "music-blog" and params["kinds"] == "2136"
-        return {
-            "playlist": {
-                "title": "Свежее",
-                "cover": {"type": "pic", "uri": "cov/%%"},
-                "tracks": [_web_track("1", "One"), {"id": "2"}],
-            }
-        }
+def _fake_api(routes):
+    """Подмена ym._api: путь → ответ (callable получает params и data)."""
+    calls = []
 
-    monkeypatch.setattr(ym, "_handler", fake_handler)
+    async def fake(path, params=None, data=None):
+        calls.append(path)
+        if path not in routes:
+            return None
+        route = routes[path]
+        return route(params, data) if callable(route) else route
+
+    return fake, calls
+
+
+def test_public_playlist_maps_response(monkeypatch):
+    fake, _ = _fake_api({
+        "users/music-blog/playlists/2136": {
+            "title": "Свежее",
+            "cover": {"type": "pic", "uri": "cov/%%"},
+            "tracks": [{"id": 1, "track": _web_track("1", "One")}, {"id": 2, "track": {"id": "2"}}],
+        },
+    })
+    monkeypatch.setattr(ym, "_api", fake)
 
     title, cover, tracks = asyncio.run(ym._public_playlist("music-blog", "2136"))
     assert title == "Свежее"
@@ -147,52 +175,233 @@ def test_public_playlist_maps_response(monkeypatch):
     assert [t.id for t in tracks] == ["1"]
 
 
+def test_public_playlist_resolves_short_entries(monkeypatch):
+    """Большие плейлисты могут прийти без объектов треков — дотягиваем по id."""
+
+    def tracks(params, data):
+        assert data["track-ids"] == "1:10,2"
+        return [_web_track("1", "One"), _web_track("2", "Two")]
+
+    fake, calls = _fake_api({
+        "playlist/lk.abc": {"title": "Мне нравится", "tracks": [{"id": 1, "albumId": 10}, {"id": 2}]},
+        "tracks": tracks,
+    })
+    monkeypatch.setattr(ym, "_api", fake)
+
+    title, _, result = asyncio.run(ym._public_playlist_uuid("lk.abc"))
+    assert title == "Мне нравится"
+    assert [t.id for t in result] == ["1", "2"]
+    assert calls == ["playlist/lk.abc", "tracks"]
+
+
 def test_public_album_flattens_volumes(monkeypatch):
-    async def fake_handler(name, params, referer_path="/", data=None):
-        assert name == "album.jsx"
-        return {
+    fake, _ = _fake_api({
+        "albums/5307899/with-tracks": {
             "title": "The Album",
             "coverUri": "cov/%%",
             "volumes": [[_web_track("1", "One")], [_web_track("2", "Two")]],
-        }
-
-    monkeypatch.setattr(ym, "_handler", fake_handler)
+        },
+    })
+    monkeypatch.setattr(ym, "_api", fake)
 
     title, cover, tracks = asyncio.run(ym._public_album("5307899"))
     assert (title, cover) == ("The Album", "https://cov/400x400")
     assert [t.id for t in tracks] == ["1", "2"]
 
 
-def test_public_likes_resolves_track_ids(monkeypatch):
-    calls = []
+def test_public_artist_pages_tracks(monkeypatch):
+    def page(params, data):
+        n = params["page"]
+        return {
+            "pager": {"total": ym._ARTIST_PAGE + 1},
+            "tracks": [_web_track(str(n), f"T{n}")],
+        }
 
-    async def fake_handler(name, params, referer_path="/", data=None):
-        calls.append(name)
-        if name == "library.jsx":
-            # Библиотека отдаёт только id вида trackId:albumId.
-            return {"library": {"trackIds": ["1:10", "2:20"]}}
-        assert name == "track-entries.jsx"
-        assert data["entries"] == "1:10,2:20"
+    fake, calls = _fake_api({
+        "artists/9/brief-info": {"artist": {"name": "Band", "cover": {"uri": "a/%%"}}},
+        "artists/9/tracks": page,
+    })
+    monkeypatch.setattr(ym, "_api", fake)
+
+    name, cover, tracks = asyncio.run(ym._public_artist("9"))
+    assert (name, cover) == ("Band", "https://a/400x400")
+    assert [t.id for t in tracks] == ["0", "1"]
+    assert calls.count("artists/9/tracks") == 2
+
+
+def test_public_likes_resolves_track_ids(monkeypatch):
+    def tracks(params, data):
+        assert data["track-ids"] == "1:10,2:20"
         return [_web_track("1", "One"), _web_track("2", "Two")]
 
-    monkeypatch.setattr(ym, "_handler", fake_handler)
+    fake, calls = _fake_api({
+        # Библиотека отдаёт только id и albumId.
+        "users/someone/likes/tracks": {
+            "library": {"tracks": [{"id": "1", "albumId": "10"}, {"id": "2", "albumId": "20"}]},
+        },
+        "tracks": tracks,
+    })
+    monkeypatch.setattr(ym, "_api", fake)
 
-    title, _, tracks = asyncio.run(ym._public_likes("someone"))
+    title, _, result = asyncio.run(ym._public_likes("someone"))
     assert "someone" in title
-    assert [t.id for t in tracks] == ["1", "2"]
-    assert calls == ["library.jsx", "track-entries.jsx"]
+    assert [t.id for t in result] == ["1", "2"]
+    assert calls == ["users/someone/likes/tracks", "tracks"]
 
 
-def test_public_paths_return_none_on_captcha(monkeypatch):
-    """Капча/геоблок отдаются как HTML — это не ошибка, а сигнал к фолбэку."""
-
-    async def fake_handler(name, params, referer_path="/", data=None):
-        return None
-
-    monkeypatch.setattr(ym, "_handler", fake_handler)
+def test_public_paths_return_none_when_unavailable(monkeypatch):
+    """Приватное/404/сеть — это не ошибка, а сигнал к фолбэку."""
+    fake, _ = _fake_api({})
+    monkeypatch.setattr(ym, "_api", fake)
     assert asyncio.run(ym._public_album("1")) is None
     assert asyncio.run(ym._public_playlist("o", "1")) is None
+    assert asyncio.run(ym._public_playlist_uuid("u")) is None
     assert asyncio.run(ym._public_likes("o")) is None
+    assert asyncio.run(ym._public_artist("1")) is None
+    assert asyncio.run(ym.fetch_profile("o")) is None
+
+
+# ─── Профиль ───
+
+
+def _profile_api(monkeypatch, likes=True):
+    playlist = lambda kind, title, count: {  # noqa: E731
+        "kind": kind,
+        "title": title,
+        "trackCount": count,
+        "owner": {"login": "someone", "name": "Кто-то"},
+        "cover": {"uri": f"c{kind}/%%"},
+    }
+    routes = {
+        "users/someone/playlists/list": [
+            playlist(1003, "Дорога", 2),
+            playlist(1004, "Пустой", 0),
+        ],
+        "users/someone/playlists/1003": {
+            "title": "Дорога",
+            "tracks": [{"id": 1, "track": _web_track("1", "One")}, {"id": 2, "track": _web_track("2", "Two")}],
+        },
+        "tracks": lambda params, data: [_web_track("1", "One"), _web_track("3", "Three")],
+    }
+    if likes:
+        routes["users/someone/likes/tracks"] = {
+            "library": {"tracks": [{"id": "1", "albumId": "10"}, {"id": "3", "albumId": "30"}]},
+        }
+    fake, calls = _fake_api(routes)
+    monkeypatch.setattr(ym, "_api", fake)
+    return calls
+
+
+def test_fetch_profile_lists_likes_and_playlists(monkeypatch):
+    _profile_api(monkeypatch)
+    name, collections = asyncio.run(ym.fetch_profile("someone"))
+    assert name == "Кто-то"
+    # Пустые плейлисты пропускаем, «Мне нравится» — первым.
+    assert [(c.key, c.track_count) for c in collections] == [("likes", 2), ("playlist:1003", 2)]
+    assert collections[1].params == {"owner": "someone", "kind": "1003"}
+    assert collections[1].cover_url == "https://c1003/400x400"
+
+
+def test_fetch_profile_without_public_likes(monkeypatch):
+    _profile_api(monkeypatch, likes=False)
+    _, collections = asyncio.run(ym.fetch_profile("someone"))
+    assert [c.key for c in collections] == ["playlist:1003"]
+
+
+def _ytmusic_echo(monkeypatch):
+    """ytmusic «находит» трек с тем же названием — id матча = название."""
+
+    async def fake_search(_request, query, limit=3):
+        title = query.split()[-1]
+        return [importer.ExternalTrackImport(
+            source="ytmusic",
+            external_id=f"yt-{title}",
+            title=title,
+            artist="A",
+            duration=200,
+            stream_url=f"https://example.test/stream/{title}",
+        )]
+
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", fake_search)
+
+
+def test_preview_yandex_profile_lists_collections(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    _profile_api(monkeypatch)
+
+    resp = client.post(
+        "/api/import/preview",
+        json={"url": "https://music.yandex.ru/users/someone"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "profile"
+    assert body["title"] == "Кто-то"
+    assert body["track_count"] == 4
+    assert [c["key"] for c in body["collections"]] == ["likes", "playlist:1003"]
+
+
+def test_import_yandex_profile_creates_playlist_per_collection(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    _profile_api(monkeypatch)
+    _ytmusic_echo(monkeypatch)
+
+    resp = client.post(
+        "/api/import",
+        json={"url": "https://music.yandex.ru/users/someone/playlists"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    names = [p["name"] for p in body["playlists"]]
+    assert names == ["Мне нравится — Кто-то", "Дорога"]
+    assert body["playlist"]["name"] == "Мне нравится — Кто-то"
+    assert body["playlists"][0]["description"] == "Импортировано из Yandex Music (избранное)"
+    assert body["imported"] == 4
+
+
+def test_import_yandex_profile_respects_selection(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    _profile_api(monkeypatch)
+    _ytmusic_echo(monkeypatch)
+
+    resp = client.post(
+        "/api/import",
+        json={"url": "https://music.yandex.ru/users/someone", "collections": ["playlist:1003"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert [p["name"] for p in resp.json()["playlists"]] == ["Дорога"]
+
+    resp = client.post(
+        "/api/import",
+        json={"url": "https://music.yandex.ru/users/someone", "collections": []},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_import_yandex_profile_unavailable(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    fake, _ = _fake_api({})
+    monkeypatch.setattr(ym, "_api", fake)
+
+    resp = client.post(
+        "/api/import/preview",
+        json={"url": "https://music.yandex.ru/users/ghost"},
+        headers=headers,
+    )
+    assert resp.status_code == 502
+    assert "приватности" in resp.json()["detail"]
 
 
 def test_fetch_by_url_falls_back_to_public(monkeypatch):
@@ -277,7 +486,7 @@ def test_extract_yandex_native_returns_none_when_unavailable(monkeypatch):
 
 
 def test_import_yandex_without_token_matches_in_ytmusic(client, db, monkeypatch):
-    """Без токена метаданные берутся из публичных хендлеров, аудио — из ytmusic."""
+    """Без токена метаданные берутся из анонимного API, аудио — из ytmusic."""
     create_user(db)
     headers = auth_headers(client)
     _no_token(monkeypatch)

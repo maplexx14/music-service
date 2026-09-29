@@ -4,9 +4,10 @@
 пользователя:
 
 * SoundCloud — материализуем нативно (свой стрим-движок, см. soundcloud.py).
-* Yandex Music — метаданные из yandex_music.py (публичные веб-хендлеры без
-  токена, либо API по токену, если он задан), с фолбэком на yt-dlp; аудио
-  подбирается матчингом в YouTube Music.
+* Yandex Music — метаданные из yandex_music.py (анонимный API без токена,
+  либо API по токену, если он задан), с фолбэком на yt-dlp; аудио
+  подбирается матчингом в YouTube Music. Ссылка на профиль импортирует
+  «Мне нравится» и плейлисты владельца — каждую коллекцию отдельным плейлистом.
 * Spotify — метаданные из spotify.py (страница встроенного плеера без ключей,
   либо Web API, если ключи заданы): аудио закрыто DRM, поэтому каждый трек
   тоже подбирается матчингом в YouTube Music.
@@ -36,6 +37,7 @@ from app.routers.tracks import get_or_create_external_track
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.schemas import (
     ExternalTrackImport,
+    ImportPreviewCollection,
     ImportPreviewResponse,
     ImportPreviewTrack,
     ImportRequest,
@@ -76,7 +78,7 @@ def _detect(url: str) -> Tuple[str, str]:
     """Ссылка → (source, kind). Кидает 400 на нераспознанный URL.
 
     source: soundcloud | yandex | spotify;
-    kind: playlist | user | track | album | artist | likes.
+    kind: playlist | user | track | album | artist | likes | profile.
     """
     # Spotify: и веб-ссылки (open.spotify.com/...), и URI (spotify:playlist:...).
     # Проверяем первым: у URI нет netloc, разбор ниже его не увидит.
@@ -680,6 +682,21 @@ async def check_cookies(
     }
 
 
+async def _yandex_profile(url: str):
+    """Ссылка на профиль Yandex → (имя, коллекции). 502, если ничего не отдалось."""
+    parsed = yandex_music_native.parse_url(url) if HAS_YANDEX_MUSIC_NATIVE else None
+    result = await yandex_music_native.fetch_profile(parsed[1]["owner"]) if parsed else None
+    if result is None:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Не удалось прочитать профиль Yandex Music: он не найден либо "
+                "плейлисты и «Мне нравится» скрыты настройками приватности"
+            ),
+        )
+    return result
+
+
 @router.post("/preview", response_model=ImportPreviewResponse)
 async def import_preview(
     payload: ImportRequest,
@@ -689,6 +706,24 @@ async def import_preview(
     """Разбирает ссылку и возвращает метаданные без материализации (для UI)."""
     url = await _normalize_url(payload.url)
     source, kind = _detect(url)
+
+    if source == "yandex" and kind == "profile":
+        name, collections = await _yandex_profile(url)
+        return ImportPreviewResponse(
+            source=source,
+            kind=kind,
+            title=name,
+            track_count=sum(c.track_count for c in collections),
+            collections=[
+                ImportPreviewCollection(
+                    key=c.key,
+                    title=c.title,
+                    cover_url=c.cover_url,
+                    track_count=c.track_count,
+                )
+                for c in collections
+            ],
+        )
 
     if source == "soundcloud" and kind == "playlist":
         native = await _soundcloud_playlist_native(request, url)
@@ -739,6 +774,156 @@ async def import_preview(
     )
 
 
+async def _resolve_entries(
+    request: Request, source: str, entries: List[dict], cache: Optional[dict] = None
+) -> Tuple[List[ExternalTrackImport], int, int]:
+    """Entries → (imports, matched, skipped), в исходном порядке.
+
+    cache (id entry → задача резолва) переиспользуется между коллекциями одного
+    профиля: трек, лежащий в нескольких плейлистах, матчится один раз.
+    """
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    cache = {} if cache is None else cache
+
+    async def resolve(entry: dict):
+        async with sem:
+            return await _entry_to_import(request, source, entry)
+
+    tasks = []
+    for entry in entries:
+        key = entry.get("id")
+        if key is None:
+            tasks.append(asyncio.ensure_future(resolve(entry)))
+            continue
+        if key not in cache:
+            cache[key] = asyncio.ensure_future(resolve(entry))
+        tasks.append(cache[key])
+
+    imports: List[ExternalTrackImport] = []
+    matched = skipped = 0
+    for imp, was_matched in await asyncio.gather(*tasks):
+        if imp is None:
+            skipped += 1  # нативно не резолвится или матч в ytmusic не нашёлся
+            continue
+        imports.append(imp)
+        if was_matched:
+            matched += 1
+    return imports, matched, skipped
+
+
+def _save_playlist(
+    db: Session,
+    user,
+    name: str,
+    description: str,
+    cover: Optional[str],
+    imports: List[ExternalTrackImport],
+) -> Tuple[Playlist, int]:
+    """Материализует треки и собирает из них плейлист. → (плейлист, число треков)."""
+    # Сначала материализуем ВСЕ треки (get_or_create_external_track идемпотентен
+    # по (source, external_id) и коммитит сам, в т.ч. с откатом при гонке —
+    # поэтому делаем это ДО создания плейлиста, чтобы его вставку не откатило).
+    track_ids: List[int] = []
+    seen: set = set()
+    for imp in imports:
+        track = get_or_create_external_track(db, imp)
+        link_materialized_deliveries(
+            db,
+            user_id=user.id,
+            source=imp.source,
+            external_id=imp.external_id,
+            track_id=track.id,
+        )
+        if track.id in seen:
+            continue  # дубли внутри коллекции (напр. матч в один и тот же трек)
+        seen.add(track.id)
+        track_ids.append(track.id)
+
+    # Теперь собираем плейлист и связи одной транзакцией.
+    new_playlist = Playlist(
+        name=name,
+        description=description,
+        cover_url=cover if (cover and cover.startswith("http")) else None,
+        is_public=False,
+        origin="imported",
+        owner_id=user.id,
+    )
+    db.add(new_playlist)
+    db.flush()  # получить new_playlist.id до вставки связей
+
+    for position, track_id in enumerate(track_ids):
+        db.execute(
+            insert(playlist_tracks).values(
+                playlist_id=new_playlist.id,
+                track_id=track_id,
+                position=position,
+            )
+        )
+
+    db.commit()
+    db.refresh(new_playlist)
+    return new_playlist, len(track_ids)
+
+
+async def _import_yandex_profile(
+    payload: ImportRequest, request: Request, url: str, user, db: Session
+) -> ImportResult:
+    """Профиль Yandex Music → по плейлисту на каждую выбранную коллекцию."""
+    name, collections = await _yandex_profile(url)
+    if payload.collections is not None:
+        wanted = set(payload.collections)
+        collections = [c for c in collections if c.key in wanted]
+    if not collections:
+        raise HTTPException(status_code=400, detail="Не выбрано ни одной коллекции")
+
+    source_label = _SOURCE_LABELS["yandex"]
+    cache: dict = {}
+    created: List[Playlist] = []
+    imported = matched = skipped = 0
+
+    for coll in collections:
+        result = await yandex_music_native.fetch_entity(request, coll.kind, coll.params)
+        if not result or not result[2]:
+            logger.warning("yandex profile %s: коллекция %s не отдалась", name, coll.key)
+            continue
+        _, cover, tracks = result
+        imports, coll_matched, coll_skipped = await _resolve_entries(
+            request, "yandex", _tracks_to_entries(tracks), cache
+        )
+        matched += coll_matched
+        skipped += coll_skipped
+        if not imports:
+            continue
+
+        is_likes = coll.kind == "likes"
+        playlist, count = _save_playlist(
+            db,
+            user,
+            f"{coll.title} — {name}" if is_likes else coll.title,
+            f"Импортировано из {source_label}" + (" (избранное)" if is_likes else ""),
+            cover or coll.cover_url,
+            imports,
+        )
+        created.append(playlist)
+        imported += count
+
+    if not created:
+        raise HTTPException(
+            status_code=422,
+            detail="Не удалось сделать играбельным ни один трек из профиля",
+        )
+
+    invalidate_recommendation_cache(user.id)
+    playlists = [PlaylistResponse.model_validate(p) for p in created]
+    return ImportResult(
+        playlist=playlists[0],
+        playlists=playlists,
+        imported=imported,
+        matched=matched,
+        skipped=skipped,
+    )
+
+
 @router.post("", response_model=ImportResult)
 @router.post("/", response_model=ImportResult)
 async def import_collection(
@@ -747,9 +932,15 @@ async def import_collection(
     current_user=Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """Импортирует коллекцию/трек в новый плейлист пользователя."""
+    """Импортирует коллекцию/трек в новый плейлист пользователя.
+
+    Профиль Yandex Music — несколько плейлистов разом (см. _import_yandex_profile).
+    """
     url = await _normalize_url(payload.url)
     source, kind = _detect(url)
+
+    if source == "yandex" and kind == "profile":
+        return await _import_yandex_profile(payload, request, url, current_user, db)
 
     imports: List[ExternalTrackImport] = []
     matched = 0
@@ -766,23 +957,7 @@ async def import_collection(
         title, cover, entries = await _extract_collection(request, url, source, kind)
         if not entries:
             raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
-
-        # Резолвим все треки конкурентно (с ограничением), сохраняя исходный порядок.
-        sem = asyncio.Semaphore(_CONCURRENCY)
-
-        async def resolve(entry: dict):
-            async with sem:
-                return await _entry_to_import(request, source, entry)
-
-        resolved = await asyncio.gather(*(resolve(e) for e in entries))
-
-        for imp, was_matched in resolved:
-            if imp is None:
-                skipped += 1  # нативно не резолвится или матч в ytmusic не нашёлся
-                continue
-            imports.append(imp)
-            if was_matched:
-                matched += 1
+        imports, matched, skipped = await _resolve_entries(request, source, entries)
 
     if not imports:
         raise HTTPException(
@@ -790,56 +965,22 @@ async def import_collection(
             detail="Не удалось сделать играбельным ни один трек из коллекции",
         )
 
-    # Сначала материализуем ВСЕ треки (get_or_create_external_track идемпотентен
-    # по (source, external_id) и коммитит сам, в т.ч. с откатом при гонке —
-    # поэтому делаем это ДО создания плейлиста, чтобы его вставку не откатило).
-    track_ids: List[int] = []
-    seen: set = set()
-    for imp in imports:
-        track = get_or_create_external_track(db, imp)
-        link_materialized_deliveries(
-            db,
-            user_id=current_user.id,
-            source=imp.source,
-            external_id=imp.external_id,
-            track_id=track.id,
-        )
-        if track.id in seen:
-            continue  # дубли внутри коллекции (напр. матч в один и тот же трек)
-        seen.add(track.id)
-        track_ids.append(track.id)
-
-    # Теперь собираем плейлист и связи одной транзакцией.
-    name = payload.playlist_name or title or "Импортированный плейлист"
-    new_playlist = Playlist(
-        name=name,
-        description=f"Импортировано из {_SOURCE_LABELS.get(source, source)}"
-                    + (" (избранное)" if kind == "likes" else ""),
-        cover_url=cover if (cover and cover.startswith("http")) else None,
-        is_public=False,
-        origin="imported",
-        owner_id=current_user.id,
+    new_playlist, imported = _save_playlist(
+        db,
+        current_user,
+        payload.playlist_name or title or "Импортированный плейлист",
+        f"Импортировано из {_SOURCE_LABELS.get(source, source)}"
+        + (" (избранное)" if kind == "likes" else ""),
+        cover,
+        imports,
     )
-    db.add(new_playlist)
-    db.flush()  # получить new_playlist.id до вставки связей
-
-    for position, track_id in enumerate(track_ids):
-        db.execute(
-            insert(playlist_tracks).values(
-                playlist_id=new_playlist.id,
-                track_id=track_id,
-                position=position,
-            )
-        )
-
-    db.commit()
-    db.refresh(new_playlist)
     invalidate_recommendation_cache(current_user.id)
-    position = len(track_ids)
+    playlist = PlaylistResponse.model_validate(new_playlist)
 
     return ImportResult(
-        playlist=PlaylistResponse.model_validate(new_playlist),
-        imported=position,
+        playlist=playlist,
+        playlists=[playlist],
+        imported=imported,
         matched=matched,
         skipped=skipped,
     )

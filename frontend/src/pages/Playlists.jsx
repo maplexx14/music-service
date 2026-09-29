@@ -4,6 +4,10 @@ import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
+import ImportCollectionPicker, {
+  allCollectionKeys,
+  selectedTrackCount,
+} from '../components/ImportCollectionPicker'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -24,6 +28,8 @@ function Playlists() {
   const [preview, setPreview] = useState(null)
   const [previewing, setPreviewing] = useState(false)
   const [importing, setImporting] = useState(false)
+  // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
+  const [selectedCollections, setSelectedCollections] = useState(new Set())
 
   // Cookies для Yandex Music
   const [showCookiesForm, setShowCookiesForm] = useState(false)
@@ -92,6 +98,7 @@ function Playlists() {
     try {
       const { data } = await api.post('/import/preview', { url: importUrl.trim() })
       setPreview(data)
+      setSelectedCollections(allCollectionKeys(data))
     } catch (error) {
       const detail = error.response?.data?.detail || 'Не удалось прочитать ссылку'
       toast.error(detail)
@@ -104,14 +111,19 @@ function Playlists() {
     if (!importUrl.trim() || importing) return
     setImporting(true)
     try {
-      const { data } = await api.post('/import', { url: importUrl.trim() })
+      const body = { url: importUrl.trim() }
+      if (isProfilePreview) body.collections = [...selectedCollections]
+      const { data } = await api.post('/import', body)
+      const created = data.playlists?.length || (data.playlist ? 1 : 0)
       const parts = [`Импортировано треков: ${data.imported}`]
+      if (created > 1) parts.push(`плейлистов: ${created}`)
       if (data.matched) parts.push(`подобрано: ${data.matched}`)
       if (data.skipped) parts.push(`пропущено: ${data.skipped}`)
       toast.success(parts.join(', '))
       resetImport()
       await fetchPlaylists()
-      if (data.playlist?.id) navigate(`/playlists/${data.playlist.id}`)
+      // Профиль даёт несколько плейлистов — остаёмся в медиатеке.
+      if (created === 1 && data.playlist?.id) navigate(`/playlists/${data.playlist.id}`)
     } catch (error) {
       const detail = error.response?.data?.detail || 'Не удалось импортировать'
       toast.error(detail)
@@ -138,7 +150,10 @@ function Playlists() {
     setShowImportForm(false)
     setImportUrl('')
     setPreview(null)
+    setSelectedCollections(new Set())
   }
+
+  const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
 
   // Функции для работы с cookies
   const checkCookiesExists = async () => {
@@ -224,7 +239,9 @@ function Playlists() {
         <div className="import-playlist-form">
           <p className="import-hint">
             Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music
-            либо Spotify. Треки Yandex(отказано) и Spotify подбираются из YouTube Music.
+            либо Spotify. Треки Yandex и Spotify подбираются из YouTube Music. Из профиля
+            Yandex Music переносятся открытые плейлисты и «Мне нравится» — каждый отдельным
+            плейлистом.
           </p>
           <div className="import-examples">
             <div className="import-example">
@@ -234,6 +251,13 @@ function Playlists() {
               <span className="import-example-url">open.spotify.com/track/4cOdK2...</span>
             </div>
            
+            <div className="import-example">
+              <span className="import-example-label">Yandex Music:</span>
+              <span className="import-example-url">music.yandex.ru/users/login (профиль)</span>
+              <span className="import-example-url">music.yandex.ru/users/login/playlists/1003</span>
+              <span className="import-example-url">music.yandex.ru/album/5307899</span>
+            </div>
+
             <div className="import-example">
               <span className="import-example-label">SoundCloud:</span>
               <span className="import-example-url">soundcloud.com/user/sets/playlist</span>
@@ -325,15 +349,24 @@ function Playlists() {
               <div className="import-preview-title">
                 {preview.title || 'Коллекция'} · {preview.track_count} треков · {preview.source}
               </div>
-              <ul className="import-preview-list">
-                {preview.tracks.slice(0, 5).map((t, i) => (
-                  <li key={i}>
-                    <span className="import-preview-track">{t.title}</span>
-                    <span className="import-preview-artist">{t.artist}</span>
-                  </li>
-                ))}
-                {preview.track_count > 5 && <li>…и ещё {preview.track_count - 5}</li>}
-              </ul>
+              {isProfilePreview ? (
+                <ImportCollectionPicker
+                  collections={preview.collections}
+                  selected={selectedCollections}
+                  onChange={setSelectedCollections}
+                  disabled={importing}
+                />
+              ) : (
+                <ul className="import-preview-list">
+                  {preview.tracks.slice(0, 5).map((t, i) => (
+                    <li key={i}>
+                      <span className="import-preview-track">{t.title}</span>
+                      <span className="import-preview-artist">{t.artist}</span>
+                    </li>
+                  ))}
+                  {preview.track_count > 5 && <li>…и ещё {preview.track_count - 5}</li>}
+                </ul>
+              )}
             </div>
           )}
 
@@ -342,9 +375,13 @@ function Playlists() {
               type="button"
               className="submit-btn"
               onClick={handleImport}
-              disabled={importing || !importUrl.trim()}
+              disabled={importing || !importUrl.trim() || (isProfilePreview && !selectedCollections.size)}
             >
-              {importing ? 'Импорт...' : 'Импортировать'}
+              {importing
+                ? 'Импорт...'
+                : isProfilePreview
+                  ? `Импортировать (${selectedCollections.size} · ${selectedTrackCount(preview, selectedCollections)} треков)`
+                  : 'Импортировать'}
             </button>
             <button type="button" className="cancel-btn" onClick={resetImport}>
               Отмена

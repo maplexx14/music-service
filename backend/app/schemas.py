@@ -352,6 +352,9 @@ class ImportRequest(BaseModel):
     url: str
     playlist_name: Optional[str] = None
     cookies_file: Optional[str] = None  # путь к cookies файлу для обхода CAPTCHA
+    # Для профиля: ключи коллекций из превью (likes, playlist:<kind>).
+    # None — импортировать все.
+    collections: Optional[List[str]] = None
 
 
 class ImportPreviewTrack(BaseModel):
@@ -362,17 +365,28 @@ class ImportPreviewTrack(BaseModel):
     source: str  # исходный сервис (soundcloud/yandex)
 
 
+class ImportPreviewCollection(BaseModel):
+    """Коллекция профиля (Yandex Music): импортируется отдельным плейлистом."""
+    key: str             # likes | playlist:<kind>
+    title: str
+    cover_url: Optional[str] = None
+    track_count: int = 0
+
+
 class ImportPreviewResponse(BaseModel):
     source: str          # soundcloud | yandex
-    kind: str            # playlist | user | track
+    kind: str            # playlist | user | track | profile
     title: Optional[str] = None
     cover_url: Optional[str] = None
     track_count: int
     tracks: List[ImportPreviewTrack] = []
+    collections: List[ImportPreviewCollection] = []  # только для kind=profile
 
 
 class ImportResult(BaseModel):
     playlist: Optional[PlaylistResponse] = None
+    # Импорт профиля создаёт по плейлисту на коллекцию; playlist — первый из них.
+    playlists: List[PlaylistResponse] = []
     imported: int    # сколько треков добавлено в плейлист
     matched: int     # из них подобрано матчингом (не нативных)
     skipped: int     # не удалось сделать играбельными

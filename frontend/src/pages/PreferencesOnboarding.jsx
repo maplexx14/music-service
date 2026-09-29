@@ -6,6 +6,10 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import defaultCover from '../assets/default-cover.webp'
 import GenreSelect from '../components/GenreSelect'
 import ArtistSelect from '../components/ArtistSelect'
+import ImportCollectionPicker, {
+  allCollectionKeys,
+  selectedTrackCount,
+} from '../components/ImportCollectionPicker'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import './PreferencesOnboarding.css'
@@ -47,6 +51,9 @@ function PreferencesOnboarding() {
   const [previewing, setPreviewing] = useState(false)
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState(0)
+  // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
+  const [selectedCollections, setSelectedCollections] = useState(new Set())
+  const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
 
   // Вкус, выведенный из прослушиваний: у пришедшего по инвайту юзера история
   // может быть уже не пустой (импорт, лайки до онбординга).
@@ -121,6 +128,7 @@ function PreferencesOnboarding() {
     try {
       const { data } = await api.post('/import/preview', { url })
       setPreview(data)
+      setSelectedCollections(allCollectionKeys(data))
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Не удалось прочитать ссылку')
     } finally {
@@ -133,8 +141,11 @@ function PreferencesOnboarding() {
     if (!url || importing) return
     setImporting(true)
     try {
-      const { data } = await api.post('/import', { url })
+      const body = { url }
+      if (isProfilePreview) body.collections = [...selectedCollections]
+      const { data } = await api.post('/import', body)
       const parts = [`Импортировано треков: ${data.imported}`]
+      if (data.playlists?.length > 1) parts.push(`плейлистов: ${data.playlists.length}`)
       if (data.matched) parts.push(`подобрано: ${data.matched}`)
       if (data.skipped) parts.push(`пропущено: ${data.skipped}`)
       toast.success(parts.join(', '))
@@ -232,7 +243,7 @@ function PreferencesOnboarding() {
             <ul className="onboarding-import-examples">
               <li>open.spotify.com/playlist/… · /album/… · /track/…</li>
               <li>soundcloud.com/user · /user/sets/playlist</li>
-              <li>music.yandex.ru/users/…/playlists/… (нужны cookies, см. «Моя музыка»)</li>
+              <li>music.yandex.ru/users/login (профиль) · /users/login/playlists/… · /album/…</li>
             </ul>
 
             {preview && (
@@ -255,14 +266,26 @@ function PreferencesOnboarding() {
                     </div>
                   </div>
                 </div>
+                {isProfilePreview && (
+                  <ImportCollectionPicker
+                    collections={preview.collections}
+                    selected={selectedCollections}
+                    onChange={setSelectedCollections}
+                    disabled={importing}
+                  />
+                )}
                 <button
                   type="button"
                   className="onboarding-import-btn"
                   onClick={handleImport}
-                  disabled={importing}
+                  disabled={importing || (isProfilePreview && !selectedCollections.size)}
                 >
                   <Download size={16} />
-                  {importing ? 'Импортируем...' : 'Импортировать'}
+                  {importing
+                    ? 'Импортируем...'
+                    : isProfilePreview
+                      ? `Импортировать (${selectedTrackCount(preview, selectedCollections)} треков)`
+                      : 'Импортировать'}
                 </button>
               </div>
             )}

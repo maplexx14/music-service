@@ -10,12 +10,12 @@ YouTube Music (см. importer.py). Отсюда нужны названия, а�
    собственную библиотеку пользователя и приватные плейлисты.
    Токен: https://github.com/MarshalX/yandex-music/blob/main/docs/authentication.md
 
-2. Публичные веб-хендлеры music.yandex.ru/handlers/*.jsx — БЕЗ токена. Это те
-   же запросы, которые делает сам сайт из браузера: публичные плейлисты,
+2. Анонимный api.music.yandex.net — БЕЗ токена. Тот же API, что у приложений
+   и нового сайта: публичные плейлисты, профили (список плейлистов владельца),
    альбомы, артисты, треки и открытое «Мне нравится» отдаются без авторизации.
-   Приватные коллекции этим путём недоступны, и Yandex может ответить капчей
-   или геоблокировкой (451 / страница «This page is no longer available» — так
-   выглядит запрос из-за пределов РФ/РБ).
+   Приватные коллекции этим путём недоступны. Старые веб-хендлеры
+   music.yandex.ru/handlers/*.jsx после переезда сайта отвечают редиректом на
+   HTML — ими больше не пользуемся.
 
 Если оба пути не сработали, вызывающий (importer) откатывается на yt-dlp с
 пользовательскими cookies.
@@ -42,30 +42,33 @@ YANDEX_MUSIC_TOKEN = os.getenv("YANDEX_MUSIC_TOKEN", "")
 # Глобальный клиент (ленивая инициализация)
 _client = None
 
-# ─── Публичные веб-хендлеры ───
+# ─── Публичный API (без токена) ───
 
-_WEB_BASE = "https://music.yandex.ru"
-_WEB_TIMEOUT = httpx.Timeout(10.0, read=25.0)
-# Хендлеры отвечают JSON только «браузеру»: без этих заголовков прилетает HTML.
+_API_BASE = "https://api.music.yandex.net"
+_API_TIMEOUT = httpx.Timeout(10.0, read=30.0)
+# Необязательный HTTP-прокси для запросов к Yandex (http://user:pass@host:port).
+# Метаданные api.music.yandex.net отдаются и зарубежным IP; прокси нужен, только
+# если адрес сервера всё же отрезали — тогда хватит выхода из РФ/СНГ.
+_API_PROXY = os.getenv("YANDEX_MUSIC_PROXY", "").strip() or None
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
-_HANDLER_PARAMS = {
-    "lang": "ru",
-    "external-domain": "music.yandex.ru",
-    "overembed": "false",
-}
 # Предохранитель на размер коллекции.
 _MAX_TRACKS = 10_000
-# Сколько id зараз просим у track-entries.jsx (длинный GET/POST режут).
+# Сколько id зараз просим у POST /tracks (длинные запросы режут).
 _ID_CHUNK = 200
+# Страница треков артиста.
+_ARTIST_PAGE = 100
+# Сколько плейлистов профиля отдаём в импорт: у редакционных аккаунтов их
+# тысячи, а импорт каждого — это матчинг всех треков в YouTube Music.
+MAX_PROFILE_PLAYLISTS = 100
 
 _UNAVAILABLE_DETAIL = (
-    "Yandex Music не отвечает. Возможные причины и решения:\n"
-    "1. Сервис недоступен с IP сервера (геоблокировка вне РФ/РБ) — нужен прокси\n"
-    "2. Yandex показал капчу — загрузите cookies через /api/import/cookies\n"
-    "3. Коллекция приватная — задайте YANDEX_MUSIC_TOKEN в .env"
+    "Yandex Music не отдал данные. Возможные причины:\n"
+    "1. Коллекция или профиль приватные — откройте их в настройках Yandex Music\n"
+    "2. Ссылка неверная или коллекция удалена\n"
+    "3. Сервис недоступен с IP сервера (геоблокировка) — задайте YANDEX_MUSIC_PROXY"
 )
 
 
@@ -158,58 +161,50 @@ def _extract_track_info(track) -> Optional[YandexMusicTrack]:
 # ─── Публичный путь: без токена ───
 
 
-async def _handler(
-    name: str,
-    params: Dict[str, Any],
-    referer_path: str = "/",
+async def _api(
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
     data: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
-    """Запрос к music.yandex.ru/handlers/{name}. None — если ответ не JSON.
+    """Анонимный запрос к api.music.yandex.net. Возвращает `result` или None.
 
-    Не бросает: любой отказ (сеть, капча, геоблок, смена формата) — это сигнал
-    вызывающему попробовать следующий источник, а не ошибка запроса юзера.
+    Не бросает: любой отказ (сеть, 4xx/5xx, приватность, смена формата) — это
+    сигнал вызывающему попробовать следующий источник, а не ошибка запроса юзера.
     """
-    url = f"{_WEB_BASE}/handlers/{name}"
-    referer = f"{_WEB_BASE}{referer_path}"
+    url = f"{_API_BASE}/{path.lstrip('/')}"
     headers = {
         "User-Agent": _BROWSER_UA,
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Retpath-Y": referer,
-        "Referer": referer,
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "ru,en;q=0.9",
+        "Accept": "application/json",
+        "Accept-Language": "ru",
     }
-    query = {**_HANDLER_PARAMS, **params}
-
     try:
-        async with httpx.AsyncClient(timeout=_WEB_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=_API_TIMEOUT, follow_redirects=True, proxy=_API_PROXY
+        ) as client:
             if data is None:
-                resp = await client.get(url, params=query, headers=headers)
+                resp = await client.get(url, params=params, headers=headers)
             else:
-                resp = await client.post(url, params=query, data=data, headers=headers)
+                resp = await client.post(url, params=params, data=data, headers=headers)
     except Exception as exc:  # noqa: BLE001 — сеть
-        logger.warning("Yandex handler %s недоступен: %s", name, exc)
-        return None
-
-    if resp.status_code != 200:
-        # 451 — геоблокировка, 404 — та же заглушка «page is no longer available».
-        logger.warning("Yandex handler %s → HTTP %s", name, resp.status_code)
-        return None
-
-    if "json" not in (resp.headers.get("content-type") or "").lower():
-        # Капча и страницы-заглушки приходят как HTML с кодом 200.
-        logger.warning("Yandex handler %s вернул не JSON (капча или заглушка)", name)
+        logger.warning("Yandex API %s недоступен: %s", path, exc)
         return None
 
     try:
-        return resp.json()
+        payload = resp.json()
     except ValueError:
-        logger.warning("Yandex handler %s вернул битый JSON", name)
+        logger.warning("Yandex API %s → HTTP %s, не JSON", path, resp.status_code)
         return None
+
+    if resp.status_code != 200 or not isinstance(payload, dict) or "result" not in payload:
+        # 404 playlist-not-found, 401 для несуществующего логина, 403 приватное.
+        error = payload.get("error") if isinstance(payload, dict) else None
+        logger.warning("Yandex API %s → HTTP %s %s", path, resp.status_code, error)
+        return None
+    return payload["result"]
 
 
 def _track_from_web(obj: dict) -> Optional[YandexMusicTrack]:
-    """Объект трека из веб-хендлера → YandexMusicTrack."""
+    """Объект трека из API → YandexMusicTrack."""
     if not isinstance(obj, dict):
         return None
     track_id = obj.get("id") or obj.get("realId")
@@ -265,25 +260,37 @@ def _web_cover(obj: dict) -> Optional[str]:
     return _cover_url(obj.get("coverUri") or obj.get("ogImage"))
 
 
+def _entry_id(item: Any) -> Optional[str]:
+    """Короткая запись трека → id вида `trackId:albumId` для POST /tracks."""
+    if not isinstance(item, dict) or not item.get("id"):
+        return None
+    album_id = item.get("albumId")
+    return f"{item['id']}:{album_id}" if album_id else str(item["id"])
+
+
 async def _public_tracks_by_ids(entries: List[str]) -> List[YandexMusicTrack]:
     """Полные треки по id вида `trackId:albumId` (так их отдаёт библиотека)."""
     tracks: List[YandexMusicTrack] = []
     for start in range(0, min(len(entries), _MAX_TRACKS), _ID_CHUNK):
         chunk = entries[start:start + _ID_CHUNK]
-        data = await _handler(
-            "track-entries.jsx",
-            {},
-            "/",
-            data={"entries": ",".join(chunk), "strict": "true"},
-        )
+        data = await _api("tracks", data={"track-ids": ",".join(chunk), "with-positions": "false"})
         if not isinstance(data, list):
             break
         tracks.extend(_tracks_from_web(data))
     return tracks
 
 
+async def _playlist_tracks(playlist: dict) -> List[YandexMusicTrack]:
+    """Треки плейлиста: полные объекты, а короткие записи дотягиваем по id."""
+    items = playlist.get("tracks") or []
+    if items and all(isinstance(i, dict) and isinstance(i.get("track"), dict) for i in items):
+        return _tracks_from_web(items)
+    ids = [e for e in (_entry_id(i) for i in items) if e]
+    return await _public_tracks_by_ids(ids)
+
+
 async def _public_album(album_id: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    data = await _handler("album.jsx", {"album": album_id}, f"/album/{album_id}")
+    data = await _api(f"albums/{album_id}/with-tracks")
     if not isinstance(data, dict) or not data.get("title"):
         return None
     # Треки альбома разложены по дискам (volumes).
@@ -294,89 +301,131 @@ async def _public_album(album_id: str) -> Optional[Tuple[Optional[str], Optional
 
 
 async def _public_artist(artist_id: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    data = await _handler(
-        "artist.jsx",
-        {"artist": artist_id, "what": "tracks", "sort": "", "dir": ""},
-        f"/artist/{artist_id}/tracks",
-    )
-    if not isinstance(data, dict):
+    info = await _api(f"artists/{artist_id}/brief-info")
+    artist = (info or {}).get("artist") if isinstance(info, dict) else None
+    if not isinstance(artist, dict) or not artist.get("name"):
         return None
-    artist = data.get("artist") or {}
-    name = artist.get("name")
-    if not name:
-        return None
-    tracks = _tracks_from_web(data.get("tracks") or [])
-    if not tracks:
-        ids = [str(i) for i in (data.get("trackIds") or []) if i]
-        tracks = await _public_tracks_by_ids(ids)
-    return name, _web_cover(artist), tracks
+
+    tracks: List[YandexMusicTrack] = []
+    page = 0
+    while len(tracks) < _MAX_TRACKS:
+        data = await _api(
+            f"artists/{artist_id}/tracks", {"page": page, "page-size": _ARTIST_PAGE}
+        )
+        if not isinstance(data, dict):
+            break
+        batch = data.get("tracks") or []
+        tracks.extend(_tracks_from_web(batch))
+        total = int((data.get("pager") or {}).get("total") or 0)
+        page += 1
+        if not batch or page * _ARTIST_PAGE >= total:
+            break
+    return artist["name"], _web_cover(artist), tracks
 
 
 async def _public_playlist(owner: str, kind: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    data = await _handler(
-        "playlist.jsx",
-        {
-            "owner": owner,
-            "kinds": kind,
-            "light": "false",
-            "madeFor": "",
-            "withLikesCount": "true",
-            "forceLogin": "true",
-        },
-        f"/users/{owner}/playlists/{kind}",
-    )
-    if not isinstance(data, dict):
+    playlist = await _api(f"users/{owner}/playlists/{kind}")
+    if not isinstance(playlist, dict) or not playlist.get("title"):
         return None
-    playlist = data.get("playlist") or {}
-    if not playlist.get("title"):
+    return playlist["title"], _web_cover(playlist), await _playlist_tracks(playlist)
+
+
+async def _public_playlist_uuid(uuid: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
+    """Плейлист по uuid — формат ссылок нового сайта (/playlists/<uuid>).
+
+    Так же открывается и «Мне нравится» (uuid вида `lk.…`).
+    """
+    playlist = await _api(f"playlist/{uuid}")
+    if not isinstance(playlist, dict) or not playlist.get("title"):
         return None
-    tracks = _tracks_from_web(playlist.get("tracks") or [])
-    if not tracks:
-        ids = [str(i) for i in (playlist.get("trackIds") or []) if i]
-        tracks = await _public_tracks_by_ids(ids)
-    return playlist.get("title"), _web_cover(playlist), tracks
+    return playlist["title"], _web_cover(playlist), await _playlist_tracks(playlist)
 
 
 async def _public_track(track_id: str, album_id: Optional[str] = None) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
     entry = f"{track_id}:{album_id}" if album_id else str(track_id)
-    data = await _handler("track.jsx", {"track": entry}, f"/track/{track_id}")
-    obj = (data or {}).get("track") if isinstance(data, dict) else None
-    track = _track_from_web(obj) if obj else None
+    data = await _api(f"tracks/{entry}")
+    track = _track_from_web(data[0]) if isinstance(data, list) and data else None
     if not track:
         return None
     return track.title, track.cover_url, [track]
 
 
-async def _public_likes(owner: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    """Открытое «Мне нравится» пользователя. Приватное отдаётся пустым."""
-    data = await _handler(
-        "library.jsx",
-        {"owner": owner, "filter": "tracks", "likeFilter": "favorite"},
-        f"/users/{owner}/likes/tracks",
-    )
-    if not isinstance(data, dict):
+async def _likes_ids(owner: str) -> Optional[List[str]]:
+    """id треков открытого «Мне нравится». None — закрыто или не нашлось."""
+    data = await _api(f"users/{owner}/likes/tracks")
+    library = (data or {}).get("library") if isinstance(data, dict) else None
+    if not isinstance(library, dict):
         return None
-    library = data.get("library") if isinstance(data.get("library"), dict) else data
+    return [e for e in (_entry_id(i) for i in library.get("tracks") or []) if e]
 
-    tracks = _tracks_from_web(library.get("tracks") or [])
-    if not tracks:
-        # library.jsx часто отдаёт только id — дотягиваем метаданные батчами.
-        ids = [str(i) for i in (library.get("trackIds") or []) if i]
-        if not ids:
-            return None
-        tracks = await _public_tracks_by_ids(ids)
-    return f"Избранное {owner} (Yandex Music)", None, tracks
+
+async def _public_likes(owner: str) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
+    """Открытое «Мне нравится» пользователя. Приватное отдаётся ошибкой."""
+    ids = await _likes_ids(owner)
+    if not ids:
+        return None
+    tracks = await _public_tracks_by_ids(ids)
+    return f"Мне нравится — {owner} (Yandex Music)", None, tracks
+
+
+class YandexCollection(BaseModel):
+    """Коллекция в профиле: плейлист или «Мне нравится»."""
+    key: str                    # likes | playlist:<kind> — выбор в UI
+    kind: str                   # likes | playlist (как у parse_url)
+    params: Dict[str, str]
+    title: str
+    cover_url: Optional[str] = None
+    track_count: int = 0
+
+
+async def fetch_profile(owner: str) -> Optional[Tuple[str, List[YandexCollection]]]:
+    """Профиль → (имя владельца, коллекции). Без токена — только публичное.
+
+    Сначала «Мне нравится» (если открыто), затем плейлисты владельца
+    (не больше MAX_PROFILE_PLAYLISTS). None — профиль не найден или всё закрыто.
+    """
+    playlists, like_ids = await asyncio.gather(
+        _api(f"users/{owner}/playlists/list"),
+        _likes_ids(owner),
+    )
+
+    name = owner
+    collections: List[YandexCollection] = []
+    if like_ids:
+        collections.append(YandexCollection(
+            key="likes",
+            kind="likes",
+            params={"owner": owner},
+            title="Мне нравится",
+            track_count=len(like_ids),
+        ))
+
+    for item in (playlists if isinstance(playlists, list) else [])[:MAX_PROFILE_PLAYLISTS]:
+        if not isinstance(item, dict) or item.get("kind") is None or not item.get("title"):
+            continue
+        name = ((item.get("owner") or {}).get("name")) or name
+        if not item.get("trackCount"):
+            continue
+        kind = str(item["kind"])
+        collections.append(YandexCollection(
+            key=f"playlist:{kind}",
+            kind="playlist",
+            params={"owner": owner, "kind": kind},
+            title=item["title"],
+            cover_url=_web_cover(item),
+            track_count=int(item["trackCount"]),
+        ))
+
+    if not collections:
+        return None
+    return name, collections
 
 
 async def _public_search(query: str, limit: int) -> List[YandexMusicTrack]:
-    data = await _handler(
-        "music-search.jsx",
-        {"text": query, "type": "tracks", "page": "0"},
-        "/search",
-    )
+    data = await _api("search", {"text": query, "type": "track", "page": 0})
     if not isinstance(data, dict):
         return []
-    items = ((data.get("tracks") or {}).get("items")) or []
+    items = ((data.get("tracks") or {}).get("results")) or []
     return _tracks_from_web(items)[:limit]
 
 
@@ -390,12 +439,16 @@ _LIKES_RE = re.compile(r"/users/([^/]+)/likes")
 # Владелец плейлиста — это логин, а не число: /users/music-blog/playlists/2136.
 _USER_PLAYLIST_RE = re.compile(r"/users/([^/]+)/playlists/([\w.-]+)")
 _SHORT_PLAYLIST_RE = re.compile(r"/playlists/([^/]+)/([\w.-]+)")
+# Новый сайт: /playlists/<uuid>, «Мне нравится» — /playlists/lk.<uuid>.
+_UUID_PLAYLIST_RE = re.compile(r"^/playlists/((?:lk\.)?[0-9a-f]{8}-[0-9a-f-]{27})$", re.I)
+# Профиль: /users/<login> или /users/<login>/playlists (без номера плейлиста).
+_PROFILE_RE = re.compile(r"^/users/([^/]+)(?:/playlists)?$")
 
 
 def parse_url(url: str) -> Optional[Tuple[str, Dict[str, str]]]:
     """Ссылка Yandex Music → (kind, параметры) или None, если это не Yandex.
 
-    kind: track | album | artist | playlist | likes.
+    kind: track | album | artist | playlist | likes | profile.
     """
     parsed = urlparse((url or "").strip())
     if "music.yandex." not in (parsed.netloc or "").lower():
@@ -417,9 +470,15 @@ def parse_url(url: str) -> Optional[Tuple[str, Dict[str, str]]]:
     match = _LIKES_RE.search(path)
     if match:
         return "likes", {"owner": match.group(1)}
+    match = _UUID_PLAYLIST_RE.search(path)
+    if match:
+        return "playlist", {"uuid": match.group(1)}
     match = _USER_PLAYLIST_RE.search(path) or _SHORT_PLAYLIST_RE.search(path)
     if match:
         return "playlist", {"owner": match.group(1), "kind": match.group(2)}
+    match = _PROFILE_RE.search(path)
+    if match:
+        return "profile", {"owner": match.group(1)}
     return None
 
 
@@ -437,7 +496,7 @@ async def _fetch_with_token(
             return await get_album_tracks(request, params["album_id"])
         if kind == "artist":
             return await get_artist_tracks(request, params["artist_id"])
-        if kind == "playlist":
+        if kind == "playlist" and "uuid" not in params:
             return await get_playlist_tracks(request, params["owner"], params["kind"])
         if kind == "likes":
             return await get_user_likes(request, params["owner"])
@@ -451,19 +510,21 @@ async def _fetch_with_token(
 async def _fetch_public(
     kind: str, params: Dict[str, str]
 ) -> Optional[Tuple[Optional[str], Optional[str], List[YandexMusicTrack]]]:
-    """Забирает коллекцию через публичные веб-хендлеры (без токена)."""
+    """Забирает коллекцию через анонимный API (без токена)."""
     try:
         if kind == "album":
             return await _public_album(params["album_id"])
         if kind == "artist":
             return await _public_artist(params["artist_id"])
+        if kind == "playlist" and "uuid" in params:
+            return await _public_playlist_uuid(params["uuid"])
         if kind == "playlist":
             return await _public_playlist(params["owner"], params["kind"])
         if kind == "likes":
             return await _public_likes(params["owner"])
         if kind == "track":
             return await _public_track(params["track_id"], params.get("album_id"))
-    except Exception as exc:  # noqa: BLE001 — смена формата хендлера
+    except Exception as exc:  # noqa: BLE001 — смена формата ответа
         logger.warning("Публичный Yandex Music не отдал %s %s: %s", kind, params, exc)
     return None
 
@@ -772,11 +833,21 @@ async def get_likes(request: Request, user_id: str):
     return await _entity_response(request, "likes", {"owner": user_id})
 
 
+@router.get("/profile/{user_id}")
+async def get_profile(user_id: str):
+    """Публичные коллекции профиля: «Мне нравится» и плейлисты."""
+    result = await fetch_profile(user_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail=_UNAVAILABLE_DETAIL)
+    name, collections = result
+    return {"name": name, "collections": collections}
+
+
 @router.get("/status")
 async def check_status():
     """Статус интеграции.
 
-    Импорт работает и без токена (публичные веб-хендлеры), поэтому
+    Импорт работает и без токена (анонимный API), поэтому
     connected=false здесь не означает «Yandex Music недоступен».
     """
     client = await _get_client_async()
