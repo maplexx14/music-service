@@ -220,33 +220,54 @@ def _online_user_ids() -> set:
         return set()
 
 
-def _admin_profile(db: Session, user: User, online_ids: set) -> dict:
+# Профиль вкуса для карточки админки живёт в Redis: _taste_profile — это
+# полдесятка запросов и проход по всей коллекции юзера, а панель открывают
+# повторно (кнопка «Обновить», возврат на вкладку). Для админки хватает
+# свежести в несколько минут — это справка, а не сигнал для волны.
+_ADMIN_TASTE_TTL = 600
+
+
+def _admin_taste(db: Session, user_id: int) -> dict:
+    cache_key = f"admin:taste:{user_id}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
     # Профиль вкуса — самая хрупкая часть дашборда (он читает лайки,
     # историю и плейлисты). Один пользователь с битыми данными не должен
     # ронять всю панель: его карточка просто едет без detected_*.
     try:
-        detected = _taste_profile(db, user.id) or {}
+        detected = _taste_profile(db, user_id) or {}
     except Exception:
-        logger.exception("taste profile failed for user %s", user.id)
+        logger.exception("taste profile failed for user %s", user_id)
         db.rollback()
-        detected = {}
-    return {
+        return {"detected_genres": [], "detected_artists": []}
+    result = {
+        "detected_genres": sorted((detected.get("genre_counts") or {}).keys())[:12],
+        "detected_artists": (detected.get("artists") or [])[:12],
+    }
+    set_cache(cache_key, result, expire=_ADMIN_TASTE_TTL)
+    return result
+
+
+def _admin_profile(db: Session, user: User, online_ids: set, with_taste: bool = True) -> dict:
+    profile = {
         "id": user.id,
         "username": user.username,
         "email": user.email,
         "preferred_genres": user.preferred_genres or [],
         "preferred_artists": user.preferred_artists or [],
-        "detected_genres": sorted((detected.get("genre_counts") or {}).keys())[:12],
-        "detected_artists": (detected.get("artists") or [])[:12],
         "created_at": user.created_at,
         "last_seen": user.last_seen,
         "is_online": user.id in online_ids,
         "is_active": user.is_active,
     }
+    if with_taste:
+        profile.update(_admin_taste(db, user.id))
+    return profile
 
 
 def _admin_users_page(
-    db: Session, online_ids: set, limit: int, offset: int
+    db: Session, online_ids: set, limit: int, offset: int, with_taste: bool = True
 ) -> tuple:
     """Страница профилей, отсортированных по последнему онлайну.
 
@@ -260,11 +281,12 @@ def _admin_users_page(
     )
     total = query.count()
     users = query.limit(limit).offset(offset).all()
-    return total, [_admin_profile(db, user, online_ids) for user in users]
+    return total, [_admin_profile(db, user, online_ids, with_taste) for user in users]
 
 
 @router.get("/admin/dashboard")
 def get_admin_dashboard(
+    taste: bool = Query(default=True),
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
@@ -273,14 +295,27 @@ def get_admin_dashboard(
     Профили приезжают первой страницей (USERS_PAGE_SIZE); остальное панель
     догружает по /admin/users — прогонять _taste_profile по всем юзерам
     сразу значило бы делать панель линейно дороже с каждым регистрацией.
+
+    taste=false отдаёт профили без detected_* — панель показывается сразу, а
+    профили вкуса догружает отдельно через /admin/users/taste.
     """
     online_ids = _online_user_ids()
-    users_total, profiles = _admin_users_page(db, online_ids, limit=50, offset=0)
+    users_total, profiles = _admin_users_page(
+        db, online_ids, limit=50, offset=0, with_taste=taste
+    )
+    # COUNT(DISTINCT artist) — полный проход по таблице треков; каталог за
+    # минуты не меняется, поэтому счётчики кэшируются как users:count.
+    catalog = get_cache("admin:catalog_counts")
+    if catalog is None:
+        catalog = {
+            "tracks_count": db.query(Track).count(),
+            "artists_count": db.query(func.count(func.distinct(Track.artist))).scalar() or 0,
+        }
+        set_cache("admin:catalog_counts", catalog, expire=120)
     return {
         "users_count": users_total,
         "online_users_count": len(online_ids),
-        "tracks_count": db.query(Track).count(),
-        "artists_count": db.query(func.count(func.distinct(Track.artist))).scalar() or 0,
+        **catalog,
         "users": profiles,
         "users_total": users_total,
     }
@@ -290,13 +325,30 @@ def get_admin_dashboard(
 def get_admin_users(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    taste: bool = Query(default=True),
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
     """Следующая страница профилей для ленивой загрузки админ-панели."""
     online_ids = _online_user_ids()
-    total, profiles = _admin_users_page(db, online_ids, limit, offset)
+    total, profiles = _admin_users_page(db, online_ids, limit, offset, with_taste=taste)
     return {"total": total, "users": profiles}
+
+
+@router.get("/admin/users/taste")
+def get_admin_users_taste(
+    ids: str = Query(..., description="id через запятую"),
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Профили вкуса (detected_*) для уже показанных карточек админки."""
+    try:
+        user_ids = list(dict.fromkeys(int(raw) for raw in ids.split(",") if raw.strip()))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="ids must be comma-separated integers")
+    if len(user_ids) > 200:
+        raise HTTPException(status_code=422, detail="too many ids")
+    return {"profiles": {str(uid): _admin_taste(db, uid) for uid in user_ids}}
 
 
 @router.get("/{user_id}", response_model=UserResponse)

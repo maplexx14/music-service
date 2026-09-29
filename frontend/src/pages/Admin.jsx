@@ -28,23 +28,57 @@ function Admin() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [tracks, setTracks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [tracksLoading, setTracksLoading] = useState(true)
   const [deletingId, setDeletingId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  const fetchAdminData = async () => {
-    setLoading(true)
+  // Профиль вкуса («Определены системой») — самая дорогая часть панели: на
+  // бэке это полдесятка запросов на каждого юзера. Поэтому карточки приходят
+  // без него (taste=false) и рисуются сразу, а detected_* догружаются следом
+  // одним пакетом и вливаются в уже показанные карточки.
+  const loadTaste = async (page) => {
+    const ids = page.map((user) => user.id)
+    if (ids.length === 0) return
     try {
-      const [dashboardResponse, tracksResponse] = await Promise.all([
-        api.get('/users/admin/dashboard'),
-        api.get('/tracks?limit=200'),
-      ])
-      setStats(dashboardResponse.data)
-      setUsers(dashboardResponse.data.users || [])
-      setUsersTotal(dashboardResponse.data.users_total ?? (dashboardResponse.data.users || []).length)
-      setTracks(tracksResponse.data || [])
+      const response = await api.get('/users/admin/users/taste', {
+        params: { ids: ids.join(',') },
+        skipErrorToast: true,
+      })
+      const profiles = response.data.profiles || {}
+      setUsers((prev) => prev.map((user) => (
+        profiles[user.id] ? { ...user, ...profiles[user.id] } : user
+      )))
+    } catch (error) {
+      console.error('Error loading taste profiles:', error)
+    }
+  }
+
+  // Треки грузятся независимо от сводки: 200 карточек не должны держать
+  // спиннер над статистикой и профилями.
+  const fetchTracks = async () => {
+    setTracksLoading(true)
+    try {
+      const response = await api.get('/tracks?limit=200')
+      setTracks(response.data || [])
+    } catch (error) {
+      console.error('Error fetching admin tracks:', error)
+    } finally {
+      setTracksLoading(false)
+    }
+  }
+
+  const fetchAdminData = async () => {
+    fetchTracks()
+    try {
+      const response = await api.get('/users/admin/dashboard', { params: { taste: false } })
+      const page = response.data.users || []
+      setStats(response.data)
+      setUsers(page)
+      setUsersTotal(response.data.users_total ?? page.length)
+      setLoading(false)
+      loadTaste(page)
     } catch (error) {
       console.error('Error fetching admin data:', error)
-    } finally {
       setLoading(false)
     }
   }
@@ -52,13 +86,14 @@ function Admin() {
   const loadMoreUsers = async () => {
     setLoadingMore(true)
     try {
-      const response = await api.get(`/users/admin/users?limit=${USERS_PAGE_SIZE}&offset=${users.length}`)
+      const response = await api.get(`/users/admin/users?limit=${USERS_PAGE_SIZE}&offset=${users.length}&taste=false`)
       const page = response.data.users || []
       setUsers((prev) => {
         const seen = new Set(prev.map((user) => user.id))
         return [...prev, ...page.filter((user) => !seen.has(user.id))]
       })
       setUsersTotal(response.data.total ?? users.length)
+      loadTaste(page)
     } catch (error) {
       console.error('Error loading more users:', error)
     } finally {
@@ -146,7 +181,7 @@ function Admin() {
                 {user.is_online ? 'сейчас в сети' : `был(а) в сети: ${formatLastSeen(user.last_seen)}`}
               </span>
             </div>
-            <div className="admin-user-preferences"><span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span><span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span><span className="admin-user-detected">Определены системой: {(user.detected_artists || []).join(', ') || 'нет данных'}</span></div>
+            <div className="admin-user-preferences"><span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span><span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span><span className="admin-user-detected">Определены системой: {user.detected_artists === undefined ? 'загрузка…' : user.detected_artists.join(', ') || 'нет данных'}</span></div>
           </div>)}
         </div>
         {users.length < usersTotal && (
@@ -172,7 +207,9 @@ function Admin() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        {filteredTracks.length === 0 ? (
+        {tracksLoading ? (
+          <Spinner />
+        ) : filteredTracks.length === 0 ? (
           <div className="admin-empty">Треки не найдены</div>
         ) : (
           <div className="admin-tracks">

@@ -108,3 +108,46 @@ def test_admin_users_requires_admin(client, db):
 
     resp = client.get("/api/users/admin/users", headers=auth_headers(client, "alice"))
     assert resp.status_code == 403
+
+
+def test_dashboard_without_taste_skips_detected(client, db):
+    create_user(db, "admin", is_admin=True)
+    create_user(db, "u1")
+
+    resp = client.get(
+        "/api/users/admin/dashboard?taste=false", headers=auth_headers(client, "admin")
+    )
+    assert resp.status_code == 200, resp.text
+    for profile in resp.json()["users"]:
+        assert "detected_artists" not in profile
+
+
+def test_admin_users_taste_batch(client, db):
+    create_user(db, "admin", is_admin=True)
+    u1 = create_user(db, "u1")
+    u2 = create_user(db, "u2")
+
+    resp = client.get(
+        f"/api/users/admin/users/taste?ids={u1.id},{u2.id},{u1.id}",
+        headers=auth_headers(client, "admin"),
+    )
+    assert resp.status_code == 200, resp.text
+    profiles = resp.json()["profiles"]
+    assert set(profiles) == {str(u1.id), str(u2.id)}
+    for profile in profiles.values():
+        assert profile["detected_artists"] == []
+        assert profile["detected_genres"] == []
+
+    bad = client.get(
+        "/api/users/admin/users/taste?ids=abc", headers=auth_headers(client, "admin")
+    )
+    assert bad.status_code == 422
+
+
+def test_admin_users_taste_requires_admin(client, db):
+    alice = create_user(db, "alice")
+
+    resp = client.get(
+        f"/api/users/admin/users/taste?ids={alice.id}", headers=auth_headers(client, "alice")
+    )
+    assert resp.status_code == 403
