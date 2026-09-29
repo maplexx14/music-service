@@ -2192,7 +2192,6 @@ function PlayerInner() {
             src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
-            loading="lazy"
             decoding="async"
             onError={handleCoverError}
           />

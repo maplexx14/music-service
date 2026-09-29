@@ -38,7 +38,7 @@ function ImportCollectionPicker({ collections, selected, onChange, disabled = fa
                 disabled={disabled}
               />
               <img
-                src={resolveCoverUrl(c.cover_url) || defaultCover}
+                src={resolveCoverUrl(c.cover_url, 'thumb') || defaultCover}
                 alt=""
                 className="import-collection-cover"
                 loading="lazy"

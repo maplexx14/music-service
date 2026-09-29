@@ -211,7 +211,7 @@ function Search() {
               {...trackMenu.getProps(track)}
             >
               <img
-                src={resolveCoverUrl(track.cover_url) || defaultCover}
+                src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
                 alt={track.title}
                 className="track-item-cover"
                 loading="lazy"
@@ -391,7 +391,7 @@ function Search() {
                     {...trackMenu.getProps(track)}
                   >
                     <img
-                      src={resolveCoverUrl(track.cover_url) || defaultCover}
+                      src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
                       alt={track.title}
                       className="track-item-cover"
                       onError={handleCoverError}

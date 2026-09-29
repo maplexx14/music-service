@@ -216,7 +216,7 @@ function Admin() {
             {filteredTracks.map((track) => (
               <div key={track.id} className="admin-track">
                 <img
-                  src={resolveCoverUrl(track.cover_url) || defaultCover}
+                  src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
                   alt={track.title}
                   className="admin-track-cover"
                   loading="lazy"

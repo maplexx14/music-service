@@ -1,17 +1,47 @@
 import { API_URL, SERVER_URL } from '../config'
 import defaultCover from '../assets/default-cover.webp'
 
-// Просит у CDN Google обложку большего разрешения. Обложки YouTube Music
-// приходят крошечными (120×120), но размер зашит в URL и CDN ресайзит по
-// запросу. Применяется к URL при отображении в полноэкранном плеере и
-// системном виджете (где нужна высокая детализация).
-const upscaleCover = (url) => {
-  if (!url) return url
+// Размер обложки под место на экране. CDN провайдеров отдают один и тот же
+// кадр в разных разрешениях, размер зашит в URL. Импорт кладёт в базу
+// полноразмерные обложки (SoundCloud 500×500, Яндекс 400×400, Spotify
+// 640×640), и раньше они без изменений уходили даже в строки списка по
+// 48px: плейлист на сотню треков тянул мегабайты картинок. На iOS это
+// особенно больно — мобильная сеть плюс декод крупных JPEG на каждый
+// кадр прокрутки, обложки проявлялись с большой задержкой.
+//   thumb — строки списков и мини-плеер (до ~64px на экране);
+//   card  — карточки, шапки плейлистов (до ~200px);
+//   full  — полноэкранный плеер и системный виджет.
+const COVER_VARIANTS = {
+  thumb: { google: 'w120-h120', yandex: '200x200', soundcloud: 't300x300', spotify: 'ab67616d00001e02' },
+  card: { google: 'w300-h300', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d00001e02' },
+  // Яндекс в full — те же 400: полноэкранный плеер ждёт прогрева обложки
+  // (preloadCover, 450мс), а 1000×1000 весит в разы больше.
+  full: { google: 'w1200-h1200', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d0000b273' },
+}
+
+// Spotify кодирует размер префиксом id картинки: 4851 — 64px, 1e02 — 300px,
+// b273 — 640px. Другие префиксы (мозаики плейлистов) не трогаем.
+const SPOTIFY_ALBUM_SIZE_RE = /\/image\/ab67616d0000(?:4851|1e02|b273)/
+
+const sizeCover = (url, size) => {
+  const v = COVER_VARIANTS[size]
+  if (!url || !v) return url
   if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
-    return url.replace(/=w\d+-h\d+/, '=w1200-h1200')
+    return url.replace(/=w\d+-h\d+/, `=${v.google}`)
   }
   if (url.includes('ytimg.com')) {
-    return url.replace(/\/(default|mqdefault|hqdefault|sddefault)\.jpg/, '/maxresdefault.jpg')
+    return size === 'full'
+      ? url.replace(/\/(default|mqdefault|hqdefault|sddefault)\.jpg/, '/maxresdefault.jpg')
+      : url
+  }
+  if (url.includes('sndcdn.com')) {
+    return url.replace(/-(?:large|t\d+x\d+|crop|original)\.(jpg|png)/, `-${v.soundcloud}.$1`)
+  }
+  if (url.includes('avatars.yandex.net') || url.includes('avatars.mds.yandex.net')) {
+    return url.replace(/\/(?:\d+x\d+|orig)$/, `/${v.yandex}`)
+  }
+  if (url.includes('scdn.co')) {
+    return url.replace(SPOTIFY_ALBUM_SIZE_RE, `/image/${v.spotify}`)
   }
   return url
 }
@@ -22,12 +52,13 @@ const upscaleCover = (url) => {
 // оно идёт через наш прокси. Бэкенд тянет обложку через свой выход и кэширует.
 const proxyExternalCover = (url) => `${API_URL}/tracks/cover-proxy?url=${encodeURIComponent(url)}`
 
-// Резолвит URL обложки. highQuality=true — для полноэкранного плеера и
-// системного виджета (апскейл CDN). highQuality=false (по умолчанию) —
-// список треков, мини-плеер; экономит трафик и ускоряет загрузку.
-export const resolveCoverUrl = (coverUrl, highQuality = false) => {
+// Резолвит URL обложки. Второй аргумент — размер: 'thumb' | 'card' | 'full'.
+// true — прежняя форма записи для 'full', по умолчанию 'card'. Свои
+// (загруженные) обложки лежат одним файлом — размер на них не влияет.
+export const resolveCoverUrl = (coverUrl, size = 'card') => {
   if (!coverUrl) return null
-  if (coverUrl.startsWith('http')) return proxyExternalCover(highQuality ? upscaleCover(coverUrl) : coverUrl)
+  const variant = size === true ? 'full' : size === false ? 'card' : size
+  if (coverUrl.startsWith('http')) return proxyExternalCover(sizeCover(coverUrl, variant))
   if (coverUrl.startsWith('/')) return `${SERVER_URL}${coverUrl}`
   return `${SERVER_URL}/${coverUrl}`
 }

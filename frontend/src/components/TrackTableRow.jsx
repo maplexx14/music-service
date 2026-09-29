@@ -6,6 +6,9 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { formatDuration } from '../utils/format'
 
+// Сколько верхних строк грузят обложку без ленивой загрузки.
+const EAGER_ROWS = 12
+
 // Строка таблицы треков — общая для плейлиста, «Понравившихся», альбома,
 // исполнителя и внешнего плейлиста.
 //
@@ -56,10 +59,13 @@ function TrackTableRow({
       </td>
       <td className="track-name-cell">
         <img
-          src={resolveCoverUrl(track.cover_url) || defaultCover}
+          src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
           alt={track.title}
           className="track-table-cover"
-          loading="lazy"
+          // Первый экран строк — сразу: ленивую загрузку WebKit запускает
+          // только у самой кромки вьюпорта, и верх списка на iOS открывался
+          // с пустыми квадратами.
+          loading={index < EAGER_ROWS ? 'eager' : 'lazy'}
           decoding="async"
           onError={handleCoverError}
         />
