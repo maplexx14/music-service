@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Play, Plus } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
+import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import TrackTableRow from '../components/TrackTableRow'
@@ -28,12 +29,17 @@ const SOURCE_LABEL = {
 // Страница альбома: релиз внешнего источника как плейлист. Открывается из
 // карусели на странице исполнителя. Слушать можно сразу, в медиатеку альбом
 // попадает только по явному «Добавить в медиатеку» (см. routers/albums.py).
+// Релиз внешнего источника не меняется: кэш этого возраста не перепроверяем.
+const ALBUM_FRESH_MS = 10 * 60 * 1000
+
 function Album() {
   const { source, id } = useParams()
   const navigate = useNavigate()
-  const [album, setAlbum] = useState(null)
-  const [tracks, setTracks] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Из кэша (прошлый заход) страница рисуется сразу, без спиннера.
+  const cacheKey = `album:${source}:${id}`
+  const [album, setAlbum] = useState(() => peekCache(cacheKey)?.album ?? null)
+  const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [saving, setSaving] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
@@ -68,18 +74,35 @@ function Album() {
     return () => document.removeEventListener('click', close)
   }, [menuTrackId])
 
+  // Материализация трека (db_id) правит список на месте — кэш следует за ним.
+  useEffect(() => {
+    if (!loading) patchCache(cacheKey, { tracks })
+  }, [tracks, loading])
+
   const fetchAlbum = async () => {
-    setLoading(true)
+    const cached = peekCache(cacheKey)
+    if (cached) {
+      setAlbum(cached.album)
+      setTracks(cached.tracks)
+      setLoading(false)
+      usePlayerStore.getState().prefetchTracks(cached.tracks, 6)
+      if (cacheAge(cacheKey) < ALBUM_FRESH_MS) return
+    } else {
+      setLoading(true)
+    }
     try {
       const { data } = await api.get(`/albums/${source}/${id}`)
+      writeCache(cacheKey, { album: data.album, tracks: data.tracks || [] })
       setAlbum(data.album)
       setTracks(data.tracks || [])
       // Прогреваем резолв верхушки — старт воспроизведения без паузы.
-      usePlayerStore.getState().prefetchTracks(data.tracks || [], 6)
+      if (!cached) usePlayerStore.getState().prefetchTracks(data.tracks || [], 6)
     } catch (error) {
       console.error('Error fetching album:', error)
-      toast.error('Не удалось загрузить альбом')
-      navigate(-1)
+      if (!cached) {
+        toast.error('Не удалось загрузить альбом')
+        navigate(-1)
+      }
     } finally {
       setLoading(false)
     }

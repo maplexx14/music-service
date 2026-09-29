@@ -128,6 +128,27 @@ body {
      остаётся там, где оно по смыслу: ввод и читаемый контент. */
   user-select: none;
   -webkit-user-select: none;
+  /* Долгое нажатие на ссылку или картинку в iOS открывало системное превью
+     страницы и меню «Открыть в Safari / Скопировать» — в нативном
+     приложении такого нет. */
+  -webkit-touch-callout: none;
+}
+
+/* Весь документ не «пружинит»: резинка iOS утаскивала вместе с контентом
+   таб-бар и мини-плеер. Скроллится и пружинит только сам экран
+   (.main-content), как нативный список. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+img {
+  -webkit-user-drag: none;
 }
 
 #root {
@@ -143,6 +164,7 @@ textarea,
 [contenteditable='true'] {
   user-select: text;
   -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* Мгновенный отклик кнопок на тач: без manipulation Safari держит тап
@@ -153,45 +175,138 @@ button,
   touch-action: manipulation;
 }
 
-/* Нативный press-feedback: элемент чуть «проваливается» под пальцем
-   в момент нажатия. transform в :active не триггерит layout — дешевле
-   bg-подсветки и заметнее глазу. Слайдеры и крупные кнопки-«плиты»
-   (play) исключены: их прожатие решается их собственными стилями. */
-button:not([disabled]):active,
-a:active,
-.track-card:active {
-  transform: scale(0.96);
-  transition: transform 80ms var(--ease-out);
+/* Отклик нажатия (кнопки, ссылки, карточки) — services/pressFeedback.js:
+   с задержкой против мигания при скролле и с плавным возвратом. */
+
+/* Переходы между экранами — View Transitions (services/navigation.js ставит
+   html[data-nav] = forward | back | fade на время перехода). Анимируется
+   только экран (.main-content), таб-бар, мини-плеер и сайдбар стоят на
+   месте, как в нативном стеке навигации. Имена слоёв выдаются только на
+   время перехода: view-transition-name делает элемент stacking context, и
+   постоянное имя у .main-content заперло бы z-index всего, что внутри. */
+html[data-nav] .main-content {
+  view-transition-name: page;
+}
+html[data-nav] .player {
+  view-transition-name: mini-player;
+}
+html[data-nav] .mobile-nav-global {
+  view-transition-name: tabbar;
+}
+html[data-nav] .mobile-topbar {
+  view-transition-name: topbar;
+}
+html[data-nav] .mobile-status-scrim {
+  view-transition-name: status-scrim;
+}
+html[data-nav] .sidebar {
+  view-transition-name: sidebar;
+}
+html[data-nav] .toast-container {
+  view-transition-name: toasts;
 }
 
-input[type='range']:active {
-  transform: none;
+/* Корень (фон) и «хром» не анимируются: показываем живое новое состояние
+   без кроссфейда. Прежний опыт: на iOS полупрозрачная пара снапшотов корня
+   давала затемнение экрана — старый слой тут просто не рисуется. */
+::view-transition-old(root),
+::view-transition-old(mini-player),
+::view-transition-old(tabbar),
+::view-transition-old(sidebar),
+::view-transition-old(toasts),
+::view-transition-old(status-scrim) {
+  display: none;
+}
+::view-transition-new(root),
+::view-transition-new(mini-player),
+::view-transition-new(tabbar),
+::view-transition-new(sidebar),
+::view-transition-new(toasts),
+::view-transition-new(status-scrim) {
+  animation: none;
+}
+::view-transition-group(root),
+::view-transition-group(mini-player),
+::view-transition-group(tabbar),
+::view-transition-group(sidebar),
+::view-transition-group(toasts),
+::view-transition-group(status-scrim),
+::view-transition-group(page) {
+  animation: none;
 }
 
-/* View Transitions API: Router(viewTransition) оборачивает смену роута в
-   document.startViewTransition. Дефолтный кроссфейд Chrome/WebKit слишком
-   резкий; здесь — мягкий, в такт остальным motion-токенам. Браузеры без
-   поддержки просто не видят этих правил (graceful degradation).
-   Открытие/закрытие фуллскрин-плеера сюда НЕ входит: на iOS PWA VT-снапшоты
-   давали затемнение экрана после закрытия — плеер ездит чистым CSS-drawer
-   (@starting-style / .is-closing в FullScreenPlayer.css). */
-@media (prefers-reduced-motion: no-preference) {
-  /* Кроссфейд «старый не гаснет, новый проявляется сверху»: старый снапшот
-     остаётся непрозрачной подложкой все 200ms, новый плавно набирает
-     альфу поверх него. Суммарное покрытие всегда 1 — сквозь пару
-     снапшотов не просвечивает чёрный канвас (симптом «экран затемняется»
-     на закрытии фуллскрина). Прежний фикс через mix-blend-mode:
-     plus-lighter рассчитывал, что оба слоя гаснут одновременно, но
-     iOS Safari блендинг внутри ::view-transition не применяет —
-     полупрозрачная пара складывалась в затемнение. Схема с непрозрачным
-     старым слоем от блендинга не зависит вовсе. */
-  ::view-transition-old(root) {
-    animation: none;
-    mix-blend-mode: normal;
+::view-transition-old(page),
+::view-transition-new(page) {
+  mix-blend-mode: normal;
+  animation-duration: 380ms;
+  animation-timing-function: var(--ease-drawer);
+  animation-fill-mode: both;
+  /* Экран на мобильном прозрачный (фон даёт .layout) — без подложки
+     въезжающий экран просвечивал бы, и сквозь него был виден старый. */
+  background-color: #121212;
+}
+
+@media (max-width: 768px) {
+  ::view-transition-old(page),
+  ::view-transition-new(page) {
+    background-color: #050505;
   }
-  ::view-transition-new(root) {
-    animation: 200ms var(--ease-out) both vt-fade-in;
-    mix-blend-mode: normal;
+}
+
+/* Вперёд: новый экран въезжает справа поверх старого, старый уходит
+   влево с параллаксом и притемнением — схема UINavigationController. */
+html[data-nav='forward']::view-transition-old(page) {
+  animation-name: vt-page-under-out;
+}
+html[data-nav='forward']::view-transition-new(page) {
+  animation-name: vt-page-in-right;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
+}
+
+/* Назад: зеркально, уходящий экран сверху. */
+html[data-nav='back']::view-transition-old(page) {
+  z-index: 1;
+  animation-name: vt-page-out-right;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
+}
+html[data-nav='back']::view-transition-new(page) {
+  animation-name: vt-page-under-in;
+}
+
+/* Десктоп: мягкий кроссфейд, старый слой держит подложку. */
+html[data-nav='fade']::view-transition-old(page) {
+  animation: none;
+}
+html[data-nav='fade']::view-transition-new(page) {
+  animation: 200ms var(--ease-out) both vt-fade-in;
+}
+
+/* Панель «Назад» появляется/исчезает вместе с экраном — коротким фейдом. */
+::view-transition-old(topbar),
+::view-transition-new(topbar) {
+  animation-duration: 200ms;
+}
+
+@keyframes vt-page-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes vt-page-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes vt-page-under-out {
+  to {
+    transform: translateX(-28%);
+    opacity: 0.6;
+  }
+}
+@keyframes vt-page-under-in {
+  from {
+    transform: translateX(-28%);
+    opacity: 0.6;
   }
 }
 

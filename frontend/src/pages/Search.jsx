@@ -4,6 +4,7 @@ import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useSearchStore } from '../store/searchStore'
 import api from '../services/api'
+import { intentPrefetchHandlers, prefetchArtist, prefetchCache } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
@@ -14,7 +15,16 @@ import { artistPath } from '../utils/artists'
 import { formatDuration } from '../utils/format'
 import './Search.css'
 
-const SEARCH_DEBOUNCE_MS = 600
+// Пауза набора перед запросом. 600мс ощущались как «поиск думает»: локальная
+// выдача отвечает из кэша бэка за десятки мс, ждать дольше незачем.
+const SEARCH_DEBOUNCE_MS = 350
+
+// Формат записи совпадает с тем, что кладёт в кэш страница ExternalPlaylist.
+const prefetchExternalPlaylist = (id) =>
+  prefetchCache(`external-playlist:${id}`, `/soundcloud/playlists/${id}`, {
+    select: (response) => ({ playlist: response.data.playlist, tracks: response.data.tracks }),
+    maxAgeMs: 10 * 60 * 1000,
+  })
 
 function Search() {
   const navigate = useNavigate()
@@ -282,6 +292,7 @@ function Search() {
                     to={artistPath(item.name)}
                     className="artist-card"
                     title={`Открыть страницу «${item.name}»`}
+                    {...intentPrefetchHandlers(() => prefetchArtist(item.name))}
                   >
                     <img
                       src={resolveCoverUrl(item.cover_url) || defaultCover}
@@ -344,6 +355,7 @@ function Search() {
                     key={playlist.id}
                     className="playlist-item"
                     onClick={() => handleImportExternalPlaylist(playlist)}
+                    {...intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))}
                     title="Открыть плейлист"
                   >
                     <img

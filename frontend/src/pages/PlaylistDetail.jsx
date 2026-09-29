@@ -3,6 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Shuffle } from 'lucide-react'
 import api from '../services/api'
+import {
+  peekCache,
+  writeCache,
+  invalidateCache,
+  playlistCacheKey,
+  PLAYLIST_PAGE_SIZE,
+} from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
@@ -11,14 +18,16 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 
-const TRACKS_PAGE_SIZE = 20
+const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 
 function PlaylistDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [playlist, setPlaylist] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [totalTracks, setTotalTracks] = useState(0)
+  // Первая страница из кэша (прошлый заход или прогрев по наведению) рисуется
+  // сразу, без спиннера; свежая версия приезжает фоном (см. fetchPlaylist).
+  const [playlist, setPlaylist] = useState(() => peekCache(playlistCacheKey(id))?.playlist ?? null)
+  const [loading, setLoading] = useState(() => !peekCache(playlistCacheKey(id)))
+  const [totalTracks, setTotalTracks] = useState(() => peekCache(playlistCacheKey(id))?.total ?? 0)
   const [loadingMore, setLoadingMore] = useState(false)
   // Упавший запрос гасит автоподгрузку и возвращает кнопку: иначе наблюдатель
   // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
@@ -40,9 +49,29 @@ function PlaylistDetail() {
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
 
   useEffect(() => {
+    // Смена id без размонтирования: подставляем кэш нового плейлиста, а не
+    // показываем старый до ответа сети.
+    const cached = peekCache(playlistCacheKey(id))
+    if (cached) {
+      setPlaylist(cached.playlist)
+      setTotalTracks(cached.total)
+      setLoading(false)
+    } else if (!playlist || String(playlist.id) !== String(id)) {
+      setLoading(true)
+    }
     fetchPlaylist()
     fetchLikedTracks()
   }, [id])
+
+  // Кэш следует за списком, но хранит только первую страницу — остальное
+  // догружается прокруткой.
+  useEffect(() => {
+    if (loading || !playlist || String(playlist.id) !== String(id)) return
+    writeCache(playlistCacheKey(id), {
+      playlist: { ...playlist, tracks: playlist.tracks.slice(0, TRACKS_PAGE_SIZE) },
+      total: totalTracks,
+    })
+  }, [playlist, totalTracks, loading, id])
 
   useEffect(() => {
     // Закрываем меню «добавить в плейлист» по клику в любом другом месте.
@@ -57,11 +86,24 @@ function PlaylistDetail() {
       const response = await api.get(`/playlists/${id}`, {
         params: { skip: 0, limit: TRACKS_PAGE_SIZE },
       })
-      setPlaylist(response.data)
-      setTotalTracks(Number(response.headers['x-total-count']) || response.data.tracks.length)
+      const fresh = response.data
+      const total = Number(response.headers['x-total-count']) || fresh.tracks.length
+      // Фоновое обновление не должно схлопывать уже догруженные страницы:
+      // свежая голова, дальше то, что пользователь успел домотать.
+      setPlaylist((prev) =>
+        prev && String(prev.id) === String(fresh.id) && prev.tracks.length > fresh.tracks.length
+          ? { ...fresh, tracks: [...fresh.tracks, ...prev.tracks.slice(fresh.tracks.length)] }
+          : fresh
+      )
+      setTotalTracks(total)
     } catch (error) {
       console.error('Error fetching playlist:', error)
-      navigate('/playlists')
+      // Упавшее фоновое обновление оставляет на экране кэш — кроме случая,
+      // когда плейлиста больше нет.
+      if (error.response?.status === 404 || !peekCache(playlistCacheKey(id))) {
+        invalidateCache(playlistCacheKey(id))
+        navigate('/playlists')
+      }
     } finally {
       setLoading(false)
     }

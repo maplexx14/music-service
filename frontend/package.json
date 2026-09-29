@@ -10,6 +10,7 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@remix-run/router": "^1.23.2",
     "@tailwindcss/postcss": "^4.1.18",
     "axios": "^1.6.5",
     "class-variance-authority": "^0.7.1",

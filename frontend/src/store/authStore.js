@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import api, { setApiAuthToken, setDeviceToken } from '../services/api'
 import { useSearchStore } from './searchStore'
+import { clearPageCache } from '../services/pageCache'
 import { invalidateFlowPreload } from './playerStore'
 
 // Simple localStorage persistence
@@ -478,6 +479,7 @@ const useAuthStore = create((set, get) => ({
         // Выдача поиска переживает размонтирование страницы, поэтому её надо
         // гасить явно — иначе следующий вход открывает чужой запрос.
         useSearchStore.getState().resetSearch()
+        clearPageCache()
       },
       
       checkAuth: async () => {

@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Play, Plus, Heart } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
+import { peekCache, writeCache, patchCache, cacheAge, artistCacheKey } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
 import Carousel from '../components/Carousel'
@@ -69,16 +70,26 @@ function AlbumsRow({ title, albums }) {
   )
 }
 
+// Страница собирается из внешних источников (секунды на холодную), поэтому
+// кэш свежее этого возраста считаем достаточным и сеть не трогаем вовсе.
+const ARTIST_FRESH_MS = 5 * 60 * 1000
+
 // Страница исполнителя: его треки одним плейлистом. Сначала то, что уже в
 // библиотеке, затем каталог YouTube Music, затем SoundCloud — порядок задаёт
 // бэк (см. routers/artists.py), фронт только склеивает списки в одну очередь.
+// Библиотека и внешние источники — одна очередь: пользователь видит «все
+// треки исполнителя» и слушает их подряд, не думая об источнике.
+const artistTracks = (data) => (data ? [...(data.tracks || []), ...(data.external || [])] : [])
+
 function Artist() {
   const { name } = useParams()
   const navigate = useNavigate()
-  const [artist, setArtist] = useState(null)
-  const [tracks, setTracks] = useState([])
-  const [albums, setAlbums] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Из кэша (прошлый заход или прогрев по наведению на имя) страница
+  // рисуется сразу, без спиннера.
+  const [artist, setArtist] = useState(() => peekCache(artistCacheKey(name)) ?? null)
+  const [tracks, setTracks] = useState(() => artistTracks(peekCache(artistCacheKey(name))))
+  const [albums, setAlbums] = useState(() => peekCache(artistCacheKey(name))?.albums ?? [])
+  const [loading, setLoading] = useState(() => !peekCache(artistCacheKey(name)))
   const [liking, setLiking] = useState(false)
   const [saving, setSaving] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
@@ -109,6 +120,16 @@ function Artist() {
     fetchLikedTracks()
   }, [name])
 
+  // Лайк и сохранение в медиатеку правят шапку на месте — кэш следует за
+  // ними, иначе возврат на страницу показал бы прошлое состояние кнопок.
+  useEffect(() => {
+    if (!artist) return
+    patchCache(artistCacheKey(name), {
+      is_liked: artist.is_liked,
+      playlist_id: artist.playlist_id,
+    })
+  }, [artist?.is_liked, artist?.playlist_id])
+
   useEffect(() => {
     if (menuTrackId === null) return
     const close = () => setMenuTrackId(null)
@@ -116,23 +137,37 @@ function Artist() {
     return () => document.removeEventListener('click', close)
   }, [menuTrackId])
 
+  const applyArtist = (data) => {
+    setArtist(data)
+    const all = artistTracks(data)
+    setTracks(all)
+    setAlbums(data.albums || [])
+    // Прогреваем резолв верхушки — старт воспроизведения без паузы. Немного:
+    // каждый ytmusic-прогрев — резолв в YouTube (лимит на IP, bot-check).
+    usePlayerStore.getState().prefetchTracks(all, 2)
+  }
+
   const fetchArtist = async () => {
-    setLoading(true)
+    const key = artistCacheKey(name)
+    const cached = peekCache(key)
+    if (cached) {
+      applyArtist(cached)
+      setLoading(false)
+      if (cacheAge(key) < ARTIST_FRESH_MS) return
+    } else {
+      setLoading(true)
+    }
     try {
       const { data } = await api.get('/artists', { params: { name } })
-      setArtist(data)
-      // Библиотека и внешние источники — одна очередь: пользователь видит
-      // «все треки исполнителя» и слушает их подряд, не думая об источнике.
-      const all = [...(data.tracks || []), ...(data.external || [])]
-      setTracks(all)
-      setAlbums(data.albums || [])
-      // Прогреваем резолв верхушки — старт воспроизведения без паузы. Немного:
-      // каждый ytmusic-прогрев — резолв в YouTube (лимит на IP, bot-check).
-      usePlayerStore.getState().prefetchTracks(all, 2)
+      writeCache(key, data)
+      applyArtist(data)
     } catch (error) {
       console.error('Error fetching artist:', error)
-      toast.error('Не удалось загрузить страницу исполнителя')
-      navigate(-1)
+      // Фоновое обновление упало — на экране остаётся кэш, уходить некуда.
+      if (!cached) {
+        toast.error('Не удалось загрузить страницу исполнителя')
+        navigate(-1)
+      }
     } finally {
       setLoading(false)
     }

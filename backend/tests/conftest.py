@@ -143,6 +143,21 @@ def _reset_yandex_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_external_search_cache():
+    """Выдача поиска YouTube Music / SoundCloud кэшируется на 10 мин, а тесты
+    подменяют провайдеров под одни и те же строки — без очистки следующий тест
+    получил бы выдачу предыдущего вместо своего мока."""
+    from app.cache import clear_pattern
+
+    patterns = ("ytmusic:search:*", "ytmusic:artist_cards:*", "soundcloud:search:*")
+    for pattern in patterns:
+        clear_pattern(pattern)
+    yield
+    for pattern in patterns:
+        clear_pattern(pattern)
+
+
+@pytest.fixture(autouse=True)
 def _reset_import_cache():
     """Кэш подбора треков (import:match:*, 30 дней) и прогресс импорта
     (import:progress:*) — те же id источника и юзеров между тестами."""

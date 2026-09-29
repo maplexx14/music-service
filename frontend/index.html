@@ -15,7 +15,10 @@
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64-64.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon1.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- maximum-scale=1: iOS зумит страницу при фокусе на поле с шрифтом
+         мельче 16px и не отзумливает обратно — интерфейс «уезжал». Ручной
+         пинч-зум iOS при этом всё равно разрешает. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#252933" />
     <meta name="application-name" content="bolt" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

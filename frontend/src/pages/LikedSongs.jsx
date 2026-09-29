@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Shuffle } from 'lucide-react'
 import api from '../services/api'
+import { peekCache, writeCache, PLAYLIST_PAGE_SIZE } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
@@ -11,15 +12,17 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './PlaylistDetail.css'
 
-const TRACKS_PAGE_SIZE = 20
+const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
+const LIKED_CACHE_KEY = 'playlist:liked'
 
 // «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
 // интерфейс страницы полностью повторяет PlaylistDetail.
 function LikedSongs() {
   const navigate = useNavigate()
-  const [playlist, setPlaylist] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [totalTracks, setTotalTracks] = useState(0)
+  // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
+  const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
+  const [loading, setLoading] = useState(() => !peekCache(LIKED_CACHE_KEY))
+  const [totalTracks, setTotalTracks] = useState(() => peekCache(LIKED_CACHE_KEY)?.total ?? 0)
   const [loadingMore, setLoadingMore] = useState(false)
   // Упавший запрос гасит автоподгрузку и возвращает кнопку: иначе наблюдатель
   // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
@@ -45,6 +48,16 @@ function LikedSongs() {
     fetchLikedTracks()
   }, [])
 
+  // Кэш следует за списком (в том числе за снятыми здесь лайками), но хранит
+  // только первую страницу — остальное догружается прокруткой.
+  useEffect(() => {
+    if (loading || !playlist) return
+    writeCache(LIKED_CACHE_KEY, {
+      playlist: { ...playlist, tracks: playlist.tracks.slice(0, TRACKS_PAGE_SIZE) },
+      total: totalTracks,
+    })
+  }, [playlist, totalTracks, loading])
+
   useEffect(() => {
     if (menuTrackId === null) return
     const close = () => setMenuTrackId(null)
@@ -57,11 +70,17 @@ function LikedSongs() {
       const response = await api.get('/playlists/me/liked', {
         params: { skip: 0, limit: TRACKS_PAGE_SIZE },
       })
-      setPlaylist(response.data)
-      setTotalTracks(Number(response.headers['x-total-count']) || response.data.tracks.length)
+      const fresh = response.data
+      // Фоновое обновление не схлопывает уже догруженные страницы.
+      setPlaylist((prev) =>
+        prev && prev.tracks.length > fresh.tracks.length
+          ? { ...fresh, tracks: [...fresh.tracks, ...prev.tracks.slice(fresh.tracks.length)] }
+          : fresh
+      )
+      setTotalTracks(Number(response.headers['x-total-count']) || fresh.tracks.length)
     } catch (error) {
       console.error('Error fetching liked playlist:', error)
-      navigate('/playlists')
+      if (!peekCache(LIKED_CACHE_KEY)) navigate('/playlists')
     } finally {
       setLoading(false)
     }

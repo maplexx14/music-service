@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Link } from 'react-router-dom'
 import { splitArtists, artistPath } from '../utils/artists'
+import { intentPrefetchHandlers, prefetchArtist } from '../services/pageCache'
 import './ArtistLink.css'
 
 // Имя исполнителя как ссылка на его страницу — «своя вкладка у каждого
@@ -31,6 +32,9 @@ function ArtistLink({ artist, className = '', onNavigate }) {
             className="artist-link"
             onClick={handleClick}
             title={`Открыть страницу «${name}»`}
+            // Наведение/касание грузит страницу артиста заранее — к клику
+            // она уже в кэше и открывается без спиннера.
+            {...intentPrefetchHandlers(() => prefetchArtist(name))}
           >
             {name}
           </Link>

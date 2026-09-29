@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
+import { peekCache, writeCache, intentPrefetchHandlers, prefetchPlaylist } from '../services/pageCache'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import ImportCollectionPicker, {
@@ -14,10 +15,14 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
 
+const LIBRARY_CACHE_KEY = 'playlists:me'
+
 function Playlists() {
   const navigate = useNavigate()
-  const [playlists, setPlaylists] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Список из прошлого захода рисуется сразу, свежий приезжает фоном: вкладка
+  // «Моя музыка» открывается без спиннера.
+  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
+  const [loading, setLoading] = useState(() => !peekCache(LIBRARY_CACHE_KEY))
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [coverFile, setCoverFile] = useState(null)
@@ -51,6 +56,12 @@ function Playlists() {
     fetchPlaylists()
     checkCookiesExists()
   }, [])
+
+  // Создание и удаление правят список на месте — кэш следует за ним, иначе
+  // возврат на вкладку на миг показал бы прошлую версию.
+  useEffect(() => {
+    if (!loading) writeCache(LIBRARY_CACHE_KEY, playlists)
+  }, [playlists, loading])
 
   const fetchPlaylists = async () => {
     try {
@@ -455,7 +466,11 @@ function Playlists() {
                 >
                   <Trash2 size={18} />
                 </button>
-                <Link to={`/playlists/${playlist.id}`} className="playlist-card-link">
+                <Link
+                  to={`/playlists/${playlist.id}`}
+                  className="playlist-card-link"
+                  {...intentPrefetchHandlers(() => prefetchPlaylist(playlist.id))}
+                >
                   <img
                     src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                     alt={playlist.name}

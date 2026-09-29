@@ -2,6 +2,10 @@ import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart, ArrowLeft } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
+import { useScrollRestoration } from '../hooks/useScrollRestoration'
+import { useEdgeSwipeBack } from '../hooks/useEdgeSwipeBack'
+import { isTabRoot, tabOf, canGoBack, isIOSStandalone } from '../services/navigation'
+import { haptic, HAPTIC } from '../utils/haptics'
 import Sidebar from './Sidebar'
 import Player from './Player'
 import ToastContainer from './Toast'
@@ -28,6 +32,26 @@ const ROUTE_CHUNKS = {
   '/settings': () => import('../pages/Settings'),
   '/admin': () => import('../pages/Admin'),
 }
+
+// Вложенные страницы, куда попадают из вкладок, — тоже прогреваются в простое.
+const DETAIL_CHUNKS = [
+  () => import('../pages/Artist'),
+  () => import('../pages/PlaylistDetail'),
+  () => import('../pages/Album'),
+  () => import('../pages/ExternalPlaylist'),
+]
+
+// Вкладки, которые открывают почти всегда, — в порядке вероятности. Грузятся
+// по одной в простое после первой отрисовки: hover-прогрев не работает на
+// таче, а первый тап по вкладке упирался в загрузку чанка со спиннером.
+const IDLE_CHUNKS = [
+  ROUTE_CHUNKS['/search'],
+  ROUTE_CHUNKS['/playlists'],
+  ROUTE_CHUNKS['/liked'],
+  ROUTE_CHUNKS['/'],
+  ...DETAIL_CHUNKS,
+  ROUTE_CHUNKS['/settings'],
+]
 
 function prefetchRouteChunk(path) {
   const loader = ROUTE_CHUNKS[path]
@@ -58,6 +82,7 @@ function Layout({ children }) {
   const isFullScreen = usePlayerStore((state) => state.isFullScreen)
   const location = useLocation()
   const navigate = useNavigate()
+  const mainRef = useRef(null)
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -94,13 +119,52 @@ function Layout({ children }) {
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 2000))
     const cancel = window.cancelIdleCallback ?? clearTimeout
-    const handle = idle(() => {
-      importFullScreenPlayer().catch(() => {})
-    })
-    return () => cancel(handle)
+    // Чанки по одному за простой: пачка параллельных загрузок на медленной
+    // сети отняла бы полосу у обложек и аудио текущей страницы.
+    const queue = [importFullScreenPlayer, ...IDLE_CHUNKS]
+    let handle = null
+    const next = () => {
+      const loader = queue.shift()
+      if (!loader) return
+      handle = idle(() => {
+        loader().catch(() => {}).finally(next)
+      })
+    }
+    next()
+    return () => {
+      queue.length = 0
+      if (handle !== null) cancel(handle)
+    }
   }, [])
 
-  const showMobileBack = isMobile && location.pathname !== '/'
+  // «Назад» — только у вложенных экранов, как в нативном стеке: у корней
+  // вкладок его нет. Раньше панель с кнопкой появлялась на любой вкладке,
+  // кроме главной, и переключение вкладок сдвигало контент на её высоту.
+  const showMobileBack = isMobile && !isTabRoot(location.pathname)
+  const isHome = location.pathname === '/'
+
+  // Открыли вложенный экран по ссылке (холодный старт PWA): в истории
+  // вернуться некуда, и navigate(-1) ничего бы не сделал — идём в корень
+  // его вкладки.
+  const goBack = () => {
+    if (canGoBack()) navigate(-1)
+    else navigate(tabOf(location.pathname), { replace: true })
+  }
+
+  useScrollRestoration(mainRef)
+  useEdgeSwipeBack(mainRef, {
+    enabled: isIOSStandalone && showMobileBack && !isFullScreen && canGoBack(),
+    onBack: () => navigate(-1),
+  })
+
+  // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
+  const handleNavClick = (event, to, isActive) => {
+    if (isActive && location.pathname === to) {
+      event.preventDefault()
+      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+    haptic(HAPTIC.selection)
+  }
 
   // Подсветка активного пункта — одна плавающая капсула на всю навигацию, как
   // в iOS-приложении: она едет между ячейками и на ходу растягивается. Индекс
@@ -132,7 +196,7 @@ function Layout({ children }) {
           <button
             type="button"
             className="mobile-back-btn"
-            onClick={() => navigate(-1)}
+            onClick={goBack}
             aria-label="Назад"
           >
             <ArrowLeft size={20} />
@@ -143,8 +207,13 @@ function Layout({ children }) {
           <div className="mobile-topbar-spacer" />
         </div>
       )}
+      {/* Подложка под статус-бар: контент уезжает под часы не «голым», а
+          под матовую полосу, как под системный бар. Главной не нужна — её
+          hero специально заходит под статус-бар. */}
+      {isMobile && !isHome && !showMobileBack && <div className="mobile-status-scrim" aria-hidden="true" />}
       <main
-        className={`main-content ${showMobileBack ? 'has-mobile-topbar' : ''}`}
+        ref={mainRef}
+        className={`main-content ${showMobileBack ? 'has-mobile-topbar' : ''} ${isMobile && !isHome && !showMobileBack ? 'has-safe-top' : ''}`}
         style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}
       >
         {children}
@@ -181,6 +250,7 @@ function Layout({ children }) {
                 aria-label={label}
                 onPointerEnter={() => prefetchRouteChunk(to)}
                 onPointerDown={() => prefetchRouteChunk(to)}
+                onClick={(event) => handleNavClick(event, to, isActive)}
               >
                 <span className="mobile-nav-global-icon">
                   <Icon size={22} fill={isActive ? 'currentColor' : 'none'} />

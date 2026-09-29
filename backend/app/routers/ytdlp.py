@@ -238,16 +238,35 @@ def _schedule_audio_matches(tracks: List[ExternalTrackResponse]) -> None:
         logger.exception("soulseek match scheduling failed")
 
 
+# TTL кэша поисковой выдачи YouTube Music (треки и карточки артистов).
+_SEARCH_CACHE_TTL = 600
+
+
 async def search_ytmusic(
     request: Request,
     q: str,
     limit: int = 20,
 ) -> List[ExternalTrackResponse]:
-    """Поиск по YouTube Music. Возвращает ExternalTrackResponse (source=ytmusic)."""
+    """Поиск по YouTube Music. Возвращает ExternalTrackResponse (source=ytmusic).
+
+    Выдача кэшируется коротко: поиск повторяет те же строки (возврат на
+    вкладку, стирание буквы), а каждый вызов — round-trip к YouTube.
+    """
     if _ytmusic is None:
         return []
 
     base_url = str(request.base_url).rstrip("/")
+    normalized_q = " ".join((q or "").lower().split())
+    cache_key = f"ytmusic:search:v1:{normalized_q}:{limit}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        results = [ExternalTrackResponse(**t) for t in cached]
+        # stream_url собираем заново: хост зависит от адреса, через который
+        # пришёл запрос (как у ytmusic_artist_catalog).
+        for t in results:
+            t.stream_url = f"{base_url}/api/ytdlp/stream/{t.external_id}"
+        return results
+
     try:
         # ytmusicapi синхронный — уводим в тредпул, чтобы не блокировать loop.
         raw = await asyncio.to_thread(
@@ -267,6 +286,11 @@ async def search_ytmusic(
         if len(results) >= limit:
             break
     _schedule_audio_matches(results)
+    # Пустую выдачу не кэшируем: чаще это сбой провайдера, а не «ничего нет».
+    if results:
+        await set_cache_async(
+            cache_key, [t.model_dump(mode="json") for t in results], expire=_SEARCH_CACHE_TTL
+        )
     return results
 
 
@@ -304,6 +328,14 @@ async def search_ytmusic_artist_cards(q: str, limit: int = 6) -> List[dict]:
     if _ytmusic is None or not (q or "").strip():
         return []
 
+    # Секция «Исполнители» дёргает это на каждый поиск, а карточки по строке
+    # почти не меняются.
+    normalized_q = " ".join(q.lower().split())
+    cache_key = f"ytmusic:artist_cards:v1:{normalized_q}:{limit}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         raw = await asyncio.to_thread(
             _ytmusic.search, q, filter="artists", limit=limit
@@ -326,6 +358,8 @@ async def search_ytmusic_artist_cards(q: str, limit: int = 6) -> List[dict]:
         out.append({"name": name, "cover_url": _thumb(item.get("thumbnails"))})
         if len(out) >= limit:
             break
+    if out:
+        await set_cache_async(cache_key, out, expire=_SEARCH_CACHE_TTL)
     return out
 
 

@@ -1,9 +1,25 @@
-import { lazy, Suspense, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useLayoutEffect } from 'react'
+import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import Spinner from './components/Spinner'
 import api from './services/api'
+import { createAppHistory, notifyRouteCommitted } from './services/navigation'
+
+// История с анимированными переходами экранов (см. services/navigation.js).
+const appHistory = createAppHistory()
+
+// Ярлыки иконки (manifest shortcuts) при уже открытом окне: launch_handler
+// focus-existing не перезагружает страницу — музыка не прерывается, — а
+// нужный экран открываем сами.
+if (typeof window !== 'undefined' && window.launchQueue?.setConsumer) {
+  window.launchQueue.setConsumer((params) => {
+    if (!params.targetURL) return
+    const url = new URL(params.targetURL)
+    const target = url.pathname + url.search
+    if (target !== appHistory.location.pathname + appHistory.location.search) appHistory.push(target)
+  })
+}
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
@@ -23,6 +39,16 @@ const UploadTrack = lazy(() => import('./pages/UploadTrack'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Admin = lazy(() => import('./pages/Admin'))
 
+// Стоит после <Routes>: layout-эффекты соседей идут по порядку, так что
+// сигнал уходит, когда новый экран уже закоммичен и прокручен на место.
+function RouteCommitSignal() {
+  const location = useLocation()
+  useLayoutEffect(() => {
+    notifyRouteCommitted(location.key)
+  }, [location.key])
+  return null
+}
+
 function App() {
   const { isAuthenticated, user } = useAuthStore()
 
@@ -35,7 +61,9 @@ function App() {
   }, [isAuthenticated])
 
   return (
-    <Router viewTransition>
+    // v7_startTransition: переход на вкладку, чей чанк ещё грузится, держит
+    // прежнюю страницу на экране вместо вспышки спиннера на месте контента.
+    <HistoryRouter history={appHistory} future={{ v7_startTransition: true }}>
       <Routes>
         <Route
           path="/login"
@@ -126,7 +154,8 @@ function App() {
           }
         />
       </Routes>
-    </Router>
+      <RouteCommitSignal />
+    </HistoryRouter>
   )
 }
 

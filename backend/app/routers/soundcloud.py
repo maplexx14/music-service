@@ -350,12 +350,42 @@ def _search_blocking(q: str, limit: int) -> list:
     return (info or {}).get("entries") or []
 
 
+# Кэш выдачи поиска. Страница артиста и поиск ходят сюда на каждый заход, а
+# это ~1с через прокси (платный трафик); выдача по строке меняется медленно.
+_SEARCH_CACHE_TTL = 600
+
+
 async def search_soundcloud(
     request: Request,
     q: str,
     limit: int = 20,
 ) -> List[ExternalTrackResponse]:
-    """Поиск по SoundCloud: быстрый api-v2, при сбое — фолбэк на yt-dlp."""
+    """Поиск по SoundCloud: быстрый api-v2, при сбое — фолбэк на yt-dlp.
+
+    Выдача кэшируется коротко. base_url — часть ключа: в stream_url зашит
+    хост, через который пришёл запрос (прод и туннель — разные адреса).
+    """
+    base_url = str(request.base_url).rstrip("/")
+    normalized_q = " ".join((q or "").lower().split())
+    cache_key = f"soundcloud:search:v1:{base_url}:{normalized_q}:{limit}"
+    cached = await get_cache_async(cache_key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+
+    results = await _search_soundcloud_uncached(request, q, limit)
+    # Пустую выдачу не кэшируем: чаще это сбой провайдера, а не «ничего нет».
+    if results:
+        await set_cache_async(
+            cache_key, [t.model_dump(mode="json") for t in results], expire=_SEARCH_CACHE_TTL
+        )
+    return results
+
+
+async def _search_soundcloud_uncached(
+    request: Request,
+    q: str,
+    limit: int,
+) -> List[ExternalTrackResponse]:
     try:
         return await _search_api(request, q, limit)
     except Exception as exc:  # noqa: BLE001 — сменилась разметка/API, идём в yt-dlp

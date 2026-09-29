@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { Play, Plus } from 'lucide-react'
 import api from '../services/api'
+import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
 import { useLazyBatch } from '../hooks/useLazyBatch'
@@ -13,12 +14,17 @@ import './PlaylistDetail.css'
 
 // Просмотр внешнего (SoundCloud) плейлиста: слушать можно сразу, в библиотеку
 // добавляется только по явному нажатию «Добавить в медиатеку».
+const EXTERNAL_FRESH_MS = 10 * 60 * 1000
+
 function ExternalPlaylist() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [playlist, setPlaylist] = useState(null)
-  const [tracks, setTracks] = useState([])
-  const [loading, setLoading] = useState(true)
+  // Внешний плейлист меняется редко, а грузится через SoundCloud (секунды):
+  // из кэша страница рисуется сразу, без спиннера.
+  const cacheKey = `external-playlist:${id}`
+  const [playlist, setPlaylist] = useState(() => peekCache(cacheKey)?.playlist ?? null)
+  const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [importing, setImporting] = useState(false)
   const [myPlaylists, setMyPlaylists] = useState([])
   const [menuTrackId, setMenuTrackId] = useState(null)
@@ -56,18 +62,35 @@ function ExternalPlaylist() {
     return () => document.removeEventListener('click', close)
   }, [menuTrackId])
 
+  // Материализация трека (db_id) правит список на месте — кэш следует за ним.
+  useEffect(() => {
+    if (!loading) patchCache(cacheKey, { tracks })
+  }, [tracks, loading])
+
   const fetchPlaylist = async () => {
-    setLoading(true)
+    const cached = peekCache(cacheKey)
+    if (cached) {
+      setPlaylist(cached.playlist)
+      setTracks(cached.tracks)
+      setLoading(false)
+      usePlayerStore.getState().prefetchTracks(cached.tracks, 8)
+      if (cacheAge(cacheKey) < EXTERNAL_FRESH_MS) return
+    } else {
+      setLoading(true)
+    }
     try {
       const response = await api.get(`/soundcloud/playlists/${id}`)
+      writeCache(cacheKey, { playlist: response.data.playlist, tracks: response.data.tracks })
       setPlaylist(response.data.playlist)
       setTracks(response.data.tracks)
       // Прогреваем резолв первых треков — старт воспроизведения без паузы.
-      usePlayerStore.getState().prefetchTracks(response.data.tracks, 8)
+      if (!cached) usePlayerStore.getState().prefetchTracks(response.data.tracks, 8)
     } catch (error) {
       console.error('Error fetching external playlist:', error)
-      toast.error('Не удалось загрузить плейлист')
-      navigate('/search')
+      if (!cached) {
+        toast.error('Не удалось загрузить плейлист')
+        navigate('/search')
+      }
     } finally {
       setLoading(false)
     }
