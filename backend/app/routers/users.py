@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import List
+from datetime import datetime, timezone
+from typing import List, Optional
+import json
 import logging
+from pydantic import BaseModel, Field
 from app.database import get_db
-from app.cache import get_cache, set_cache, redis_client
+from app.cache import get_cache, set_cache, delete_cache, redis_client
 from app.models import User, Track
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
 from app import lastfm_genres
@@ -349,6 +352,69 @@ def get_admin_users_taste(
     if len(user_ids) > 200:
         raise HTTPException(status_code=422, detail="too many ids")
     return {"profiles": {str(uid): _admin_taste(db, uid) for uid in user_ids}}
+
+
+# «Что сейчас играет» — эфемерное состояние плеера, в БД ему не место: клиент
+# шлёт его на смене трека/паузе и пульсом раз в NOW_PLAYING_HEARTBEAT с, ключ
+# живёт NOW_PLAYING_TTL. Закрытая вкладка просто перестаёт пульсировать, и
+# юзер пропадает из «сейчас слушает» без явного запроса на выход — как с
+# presence-маркером users:online:*.
+NOW_PLAYING_TTL = 90
+_NOW_PLAYING_PREFIX = "users:now_playing:"
+
+
+class NowPlayingPayload(BaseModel):
+    # Внешние треки (ytmusic/soundcloud) ещё не в БД, поэтому id — строка,
+    # а название/артист/обложка приходят от клиента, а не из Track.
+    track_id: Optional[str] = Field(None, max_length=200)
+    title: str = Field(..., max_length=300)
+    artist: Optional[str] = Field(None, max_length=300)
+    cover_url: Optional[str] = Field(None, max_length=1000)
+    source: Optional[str] = Field(None, max_length=40)
+    position: float = Field(0, ge=0)
+    duration: float = Field(0, ge=0)
+    is_playing: bool = True
+
+
+@router.put("/me/now-playing")
+def update_now_playing(
+    payload: NowPlayingPayload,
+    current_user: User = Depends(get_current_active_user),
+):
+    state = payload.model_dump()
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}", state, expire=NOW_PLAYING_TTL)
+    return {"ok": True}
+
+
+@router.delete("/me/now-playing")
+def clear_now_playing(current_user: User = Depends(get_current_active_user)):
+    delete_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}")
+    return {"ok": True}
+
+
+@router.get("/admin/now-playing")
+def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
+    """Текущее состояние плееров всех, у кого живой now-playing ключ.
+
+    Ответ — {user_id: state}; панель опрашивает его часто и вливает в уже
+    показанные карточки, поэтому здесь только Redis, без запросов в БД.
+    """
+    try:
+        keys = list(redis_client.scan_iter(match=f"{_NOW_PLAYING_PREFIX}*", count=200))
+        values = redis_client.mget(keys) if keys else []
+    except Exception:
+        logger.exception("failed to read now-playing states")
+        return {"now_playing": {}}
+    result = {}
+    for key, raw in zip(keys, values):
+        if not raw:
+            continue
+        try:
+            result[key.rsplit(":", 1)[-1]] = json.loads(raw)
+        except ValueError:
+            continue
+    return {"now_playing": result}
 
 
 @router.get("/{user_id}", response_model=UserResponse)

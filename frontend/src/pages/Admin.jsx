@@ -7,6 +7,47 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Admin.css'
 
 const USERS_PAGE_SIZE = 50
+const NOW_PLAYING_POLL_MS = 15000
+
+function formatClock(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+// Позиция приходит со снимком из пульса (раз в 30 с) — у играющего трека
+// досчитываем прошедшее с updated_at, чтобы время не стояло между опросами.
+function livePosition(state) {
+  if (!state.is_playing) return state.position
+  const elapsed = (Date.now() - new Date(state.updated_at).getTime()) / 1000
+  const position = state.position + Math.max(0, elapsed)
+  return state.duration ? Math.min(position, state.duration) : position
+}
+
+function NowPlaying({ state }) {
+  return (
+    <div className="admin-now-playing">
+      <img
+        src={resolveCoverUrl(state.cover_url, 'thumb') || defaultCover}
+        alt=""
+        className="admin-now-playing-cover"
+        loading="lazy"
+        decoding="async"
+        onError={handleCoverError}
+      />
+      <div className="admin-now-playing-info">
+        <div className="admin-now-playing-title">
+          {state.title}{state.artist ? ` — ${state.artist}` : ''}
+        </div>
+        <div className="admin-now-playing-meta">
+          {state.is_playing ? 'Слушает сейчас' : 'На паузе'}
+          {' · '}
+          {formatClock(livePosition(state))}{state.duration ? ` / ${formatClock(state.duration)}` : ''}
+          {state.source ? ` · ${state.source}` : ''}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function formatLastSeen(value) {
   if (!value) return 'нет данных'
@@ -31,6 +72,7 @@ function Admin() {
   const [tracksLoading, setTracksLoading] = useState(true)
   const [deletingId, setDeletingId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [nowPlaying, setNowPlaying] = useState({})
 
   // Профиль вкуса («Определены системой») — самая дорогая часть панели: на
   // бэке это полдесятка запросов на каждого юзера. Поэтому карточки приходят
@@ -101,9 +143,33 @@ function Admin() {
     }
   }
 
+  const fetchNowPlaying = async () => {
+    try {
+      const response = await api.get('/users/admin/now-playing', { skipErrorToast: true, dedupe: false })
+      setNowPlaying(response.data.now_playing || {})
+    } catch (error) {
+      console.error('Error fetching now playing:', error)
+    }
+  }
+
   useEffect(() => {
     fetchAdminData()
   }, [])
+
+  // Отдельный частый опрос: эндпоинт читает только Redis, а перезапрашивать
+  // ради него весь дашборд с профилями было бы в разы дороже.
+  useEffect(() => {
+    fetchNowPlaying()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') fetchNowPlaying()
+    }, NOW_PLAYING_POLL_MS)
+    return () => window.clearInterval(interval)
+  }, [])
+
+  const listeningCount = useMemo(
+    () => Object.values(nowPlaying).filter((state) => state.is_playing).length,
+    [nowPlaying],
+  )
 
   const filteredTracks = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -146,7 +212,7 @@ function Admin() {
           <h1 className="admin-title">Админ панель</h1>
           <div className="admin-subtitle">Сводка по сервису</div>
         </div>
-        <button type="button" className="admin-refresh" onClick={fetchAdminData}>
+        <button type="button" className="admin-refresh" onClick={() => { fetchAdminData(); fetchNowPlaying() }}>
           Обновить
         </button>
       </div>
@@ -155,6 +221,7 @@ function Admin() {
         {[
           ['Пользователи', stats.users_count],
           ['Сейчас онлайн', stats.online_users_count],
+          ['Сейчас слушают', listeningCount],
           ['Треки', stats.tracks_count],
           ['Артисты', stats.artists_count],
         ].map(([label, value]) => <div className="admin-stat" key={label}><strong>{value}</strong><span>{label}</span></div>)}
@@ -181,6 +248,7 @@ function Admin() {
                 {user.is_online ? 'сейчас в сети' : `был(а) в сети: ${formatLastSeen(user.last_seen)}`}
               </span>
             </div>
+            {nowPlaying[user.id] && <NowPlaying state={nowPlaying[user.id]} />}
             <div className="admin-user-preferences"><span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span><span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span><span className="admin-user-detected">Определены системой: {user.detected_artists === undefined ? 'загрузка…' : user.detected_artists.join(', ') || 'нет данных'}</span></div>
           </div>)}
         </div>

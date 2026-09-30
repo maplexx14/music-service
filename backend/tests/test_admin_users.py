@@ -151,3 +151,39 @@ def test_admin_users_taste_requires_admin(client, db):
         f"/api/users/admin/users/taste?ids={alice.id}", headers=auth_headers(client, "alice")
     )
     assert resp.status_code == 403
+
+
+def test_now_playing_visible_to_admin(client, db):
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+
+    payload = {
+        "track_id": "ytmusic:abc",
+        "title": "Song",
+        "artist": "Band",
+        "source": "ytmusic",
+        "position": 12.5,
+        "duration": 200,
+        "is_playing": True,
+    }
+    resp = client.put(
+        "/api/users/me/now-playing", json=payload, headers=auth_headers(client, "listener")
+    )
+    assert resp.status_code == 200, resp.text
+
+    admin_headers = auth_headers(client, "admin")
+    states = client.get("/api/users/admin/now-playing", headers=admin_headers).json()["now_playing"]
+    state = states[str(listener.id)]
+    assert state["title"] == "Song"
+    assert state["is_playing"] is True
+    assert state["updated_at"]
+
+    client.delete("/api/users/me/now-playing", headers=auth_headers(client, "listener"))
+    states = client.get("/api/users/admin/now-playing", headers=admin_headers).json()["now_playing"]
+    assert str(listener.id) not in states
+
+
+def test_now_playing_admin_only(client, db):
+    create_user(db, "plain")
+    resp = client.get("/api/users/admin/now-playing", headers=auth_headers(client, "plain"))
+    assert resp.status_code == 403

@@ -4,6 +4,7 @@ import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import Spinner from './components/Spinner'
 import api from './services/api'
+import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted } from './services/navigation'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
@@ -59,6 +60,7 @@ function App() {
     const interval = window.setInterval(heartbeat, 60000)
     return () => window.clearInterval(interval)
   }, [isAuthenticated])
+  useNowPlayingReporter(isAuthenticated)
 
   return (
     // v7_startTransition: переход на вкладку, чей чанк ещё грузится, держит
