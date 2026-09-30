@@ -1,5 +1,7 @@
 import asyncio
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 import json
 from typing import Optional, Any
 import os
@@ -28,6 +30,10 @@ redis_client = redis.Redis(
     # иначе первый запрос после простоя падает на разорванном сокете.
     health_check_interval=30,
     retry_on_timeout=True,
+    # Явно: один повтор без паузы — умолчание redis-py 5.x при
+    # retry_on_timeout. С 6.x умолчание стало 3 повтора с backoff до 10 с, и
+    # каждый вызов к лежащему Redis спал секундами вместо быстрого отказа.
+    retry=Retry(NoBackoff(), 1),
     max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", "100")),
 )
 
