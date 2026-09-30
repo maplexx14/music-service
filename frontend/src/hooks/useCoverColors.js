@@ -14,12 +14,11 @@ import { SAMPLE, paletteFromPixels } from '../utils/coverColor'
 const hueCache = new Map()
 const HUE_CACHE_LIMIT = 64
 
-// URL обложки для разбора — БЕЗ апскейла CDN (resolveCoverUrl без highQuality).
-// Для выборки 16×16 апскейл до 1200×1200 не нужен: он стоит лишней сетевой
-// загрузки и тяжёлого декода на каждый трек, а на цвет не влияет. Обычный URL
-// обложки — тот же, что у карточек треков на странице, так что чаще всего он
-// уже в кэше браузера.
-const sampleUrl = (coverUrl) => (coverUrl ? resolveCoverUrl(coverUrl) : null)
+// URL обложки для разбора — самый мелкий вариант (thumb). Для выборки 16×16
+// крупнее не нужно: лишний размер — это лишняя загрузка ровно в момент старта
+// трека, когда канал нужен звуку, а на цвет он не влияет. Thumb — тот же URL,
+// что у строк списков и мини-плеера, так что чаще всего он уже в кэше.
+const sampleUrl = (coverUrl) => (coverUrl ? resolveCoverUrl(coverUrl, 'thumb') : null)
 
 function isCrossOrigin(src) {
   try {

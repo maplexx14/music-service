@@ -16,7 +16,17 @@ const COVER_VARIANTS = {
   card: { google: 'w300-h300', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d00001e02' },
   // Яндекс в full — те же 400: полноэкранный плеер ждёт прогрева обложки
   // (preloadCover, 450мс), а 1000×1000 весит в разы больше.
-  full: { google: 'w1200-h1200', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d0000b273' },
+  // Google — 800 с качеством JPEG 75: обложка ytmusic 1200×1200 при родных
+  // -l90 весила ~610 КБ, это в разы больше первых секунд аудио, и на узком
+  // канале она качалась параллельно со стартом трека (виджет системы, прогрев
+  // фуллскрина). 800/-l75 — ~200 КБ, на экране телефона разницы не видно.
+  full: {
+    google: 'w800-h800',
+    googleQuality: 75,
+    yandex: '400x400',
+    soundcloud: 't500x500',
+    spotify: 'ab67616d0000b273',
+  },
 }
 
 // Spotify кодирует размер префиксом id картинки: 4851 — 64px, 1e02 — 300px,
@@ -27,7 +37,10 @@ const sizeCover = (url, size) => {
   const v = COVER_VARIANTS[size]
   if (!url || !v) return url
   if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
-    return url.replace(/=w\d+-h\d+/, `=${v.google}`)
+    const sized = url.replace(/=w\d+-h\d+/, `=${v.google}`)
+    // Качество меняем только там, где оно задано: у thumb/card URL остаётся
+    // прежним — он уже лежит в кэше браузера и nginx.
+    return v.googleQuality ? sized.replace(/(=w\d+-h\d+)-l\d+/, `$1-l${v.googleQuality}`) : sized
   }
   if (url.includes('ytimg.com')) {
     return size === 'full'

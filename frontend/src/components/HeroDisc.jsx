@@ -46,6 +46,9 @@ function clamp(value, min, max) {
 // (со всеми полками карточек) на смену трека не перерисовывается.
 function HeroDisc() {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const heavyCover = usePlayerStore(
+    (s) => s.currentTrack?.id != null && s.heavyCoverTrackId === s.currentTrack.id
+  )
   // duration — только для первичной отрисовки aria-атрибутов; в кадре
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => s.duration)
@@ -225,8 +228,10 @@ function HeroDisc() {
         ref={coverRef}
         className="hero-disc-cover"
         // Диск крупный (до 520px), а обложки YouTube приходят 120×120 —
-        // просим у CDN увеличенную версию, как полноэкранный плеер.
-        src={resolveCoverUrl(currentTrack.cover_url, true) || defaultCover}
+        // просим у CDN увеличенную версию, как полноэкранный плеер. Но только
+        // после старта звука (heavyCoverTrackId): до него — card, иначе
+        // крупная картинка качалась бы наперегонки с первыми байтами трека.
+        src={resolveCoverUrl(currentTrack.cover_url, heavyCover ? 'full' : 'card') || defaultCover}
         alt=""
         draggable={false}
         decoding="async"

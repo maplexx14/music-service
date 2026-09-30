@@ -185,6 +185,10 @@ const usePlayerStore = create((set, get) => ({
   volume: 1,
   currentTime: 0,
   duration: 0,
+  // id трека, для которого уже можно грузить hi-res обложку. Ставит Player
+  // после первого звука (с форой буферу): до этого сотни КБ картинки качались
+  // бы параллельно с первыми байтами аудио и на узком канале задерживали старт.
+  heavyCoverTrackId: null,
   isFullScreen: false,
   isRepeatOne: false,
   isShuffle: false,
@@ -1061,6 +1065,7 @@ const usePlayerStore = create((set, get) => ({
       source: null,
       isFullScreen: false,
       queuePager: null,
+      heavyCoverTrackId: null,
     })
   },
 }))

@@ -217,6 +217,12 @@ export function subscribeQuality(cb) {
   return () => listeners.delete(cb)
 }
 
+// Текущий вердикт: канал узкий. Нужен не только стриму: тяжёлые побочные
+// загрузки (hi-res обложка) на таком канале отбирают полосу у звука.
+export function isLowQuality() {
+  return low
+}
+
 // Дописывает ?quality=low к ссылке на свой стрим. Звать только для URL,
 // которые собирает клиент; чужие ссылки отсекает QUALITY_AWARE.
 export function withQuality(url) {

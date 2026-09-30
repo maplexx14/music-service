@@ -19,7 +19,7 @@ import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
-import { noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
+import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
@@ -68,6 +68,12 @@ const LONG_PAUSE_RELOAD_MS = 60 * 1000
 // остаётся нейтральной зоной — ни плюс, ни минус.
 const PLAY_RECORD_RATIO = 0.5
 const PLAY_RECORD_MIN_SEC = 60
+
+// Пауза после первого звука перед загрузкой hi-res обложки: звуку сперва
+// нужен буфер вперёд, иначе картинка отберёт полосу и вызовет перебуферизацию.
+// В скрытой вкладке не ждём: таймеры там замораживаются, а виджет на экране
+// блокировки — единственное место, где обложку сейчас видно.
+const HEAVY_COVER_DELAY_MS = 3000
 
 // Зеркало EXTERNAL_STREAM_PREFIX из backend/app/routers/tracks.py: сюда
 // stream_track сам редиректит (307) материализованные внешние треки.
@@ -392,6 +398,10 @@ function PlayerInner() {
   // ли канал текущий битрейт. Ставится в двух местах, где реально назначается
   // src (эффект audioSource и playAdjacentNow), снимается на первом 'playing'.
   const loadStartedAtRef = useRef(0)
+  // Когда разрешить hi-res обложку (виджет системы, фуллскрин, HeroDisc) —
+  // см. heavyCoverTrackId в playerStore и HEAVY_COVER_DELAY_MS.
+  const heavyCoverTrackId = usePlayerStore((s) => s.heavyCoverTrackId)
+  const heavyCoverTimerRef = useRef(null)
   // Таймер проверки «подменённый элемент реально поехал» (см. verifySwapStarted).
   const swapVerifyTimerRef = useRef(null)
   // Страховочный таймер отпускания предыдущего элемента, если 'playing' на
@@ -521,18 +531,25 @@ function PlayerInner() {
     openFullScreen(karaoke)
   }
 
+  // Звук текущего трека уже пошёл и отыграл свою фору — тяжёлые загрузки
+  // больше не мешают старту (см. heavyCoverTrackId).
+  const heavyCoverAllowed = currentTrack?.id != null && heavyCoverTrackId === currentTrack.id
+
   // Hi-res обложка нужна фуллскрину при открытии (выезд поверх страницы) —
-  // качаем её заранее, в простое после смены трека, чтобы открытие не
-  // ждало сети. Таймаут в preloadCover не даёт прогреву копить промисы.
+  // качаем её заранее, чтобы открытие не ждало сети. Но не на смене трека, а
+  // после старта звука, и не на узком канале: там сотни КБ картинки стоят
+  // перебуферизации, а открытие фуллскрина и так ограничено таймаутом
+  // preloadCover. Таймаут же не даёт прогреву копить промисы.
   useEffect(() => {
-    if (!currentTrack?.cover_url || isFullScreen) return undefined
+    if (!currentTrack?.cover_url || isFullScreen || !heavyCoverAllowed) return undefined
+    if (isLowQuality()) return undefined
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
     const cancel = window.cancelIdleCallback ?? clearTimeout
     const handle = idle(() => {
       preloadCover(resolveCoverUrl(currentTrack.cover_url, true)).catch(() => {})
     })
     return () => cancel(handle)
-  }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen])
+  }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -972,6 +989,12 @@ function PlayerInner() {
       loadStartedAtRef.current = 0
       handlePlaying()
       setIsBuffering(false)
+      // Звук пошёл — теперь можно тянуть hi-res обложку (см. heavyCoverTrackId).
+      const startedId = usePlayerStore.getState().currentTrack?.id ?? null
+      const allowHeavyCover = () => usePlayerStore.setState({ heavyCoverTrackId: startedId })
+      clearTimeout(heavyCoverTimerRef.current)
+      if (document.hidden) allowHeavyCover()
+      else heavyCoverTimerRef.current = setTimeout(allowHeavyCover, HEAVY_COVER_DELAY_MS)
       // syncPositionState на playing: iOS требует setPositionState ДО того,
       // как система «признает» воспроизведение — иначе виджет на экране
       // блокировки не появляется. timeupdate стреляет слишком поздно.
@@ -1452,6 +1475,7 @@ function PlayerInner() {
       }
       clearTimeout(swapVerifyTimerRef.current)
       clearTimeout(swapReleaseTimerRef.current)
+      clearTimeout(heavyCoverTimerRef.current)
     }
   }, [])
 
@@ -1663,7 +1687,11 @@ function PlayerInner() {
       }
       return
     }
-    const artwork = resolveCoverUrl(currentTrack.cover_url, true)
+    // До первого звука — мелкая обложка: она уже в кэше (та же, что у
+    // мини-плеера и строк списков) и не отбирает канал у старта трека. После —
+    // полная; на узком канале — средняя (card), полная там не окупается.
+    const artworkSize = !heavyCoverAllowed ? 'thumb' : isLowQuality() ? 'card' : 'full'
+    const artwork = resolveCoverUrl(currentTrack.cover_url, artworkSize)
     const artworkUrl = artwork
       ? new URL(artwork, window.location.origin).href
       : new URL(defaultCover, window.location.origin).href
@@ -1706,6 +1734,7 @@ function PlayerInner() {
     currentTrack?.cover_url,
     currentTrack?.duration,
     isExternalTrack,
+    heavyCoverAllowed,
   ])
 
   // Обработчики кнопок системного виджета. Регистрируем один раз.
@@ -2189,7 +2218,7 @@ function PlayerInner() {
         >
           <img
             ref={miniCoverRef}
-            src={resolveCoverUrl(currentTrack.cover_url) || defaultCover}
+            src={resolveCoverUrl(currentTrack.cover_url, 'thumb') || defaultCover}
             alt={currentTrack.title}
             className="player-cover"
             decoding="async"
