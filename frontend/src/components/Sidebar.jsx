@@ -1,15 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, LogOut, Upload, Settings, ChevronLeft, ChevronRight, ChevronDown, Shield } from 'lucide-react'
+import { Home, Search, Library, Heart, Upload, ChevronLeft, ChevronRight, Shield, Settings2 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import './Sidebar.css'
 
 function Sidebar() {
   const location = useLocation()
-  const { logout, user } = useAuthStore()
-  const dropdownRef = useRef(null)
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
+  const user = useAuthStore((s) => s.user)
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
     return saved ? JSON.parse(saved) : false
@@ -20,24 +18,6 @@ function Sidebar() {
     // Dispatch custom event to notify Layout
     window.dispatchEvent(new Event('sidebarToggle'))
   }, [isCollapsed])
-
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setIsProfileMenuOpen(false)
-      }
-    }
-    if (isProfileMenuOpen) {
-      document.addEventListener('click', handleClickOutside)
-    }
-    return () => document.removeEventListener('click', handleClickOutside)
-  }, [isProfileMenuOpen])
-
-  const handleLogout = () => {
-    setIsProfileMenuOpen(false)
-    logout()
-    window.location.href = '/login'
-  }
 
   const toggleCollapse = () => {
     setIsCollapsed(!isCollapsed)
@@ -83,24 +63,23 @@ function Sidebar() {
         })}
       </nav>
 
-      <div
-        className={`sidebar-footer ${isProfileMenuOpen ? 'menu-open' : ''}`}
-        ref={dropdownRef}
-      >
-        <button
-          type="button"
-          className="profile-trigger"
-          onClick={() => setIsProfileMenuOpen((prev) => !prev)}
-          aria-expanded={isProfileMenuOpen}
-          aria-haspopup="true"
-          aria-label="Меню профиля"
+      {/* Профиль ведёт сразу в настройки: там же выход и админка. Раньше по
+          нажатию открывалось меню из двух пунктов — лишний шаг до того же. */}
+      <div className="sidebar-footer">
+        <Link
+          to="/settings"
+          className={`profile-trigger${location.pathname.startsWith('/settings') ? ' active' : ''}`}
+          title={isCollapsed ? 'Профиль и настройки' : undefined}
+          aria-label="Профиль и настройки"
+          onPointerEnter={() => prefetchRouteChunk('/settings')}
+          onPointerDown={() => prefetchRouteChunk('/settings')}
         >
           {!isCollapsed && (
             <div className="user-info">
               {user?.avatar_url ? (
-                <img src={user.avatar_url} alt={user.username} className="user-avatar" />
+                <img src={user.avatar_url} alt="" className="user-avatar" />
               ) : (
-                <div className="user-avatar user-avatar-placeholder">
+                <div className="user-avatar user-avatar-placeholder" aria-hidden="true">
                   {(user?.username || 'U').charAt(0).toUpperCase()}
                 </div>
               )}
@@ -108,35 +87,19 @@ function Sidebar() {
                 <div className="user-name">{user?.full_name || user?.username}</div>
                 <div className="user-email">{user?.email}</div>
               </div>
-              <ChevronDown size={16} className={`profile-chevron ${isProfileMenuOpen ? 'open' : ''}`} />
+              <Settings2 size={16} className="profile-chevron" aria-hidden="true" />
             </div>
           )}
           {isCollapsed && (
             user?.avatar_url ? (
-              <img src={user.avatar_url} alt={user.username} className="user-avatar-collapsed" />
+              <img src={user.avatar_url} alt="" className="user-avatar-collapsed" />
             ) : (
-              <div className="user-avatar-collapsed user-avatar-placeholder">
+              <div className="user-avatar-collapsed user-avatar-placeholder" aria-hidden="true">
                 {(user?.username || 'U').charAt(0).toUpperCase()}
               </div>
             )
           )}
-        </button>
-        {isProfileMenuOpen && (
-          <div className={`profile-dropdown ${isCollapsed ? 'collapsed' : ''}`}>
-            <Link
-              to="/settings"
-              className={`profile-dropdown-item ${location.pathname === '/settings' ? 'active' : ''}`}
-              onClick={() => setIsProfileMenuOpen(false)}
-            >
-              <Settings size={20} />
-              <span>Настройки</span>
-            </Link>
-            <button type="button" className="profile-dropdown-item" onClick={handleLogout}>
-              <LogOut size={20} />
-              <span>Выйти</span>
-            </button>
-          </div>
-        )}
+        </Link>
       </div>
     </div>
   )

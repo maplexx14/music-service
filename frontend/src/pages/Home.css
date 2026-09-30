@@ -538,64 +538,6 @@
   color: rgba(255, 255, 255, 0.85);
 }
 
-.mobile-profile {
-  position: relative;
-}
-
-.mobile-profile-menu {
-  position: absolute;
-  right: 0;
-  top: 48px;
-  background: rgba(16, 16, 16, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 6px;
-  min-width: 160px;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
-  z-index: 20;
-  /* Вырастает от аватара сверху-справа. */
-  transform-origin: top right;
-  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), display var(--duration-fast) allow-discrete;
-}
-
-@starting-style {
-  .mobile-profile-menu {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-}
-
-/* Закрытое меню: display-переход ниже даёт и выходу проиграть те же
-   150ms — элемент остаётся в DOM до конца анимации. */
-.mobile-profile-menu[data-open="false"] {
-  opacity: 0;
-  transform: scale(0.96);
-  display: none;
-}
-
-.mobile-profile-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  color: #ffffff;
-  text-decoration: none;
-  font-size: 13px;
-  /* Пункт «Выйти» — <button>: сбрасываем нативные стили, чтобы он
-     выглядел как соседние ссылки. */
-  background: none;
-  border: none;
-  width: 100%;
-  font-family: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-
-.mobile-profile-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .mobile-header,
 .mobile-player,
 .mobile-nav {
@@ -618,6 +560,8 @@
 .mobile-avatar {
   width: 36px;
   height: 36px;
+  /* Аватар теперь ссылка в настройки, а не кнопка меню. */
+  text-decoration: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
   border: none;

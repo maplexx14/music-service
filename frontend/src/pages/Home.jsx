@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Pause, Settings, Shield, LogOut, Home as HomeIcon, History } from 'lucide-react'
+import { Play, Pause, Home as HomeIcon, History } from 'lucide-react'
 import {
   recordRecommendationImpression,
   usePlayerStore,
@@ -126,17 +126,9 @@ function Home() {
   const heroColors = coverColors ?? DEFAULT_HERO_COLORS
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
-  // Профиль в верхней шапке — единственное место выхода из аккаунта
-  // на мобильных (сайдбар скрыт, в нижней навигации профиля нет).
+  // Аватар в верхней шапке — вход в профиль и настройки на мобильных
+  // (сайдбар скрыт, в нижней навигации профиля нет). Выход — там же.
   const user = useAuthStore((s) => s.user)
-  const logout = useAuthStore((s) => s.logout)
-
-  const handleLogout = () => {
-    setIsProfileMenuOpen(false)
-    logout()
-    window.location.href = '/login'
-  }
 
   useEffect(() => {
     fetchData()
@@ -322,58 +314,13 @@ function Home() {
         <span href = "">
           <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
         </span>
-        <div className="mobile-profile">
-          <button
-            className="mobile-avatar"
-            type="button"
-            aria-label="Меню профиля"
-            aria-expanded={isProfileMenuOpen}
-            aria-haspopup="true"
-            onClick={() => setIsProfileMenuOpen((prev) => !prev)}
-          >
-            {user?.avatar_url ? (
-              <img src={user.avatar_url} alt="" className="mobile-avatar-img" />
-            ) : (
-              <span>{(user?.username || 'U').charAt(0).toUpperCase()}</span>
-            )}
-          </button>
-          <div
-            className="mobile-profile-menu"
-            role="menu"
-            data-open={isProfileMenuOpen}
-            // React 18 не знает boolean-атрибут inert: true он просто
-            // выкинет с warning. Пустая строка попадает в DOM как inert="".
-            inert={!isProfileMenuOpen ? '' : undefined}
-          >
-            <Link
-              to="/settings"
-              className="mobile-profile-item"
-              role="menuitem"
-              onClick={() => setIsProfileMenuOpen(false)}
-            >
-              <Settings size={20} />
-              Настройки
-            </Link>
-            <Link
-              to="/admin"
-              className="mobile-profile-item"
-              role="menuitem"
-              onClick={() => setIsProfileMenuOpen(false)}
-            >
-              <Shield size={20} />
-              Админ
-            </Link>
-            <button
-              type="button"
-              className="mobile-profile-item"
-              role="menuitem"
-              onClick={handleLogout}
-            >
-              <LogOut size={20} />
-              Выйти
-            </button>
-          </div>
-        </div>
+        <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
+          {user?.avatar_url ? (
+            <img src={user.avatar_url} alt="" className="mobile-avatar-img" />
+          ) : (
+            <span aria-hidden="true">{(user?.username || 'U').charAt(0).toUpperCase()}</span>
+          )}
+        </Link>
       </div>
       <div
         className="hero-section"

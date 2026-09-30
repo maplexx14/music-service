@@ -534,9 +534,8 @@ body{
   .mobile-topbar,
   .mobile-player,
   .mobile-nav,
-  .playlist-add-panel,
-  .profile-dropdown,
-  .mobile-profile-menu,
+  .atp-dialog,
+  .track-ctx-menu,
   .toast {
     background: #0a0a0e !important;
     border: 1px solid rgba(255, 255, 255, 0.5) !important;

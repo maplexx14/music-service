@@ -143,7 +143,9 @@ function App() {
                     <Route path="/artists/:name" element={<Artist />} />
                     <Route path="/liked" element={<LikedSongs />} />
                     <Route path="/upload" element={<UploadTrack />} />
-                    <Route path="/settings" element={<Settings />} />
+                    {/* Один маршрут на меню и разделы: страница не размонтируется при
+                        переходах, и несохранённые предпочтения не теряются. */}
+                    <Route path="/settings/:section?" element={<Settings />} />
                     <Route path="/admin" element={user?.is_admin ? <Admin /> : <Navigate to="/" />} />
                   </Routes>
                 </Suspense>

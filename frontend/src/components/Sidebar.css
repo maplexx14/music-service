@@ -160,80 +160,22 @@
   color: #b3b3b3;
   flex-shrink: 0;
   margin-left: auto;
-  transition: transform 0.2s ease;
 }
 
-.profile-chevron.open {
-  transform: rotate(180deg);
-}
-
-.profile-dropdown {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  margin-bottom: 8px;
-  background-color: #282828;
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  /* Вырастает от триггера снизу, а не появляется из ниоткуда. */
-  transform-origin: bottom center;
-  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
-}
-
-@starting-style {
-  .profile-dropdown {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-}
-
-.profile-dropdown.collapsed {
-  left: auto;
-  right: 0;
-  min-width: 160px;
-}
-
-.profile-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: none;
-  background: none;
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 500;
+/* Профиль — ссылка, а не кнопка: сбрасываем подчёркивание и подсвечиваем,
+   пока открыты настройки. */
+.profile-trigger {
   text-decoration: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  width: 100%;
-  text-align: left;
-  font-family: inherit;
+  border-radius: var(--radius-card);
 }
 
-.profile-dropdown-item:hover {
-  background-color: #3e3e3e;
+.profile-trigger:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 4px;
 }
 
-.profile-dropdown-item.active {
-  background-color: #1a1a1a;
-  color: #a259ff;
-}
-
-.profile-dropdown-item.active svg {
-  color: #a259ff;
-}
-
-.profile-dropdown-item svg {
-  flex-shrink: 0;
-  color: #b3b3b3;
+.profile-trigger.active .profile-chevron {
+  color: var(--brand-accent);
 }
 
 .sidebar.collapsed .sidebar-footer {
