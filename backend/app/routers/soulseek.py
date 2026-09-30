@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import random
 import re
 import time
 from typing import List, Optional, Tuple
@@ -34,6 +35,9 @@ AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
 # 15 с здесь стабильно возвращали пустоту на любой запрос.
 SEARCH_TIMEOUT = 60.0
 SEARCH_POLL_INTERVAL = 0.7
+# Повторы создания поиска при 429 (см. _slskd_search_responses).
+_CREATE_RETRIES = 8
+_CREATE_RETRY_DELAY = 0.15
 # Стрим: сколько ждать новых байт, прежде чем сдаться (в секундах, при простое).
 STREAM_IDLE_TIMEOUT = 45.0
 STREAM_POLL_INTERVAL = 0.4
@@ -165,11 +169,19 @@ async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Op
     if not _slskd_available():
         return None
     try:
-        create = await _slskd_client.post(
-            f"{SLSKD_URL}/api/v0/searches",
-            json={"searchText": q},
-            headers=_headers(),
-        )
+        # slskd создаёт поиски строго по одному: параллельный POST получает 429
+        # «Only one concurrent operation is permitted». Замок занят миллисекунды,
+        # а воркеров gunicorn несколько — семафор в процессе не спасает,
+        # поэтому просто повторяем с небольшой паузой.
+        for attempt in range(_CREATE_RETRIES):
+            create = await _slskd_client.post(
+                f"{SLSKD_URL}/api/v0/searches",
+                json={"searchText": q},
+                headers=_headers(),
+            )
+            if create.status_code != 429:
+                break
+            await asyncio.sleep(_CREATE_RETRY_DELAY * (attempt + 1) + random.uniform(0, _CREATE_RETRY_DELAY))
         create.raise_for_status()
         search_id = create.json().get("id")
         if not search_id:
@@ -200,6 +212,14 @@ async def _slskd_search_responses(q: str, timeout: float = SEARCH_TIMEOUT) -> Op
                 )
                 resp.raise_for_status()
                 responses = resp.json()
+                # Ответы забраны — поиск в slskd больше не нужен. Без удаления
+                # история копится тысячами и тормозит его список поисков.
+                try:
+                    await _slskd_client.delete(
+                        f"{SLSKD_URL}/api/v0/searches/{search_id}", headers=_headers()
+                    )
+                except httpx.HTTPError:
+                    pass
                 break
         return responses
     except (httpx.ConnectError, httpx.ConnectTimeout):

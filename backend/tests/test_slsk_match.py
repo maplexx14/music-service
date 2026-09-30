@@ -12,6 +12,8 @@ _match_job/await_soulseek_match, поэтому выглядело как «Soul
 
 import asyncio
 
+import httpx
+
 from app import slsk_harvest
 from app.routers import soulseek, ytdlp
 from app.routers.soundcloud import _is_exact_match
@@ -214,3 +216,35 @@ def test_harvest_one_failure_does_not_abort_pass(monkeypatch):
         )
 
     assert asyncio.run(_both()) == ["matched", ""]
+
+
+def test_search_create_retries_slskd_429(monkeypatch):
+    """slskd создаёт поиски по одному и отбивает параллельный POST 429 —
+    повторяем, а не считаем поиск недоступным. Забранный поиск удаляется."""
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        path = request.url.path
+        if request.method == "POST":
+            posts = sum(1 for m, _ in calls if m == "POST")
+            if posts < 3:
+                return httpx.Response(429, text="Only one concurrent operation is permitted.")
+            return httpx.Response(200, json={"id": "s1"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if path.endswith("/responses"):
+            return httpx.Response(200, json=[{"username": "peer", "files": []}])
+        return httpx.Response(200, json={"isComplete": True, "state": "Completed"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(soulseek, "_slskd_client", client)
+    monkeypatch.setattr(soulseek, "_CREATE_RETRY_DELAY", 0)
+    monkeypatch.setattr(soulseek, "SEARCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(soulseek, "_slskd_down_until", 0.0)
+
+    responses = asyncio.run(soulseek._slskd_search_responses("q"))
+
+    assert responses == [{"username": "peer", "files": []}]
+    assert [m for m, _ in calls].count("POST") == 3
+    assert ("DELETE", "/api/v0/searches/s1") in calls
