@@ -128,6 +128,31 @@
 .tracks-table {
   width: 100%;
   border-collapse: collapse;
+  /* Ширины колонок — по шапке, один раз. При auto браузер пересчитывал их по
+     ВСЕМ строкам на каждую подгруженную пачку (useLazyBatch), и раскладка
+     длинного списка вставала рывком прямо во время прокрутки. */
+  table-layout: fixed;
+}
+
+/* Название шире альбома; колонка длительности — фиксированная. В таблице
+   альбома колонки «Альбом» нет, и название забирает всё оставшееся. */
+.tracks-table th:nth-child(2):nth-last-child(4) {
+  width: 55%;
+}
+
+.tracks-table th:nth-last-child(2) {
+  width: 120px;
+}
+
+/* Колонка действий: при fixed min-width ячейки не работает, ширину держит
+   шапка. Селектор специфичнее, чем в LikedSongs.css (там 56px — кнопки
+   лайка и меню обрезались бы). */
+.tracks-table thead th:last-child {
+  width: 112px;
+}
+
+.tracks-table td {
+  overflow-wrap: anywhere;
 }
 
 .tracks-table thead {

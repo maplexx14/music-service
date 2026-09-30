@@ -36,6 +36,7 @@ export function useEdgeSwipeBack(scrollerRef, { enabled, onBack }) {
       el.style.transform = ''
       el.style.boxShadow = ''
       el.style.willChange = ''
+      el.style.overflowY = ''
     }
 
     const onStart = (e) => {
@@ -51,23 +52,22 @@ export function useEdgeSwipeBack(scrollerRef, { enabled, onBack }) {
       const dx = t.clientX - g.x
       const dy = t.clientY - g.y
       if (!g.axis) {
-        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) {
-          // iOS решает «это скролл» по первому непогашенному touchmove и
-          // потом отменить его уже не даёт — горизонтальное начало гасим
-          // сразу, до фиксации оси.
-          if (dx > Math.abs(dy) && e.cancelable) e.preventDefault()
-          return
-        }
+        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
         g.axis = dx > Math.abs(dy) ? 'x' : 'y'
         if (g.axis === 'y') {
           g = null
           return
         }
         el.style.willChange = 'transform'
+        // Горизонтальный жест забираем целиком: список под пальцем не должен
+        // одновременно прокручиваться. Не через preventDefault — он требует
+        // НЕпассивного touchmove на скролл-контейнере, а такой слушатель
+        // заставляет браузер на КАЖДОМ движении пальца ждать главный поток,
+        // прежде чем прокрутить: весь скролл экрана дёргался, стоило JS
+        // занять кадр. Запрет прокрутки через overflow работает и в
+        // пассивном режиме.
+        el.style.overflowY = 'hidden'
       }
-      // Горизонтальный жест забираем целиком: список под пальцем не должен
-      // одновременно прокручиваться.
-      if (e.cancelable) e.preventDefault()
       const dt = Math.max(1, e.timeStamp - g.lastT)
       g.v = (t.clientX - g.lastX) / dt
       g.lastX = t.clientX
@@ -116,7 +116,7 @@ export function useEdgeSwipeBack(scrollerRef, { enabled, onBack }) {
     }
 
     el.addEventListener('touchstart', onStart, { passive: true })
-    el.addEventListener('touchmove', onMove, { passive: false })
+    el.addEventListener('touchmove', onMove, { passive: true })
     el.addEventListener('touchend', onEnd, { passive: true })
     el.addEventListener('touchcancel', onEnd, { passive: true })
     return () => {

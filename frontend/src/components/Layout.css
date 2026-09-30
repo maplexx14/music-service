@@ -51,9 +51,10 @@
     left: 0;
     right: 0;
     height: env(safe-area-inset-top, 0px);
-    background: rgba(5, 5, 5, 0.72);
-    backdrop-filter: blur(12px) saturate(160%);
-    -webkit-backdrop-filter: blur(12px) saturate(160%);
+    /* Без backdrop-filter: под полоской статус-бара едет весь скролл, и
+       размытие пересчитывалось на каждом его кадре. На плотном фоне
+       разницы не видно. */
+    background: rgba(5, 5, 5, 0.9);
     z-index: 1003;
     pointer-events: none;
   }
@@ -70,10 +71,12 @@
     align-items: center;
     padding-left: 8px;
     padding-right: 8px;
-    background: rgba(0, 0, 0, 0.85);
+    /* Без backdrop-filter по той же причине, что и у .mobile-status-scrim:
+       блюр под 85%-затемнением не читался, а стоил перерисовки на каждом
+       кадре прокрутки. */
+    background: rgba(0, 0, 0, 0.92);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     z-index: 1003;
-    backdrop-filter: blur(8px);
     /* Только fade, без движения: панель не должна ощущаться анимацией. */
     transition: opacity var(--duration-fast) var(--ease-out);
   }
