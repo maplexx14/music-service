@@ -90,8 +90,8 @@ function EmailTwoFactorSettings() {
       <div className="settings-section-title">Код на почту</div>
       <p className="settings-hint settings-section-hint">
         {enabled
-          ? 'При входе присылаем 6-значный код на вашу почту.'
-          : 'Второй фактор без приложения: 6-значный код письмом при каждом входе.'}
+          ? 'При входе с нового устройства присылаем 6-значный код на вашу почту.'
+          : 'Второй фактор без приложения: 6-значный код письмом при входе с нового устройства.'}
       </p>
 
       {error && <div className="settings-error">{error}</div>}

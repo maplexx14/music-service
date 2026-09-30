@@ -299,9 +299,12 @@ def test_setup_and_enable_email_2fa(client, db, monkeypatch):
     assert status["email_2fa_enabled"] is True
     assert status["email_masked"]
 
-    # Вход стал двухшаговым — и на знакомом устройстве тоже, иначе проверка
-    # ничего не доказывала бы: новое устройство просит код и без 2FA.
-    assert _login(client, device_token=trust_device(db, user.id))["mfa_required"] is True
+    # Второй фактор — только на незнакомом устройстве: новое просит почтовый
+    # код, знакомое пускает в один шаг.
+    fresh = _login(client)
+    assert fresh["mfa_required"] is True
+    assert fresh["mfa_methods"] == ["email"]
+    assert _login(client, device_token=trust_device(db, user.id))["mfa_required"] is False
 
 
 def test_enable_email_2fa_requires_password_and_code(client, db, monkeypatch):

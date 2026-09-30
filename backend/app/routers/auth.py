@@ -301,21 +301,18 @@ def login(
     if not user.email_verified:
         raise HTTPException(status_code=403, detail=EMAIL_NOT_VERIFIED)
 
-    # 2FA включена → пароль проверен, но вход не завершён: выдаём короткоживущий
-    # mfa_token (в API он не работает — это не access_token), а фронт на его
-    # основе вызывает /auth/mfa/verify. Иначе пришлось бы хранить сессию шага.
-    methods = _mfa_methods(user)
-
-    # Вход с НЕЗНАКОМОГО устройства требует второй фактор даже у тех, кто 2FA
-    # не включал: одного украденного пароля должно быть недостаточно. Фолбэк —
-    # код на почту (адрес подтверждён, проверено выше).
+    # Второй фактор спрашиваем ТОЛЬКО на незнакомом устройстве — и у тех, кто
+    # включал свою 2FA, и у тех, кто нет (одного украденного пароля должно
+    # быть недостаточно). Знакомое устройство уже прошло второй фактор
+    # раньше, его токен и есть доказательство — вход в один шаг.
+    # Пароль проверен, но вход не завершён: выдаём короткоживущий mfa_token
+    # (в API он не работает — это не access_token), а фронт на его основе
+    # вызывает /auth/mfa/verify. Иначе пришлось бы хранить сессию шага.
     device_token = request.headers.get(DEVICE_TOKEN_HEADER)
-    trusted = is_trusted_device(db, user.id, device_token)
-    new_device = not trusted
-    if new_device:
-        # Фактор мог быть не выбран юзером — тогда назначаем почтовый код,
-        # иначе шаг подтверждения нечем закрыть.
-        methods = _login_methods(user)
+    new_device = not is_trusted_device(db, user.id, device_token)
+    # Своя 2FA задаёт способы подтверждения; без неё — код на почту (адрес
+    # подтверждён, проверено выше).
+    methods = _login_methods(user) if new_device else []
 
     if methods:
         mfa_token_expires = timedelta(minutes=MFA_TOKEN_EXPIRE_MINUTES)
@@ -436,11 +433,22 @@ def verify_email(
                 logger.exception("could not restore registration token %s", pending.id)
             raise
         delete_pending_registration(pending)
-        access = _issue_access_token(user)
+        # Переход по ссылке из письма — то же доказательство владения почтой,
+        # что и код на новом устройстве, и этот браузер сразу получает вход.
+        # Без запоминания следующий вход по паролю с него же считался бы
+        # «новым устройством» и снова требовал код из письма.
+        device_token = remember_device(
+            db,
+            user.id,
+            request.headers.get("user-agent"),
+            request.headers.get(DEVICE_TOKEN_HEADER),
+        )
+        access = _issue_access_token(user, device_token)
         return EmailVerifyResponse(
             email_verified=True,
             access_token=access["access_token"],
             token_type=access["token_type"],
+            device_token=access.get("device_token"),
         )
 
     # Совместимость со ссылками, выписанными старой версией приложения.

@@ -124,6 +124,11 @@ const useAuthStore = create((set, get) => ({
             skipErrorToast: true,
             skipAuthRedirect: true,
           })
+          // Ссылка из письма подтверждает и этот браузер: следующий вход
+          // по паролю с него не должен снова спрашивать код.
+          if (response.data?.device_token) {
+            setDeviceToken(response.data.device_token)
+          }
           if (response.data?.access_token) {
             const loginResult = await useAuthStore.getState().finalizeLogin(
               response.data.access_token,

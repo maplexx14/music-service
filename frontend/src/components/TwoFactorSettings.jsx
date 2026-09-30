@@ -120,8 +120,8 @@ function TwoFactorSettings() {
       <div className="settings-section-title">Приложение-аутентификатор</div>
       <p className="settings-hint settings-section-hint">
         {enabled
-          ? 'Вход требует код из приложения-аутентификатора.'
-          : 'Дополнительный код при входе — на случай, если пароль украдут.'}
+          ? 'Вход с нового устройства требует код из приложения-аутентификатора.'
+          : 'Дополнительный код при входе с нового устройства — на случай, если пароль украдут.'}
       </p>
 
       {error && <div className="settings-error">{error}</div>}

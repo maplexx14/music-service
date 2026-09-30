@@ -86,6 +86,27 @@ def test_verify_email_unlocks_login(client, db):
     assert login.json()["access_token"]
 
 
+def test_verify_email_remembers_device(client, db):
+    """Браузер, открывший ссылку из письма, становится доверенным: следующий
+    вход по паролю с него не требует код нового устройства."""
+    _register(client)
+    token = _token_for("bob")
+
+    resp = client.post("/api/auth/verify-email", json={"token": token})
+    assert resp.status_code == 200, resp.text
+    device_token = resp.json()["device_token"]
+    assert device_token
+
+    login = client.post(
+        "/api/auth/login",
+        data={"username": "bob", "password": "password123"},
+        headers={DEVICE_TOKEN_HEADER: device_token},
+    )
+    assert login.status_code == 200, login.text
+    assert login.json()["mfa_required"] is False
+    assert login.json()["access_token"]
+
+
 def test_token_is_single_use(client, db):
     _register(client)
     token = _token_for("bob")

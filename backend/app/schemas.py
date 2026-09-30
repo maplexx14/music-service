@@ -220,6 +220,9 @@ class EmailVerifyResponse(BaseModel):
     # verification link has authenticated the email owner.
     access_token: Optional[str] = None
     token_type: Optional[str] = None
+    # Браузер, открывший ссылку, запоминается как доверенное устройство —
+    # как после кода на новом устройстве (см. Token.device_token).
+    device_token: Optional[str] = None
 
 
 class EmailResendRequest(BaseModel):

@@ -131,9 +131,9 @@ def test_device_token_issued_only_after_second_factor(client, db, monkeypatch):
     assert rows == []
 
 
-def test_totp_user_still_needs_code_on_known_device(client, db, monkeypatch):
-    """Своя 2FA не слабеет от доверия устройству: она спрашивается всегда,
-    доверие лишь снимает ДОПОЛНИТЕЛЬНУЮ проверку нового устройства."""
+def test_totp_user_skips_code_on_known_device(client, db, monkeypatch):
+    """Второй фактор — только на незнакомом устройстве, своя 2FA тоже:
+    знакомое устройство уже прошло TOTP, его токен — доказательство."""
     import pyotp
 
     user = create_user(db, "bob")
@@ -153,47 +153,49 @@ def test_totp_user_still_needs_code_on_known_device(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
     device_token = resp.json()["device_token"]
 
-    # Устройство знакомое — код всё равно требуется.
     second = _login(client, device_token=device_token)
-    assert second["mfa_required"] is True
-    assert second["new_device"] is False
-    assert second["mfa_methods"] == ["totp"]
+    assert second["mfa_required"] is False
+    assert second["access_token"]
 
 
-def test_known_device_is_not_duplicated_on_every_login(client, db, monkeypatch):
-    """Юзер с TOTP подтверждает код на каждом входе, но устройство одно и то
-    же: каждый вход не должен добавлять строку в список и вытеснять из лимита
-    настоящие другие устройства."""
-    import pyotp
+def test_email_2fa_user_skips_code_on_known_device(client, db, monkeypatch):
+    """Включённая почтовая 2FA на знакомом устройстве письмо не шлёт."""
+    user = create_user(db, "bob")
+    user.email_2fa_enabled = True
+    db.commit()
+    box = _sent_codes(monkeypatch)
+
+    resp = _pass_email_step(client, _login(client), box)
+    assert resp.status_code == 200, resp.text
+    device_token = resp.json()["device_token"]
+
+    second = _login(client, device_token=device_token)
+    assert second["mfa_required"] is False
+    assert second["access_token"]
+    assert len(box) == 1
+
+
+def test_known_device_is_not_duplicated_on_repeat_confirmation(client, db, monkeypatch):
+    """Повторное подтверждение с уже знакомого устройства (например, вторая
+    вкладка входа) возвращает тот же токен и не добавляет строку в список."""
+    from app.email_2fa import clear_email_code
 
     user = create_user(db, "bob")
-    secret = generate_totp_secret()
-    user.totp_secret = secret
-    user.totp_enabled = True
-    db.commit()
-    _sent_codes(monkeypatch)
+    box = _sent_codes(monkeypatch)
 
-    def _verify(device_token=None):
-        # Один и тот же TOTP-код в пределах окна не проходит второй раз
-        # (защита от реплея), а тест не может ждать следующего окна.
-        from app.cache import clear_pattern
+    first_body = _login(client)
+    first = _pass_email_step(client, first_body, box).json()["device_token"]
 
-        clear_pattern("2fa:used:*")
-        body = _login(client, device_token=device_token)
-        headers = {DEVICE_TOKEN_HEADER: device_token} if device_token else {}
-        resp = client.post(
-            "/api/auth/mfa/verify",
-            json={"mfa_token": body["mfa_token"], "code": pyotp.TOTP(secret).now()},
-            headers=headers,
-        )
-        assert resp.status_code == 200, resp.text
-        return resp.json()["device_token"]
+    clear_email_code(user.id, PURPOSE_LOGIN)
+    second_body = _login(client)  # без токена — снова шаг подтверждения
+    resp = client.post(
+        "/api/auth/mfa/verify",
+        json={"mfa_token": second_body["mfa_token"], "code": box[-1]["code"]},
+        headers={DEVICE_TOKEN_HEADER: first},
+    )
+    assert resp.status_code == 200, resp.text
 
-    first = _verify()
-    second = _verify(first)
-
-    # Токен тот же, строка одна: знакомое устройство переиспользуется.
-    assert second == first
+    assert resp.json()["device_token"] == first
     assert len(db.execute(select(user_trusted_devices.c.id)).all()) == 1
 
 
