@@ -1,0 +1,15 @@
+[Unit]
+Description=Чистка диска прод-сервера music-service (см. deploy/disk-cleanup.sh)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Сроки хранения и порог аварийного режима описаны в шапке disk-cleanup.sh и
+# переопределяются такими же строками Environment=.
+Environment=VOLUME_PREFIX=music-service_
+# Явно через bash: при деплое с Windows executable-бит файла может потеряться.
+ExecStart=/usr/bin/bash /root/music-service/deploy/disk-cleanup.sh
+User=root
+Nice=10
+IOSchedulingClass=idle

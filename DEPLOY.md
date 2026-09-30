@@ -23,3 +23,22 @@ For a manual server deployment, run:
 ```bash
 ./deploy.sh
 ```
+
+## Чистка диска
+
+Диск прода небольшой (50 ГБ); образы после каждого деплоя, кэш стрима и
+загрузки Soulseek растут без предела. Раз в час их чистит systemd-таймер
+(`deploy/disk-cleanup.sh`, сроки хранения — в шапке скрипта). MinIO — архив
+треков, скрипт его не трогает и только предупреждает в журнале, если места
+мало даже после аварийного прохода.
+
+Установка на сервере (один раз):
+
+```bash
+ln -sf /root/music-service/deploy/systemd/music-disk-cleanup.service /etc/systemd/system/
+ln -sf /root/music-service/deploy/systemd/music-disk-cleanup.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now music-disk-cleanup.timer
+```
+
+Проверка без удаления: `DRY_RUN=1 bash deploy/disk-cleanup.sh`. Журнал:
+`journalctl -u music-disk-cleanup.service -n 30`.

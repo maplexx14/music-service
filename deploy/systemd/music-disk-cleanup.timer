@@ -1,0 +1,14 @@
+[Unit]
+Description=Ежечасная чистка диска (см. music-disk-cleanup.service)
+
+[Timer]
+# Раз в час: обычный проход почти ничего не делает (find по двум томам и
+# prune без кандидатов), а аварийный режим включается раньше, чем диск
+# успеет забиться — MinIO и кэш растут на сотни МБ в день.
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Unit=music-disk-cleanup.service
+
+[Install]
+WantedBy=timers.target

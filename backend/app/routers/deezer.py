@@ -25,6 +25,7 @@ import os
 import re
 import time
 import unicodedata
+import uuid
 from typing import Optional
 
 import httpx
@@ -466,7 +467,11 @@ async def _download(sng_id: str, dest: str) -> None:
     """Скачивает и расшифровывает трек в ``dest`` (через .part)."""
     url, real_id, expected, duration = await _media_url(sng_id)
     key = _bf_key(real_id)
-    part = dest + ".part"
+    # Свой .part на каждую загрузку: блокировка в fetch_to_cache живёт внутри
+    # процесса, а воркеров gunicorn несколько. С общим именем два воркера
+    # писали в один файл, и второй os.replace падал с ENOENT — трек помечался
+    # как отказ Deezer и уходил дальше по цепочке.
+    part = f"{dest}.{os.getpid()}-{uuid.uuid4().hex[:8]}.part"
     written = 0
     buf = b""
     index = 0
