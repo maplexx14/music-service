@@ -1937,9 +1937,12 @@ def _compute_recommendations(
                 or track.id in acoustic_candidate_ids
             )
         ]
+        # Скор одного кандидата ~0.2мс, а нужен он и сортировке, и rerank —
+        # считаем один раз.
+        pool_scores = {id(track): _candidate_score(track) for track in ranked_pool}
         ranked_pool.sort(
             key=lambda track: (
-                -_candidate_score(track),
+                -pool_scores[id(track)],
                 stable_jitter(current_user.id, track.id),
                 track.id,
             )
@@ -1949,9 +1952,10 @@ def _compute_recommendations(
         # win when it is genuinely a better match.
         ranked_pool = soft_artist_rerank(
             ranked_pool,
-            _candidate_score,
+            lambda track: pool_scores[id(track)],
             artist_of=lambda track: effective_track_artist_title(track)[0],
-        )[: max(limit * 6, limit)]
+            limit=max(limit * 6, limit),
+        )
         local_ranked_ids = [
             track.id
             for track in ranked_pool[: max(limit * 3, limit)]

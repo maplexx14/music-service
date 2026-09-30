@@ -20,6 +20,7 @@ from app.diversity import (
     cap_per_artist,
     interleave_artists,
     mmr,
+    soft_artist_rerank,
     spread_into,
     take_capped,
     take_overflow,
@@ -315,3 +316,34 @@ def test_take_overflow_fills_rather_than_returning_short():
     picked, rest = take_capped(items, 3, 2, lambda i: i["artist"])
     assert len(picked) == 2
     assert len(picked) + len(take_overflow(rest, 1, lambda i: i["artist"])) == 3
+
+
+def test_soft_artist_rerank_scores_each_item_once():
+    # Жадный отбор O(n²): пересчёт скора внутри цикла стоил /recommendations
+    # ~80 тыс. вызовов скоринга и 6-8с холодного ответа.
+    rng = random.Random(7)
+    items = [
+        {"artist": rng.choice("ABCDEFG"), "score": rng.random()} for _ in range(60)
+    ]
+    calls = []
+
+    def score_of(item):
+        calls.append(item)
+        return item["score"]
+
+    out = soft_artist_rerank(items, score_of, artist_of=lambda i: i["artist"])
+    assert len(calls) == len(items)
+    assert sorted(map(id, out)) == sorted(map(id, items))
+
+
+def test_soft_artist_rerank_limit_is_prefix_of_full_order():
+    rng = random.Random(11)
+    items = [
+        {"artist": rng.choice("ABCD"), "score": rng.random()} for _ in range(40)
+    ]
+    full = soft_artist_rerank(items, lambda i: i["score"], artist_of=lambda i: i["artist"])
+    head = soft_artist_rerank(
+        items, lambda i: i["score"], artist_of=lambda i: i["artist"], limit=12
+    )
+    assert head == full[:12]
+    assert soft_artist_rerank(items, lambda i: i["score"], limit=100, artist_of=lambda i: i["artist"]) == full
