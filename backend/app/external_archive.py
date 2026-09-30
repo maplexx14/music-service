@@ -35,7 +35,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app import storage
-from app.cache import record_proxy_traffic, set_cache_async
+from app.cache import get_cache_async, record_proxy_traffic, set_cache_async
 from app.database import SessionLocal
 from app.models import Track
 from app.transcode import transcode_to_aac, AAC_EXT, AAC_CONTENT_TYPE
@@ -643,6 +643,29 @@ async def archive_track(
             await client.aclose()
 
 
+async def _deezer_serves(video_id: Optional[str]) -> bool:
+    """Трек играет с Deezer — архивацию делает он сам, YouTube не трогаем.
+
+    Стрим ytmusic-трека отдаёт файл Deezer и сам уносит его в MinIO
+    (deezer._schedule_adopt), привязывая к записи в БД. Параллельная
+    архивация отсюда пошла бы резолвить тот же трек в YouTube — лишний запрос
+    с нашего IP, приближающий bot-check. Если скачать с Deezer не вышло,
+    стрим падает дальше по цепочке и архивирует трек сам
+    (schedule_archive_external в ytdlp.stream_ytmusic).
+    """
+    if not video_id:
+        return False
+    try:
+        from app.routers import deezer
+
+        if not deezer.enabled() or await get_cache_async(f"deezer:fail:{video_id}"):
+            return False
+        return bool(await deezer.await_deezer_match(video_id))
+    except Exception:  # noqa: BLE001 — при сомнении архивируем как раньше
+        logger.warning("deezer check failed for %s", video_id, exc_info=True)
+        return False
+
+
 async def schedule_archive(track_id: int) -> None:
     """Ленивая фоновая архивация одного трека при прослушивании.
 
@@ -670,6 +693,8 @@ async def schedule_archive(track_id: int) -> None:
                 if track is None or storage.is_minio_path(track.file_path):
                     return
                 if track.source not in ARCHIVABLE_SOURCES:
+                    return
+                if track.source == "ytmusic" and await _deezer_serves(track.external_id):
                     return
                 resume_tmp = None
                 for attempt in range(_MAX_RETRIES + 1):

@@ -16,6 +16,11 @@ os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.05")
 # сразу тянет сеть (ytmusic-каталог + slskd). Присваивание, а не setdefault:
 # compose может протащить .env с включённым харвестом.
 os.environ["SLSK_HARVEST"] = "0"
+# Deezer (app/routers/deezer.py) стоит первым в цепочке стрима и ходит в сеть,
+# если найдёт ARL. Тесты цепочки его не ждут: выключаем, а тесты самого Deezer
+# подменяют ARL явно.
+os.environ["DEEZER_ARL"] = ""
+os.environ["DEEZER_ARL_FILE"] = "/nonexistent/deezer_arl.txt"
 # Минимальная стоимость bcrypt: при боевых 12 раундах каждый хэш/проверка
 # пароля стоит ~0.25 с, а тесты 2FA/логина делают их десятками (см.
 # app/auth.BCRYPT_ROUNDS).

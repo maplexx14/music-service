@@ -218,12 +218,19 @@ def _schedule_audio_matches(tracks: List[ExternalTrackResponse]) -> None:
     """Фоновый поиск источников аудио для ytmusic-выдачи.
 
     ytmusic — только каталог метаданных: аудио той же записи берём по
-    приоритету Soulseek (оригинальный релизный файл) → YouTube → SoundCloud
-    (фолбэк). Матч нужен к моменту клика, поэтому ищем заранее — сам
-    /stream/{video_id} метаданных трека не имеет и проверяет только кэш
-    (см. soundcloud.schedule_ytmusic_soundcloud_match и
+    приоритету Deezer → Soulseek (оригинальный релизный файл) → YouTube →
+    SoundCloud (фолбэк). Матч нужен к моменту клика, поэтому ищем заранее —
+    сам /stream/{video_id} метаданных трека не имеет и проверяет только кэш
+    (см. deezer.schedule_ytmusic_deezer_match,
+    soundcloud.schedule_ytmusic_soundcloud_match и
     soulseek.schedule_ytmusic_soulseek_match).
     """
+    try:
+        from app.routers import deezer
+
+        deezer.schedule_ytmusic_deezer_match(tracks)
+    except Exception:  # noqa: BLE001 — источник аудио не должен ломать поиск
+        logger.exception("deezer match scheduling failed")
     try:
         from app.routers import soundcloud
 
@@ -2486,6 +2493,19 @@ async def stream_ytmusic(video_id: str, request: Request):
     except Exception:  # noqa: BLE001 — проверка best-effort, стрим не ломаем
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
         has_local = False
+    # Deezer — первым из внешних: YouTube с адресов сервера отвечает
+    # bot-check'ом, а CDN Deezer отдаёт полный трек за доли секунды. Файл
+    # ложится в дисковый кэш под этим же video_id и отдаётся отсюда, без
+    # редиректа; отказ (нет матча/прав) — None, цепочка идёт дальше.
+    if not has_local:
+        try:
+            from app.routers import deezer
+
+            response = await deezer.stream_for_ytmusic(video_id, request)
+            if response is not None:
+                return response
+        except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+            logger.exception("deezer stream failed for %s", video_id)
     if not has_local and request.query_params.get("scfallback") != "1" and (
         request.query_params.get("slskfallback") != "1"
     ):
@@ -2578,6 +2598,15 @@ async def prefetch_ytmusic(video_id: str):
         has_local = False
     if has_local:
         return {"status": "cached"}
+    # Deezer играет первым (см. stream_ytmusic) — греем его: файл целиком
+    # ложится в дисковый кэш, и prefetch_is_ready увидит его через _cached_file.
+    try:
+        from app.routers import deezer
+
+        if await deezer.prefetch_for_ytmusic(video_id):
+            return {"status": "downloading"}
+    except Exception:  # noqa: BLE001 — выбор источника прогрева не фатален
+        logger.warning("deezer prefetch failed for %s", video_id, exc_info=True)
     try:
         from app.routers import soulseek
 
