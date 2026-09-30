@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Play, Plus, Heart } from 'lucide-react'
+import { Play, Pause, Heart, ListPlus, ListChecks } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge, artistCacheKey } from '../services/pageCache'
@@ -9,6 +9,7 @@ import TrackTableRow from '../components/TrackTableRow'
 import Carousel from '../components/Carousel'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
+import { haptic, HAPTIC } from '../utils/haptics'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useCoverColors } from '../hooks/useCoverColors'
@@ -119,6 +120,8 @@ function Artist() {
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const queueSource = usePlayerStore((s) => s.source)
+  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
@@ -127,6 +130,30 @@ function Artist() {
   // Шапка красится в тон аватара — как hero на главной по обложке трека. До
   // разбора (и без аватара) — фирменная палитра, чтобы не мигать серым.
   const heroColors = useCoverColors(artist?.cover_url) || DEFAULT_HERO_COLORS
+  // Имя в шапке ушло под верхнюю панель — на мобильном показываем компактную
+  // полосу с именем и кнопкой воспроизведения (см. .artist-compact-bar).
+  // Элемент в state, а не в ref: имя появляется только после загрузки, и
+  // наблюдатель должен подписаться именно тогда.
+  const [nameEl, setNameEl] = useState(null)
+  const [nameHidden, setNameHidden] = useState(false)
+
+  useEffect(() => {
+    if (!nameEl || typeof IntersectionObserver === 'undefined') return undefined
+    // Отступ сверху ≈ высота мобильной верхней панели (Layout.css, 52px +
+    // safe-area). Считаем имя скрытым, только когда оно ушло ВВЕРХ — ниже
+    // экрана оно не бывает, но на всякий случай не путаем стороны.
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const above = entry.rootBounds
+          ? entry.boundingClientRect.bottom < entry.rootBounds.top
+          : false
+        setNameHidden(!entry.isIntersecting && above)
+      },
+      { rootMargin: '-64px 0px 0px 0px' },
+    )
+    observer.observe(nameEl)
+    return () => observer.disconnect()
+  }, [nameEl])
 
   // Каталог исполнителя (библиотека + оба внешних источника) приходит одним
   // ответом и легко переваливает за сотню строк — рисуем партиями по мере
@@ -200,10 +227,23 @@ function Artist() {
     if (tracks.length > 0) playPlaylist(tracks, 0, 'artist')
   }
 
+  // Очередь уже из треков этого исполнителя — кнопка становится паузой, а не
+  // перезапуском с первого трека (на телефоне это главная кнопка страницы).
+  const isArtistCurrent =
+    queueSource === 'artist' && !!currentTrack && tracks.some((t) => t.id === currentTrack.id)
+  const isArtistPlaying = isArtistCurrent && isPlaying
+
+  const handlePlayToggle = () => {
+    haptic(HAPTIC.selection)
+    if (isArtistCurrent) togglePlayPause()
+    else handlePlay()
+  }
+
   // Лайк артиста пишется в явные предпочтения пользователя (те же, что в
   // онбординге) — оттуда его читают волна и рекомендации.
   const handleToggleArtistLike = async () => {
     if (liking) return
+    haptic(HAPTIC.selection)
     // Оптимистично: сердечко переключается сразу, сеть подтверждает в фоне.
     const nextLiked = !artist.is_liked
     setArtist((prev) => ({ ...prev, is_liked: nextLiked }))
@@ -340,6 +380,12 @@ function Artist() {
   // сингл выглядит таким же релизом, как двойной альбом.
   const fullAlbums = albums.filter((a) => (a.album_type || '').toLowerCase() === 'album')
   const shortReleases = albums.filter((a) => (a.album_type || '').toLowerCase() !== 'album')
+  const playLabel = isArtistPlaying ? 'Пауза' : 'Воспроизвести'
+  const saveLabel = saving
+    ? 'Добавление...'
+    : artist.playlist_id
+      ? 'Открыть в медиатеке'
+      : 'Добавить в медиатеку'
 
   return (
     <div className="page-container">
@@ -373,7 +419,9 @@ function Artist() {
           />
           <div className="artist-hero-info">
             <div className="artist-kicker">Исполнитель</div>
-            <h1 className="artist-name">{artist.name}</h1>
+            <h1 className="artist-name" ref={setNameEl}>
+              {artist.name}
+            </h1>
             <ul className="artist-stats">
               <li>{tracks.length} {plural(tracks.length, 'трек', 'трека', 'треков')}</li>
               {albums.length > 0 && (
@@ -385,28 +433,57 @@ function Artist() {
         </div>
       </header>
 
+      {/* Компактная полоса поверх мобильной верхней панели: имя и play, пока
+          шапка прокручена. На десктопе скрыта стилями. */}
+      <div
+        className={`artist-compact-bar${nameHidden ? ' visible' : ''}`}
+        aria-hidden={!nameHidden}
+      >
+        <span className="artist-compact-name">{artist.name}</span>
+        <button
+          type="button"
+          className="artist-compact-play"
+          onClick={handlePlayToggle}
+          disabled={tracks.length === 0}
+          tabIndex={nameHidden ? 0 : -1}
+          aria-label={playLabel}
+        >
+          {isArtistPlaying ? (
+            <Pause size={18} fill="currentColor" />
+          ) : (
+            <Play size={18} fill="currentColor" />
+          )}
+        </button>
+      </div>
+
       <div className="artist-toolbar">
         <div className="playlist-actions artist-actions">
-          <button className="play-button-large" onClick={handlePlay} disabled={tracks.length === 0}>
-            <Play size={24} fill="currentColor" />
-            Воспроизвести
+          <button
+            className="play-button-large artist-play"
+            onClick={handlePlayToggle}
+            disabled={tracks.length === 0}
+            aria-label={playLabel}
+          >
+            {isArtistPlaying ? (
+              <Pause size={24} fill="currentColor" />
+            ) : (
+              <Play size={24} fill="currentColor" />
+            )}
+            <span className="artist-action-label">{playLabel}</span>
           </button>
           <button
-            className="play-button-large secondary"
+            className="play-button-large secondary artist-save"
             onClick={handleSaveToLibrary}
             disabled={saving || tracks.length === 0}
+            aria-label={saveLabel}
             title={
               artist.playlist_id
                 ? 'Плейлист исполнителя уже в медиатеке — открыть'
                 : 'Сохранить все треки исполнителя плейлистом'
             }
           >
-            <Plus size={20} />
-            {saving
-              ? 'Добавление...'
-              : artist.playlist_id
-                ? 'Открыть в медиатеке'
-                : 'Добавить в медиатеку'}
+            {artist.playlist_id ? <ListChecks size={20} /> : <ListPlus size={20} />}
+            <span className="artist-action-label">{saveLabel}</span>
           </button>
           <button
             type="button"

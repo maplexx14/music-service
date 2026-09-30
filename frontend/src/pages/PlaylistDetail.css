@@ -556,10 +556,64 @@
     flex-shrink: 0;
   }
 
-  /* Меню «в плейлист» не должно вылезать за правый край. */
+  /* Меню «в плейлист» на телефоне — нижняя шторка, как в нативных
+     приложениях: дропдаун у правого края строки был мелким, на нижних строках
+     уходил под мини-плеер, а длинные названия плейлистов обрезались на 70vw.
+     Затемнение — тенью с большим разбросом: отдельного элемента-подложки нет,
+     а тап мимо шторки и так закрывает меню (document click на страницах). */
   .add-to-playlist-menu {
+    position: fixed;
+    top: auto;
+    left: 0;
     right: 0;
-    min-width: 180px;
-    max-width: 70vw;
+    bottom: 0;
+    z-index: 1300;
+    min-width: 0;
+    max-width: none;
+    max-height: min(60dvh, 420px);
+    padding: 20px 8px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    background-color: #1c1c1f;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
+    overscroll-behavior: contain;
+    animation: add-to-playlist-sheet-in 220ms var(--ease-drawer) both;
+  }
+
+  /* Ручка шторки — подсказка, что это панель поверх экрана. */
+  .add-to-playlist-menu::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .add-to-playlist-option {
+    min-height: 52px;
+    padding: 12px 16px;
+    font-size: var(--text-md);
+    border-radius: var(--radius-card);
+  }
+
+  .add-to-playlist-empty {
+    padding: 16px;
+    font-size: var(--text-md);
+    text-align: center;
+  }
+}
+
+@keyframes add-to-playlist-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .add-to-playlist-menu {
+    animation: none;
   }
 }

@@ -1,5 +1,8 @@
 .auth-container {
   min-height: 100vh;
+  /* В Safari 100vh — высота при спрятанных панелях: форма центрировалась
+     ниже видимой области и кнопка уезжала под панель браузера. */
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;

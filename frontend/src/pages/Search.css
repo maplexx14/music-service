@@ -22,6 +22,17 @@
 
 /* Кликнув в поле, пользователь должен видеть каретку сразу —
    caret-color в акценте подчёркивает фокус даже до рамки. */
+/* Системное оформление поля поиска (скругления и отступы Safari) ломает наш
+   вид; крестик очистки оставляем — на телефоне он полезен. */
+.search-input {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
 .search-input::placeholder {
   color: #7a7a7a;
 }
@@ -299,6 +310,25 @@
 }
 
 @media (max-width: 768px) {
+  /* Поле поиска прилипает к верху: результаты длинные, и чтобы поправить
+     запрос, не нужно листать обратно. Фон — под цвет страницы, иначе
+     строки просвечивали бы сквозь промежутки. */
+  /* Вкладка корневая: над ней нет панели «Назад», только матовая подложка
+     статус-бара (Layout.css) — поле встаёт сразу под неё. */
+  .search-header {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 5;
+    margin: 0 -16px 20px;
+    padding: 8px 16px 12px;
+    background: linear-gradient(180deg, #050505 75%, rgba(5, 5, 5, 0));
+  }
+
+  .search-input {
+    padding: 14px 18px;
+    border-radius: var(--radius-pill);
+  }
+
   .track-item {
     gap: 12px;
     padding: 10px;
@@ -399,5 +429,13 @@
   .artist-card-cover {
     width: 72px;
     height: 72px;
+  }
+}
+
+@media (max-width: 380px) {
+  /* Поля страницы здесь 12px (Home.css). */
+  .search-header {
+    margin-inline: -12px;
+    padding-inline: 12px;
   }
 }

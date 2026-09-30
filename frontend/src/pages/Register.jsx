@@ -183,6 +183,9 @@ function Register() {
               onChange={handleChange}
               required
               autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
             />
           </div>
 

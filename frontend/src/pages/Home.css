@@ -720,6 +720,9 @@
     width: calc(100% + 32px);
     /* Контейнер потока занимает большую часть экрана и центрирован. */
     min-height: 75vh;
+    /* svh — видимая высота при показанных панелях Safari: иначе hero был
+       выше экрана и волна уезжала под нижнюю навигацию. */
+    min-height: 75svh;
     max-height: none;
     border-radius: 0;
     align-items: center;

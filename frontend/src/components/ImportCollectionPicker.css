@@ -66,3 +66,21 @@
   font-size: 12px;
   color: #888;
 }
+
+/* Телефон: строка коллекции целиком — цель под палец (вся строка — label,
+   тап в любое место переключает галочку). */
+@media (pointer: coarse) {
+  .import-collections-all,
+  .import-collection {
+    min-height: 44px;
+  }
+
+  .import-collection {
+    padding: 6px 8px;
+  }
+
+  .import-collections input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+  }
+}

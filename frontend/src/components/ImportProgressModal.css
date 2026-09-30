@@ -125,3 +125,46 @@
   line-height: 1.5;
   color: #8b8b8b;
 }
+
+/* Телефон: окно прогресса — нижняя шторка. По центру оно висело бы прямо
+   над мини-плеером, а снизу его удобно закрыть большим пальцем. */
+@media (max-width: 768px) {
+  .import-progress-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .import-progress-modal {
+    max-width: none;
+    padding: 24px 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+    border: none;
+    border-top: 1px solid rgba(162, 89, 255, 0.25);
+    border-radius: 20px 20px 0 0;
+    animation: import-progress-sheet-in 220ms var(--ease-drawer) both;
+  }
+
+  .import-progress-close {
+    top: 8px;
+    right: 8px;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .import-progress-head {
+    padding-right: 40px;
+  }
+}
+
+@keyframes import-progress-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .import-progress-modal {
+    animation: none;
+  }
+}

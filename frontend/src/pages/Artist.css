@@ -107,6 +107,11 @@
   -webkit-backdrop-filter: blur(8px);
 }
 
+/* Компактная полоса — только мобильная (см. медиазапрос ниже). */
+.artist-compact-bar {
+  display: none;
+}
+
 /* Кнопки под карточкой, а не внутри: на цветном фоне фиолетовая «Воспроизвести»
    спорила бы с палитрой аватара. */
 .artist-toolbar {
@@ -235,9 +240,12 @@
 
 /* --- Мобильная адаптация --- */
 @media (max-width: 768px) {
+  /* Шапка на всю ширину экрана, как карусели ниже (Carousel.css): карточка
+     с полями по 16px на телефоне выглядела вставкой, а не экраном артиста. */
   .artist-hero {
-    padding: 40px 16px 20px;
-    margin-top: 8px;
+    margin-inline: -16px;
+    padding: 32px 16px 24px;
+    border-radius: 0;
   }
 
   .artist-hero-content {
@@ -265,42 +273,117 @@
     padding-top: 16px;
   }
 
-  /* В шапке исполнителя кнопок три, а не две, как у плейлиста: «Воспроизвести»,
-     «Добавить в медиатеку» и лайк. В одну строку они не помещаются — длинная
-     подпись второй кнопки переносится и ряд разъезжается. Раскладываем сеткой:
-     воспроизведение на всю ширину первой строкой, ниже — вторичное действие и
-     лайк. */
+  /* Кнопки — одним рядом, как в нативных плеерах: слева вторичные действия
+     иконками, справа крупная круглая «Воспроизвести» под большой палец.
+     Подписи прячем — на узком экране «Добавить в медиатеку» не помещалась и
+     рвалась; смысл несут иконка и aria-label. */
   .playlist-actions.artist-actions {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 10px;
+    display: flex;
+    justify-content: flex-start;
+    gap: 12px;
   }
 
-  .artist-actions .play-button-large:first-child {
-    grid-column: 1 / -1;
+  .artist-action-label {
+    display: none;
   }
 
-  /* flex:1 из общего мобильного правила в гриде только мешает: ширину теперь
-     задаёт колонка. */
-  .artist-actions .play-button-large {
+  .artist-actions .artist-play {
+    order: 3;
+    margin-left: auto;
     flex: none;
-    min-width: 0;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--radius-avatar);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   }
 
-  .artist-actions .play-button-large.secondary {
-    /* Подпись длинная («Добавить в медиатеку» / «Открыть в медиатеке») и на
-       узкой колонке рвалась бы на две строки — ужимаем её, а не кнопку. */
-    font-size: var(--text-base);
-    padding: 12px 14px;
-    gap: 8px;
-  }
-
-  /* Лайк рядом с кнопкой — палец должен попадать, а не целиться. */
+  .artist-actions .artist-save,
   .artist-actions .action-button {
+    flex: none;
     width: 44px;
     height: 44px;
+    padding: 0;
+    justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-avatar);
+    color: #ffffff;
+  }
+
+  .artist-actions .action-button.liked {
+    color: var(--brand-accent);
+    border-color: var(--brand-accent);
+  }
+
+  .artist-actions .artist-save:active:not(:disabled),
+  .artist-actions .action-button:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+
+  .artist-actions button {
+    touch-action: manipulation;
+  }
+
+  /* --- Компактная полоса при прокрутке ---
+     Ложится на центр и правую ячейку мобильной верхней панели (Layout.css:
+     высота 52px под safe-area, кнопка «Назад» в левой ячейке 52px + 8px
+     отступа), поэтому «Назад» остаётся доступной. */
+  .artist-compact-bar {
+    display: flex;
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 64px;
+    right: 8px;
+    height: 52px;
+    align-items: center;
+    gap: 12px;
+    z-index: 1004;
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition: opacity var(--duration-fast) var(--ease-out),
+                transform var(--duration-fast) var(--ease-out);
+  }
+
+  .artist-compact-bar.visible {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .artist-compact-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-md);
+    font-weight: 700;
+    color: #ffffff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .artist-compact-play {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: var(--radius-avatar);
+    background-color: var(--brand-accent);
+    color: #ffffff;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .artist-compact-play:active:not(:disabled) {
+    background-color: var(--brand-accent-active);
+    transform: scale(0.94);
+  }
+
+  .artist-compact-play:disabled {
+    opacity: 0.5;
   }
 
   .track-inline-meta {
@@ -333,5 +416,19 @@
 
   .album-meta {
     font-size: var(--text-xs);
+  }
+}
+
+@media (max-width: 380px) {
+  /* На самых узких экранах поля страницы 12px (Home.css). */
+  .artist-hero {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .artist-compact-bar {
+    transform: none;
   }
 }

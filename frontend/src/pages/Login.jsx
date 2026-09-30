@@ -240,6 +240,9 @@ function Login() {
                 onChange={(e) => setUsername(e.target.value)}
                 required
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
 

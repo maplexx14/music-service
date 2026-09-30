@@ -121,10 +121,20 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
   const isLiked =
     (dbId ? likedTrackIds.includes(dbId) : false) || pendingLikeKeys.includes(trackLikeKey(track))
 
+  // На телефоне — нижняя шторка вместо меню у пальца: у пальца оно
+  // перекрывалось им же и на нижних строках уходило под мини-плеер.
+  const isSheet = window.matchMedia?.('(max-width: 768px)').matches ?? false
   const vw = window.innerWidth
   const vh = window.innerHeight
   const left = Math.min(Math.max(menu.x - MENU_W / 2, 12), vw - MENU_W - 12)
   const top = Math.min(Math.max(menu.y - 16, 12), vh - MENU_H - 12)
+
+  // Закрываем только по тапу в саму подложку. События от пунктов меню
+  // всплывают сюда же (меню — её потомок), и без этой проверки touchstart на
+  // пункте закрывал меню раньше, чем до пункта доходил click.
+  const closeOnBackdrop = (e) => {
+    if (e.target === e.currentTarget) onClose()
+  }
 
   const like = () => {
     onClose()
@@ -133,11 +143,15 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
   }
 
   return createPortal(
-    <div className="track-ctx-backdrop" onTouchStart={onClose} onMouseDown={onClose}>
+    <div
+      className={`track-ctx-backdrop${isSheet ? ' sheet' : ''}`}
+      onTouchStart={closeOnBackdrop}
+      onMouseDown={closeOnBackdrop}
+    >
       <div
         ref={menuRef}
-        className="track-ctx-menu"
-        style={{ left, top }}
+        className={`track-ctx-menu${isSheet ? ' sheet' : ''}`}
+        style={isSheet ? undefined : { left, top }}
         role="menu"
         aria-label={`Действия с треком ${track.title}`}
       >

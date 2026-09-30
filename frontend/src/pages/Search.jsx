@@ -258,11 +258,22 @@ function Search() {
   return (
     <div className="page-container">
       <div className="search-header">
+        {/* type=search + enterKeyHint: клавиатура телефона показывает «Найти»,
+            а Enter её прячет — результаты ищутся по мере ввода, и нажатие
+            означает «хватит, покажи». Автоисправление и заглавная буква в
+            начале для имён артистов и названий только мешают. */}
         <input
-          type="text"
+          type="search"
+          enterKeyHint="search"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           placeholder="Что вы хотите послушать?"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
           className="search-input"
           autoFocus
         />
