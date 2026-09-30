@@ -46,7 +46,7 @@ yt-dlp-ejs==0.8.0
 # docker-compose, YTDLP_POT_PROVIDER_URL). Версия обязана совпадать с образом
 # brainicism/bgutil-ytdlp-pot-provider. Проверено с yt-dlp 2026.7.4.
 bgutil-ytdlp-pot-provider==2.0.0
-ytmusicapi==1.8.2
+ytmusicapi==1.12.3
 # Blowfish для расшифровки аудио Deezer (app/routers/deezer.py). Раньше
 # приходил только транзитивно, через minio.
 pycryptodome==3.23.0
