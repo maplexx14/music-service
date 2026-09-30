@@ -6,13 +6,15 @@ import {
   trackLikeKey,
   usePlayerStore,
 } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft, ShieldCheck } from 'lucide-react'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useSwipe } from '../hooks/useSwipe'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
+import { openCensorDialog } from '../store/censorDialogStore'
+import { useAuthStore } from '../store/authStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
@@ -448,6 +450,7 @@ function PlayerInner() {
   const [isBuffering, setIsBuffering] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
+  const isAdmin = useAuthStore((s) => Boolean(s.user?.is_admin))
   const isExternalTrack = EXTERNAL_SOURCES.includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
@@ -2258,6 +2261,20 @@ function PlayerInner() {
                 >
                   <ListPlus size={18} />
                 </button>
+                {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
+                  // Трек зацензурен по закону РФ — привязать оригинал (только
+                  // админ, см. CensorOverrideDialog).
+                  <button
+                    className="add-btn"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      openCensorDialog(currentTrack)
+                    }}
+                    title="Оригинал без цензуры"
+                  >
+                    <ShieldCheck size={18} />
+                  </button>
+                )}
               </>
             )}
             {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (

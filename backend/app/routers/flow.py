@@ -57,7 +57,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import and_, case, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from app import artist_probe, beets_genre, beets_similar, storage
+from app import artist_probe, beets_genre, beets_similar, censorship, storage
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -2302,6 +2302,7 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
 
 
 @router.get("/flow")
+@censorship.overrides_in_response()
 async def get_flow(
     request: Request,
     response: Response,

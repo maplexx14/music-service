@@ -29,6 +29,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from app import storage
 from app import external_archive
+from app import censorship
 import mimetypes
 import asyncio
 from datetime import datetime, timezone
@@ -364,6 +365,15 @@ async def stream_track(
     )
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+
+    # Зацензуренный трек с привязанным оригиналом (app/censorship.py): архивная
+    # копия — та же цензурная запись, играет оригинал.
+    if track.source == "ytmusic" and track.external_id:
+        override = await censorship.override_for_video(track.external_id)
+        if override is not None:
+            return RedirectResponse(
+                censorship.soundcloud_stream_path(override, track.external_id), status_code=307
+            )
 
     # Заархивированный трек (в т.ч. изначально внешний ytmusic/soundcloud) лежит в
     # объектном хранилище. Проксируем его через бэкенд (тот же origin/https,

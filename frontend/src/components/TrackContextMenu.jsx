@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Heart, ListPlus, X } from 'lucide-react'
+import { Heart, ListPlus, ShieldCheck, X } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
+import { openCensorDialog } from '../store/censorDialogStore'
+import { useAuthStore } from '../store/authStore'
 import './TrackContextMenu.css'
 
 const LONG_PRESS_MS = 450
@@ -108,14 +110,19 @@ export function useTrackContextMenu() {
 // по числу пунктов — этого хватает, чтобы меню не вылезало за экран.
 const MENU_W = 230
 const MENU_H = 150
+const MENU_ITEM_H = 48
 
 export function TrackContextMenu({ menu, menuRef, onClose }) {
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
+  const isAdmin = useAuthStore((s) => Boolean(s.user?.is_admin))
 
   if (!menu) return null
   const { track } = menu
+  // Привязка оригинала вместо зацензуренной версии — у треков каталога
+  // YouTube Music (см. CensorOverrideDialog).
+  const canLinkOriginal = isAdmin && track.source === 'ytmusic' && Boolean(track.external_id)
 
   const dbId =
     typeof track.id === 'number' ? track.id : typeof track.db_id === 'number' ? track.db_id : null
@@ -128,7 +135,8 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
   const vw = window.innerWidth
   const vh = window.innerHeight
   const left = Math.min(Math.max(menu.x - MENU_W / 2, 12), vw - MENU_W - 12)
-  const top = Math.min(Math.max(menu.y - 16, 12), vh - MENU_H - 12)
+  const menuH = MENU_H + (canLinkOriginal ? MENU_ITEM_H : 0)
+  const top = Math.min(Math.max(menu.y - 16, 12), vh - menuH - 12)
 
   // Закрываем только по тапу в саму подложку. События от пунктов меню
   // всплывают сюда же (меню — её потомок), и без этой проверки touchstart на
@@ -146,6 +154,11 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
   const addToPlaylist = () => {
     onClose()
     openAddToPlaylist(track)
+  }
+
+  const linkOriginal = () => {
+    onClose()
+    openCensorDialog(track)
   }
 
   return createPortal(
@@ -175,6 +188,12 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
           <ListPlus size={18} />
           <span>Добавить в плейлист…</span>
         </button>
+        {canLinkOriginal && (
+          <button type="button" className="track-ctx-item" role="menuitem" onClick={linkOriginal}>
+            <ShieldCheck size={18} />
+            <span>Оригинал без цензуры…</span>
+          </button>
+        )}
       </div>
     </div>,
     document.body,

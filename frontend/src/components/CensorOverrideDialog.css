@@ -1,0 +1,47 @@
+/* Окно «Оригинал без цензуры». Каркас — классы окна «Добавить в плейлист»
+   (.atp-*), здесь только своё. */
+
+.censor-hint {
+  padding: 4px 12px 8px;
+  font-size: var(--text-sm);
+  color: #9a9a9a;
+}
+
+.censor-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.censor-row .atp-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.censor-official {
+  flex: none;
+  color: var(--brand-accent);
+}
+
+.censor-listen {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-avatar);
+  color: #b3b3b3;
+}
+
+.censor-listen:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .censor-listen:hover {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}

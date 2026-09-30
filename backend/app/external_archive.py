@@ -165,7 +165,9 @@ async def _note_acoustic_features(
         )
 
 
-async def adopt_local_file(source: str, external_id: str, local_path: str) -> Optional[str]:
+async def adopt_local_file(
+    source: str, external_id: str, local_path: str, replace: bool = False
+) -> Optional[str]:
     """Кладёт уже готовый локальный файл в MinIO как архивную копию трека.
 
     Обычный путь архивации сам резолвит и качает аудио. Но есть источники, где
@@ -173,6 +175,10 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
     HLS-only треки ремуксятся ffmpeg'ом в дисковый кэш прямо на стриме
     (см. soundcloud._stream_via_hls), и этот же файл имеет смысл сохранить —
     дисковый кэш вытесняется по LRU, а MinIO нет.
+
+    ``replace`` — файл заменяет прежнюю архивную копию (цензурную копию с
+    YouTube, см. deezer.replace_youtube_copy): старый объект удаляется, а
+    запись в БД перепривязывается, даже если уже смотрела в MinIO.
 
     Возвращает file_path в MinIO или None, если архивация невозможна/не нужна.
     """
@@ -191,6 +197,11 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
     ext = os.path.splitext(local_path)[1].lower() or ".m4a"
     key = f"external/{source}/{external_id}{ext}"
     acoustic_features = await asyncio.to_thread(analyze_file, local_path)
+    old_path = None
+    if replace:
+        old_path = await asyncio.to_thread(
+            storage.find_music_object, f"external/{source}/{external_id}"
+        )
     try:
         storage.ensure_buckets()
         file_path, file_size = await asyncio.to_thread(
@@ -207,19 +218,32 @@ async def adopt_local_file(source: str, external_id: str, local_path: str) -> Op
     # прямо из MinIO, а ленивая архивация больше не бралась за него.
     db = SessionLocal()
     try:
-        track = (
-            db.query(Track)
-            .filter(Track.source == source, Track.external_id == str(external_id))
-            .first()
+        query = db.query(Track).filter(
+            Track.source == source, Track.external_id == str(external_id)
         )
-        if track is not None and not storage.is_minio_path(track.file_path):
+        # Замена перепривязывает все записи трека: удаляемый объект не должен
+        # остаться чьим-то file_path.
+        tracks = query.all() if replace else [t for t in [query.first()] if t is not None]
+        stale = {old_path} if old_path else set()
+        for track in tracks:
+            if storage.is_minio_path(track.file_path):
+                if not replace or track.file_path == file_path:
+                    continue
+                stale.add(track.file_path)
             track.file_path = file_path
             track.file_size = file_size
             if acoustic_features:
                 track.acoustic_features = acoustic_features
                 track.acoustic_analyzed_at = datetime.now(timezone.utc)
                 track.acoustic_analyzer_version = ANALYZER_VERSION
+        if tracks:
             db.commit()
+        # Удаляем только после перепривязки записей: иначе /tracks/{id}/stream
+        # успел бы сходить в уже удалённый объект. Другое расширение — другой
+        # ключ, и без удаления поиск архива по префиксу мог бы снова найти
+        # старую копию.
+        for path in stale - {file_path}:
+            await asyncio.to_thread(storage.remove_object_path, path)
     except Exception:  # noqa: BLE001
         db.rollback()
         logger.exception("adopt: не удалось привязать %s/%s к записи", source, external_id)

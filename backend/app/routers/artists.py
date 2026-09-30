@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import case, false, func, insert, or_
 from sqlalchemy.orm import Session
 
+from app import censorship
 from app.artist_utils import (
     query_names_artist,
     same_artist,
@@ -212,6 +213,7 @@ def _is_liked(user: Optional[User], name: str) -> bool:
 
 
 @router.get("", response_model=ArtistPageResponse)
+@censorship.overrides_in_response("external")
 async def artist_page(
     request: Request,
     name: str = Query(..., min_length=1),

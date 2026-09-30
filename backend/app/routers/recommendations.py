@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import re
+from app import censorship
 from app.database import get_db
 from app.cache import (
     get_cache,
@@ -2094,6 +2095,7 @@ def _compute_recommendations(
 
 
 @router.get("/", response_model=RecommendationResponse)
+@censorship.overrides_in_response("tracks")
 async def get_recommendations(
     request: Request,
     limit: int = Query(20, ge=1, le=_MAX_TRACK_LIMIT),

@@ -2479,11 +2479,29 @@ async def stream_cached_audio(
     )
 
 
+async def _local_copy_path(video_id: str) -> Optional[str]:
+    """Своя копия трека: файл дискового кэша или minio-путь архива, иначе None."""
+    return _cached_file(video_id) or await archived_music_path(f"ytmusic/{video_id}")
+
+
 async def _has_local_copy(video_id: str) -> bool:
     """Трек уже лежит на диске или в MinIO — играется без обращения к YouTube."""
-    if _cached_file(video_id):
-        return True
-    return bool(await archived_music_path(f"ytmusic/{video_id}"))
+    return bool(await _local_copy_path(video_id))
+
+
+# Расширения копий, скачанных с YouTube: webm/opus как есть, m4a — AAC после
+# транскода архивации. Deezer кладёт mp3, Soulseek — файл пира как есть.
+_YOUTUBE_COPY_EXTS = (".webm", ".opus", ".m4a")
+
+
+def _is_youtube_copy(path: Optional[str]) -> bool:
+    """Копия, скорее всего, скачана с YouTube — и может быть цензурной.
+
+    YouTube Music отдаёт звук clean-редакции и у clean-роликов, и под
+    explicit-флагом. Soulseek-файл в m4a сюда тоже попадёт — тогда он просто
+    заменится explicit-оригиналом из Deezer, это безопасно.
+    """
+    return bool(path) and path.lower().endswith(_YOUTUBE_COPY_EXTS)
 
 
 async def _soundcloud_first_redirect(video_id: str) -> Optional[RedirectResponse]:
@@ -2534,11 +2552,41 @@ async def stream_ytmusic(video_id: str, request: Request):
     # тот же ключ ytmusic/{id}) проверяется ДО ожидания матчей: иначе уже
     # заархивированный трек стоял до 3 с на идущем поиске Soulseek, а это
     # ровно первый трек свежей порции потока — задержка клика по «потоку».
+    # Трек зацензурен по закону РФ, и админ привязал оригинал — играет он,
+    # мимо своей копии и всех матчей (они той же цензурной записи). vid —
+    # путь назад, если SoundCloud трек не отдаст (см. app/censorship.py).
+    # scfallback=1 — это и есть возврат оттуда: второй раз не уходим.
+    if request.query_params.get("scfallback") != "1":
+        try:
+            from app import censorship
+
+            override = await censorship.override_for_video(video_id)
+            if override is not None:
+                return RedirectResponse(
+                    censorship.soundcloud_stream_path(override, video_id), status_code=307
+                )
+            censorship.schedule_suggestion(video_id)
+        except Exception:  # noqa: BLE001 — привязки не должны ломать стрим
+            logger.exception("censor override lookup failed for %s", video_id)
     try:
-        has_local = await _has_local_copy(video_id)
+        local_path = await _local_copy_path(video_id)
     except Exception:  # noqa: BLE001 — проверка best-effort, стрим не ломаем
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
-        has_local = False
+        local_path = None
+    has_local = bool(local_path)
+    # Своя копия с YouTube может быть цензурной: если у записи есть
+    # explicit-оригинал в Deezer, копия заменяется им (см.
+    # deezer.replace_youtube_copy) — это и главная, и поток рекомендаций,
+    # и библиотека: все ytmusic-треки играют через этот эндпоинт.
+    if _is_youtube_copy(local_path):
+        try:
+            from app.routers import deezer
+
+            replaced = await deezer.replace_youtube_copy(video_id)
+            if replaced:
+                return await _serve_file(replaced, "audio/mpeg", request)
+        except Exception:  # noqa: BLE001 — замена не должна ломать стрим
+            logger.exception("youtube copy replacement failed for %s", video_id)
     # Deezer — первым из внешних: YouTube с адресов сервера отвечает
     # bot-check'ом, а CDN Deezer отдаёт полный трек за доли секунды. Файл
     # ложится в дисковый кэш под этим же video_id и отдаётся отсюда, без
@@ -2637,12 +2685,33 @@ async def prefetch_ytmusic(video_id: str):
     # Своя копия уже есть — греть нечего: stream_ytmusic отдаст её сразу, мимо
     # матчей. Без этой проверки прогрев стоял до 3 с на поиске Soulseek и ставил
     # у пира ненужную закачку, а ready-поллинг фронта ждал всё это время.
+    # Привязанный оригинал (см. stream_ytmusic) — греем его.
     try:
-        has_local = await _has_local_copy(video_id)
+        from app import censorship
+        from app.routers import soundcloud
+
+        override = await censorship.override_for_video(video_id)
+        if override is not None:
+            return await soundcloud.prefetch_soundcloud(
+                soundcloud._encode_token(override["original_id"], override["original_permalink"])
+            )
+    except Exception:  # noqa: BLE001 — прогрев best-effort
+        logger.warning("censor override prefetch failed for %s", video_id, exc_info=True)
+    try:
+        local_path = await _local_copy_path(video_id)
     except Exception:  # noqa: BLE001 — проверка best-effort
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
-        has_local = False
-    if has_local:
+        local_path = None
+    if local_path:
+        # Копию с YouTube меняем на explicit-оригинал заранее, пока трек ждёт
+        # в очереди (см. stream_ytmusic).
+        if _is_youtube_copy(local_path):
+            try:
+                from app.routers import deezer
+
+                deezer.schedule_replace_youtube_copy(video_id)
+            except Exception:  # noqa: BLE001 — прогрев best-effort
+                logger.warning("youtube copy replacement scheduling failed for %s", video_id, exc_info=True)
         return {"status": "cached"}
     # Deezer играет первым (см. stream_ytmusic) — греем его: файл целиком
     # ложится в дисковый кэш, и prefetch_is_ready увидит его через _cached_file.
@@ -2696,6 +2765,17 @@ async def prefetch_ytmusic_ready(video_id: str):
     после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
+    try:
+        from app import censorship
+        from app.routers import soundcloud
+
+        override = await censorship.override_for_video(video_id)
+        if override is not None:
+            return await soundcloud.prefetch_soundcloud_ready(
+                soundcloud._encode_token(override["original_id"], override["original_permalink"])
+            )
+    except Exception:  # noqa: BLE001 — проверка best-effort
+        logger.warning("censor override ready check failed for %s", video_id, exc_info=True)
     ready = await prefetch_is_ready(
         video_id, f"ytdlp:resolve:v2:{video_id}", archive_key=f"ytmusic/{video_id}"
     )

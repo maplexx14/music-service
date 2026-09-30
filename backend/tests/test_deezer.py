@@ -88,7 +88,7 @@ def test_find_equivalent_skips_unreadable_and_caches_result(monkeypatch):
     monkeypatch.setattr(deezer._client, "get", fake_get)
 
     assert asyncio.run(deezer.find_deezer_equivalent("mRt8c7taItw", "Cup Noodles", "123", 192)) == "2"
-    assert store["ytmusic:dzmatch:mRt8c7taItw"] == {"sng_id": "2"}
+    assert store["ytmusic:dzmatch:mRt8c7taItw"] == {"sng_id": "2", "explicit": False, "edited": False}
     # Второй вызов — из кэша, без поиска.
     assert asyncio.run(deezer.find_deezer_equivalent("mRt8c7taItw", "Cup Noodles", "123", 192)) == "2"
     assert len(calls) == 1
@@ -233,3 +233,211 @@ def test_matching_handles_stylized_names_accents_and_long_tracks():
     assert not ok("Thoughtless", "Klones Of Nu Metal", 275, "Thoughtless", "Korn", 273)
     # Настоящая кириллица не ломается: «й» не превращается в «и».
     assert deezer._key("Мумий Тролль") != deezer._key("Мумии Тролль")
+
+
+def _search_returning(monkeypatch, items):
+    calls = []
+
+    async def fake_get(url, params=None):
+        calls.append(params["q"])
+        return _Resp({"data": items})
+
+    monkeypatch.setattr(deezer._client, "get", fake_get)
+    return calls
+
+
+def test_find_equivalent_prefers_explicit_over_edited(monkeypatch):
+    # Реальная картина Deezer: у записи две редакции с тем же названием и
+    # длительностью, и edited стоит в выдаче первой.
+    store = _fake_cache(monkeypatch)
+    _search_returning(monkeypatch, [
+        {"id": 10, "title": "Song", "duration": 200, "artist": {"name": "Artist"},
+         "explicit_lyrics": False, "explicit_content_lyrics": 3},
+        {"id": 11, "title": "Song", "duration": 200, "artist": {"name": "Artist"},
+         "explicit_lyrics": True, "explicit_content_lyrics": 1},
+    ])
+
+    assert asyncio.run(deezer.find_deezer_equivalent("VIDEOID1", "Song", "Artist", 200)) == "11"
+    assert store["ytmusic:dzmatch:VIDEOID1"]["explicit"] is True
+    assert asyncio.run(deezer.match_is_explicit("VIDEOID1")) is True
+
+
+def test_find_equivalent_takes_edited_only_as_last_resort(monkeypatch):
+    _fake_cache(monkeypatch)
+    _search_returning(monkeypatch, [
+        {"id": 10, "title": "Song", "duration": 200, "artist": {"name": "Artist"},
+         "explicit_content_lyrics": 3},
+    ])
+
+    assert asyncio.run(deezer.find_deezer_equivalent("VIDEOID1", "Song", "Artist", 200)) == "10"
+    assert asyncio.run(deezer.match_is_edited("VIDEOID1")) is True
+    assert asyncio.run(deezer.match_is_explicit("VIDEOID1")) is False
+
+
+def test_legacy_match_without_edition_is_searched_again(monkeypatch):
+    # Матч старого формата выбран без оглядки на цензуру — ему не доверяем.
+    store = _fake_cache(monkeypatch)
+    store["ytmusic:dzmatch:VIDEOID1"] = {"sng_id": "10"}
+    calls = _search_returning(monkeypatch, [
+        {"id": 11, "title": "Song", "duration": 200, "artist": {"name": "Artist"},
+         "explicit_content_lyrics": 1},
+    ])
+
+    assert asyncio.run(deezer.deezer_match_for("VIDEOID1")) is None
+    assert asyncio.run(deezer.find_deezer_equivalent("VIDEOID1", "Song", "Artist", 200)) == "11"
+    assert len(calls) == 1
+
+
+def test_edited_match_yields_to_full_soundcloud(monkeypatch):
+    from app.routers import soundcloud
+
+    store = _fake_cache(monkeypatch)
+    store["ytmusic:dzmatch:VIDEOID1"] = {"sng_id": "10", "explicit": False, "edited": True}
+    monkeypatch.setattr(deezer, "enabled", lambda: True)
+
+    async def sc_match(video_id, full_only=False):
+        assert full_only
+        return ("123", "https://soundcloud.com/a/song")
+
+    monkeypatch.setattr(soundcloud, "await_soundcloud_match", sc_match)
+
+    async def must_not_download(*_a, **_kw):
+        raise AssertionError("edited-версию при оригинале на SoundCloud не качаем")
+
+    monkeypatch.setattr(deezer, "fetch_to_cache", must_not_download)
+
+    assert asyncio.run(deezer.stream_for_ytmusic("VIDEOID1", _request())) is None
+
+
+def test_replace_youtube_copy_only_for_explicit_match(monkeypatch):
+    store = _fake_cache(monkeypatch)
+    monkeypatch.setattr(deezer, "enabled", lambda: True)
+    fetched = []
+
+    async def fetch(video_id, sng_id, replace=False):
+        fetched.append((video_id, sng_id, replace))
+        return f"/cache/{video_id}.mp3"
+
+    monkeypatch.setattr(deezer, "fetch_to_cache", fetch)
+    store["ytmusic:dzmatch:EXPLICIT1"] = {"sng_id": "11", "explicit": True, "edited": False}
+    store["ytmusic:dzmatch:NEUTRAL1"] = {"sng_id": "12", "explicit": False, "edited": False}
+
+    assert asyncio.run(deezer.replace_youtube_copy("EXPLICIT1")) == "/cache/EXPLICIT1.mp3"
+    # Не explicit — цензуре взяться неоткуда, своя копия остаётся.
+    assert asyncio.run(deezer.replace_youtube_copy("NEUTRAL1")) is None
+    assert fetched == [("EXPLICIT1", "11", True)]
+
+
+def test_fetch_replace_drops_youtube_copy(monkeypatch, tmp_path):
+    monkeypatch.setattr(ytdlp, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(ytdlp, "_enforce_cache_limit", lambda: None)
+    _fake_cache(monkeypatch)
+    old = tmp_path / "VIDEOID1.webm"
+    old.write_bytes(b"youtube")
+    adopted = []
+    monkeypatch.setattr(
+        deezer, "_schedule_adopt",
+        lambda vid, path, replace=False: adopted.append((vid, path, replace)),
+    )
+
+    async def download(_sng_id, dest):
+        with open(dest, "wb") as fh:
+            fh.write(b"deezer")
+
+    monkeypatch.setattr(deezer, "_download", download)
+
+    # Без replace готовой считается любая копия.
+    assert asyncio.run(deezer.fetch_to_cache("VIDEOID1", "11")) == str(old)
+
+    path = asyncio.run(deezer.fetch_to_cache("VIDEOID1", "11", replace=True))
+    assert path == str(tmp_path / "VIDEOID1.mp3")
+    assert not old.exists()
+    assert ytdlp._cached_file("VIDEOID1") == path
+    assert adopted == [("VIDEOID1", path, True)]
+
+
+def _setup_local_copy(monkeypatch, local_path, replaced):
+    monkeypatch.setattr(ytdlp, "_ytmusic", object())
+
+    async def local_copy(_video_id):
+        return local_path
+
+    monkeypatch.setattr(ytdlp, "_local_copy_path", local_copy)
+    calls = []
+
+    async def replace(video_id):
+        calls.append(video_id)
+        return replaced
+
+    monkeypatch.setattr(deezer, "replace_youtube_copy", replace)
+    served = []
+
+    async def serve(path, media_type, request):
+        served.append(path)
+        return "served"
+
+    monkeypatch.setattr(ytdlp, "_serve_file", serve)
+    return calls, served
+
+
+def test_stream_replaces_youtube_copy_with_explicit(monkeypatch):
+    calls, served = _setup_local_copy(
+        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.m4a", "/cache/VIDEOID1.mp3"
+    )
+
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "served"
+    assert calls == ["VIDEOID1"]
+    assert served == ["/cache/VIDEOID1.mp3"]
+
+
+def test_stream_keeps_non_youtube_copy(monkeypatch):
+    calls, _served = _setup_local_copy(
+        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.mp3", "/cache/VIDEOID1.mp3"
+    )
+
+    async def cached_audio(request, cache_id, resolver, archive_key=None):
+        return "local"
+
+    monkeypatch.setattr(ytdlp, "stream_cached_audio", cached_audio)
+
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "local"
+    assert calls == []
+
+
+def test_adopt_replace_rebinds_rows_and_drops_youtube_object(monkeypatch, tmp_path, db):
+    from app import external_archive, storage
+    from app.models import Track
+    from tests.conftest import TestingSessionLocal
+
+    old = "minio://music/external/ytmusic/VIDEOID1.m4a"
+    new = "minio://music/external/ytmusic/VIDEOID1.mp3"
+    for _ in range(2):  # дубли одной записи тоже не должны смотреть в удалённое
+        db.add(Track(title="Song", artist="Artist", duration=200, source="ytmusic",
+                     external_id="VIDEOID1", file_path=old, file_size=1))
+    db.commit()
+
+    local = tmp_path / "VIDEOID1.mp3"
+    local.write_bytes(b"deezer")
+    removed = []
+    monkeypatch.setattr(storage, "is_minio_backend", lambda: True)
+    monkeypatch.setattr(storage, "ensure_buckets", lambda: None)
+    monkeypatch.setattr(storage, "find_music_object", lambda prefix: old)
+    monkeypatch.setattr(storage, "upload_music_file", lambda path, key, ct: (new, 6))
+    monkeypatch.setattr(storage, "remove_object_path", removed.append)
+    monkeypatch.setattr(external_archive, "analyze_file", lambda path: None)
+    monkeypatch.setattr(external_archive, "SessionLocal", TestingSessionLocal)
+
+    async def noop(*_a, **_kw):
+        pass
+
+    monkeypatch.setattr(external_archive, "_note_archived", noop)
+    monkeypatch.setattr(external_archive, "_note_acoustic_features", noop)
+
+    result = asyncio.run(
+        external_archive.adopt_local_file("ytmusic", "VIDEOID1", str(local), replace=True)
+    )
+
+    assert result == new
+    assert removed == [old]
+    db.expire_all()
+    assert [t.file_path for t in db.query(Track)] == [new, new]

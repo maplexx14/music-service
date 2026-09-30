@@ -19,6 +19,7 @@ ARL — из DEEZER_ARL или файла DEEZER_ARL_FILE (по умолчани
 """
 
 import asyncio
+import glob
 import hashlib
 import logging
 import os
@@ -64,6 +65,11 @@ _BAD_ARL_BACKOFF = 600
 
 _MATCH_TTL = 7 * 24 * 3600
 _MATCH_MISS_TTL = 6 * 3600
+# explicit_content_lyrics в выдаче поиска (EXPLICIT_LYRICS_STATUS в gw):
+# 1 — оригинал с ненормативной лексикой, 3 — edited, цензурная редакция.
+# Остальные коды (0 не explicit, 2/6 неизвестно) для выбора равнозначны.
+_LYRICS_EXPLICIT = 1
+_LYRICS_EDITED = 3
 # Одна и та же запись на двух сервисах расходится на секунду-две (трим тишины),
 # длинные треки — сильнее (Deep Purple, 7:06 в ytmusic против 7:00 в Deezer).
 # Радио-версия/ремастер обычно отличается сильнее и этим окном отсекается.
@@ -262,12 +268,64 @@ def is_same_recording(
     return _same_text(cand_title, title)
 
 
+def _lyrics_code(item: dict) -> int:
+    try:
+        return int(item.get("explicit_content_lyrics"))
+    except (TypeError, ValueError):
+        return _LYRICS_EXPLICIT if item.get("explicit_lyrics") else 0
+
+
+def _lyrics_rank(item: dict) -> int:
+    code = _lyrics_code(item)
+    if code == _LYRICS_EXPLICIT:
+        return 0
+    return 2 if code == _LYRICS_EDITED else 1
+
+
+def _match_entry(item: Optional[dict]) -> dict:
+    """Запись матча для кэша: id и редакция выбранной версии."""
+    if item is None:
+        return {"sng_id": None, "explicit": False, "edited": False}
+    code = _lyrics_code(item)
+    return {
+        "sng_id": str(item["id"]),
+        "explicit": code == _LYRICS_EXPLICIT,
+        "edited": code == _LYRICS_EDITED,
+    }
+
+
+def _match_key(video_id: str) -> str:
+    return f"ytmusic:dzmatch:{video_id}"
+
+
+async def _cached_match(video_id: str) -> Optional[dict]:
+    """Матч из кэша. Записи без поля explicit — от матчера, который брал
+    первую версию в выдаче, возможно edited: их не доверяем, ищем заново."""
+    cached = await get_cache_async(_match_key(video_id))
+    if not cached or "explicit" not in cached:
+        return None
+    return cached
+
+
+async def match_is_explicit(video_id: str) -> bool:
+    """Известный матч — explicit-оригинал: у записи есть нецензурная версия,
+    и Deezer отдаёт именно её. Только чтение кэша."""
+    cached = await _cached_match(video_id)
+    return bool(cached and cached.get("sng_id") and cached.get("explicit"))
+
+
+async def match_is_edited(video_id: str) -> bool:
+    """Известный матч — edited-редакция (других версий Deezer не нашёл)."""
+    cached = await _cached_match(video_id)
+    return bool(cached and cached.get("sng_id") and cached.get("edited"))
+
+
 async def find_deezer_equivalent(
     video_id: str, title: str, artist: str, duration: int
 ) -> Optional[str]:
     """id трека Deezer той же записи или None. Промах кэшируется."""
-    key = f"ytmusic:dzmatch:{video_id}"
-    cached = await get_cache_async(key)
+    key = _match_key(video_id)
+    cached = await _cached_match(video_id)
     if cached:
         sng_id = cached.get("sng_id")
         return str(sng_id) if sng_id else None
@@ -297,32 +355,38 @@ async def find_deezer_equivalent(
         logger.warning("deezer search error for ytmusic %s: %s", video_id, str(data)[:200])
         return None
 
-    match = None
-    for item in data.get("data") or []:
-        if not item.get("readable", True):
-            continue
-        if is_same_recording(
+    candidates = [
+        item for item in data.get("data") or []
+        if item.get("readable", True) and is_same_recording(
             clean_title(item.get("title") or ""),
             (item.get("artist") or {}).get("name") or "",
             int(item.get("duration") or 0),
             want_title, artist, duration,
-        ):
-            match = str(item["id"])
-            break
+        )
+    ]
+    # У одной записи в Deezer бывают обе редакции с тем же названием и
+    # длительностью: оригинал (explicit) и edited. Первая в выдаче — не
+    # обязательно оригинал, а ytmusic-трек сам мог быть clean-версией, поэтому
+    # выбираем явно: explicit → нейтральная → edited (только если другой нет).
+    candidates.sort(key=_lyrics_rank)  # стабильно: внутри ранга порядок поиска
+    entry = _match_entry(candidates[0] if candidates else None)
 
     await set_cache_async(
-        key, {"sng_id": match}, expire=_MATCH_TTL if match else _MATCH_MISS_TTL
+        key, entry, expire=_MATCH_TTL if entry["sng_id"] else _MATCH_MISS_TTL
     )
-    if match:
-        logger.info("ytmusic track %s (%s — %s) matched to deezer %s", video_id, artist, title, match)
+    if entry["sng_id"]:
+        logger.info(
+            "ytmusic track %s (%s — %s) matched to deezer %s (explicit=%s, edited=%s)",
+            video_id, artist, title, entry["sng_id"], entry["explicit"], entry["edited"],
+        )
     else:
         logger.info("no deezer equivalent for ytmusic track %s", video_id)
-    return match
+    return entry["sng_id"]
 
 
 async def deezer_match_for(video_id: str) -> Optional[str]:
     """Известный матч из кэша, без поиска."""
-    cached = await get_cache_async(f"ytmusic:dzmatch:{video_id}")
+    cached = await _cached_match(video_id)
     sng_id = cached.get("sng_id") if cached else None
     return str(sng_id) if sng_id else None
 
@@ -392,7 +456,7 @@ async def await_deezer_match(video_id: str, timeout: float = _MATCH_STREAM_WAIT)
     не из поиска/потока, а, например, из очереди после рестарта), берём их из
     каталога ytmusic и ищем сразу — всё в пределах timeout.
     """
-    cached = await get_cache_async(f"ytmusic:dzmatch:{video_id}")
+    cached = await _cached_match(video_id)
     if cached:
         sng_id = cached.get("sng_id")
         return str(sng_id) if sng_id else None
@@ -421,6 +485,14 @@ async def await_deezer_match(video_id: str, timeout: float = _MATCH_STREAM_WAIT)
 # ---------------------------------------------------------------------------
 
 
+def _gw_lyrics(song: dict) -> Optional[int]:
+    status = (song.get("EXPLICIT_TRACK_CONTENT") or {}).get("EXPLICIT_LYRICS_STATUS")
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _media_url(sng_id: str) -> tuple[str, str, int, int]:
     """(url на CDN, id для ключа расшифровки, ожидаемый размер, длительность) MP3 128."""
     song = await _gw("song.getData", {"sng_id": sng_id})
@@ -428,6 +500,10 @@ async def _media_url(sng_id: str) -> tuple[str, str, int, int]:
     # релиз под другим id) в FALLBACK. Ключ расшифровки — от id замены.
     fallback = song.get("FALLBACK") or {}
     if fallback.get("TRACK_TOKEN") and not song.get("TRACK_TOKEN"):
+        # Замена бывает и edited-редакцией того же трека: оригинал выбран
+        # матчером именно как нецензурный, цензура вместо него не годится.
+        if _gw_lyrics(fallback) == _LYRICS_EDITED and _gw_lyrics(song) != _LYRICS_EDITED:
+            raise DeezerError(f"{sng_id}: замена в стране аккаунта — edited-версия")
         song = fallback
     real_id = str(song.get("SNG_ID") or sng_id)
     size = int(song.get("FILESIZE_MP3_128") or 0)
@@ -504,18 +580,22 @@ async def _download(sng_id: str, dest: str) -> None:
                 pass
 
 
-async def fetch_to_cache(video_id: str, sng_id: str) -> Optional[str]:
+async def fetch_to_cache(video_id: str, sng_id: str, replace: bool = False) -> Optional[str]:
     """Путь к расшифрованному MP3 трека в дисковом кэше ytdlp или None.
 
     Один трек качается один раз: браузер шлёт на трек несколько Range-запросов
     подряд, остальные ждут первый на блокировке и получают готовый файл.
+
+    ``replace`` — в кэше может лежать копия с YouTube (возможно, цензурная):
+    она не считается готовой, а после скачивания удаляется с диска и из MinIO
+    (см. replace_youtube_copy).
     """
     from app.routers.ytdlp import CACHE_DIR, _cached_file, _enforce_cache_limit
 
     lock = _download_locks.setdefault(video_id, asyncio.Lock())
     async with lock:
         ready = _cached_file(video_id)
-        if ready:
+        if ready and (not replace or ready.endswith(".mp3")):
             return ready
         if await get_cache_async(f"deezer:fail:{video_id}"):
             return None
@@ -533,20 +613,42 @@ async def fetch_to_cache(video_id: str, sng_id: str) -> Optional[str]:
             "deezer %s → %s: %d B за %.1f с",
             sng_id, video_id, os.path.getsize(dest), time.monotonic() - started,
         )
+        if replace:
+            _drop_other_cache_files(dest)
         await asyncio.to_thread(_enforce_cache_limit)
-        _schedule_adopt(video_id, dest)
+        _schedule_adopt(video_id, dest, replace=replace)
         return dest
 
 
-def _schedule_adopt(video_id: str, path: str) -> None:
-    """Уносит файл в MinIO под ytmusic/{video_id}: дисковый кэш вытесняется."""
+def _drop_other_cache_files(dest: str) -> None:
+    """Удаляет прежние копии трека в дисковом кэше (``{video_id}.*`` кроме dest).
+
+    _cached_file берёт первый попавшийся файл трека: оставшаяся рядом копия
+    с YouTube могла бы продолжить играть вместо свежего mp3. Уже открытые на
+    отдачу дескрипторы старого файла удаление не рвёт.
+    """
+    stem = os.path.splitext(dest)[0]
+    for path in glob.glob(f"{glob.escape(stem)}.*"):
+        if path == dest or path.endswith(".part"):
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            logger.warning("не удалось удалить старую копию %s", path, exc_info=True)
+
+
+def _schedule_adopt(video_id: str, path: str, replace: bool = False) -> None:
+    """Уносит файл в MinIO под ytmusic/{video_id}: дисковый кэш вытесняется.
+
+    ``replace`` — заменить уже лежащую там копию (с YouTube), а не оставить её.
+    """
     if video_id in _adopt_inflight:
         return
     from app import external_archive
 
     async def job():
         try:
-            await external_archive.adopt_local_file("ytmusic", video_id, path)
+            await external_archive.adopt_local_file("ytmusic", video_id, path, replace=replace)
         except Exception:  # noqa: BLE001 — фон
             logger.warning("deezer adopt failed for %s", video_id, exc_info=True)
         finally:
@@ -556,12 +658,27 @@ def _schedule_adopt(video_id: str, path: str) -> None:
     asyncio.create_task(job())
 
 
+async def _prefer_soundcloud_over_edited(video_id: str) -> bool:
+    """Deezer нашёл только edited-редакцию, а SoundCloud отдаёт запись целиком.
+
+    SoundCloud не цензурит — там лежит оригинал, и он важнее скорости Deezer.
+    """
+    if not await match_is_edited(video_id):
+        return False
+    from app.routers import soundcloud
+
+    if not await soundcloud.await_soundcloud_match(video_id, full_only=True):
+        return False
+    logger.info("deezer match for %s is edited, soundcloud has the original", video_id)
+    return True
+
+
 async def stream_for_ytmusic(video_id: str, request: Request) -> Optional[Response]:
     """Ответ с аудио ytmusic-трека из Deezer или None (идём дальше по цепочке)."""
     if not enabled():
         return None
     sng_id = await await_deezer_match(video_id)
-    if not sng_id:
+    if not sng_id or await _prefer_soundcloud_over_edited(video_id):
         return None
     path = await fetch_to_cache(video_id, sng_id)
     if not path:
@@ -571,12 +688,51 @@ async def stream_for_ytmusic(video_id: str, request: Request) -> Optional[Respon
     return await _serve_file(path, "audio/mpeg", request)
 
 
+# Сколько стрим уже скачанного трека ждёт матч Deezer. Своя копия играет
+# мгновенно — долго держать её ради проверки на цензуру нельзя; не успели —
+# поиск доедет в фоне, и копия заменится при следующем проигрывании.
+_REPLACE_MATCH_WAIT = 1.5
+
+
+async def replace_youtube_copy(video_id: str) -> Optional[str]:
+    """Меняет копию трека, скачанную с YouTube, на explicit-оригинал из Deezer.
+
+    YouTube Music часто отдаёт звук цензурной редакции — и у clean-роликов, и
+    под explicit-флагом. Такие копии копились в дисковом кэше и MinIO, пока
+    YouTube был основным источником, и своя копия играет раньше всех матчей.
+    Если Deezer знает explicit-версию записи, копия заменяется ею (диск,
+    MinIO, file_path в БД). Возвращает путь к новому mp3 или None — оставить
+    как есть (матча нет, он не explicit или скачать не вышло).
+    """
+    if not enabled():
+        return None
+    sng_id = await await_deezer_match(video_id, timeout=_REPLACE_MATCH_WAIT)
+    if not sng_id or not await match_is_explicit(video_id):
+        return None
+    logger.info("replacing youtube copy of %s with explicit deezer %s", video_id, sng_id)
+    return await fetch_to_cache(video_id, sng_id, replace=True)
+
+
+def schedule_replace_youtube_copy(video_id: str) -> None:
+    """replace_youtube_copy в фоне — для прогрева очереди."""
+    if not enabled():
+        return
+
+    async def job():
+        try:
+            await replace_youtube_copy(video_id)
+        except Exception:  # noqa: BLE001 — фон
+            logger.warning("youtube copy replacement failed for %s", video_id, exc_info=True)
+
+    asyncio.create_task(job())
+
+
 async def prefetch_for_ytmusic(video_id: str) -> bool:
     """Качает трек заранее, если матч уже известен. True — прогрев запущен."""
     if not enabled():
         return False
     sng_id = await await_deezer_match(video_id, timeout=1.0)
-    if not sng_id:
+    if not sng_id or await _prefer_soundcloud_over_edited(video_id):
         return False
 
     async def job():

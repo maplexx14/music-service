@@ -286,3 +286,44 @@ class Playlist(Base):
     # Relationships
     owner = relationship("User", back_populates="playlists")
     tracks = relationship("Track", secondary=playlist_tracks, back_populates="playlists", order_by="playlist_tracks.c.position")
+
+
+class CensorOverride(Base):
+    """Зацензуренный трек каталога → его оригинал на SoundCloud.
+
+    По закону РФ о «пропаганде» (наркотики и т.п.) дистрибьюторы заменили
+    релизы части треков цензурными версиями: запиканный звук, иногда и
+    название («В этой оу е» вместо «В этой траве»). Explicit-флаг это не
+    ловит, метаданные тоже — поэтому привязку подтверждает админ, а сервис
+    лишь предлагает кандидатов (status=suggested, см. app/censorship.py).
+    Сервис работает не в РФ, так что для подтверждённых треков звук берётся
+    из оригинала, а в выдаче показывается его название.
+    """
+    __tablename__ = "censor_overrides"
+    __table_args__ = (
+        Index("uq_censor_overrides_source_external", "source", "external_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True)
+    # Цензурная версия: источник каталога (пока только ytmusic) и её id там.
+    source = Column(String(16), nullable=False, default="ytmusic", server_default="ytmusic")
+    external_id = Column(String, nullable=False)
+    censored_title = Column(String, nullable=False)
+    censored_artist = Column(String, nullable=False)
+    # Нормализованный ключ «артист|название» цензурной версии: та же запись
+    # встречается в каталоге под другими id (сингл и альбом).
+    censored_key = Column(String, nullable=False, index=True)
+    # Оригинал на SoundCloud.
+    original_id = Column(String, nullable=False)
+    original_permalink = Column(String, nullable=False)
+    original_title = Column(String, nullable=False)
+    original_artist = Column(String, nullable=False)
+    original_duration = Column(Integer, nullable=False, default=0)
+    original_cover_url = Column(String, nullable=True)
+    # confirmed — действует; suggested — ждёт решения админа; rejected —
+    # отклонено (не предлагать эту пару снова).
+    status = Column(String(16), nullable=False, default="suggested", server_default="suggested", index=True)
+    score = Column(Float, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

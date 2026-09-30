@@ -49,6 +49,97 @@ function NowPlaying({ state }) {
   )
 }
 
+const CENSOR_STATUS_LABEL = { suggested: 'Подсказка', confirmed: 'Играет оригинал', rejected: 'Отклонено' }
+
+// Зацензуренные по закону РФ треки и их оригиналы на SoundCloud (см. backend
+// app/censorship.py). Сервис сам проверяет русские треки при прослушивании:
+// надёжный оригинал привязывает сразу («автоматически» — такую привязку стоит
+// глянуть и при ошибке снять), сомнительный оставляет подсказкой. Привязать
+// трек вручную — «Оригинал без цензуры» в меню трека или в плеере.
+function CensorOverrides() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState(null)
+
+  const load = async () => {
+    try {
+      const response = await api.get('/censorship/overrides', { skipErrorToast: true, dedupe: false })
+      setItems(response.data || [])
+    } catch (error) {
+      console.error('Error loading censor overrides:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const act = async (item, action) => {
+    setBusyId(item.id)
+    try {
+      const response = await api.post(`/censorship/overrides/${item.id}/${action}`)
+      setItems((prev) => prev.map((row) => (row.id === item.id ? response.data : row)))
+    } catch (error) {
+      console.error('Error updating censor override:', error)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // Сначала то, что ждёт решения, потом действующие; отклонённые — в конце.
+  const order = { suggested: 0, confirmed: 1, rejected: 2 }
+  const sorted = [...items].sort((a, b) => order[a.status] - order[b.status])
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">Цензура</div>
+      <div className="admin-section-subtitle">
+        Треки, зацензуренные по закону РФ, и их оригиналы на SoundCloud
+      </div>
+      {loading ? (
+        <Spinner />
+      ) : sorted.length === 0 ? (
+        <div className="admin-empty">Пока пусто. Привязать трек — «Оригинал без цензуры» в меню трека</div>
+      ) : (
+        <div className="admin-censor-list">
+          {sorted.map((item) => (
+            <div key={item.id} className={`admin-censor is-${item.status}`}>
+              <div className="admin-censor-info">
+                <div className="admin-censor-pair">
+                  <span className="admin-censor-censored">{item.censored_artist} — {item.censored_title}</span>
+                  <span aria-hidden="true">→</span>
+                  <a href={item.original_permalink} target="_blank" rel="noreferrer">
+                    {item.original_title}
+                  </a>
+                </div>
+                <div className="admin-censor-meta">
+                  {CENSOR_STATUS_LABEL[item.status]}
+                  {item.status === 'confirmed' && item.auto ? ' (автоматически)' : ''}
+                  {' · '}{item.original_artist} · {formatClock(item.original_duration)}
+                </div>
+              </div>
+              <div className="admin-censor-actions">
+                {item.status !== 'confirmed' && (
+                  <button type="button" className="admin-refresh" disabled={busyId === item.id} onClick={() => act(item, 'confirm')}>
+                    Подтвердить
+                  </button>
+                )}
+                {item.status !== 'rejected' && (
+                  <button type="button" className="admin-refresh" disabled={busyId === item.id} onClick={() => act(item, 'reject')}>
+                    {item.status === 'confirmed' ? 'Снять' : 'Отклонить'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function formatLastSeen(value) {
   if (!value) return 'нет данных'
   const diff = Date.now() - new Date(value).getTime()
@@ -263,6 +354,8 @@ function Admin() {
           </button>
         )}
       </div>
+
+      <CensorOverrides />
 
       <div className="admin-section">
         <div className="admin-section-head">

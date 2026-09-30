@@ -272,6 +272,15 @@ def _no_external_pool_network(request, monkeypatch):
     monkeypatch.setattr(
         "app.routers.soulseek.find_soulseek_equivalent", _no_slsk_match
     )
+
+    # Автоподсказки оригиналов цензурных треков (app/censorship.py) стрим
+    # запускает фоном: без стабов они ходили бы в каталог YouTube Music и в
+    # поиск SoundCloud. Тесты подсказок патчат их поверх.
+    async def _no_candidates(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr("app.censorship.find_candidates", _no_candidates)
+    monkeypatch.setattr("app.routers.deezer._ytmusic_meta_blocking", lambda *_a, **_kw: None)
     yield
 
 

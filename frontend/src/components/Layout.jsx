@@ -10,6 +10,7 @@ import Sidebar from './Sidebar'
 import Player from './Player'
 import ToastContainer from './Toast'
 import AddToPlaylistDialog from './AddToPlaylistDialog'
+import CensorOverrideDialog from './CensorOverrideDialog'
 import './Layout.css'
 
 // Полноэкранный плеер вместе с панелью текстов — отдельный чанк. Он и так
@@ -222,6 +223,7 @@ function Layout({ children }) {
       <Player />
       <ToastContainer />
       <AddToPlaylistDialog />
+      <CensorOverrideDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже
           отрисованного мини-плеера, спиннер здесь мигал бы зря. */}
       {isFullScreen && (

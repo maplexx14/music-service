@@ -326,6 +326,7 @@ async def find_soulseek_equivalent(
         # попробует снова.
         return None
 
+    from app.routers.aggregate import is_clean_edit
     from app.routers.soundcloud import _ScMatchCandidate, _is_exact_match
 
     best: Optional[tuple] = None  # (rank, username, file)
@@ -353,6 +354,10 @@ async def find_soulseek_equivalent(
             ):
                 continue
             if _is_remix_mismatch(filename, want_title):
+                continue
+            # «Song (Clean).mp3» — цензурная редакция: ytmusic-трек играется
+            # через Soulseek, чтобы получить оригинал, а не её.
+            if is_clean_edit(filename) and not is_clean_edit(want_title):
                 continue
             # Уже скачанный файл — мгновенный стрим без пира вообще.
             have_local = 1 if _find_local_path(filename) else 0

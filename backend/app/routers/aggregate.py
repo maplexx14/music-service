@@ -6,6 +6,7 @@ from typing import List, Tuple
 
 from fastapi import APIRouter, Query, Request
 
+from app import censorship
 from app.cache import get_cache, set_cache
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
@@ -41,6 +42,11 @@ _CLEAN_MARKER = re.compile(
 )
 
 
+def is_clean_edit(text: str) -> bool:
+    """В названии (или имени файла) есть маркер цензурной редакции."""
+    return bool(_CLEAN_MARKER.search(text or ""))
+
+
 def _mark_clean(track: ExternalTrackResponse) -> ExternalTrackResponse:
     """Проставляет is_clean по маркерам в названии (для бейджа на фронте).
 
@@ -48,7 +54,7 @@ def _mark_clean(track: ExternalTrackResponse) -> ExternalTrackResponse:
     """
     if track.is_clean:
         return track
-    if _CLEAN_MARKER.search(track.title or ""):
+    if is_clean_edit(track.title):
         return track.model_copy(update={"is_clean": True})
     return track
 
@@ -275,7 +281,12 @@ async def search_external(
         sources.append(res)
 
     # Бейдж clean и приоритет нецензурированных версий — см. _prefer_uncensored.
-    sources = [_prefer_uncensored(tracks) for tracks in sources]
+    # Названия оригиналов у треков, зацензуренных по закону РФ (см.
+    # app/censorship.py), — до склейки: иначе оригинал из SoundCloud не
+    # схлопнулся бы с ними как дубль.
+    sources = [
+        _prefer_uncensored(await censorship.apply_overrides(tracks)) for tracks in sources
+    ]
     return _merge_sources(sources, limit)
 
 
@@ -319,7 +330,7 @@ async def search_external_grouped(
     # Подозрительные — обе: clean-меченые (явная цензура) и explicit (по опыту
     # YTM отдаёт цензурный звук и под explicit-флагом); SoundCloud не цензурит.
     ytmusic = dedup_sequential(
-        _collapse_versions(ok(catalog) + ok(songs)), limit
+        _collapse_versions(await censorship.apply_overrides(ok(catalog) + ok(songs))), limit
     )
 
     # Цензура: см. replace_censored. Замещённые clean-версии уже не clean,

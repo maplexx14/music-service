@@ -1,0 +1,547 @@
+"""Оригиналы вместо треков, зацензуренных по закону РФ.
+
+Закон о «пропаганде» (наркотики и т.п.) заставил дистрибьюторов заменить
+релизы части русских треков цензурными версиями: звук запикан, иногда
+переписано и название («СЕРЕГА ПИРАТ — В этой оу е» вместо «В этой траве»).
+Замена прошла по всем площадкам сразу — YouTube Music, Deezer и т.д., — а
+explicit-флаг у таких треков как стоял, так и стоит. Оригиналы остались на
+SoundCloud: их заливали сами артисты. Сервис работает не в РФ, поэтому для
+таких треков играет оригинал.
+
+Автоматически отличить цензурный релиз от обычного по метаданным нельзя («Клей»
+у CUPSIZE называется так же, как и был), поэтому привязку «трек каталога →
+оригинал на SoundCloud» подтверждает админ (models.CensorOverride). Сервис
+только предлагает кандидатов: при прослушивании русского трека ищет на
+SoundCloud залив того же артиста с близкой длительностью, но изменённым
+названием — такой трек попадает в админку со статусом suggested.
+
+Подтверждённая привязка действует везде, где играет трек каталога:
+- звук — /api/ytdlp/stream/{id} отдаёт 307 на оригинал (ytdlp.stream_ytmusic);
+- выдача — поиск, поток, рекомендации, страницы артиста/альбома показывают
+  название оригинала (apply_overrides);
+- библиотека — записи Track получают название оригинала при подтверждении.
+"""
+import asyncio
+import difflib
+import functools
+import logging
+import math
+import re
+import time
+from typing import Any, Iterable, Optional
+
+from app.artist_utils import same_artist
+from app.cache import get_cache_async, set_cache_async
+from app.database import SessionLocal
+from app.models import CensorOverride, Track
+
+logger = logging.getLogger(__name__)
+
+STATUS_CONFIRMED = "confirmed"
+STATUS_SUGGESTED = "suggested"
+STATUS_REJECTED = "rejected"
+
+# Подтверждённые привязки держим в памяти воркера: их десятки, а смотрят их
+# на каждый стрим и каждую выдачу. Изменение из админки сбрасывает кэш своего
+# воркера сразу, остальные подхватят через _CACHE_TTL.
+_CACHE_TTL = 30.0
+_cache: dict = {"at": 0.0, "by_id": {}, "by_key": {}}
+_cache_lock = asyncio.Lock()
+
+# Другой id той же цензурной записи (сингл и альбом), опознанный по ключу
+# «артист|название» в выдаче: стрим знает только id, поэтому запоминаем.
+_ALIAS_TTL = 30 * 24 * 3600
+
+# Автоподсказки: один трек проверяем не чаще раза в месяц и по одному за раз
+# (поиск SoundCloud идёт через платный прокси).
+_SUGGEST_CHECK_TTL = 30 * 24 * 3600
+_suggest_sem = asyncio.Semaphore(1)
+_suggest_inflight: set[str] = set()
+
+_CYRILLIC = re.compile(r"[а-яё]", re.IGNORECASE)
+# Звёздочки и прочие заглушки вместо букв: «В ЭТ*Й Т**ВЕ».
+_CENSOR_GLYPHS = re.compile(r"[*#…]|_{2,}")
+# Производные заливы: ремиксы, ускорения, каверы. Оригиналом они не бывают,
+# если только сам трек каталога не такой же.
+_DERIVATIVE = re.compile(
+    r"remix|ремикс|\brmx\b|speed|sped|slowed|замедл|ускор|nightcore|найткор|"
+    r"reverb|cover|кавер|mashup|мэшап|instrumental|инструментал|минус|karaoke|"
+    r"караоке|\b8d\b|bass\s*boost|mylancore|\bedit\b|suno|\bver\.?\b|версия",
+    re.IGNORECASE,
+)
+
+
+def censored_key(artist: str, title: str) -> str:
+    from app.routers.aggregate import dedup_key
+
+    return "|".join(dedup_key(_Named(artist, title)))
+
+
+class _Named:
+    __slots__ = ("artist", "title")
+
+    def __init__(self, artist: str, title: str):
+        self.artist = artist
+        self.title = title
+
+
+def _snapshot(row: CensorOverride) -> dict:
+    return {
+        "id": row.id,
+        "source": row.source,
+        "external_id": row.external_id,
+        "censored_title": row.censored_title,
+        "censored_artist": row.censored_artist,
+        "original_id": row.original_id,
+        "original_permalink": row.original_permalink,
+        "original_title": row.original_title,
+        "original_artist": row.original_artist,
+        "original_duration": row.original_duration or 0,
+        "original_cover_url": row.original_cover_url,
+        "status": row.status,
+        "score": row.score,
+        # Нет автора — привязал сам сервис (auto_confirmable) или это
+        # подсказка, которую ещё никто не трогал.
+        "auto": row.created_by is None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _load_confirmed_blocking() -> tuple[dict, dict]:
+    db = SessionLocal()
+    try:
+        rows = db.query(CensorOverride).filter(CensorOverride.status == STATUS_CONFIRMED).all()
+        by_id = {row.external_id: _snapshot(row) for row in rows}
+        by_key = {row.censored_key: by_id[row.external_id] for row in rows}
+        return by_id, by_key
+    finally:
+        db.close()
+
+
+def invalidate() -> None:
+    _cache["at"] = 0.0
+
+
+async def confirmed_overrides() -> tuple[dict, dict]:
+    """(по id цензурной версии, по ключу «артист|название») — только confirmed."""
+    if time.monotonic() - _cache["at"] < _CACHE_TTL:
+        return _cache["by_id"], _cache["by_key"]
+    async with _cache_lock:
+        if time.monotonic() - _cache["at"] >= _CACHE_TTL:
+            try:
+                by_id, by_key = await asyncio.to_thread(_load_confirmed_blocking)
+            except Exception:  # noqa: BLE001 — без привязок сервис играет как раньше
+                logger.exception("censor overrides load failed")
+                by_id, by_key = _cache["by_id"], _cache["by_key"]
+            _cache.update(at=time.monotonic(), by_id=by_id, by_key=by_key)
+    return _cache["by_id"], _cache["by_key"]
+
+
+def _alias_key(video_id: str) -> str:
+    return f"censor:alias:{video_id}"
+
+
+async def override_for_video(video_id: str) -> Optional[dict]:
+    """Подтверждённый оригинал для ytmusic-трека или None."""
+    by_id, _by_key = await confirmed_overrides()
+    if not by_id:
+        return None
+    override = by_id.get(video_id)
+    if override is not None:
+        return override
+    alias = await get_cache_async(_alias_key(video_id))
+    return by_id.get(alias) if alias else None
+
+
+def soundcloud_stream_path(override: dict, video_id: str = "") -> str:
+    """Путь стрима оригинала. vid — путь назад, если SoundCloud не отдаст трек
+    (см. soundcloud.stream_soundcloud): лучше цензура, чем тишина."""
+    from app.routers.soundcloud import _encode_token
+
+    token = _encode_token(override["original_id"], override["original_permalink"])
+    suffix = f"?vid={video_id}" if video_id else ""
+    return f"/api/soundcloud/stream/{token}{suffix}"
+
+
+def _field(track: Any, name: str):
+    if isinstance(track, dict):
+        return track.get(name)
+    return getattr(track, name, None)
+
+
+def _with_original(track: Any, override: dict) -> Any:
+    update = {"title": override["original_title"], "is_clean": False}
+    if override.get("original_duration"):
+        # Длительность — оригинала: играет именно он, прогресс-бар и
+        # конец трека в плеере считаются от неё.
+        update["duration"] = override["original_duration"]
+    if isinstance(track, dict):
+        return {**track, **update}
+    if hasattr(track, "model_copy"):
+        fields = getattr(type(track), "model_fields", {})
+        return track.model_copy(update={k: v for k, v in update.items() if k in fields})
+    return track
+
+
+async def apply_overrides(tracks: Iterable[Any]) -> list:
+    """Выдача с названиями оригиналов у зацензуренных ytmusic-треков.
+
+    Понимает и объекты выдачи (ExternalTrackResponse), и dict'и (поток).
+    Возвращает новый список; объекты не мутируются — они могут лежать в
+    провайдерских кэшах.
+    """
+    tracks = list(tracks)
+    by_id, by_key = await confirmed_overrides()
+    if not by_id:
+        return tracks
+    out = []
+    for track in tracks:
+        video_id = _field(track, "external_id")
+        if _field(track, "source") != "ytmusic" or not video_id:
+            out.append(track)
+            continue
+        override = by_id.get(video_id)
+        if override is None:
+            override = by_key.get(
+                censored_key(_field(track, "artist") or "", _field(track, "title") or "")
+            )
+            if override is not None:
+                await set_cache_async(_alias_key(video_id), override["external_id"], expire=_ALIAS_TTL)
+        out.append(_with_original(track, override) if override else track)
+    return out
+
+
+def overrides_in_response(*attrs: str):
+    """Декоратор эндпоинта: названия оригиналов в его выдаче.
+
+    Выдача — список треков или модель, у которой треки лежат в полях attrs.
+    Подменять на выходе, а не у провайдеров: те отдают треки из своих кэшей
+    мимо любых общих точек.
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            result = await fn(*args, **kwargs)
+            try:
+                if isinstance(result, list):
+                    return await apply_overrides(result)
+                for attr in attrs:
+                    value = _field(result, attr)
+                    if isinstance(value, list):
+                        replaced = await apply_overrides(value)
+                        if isinstance(result, dict):
+                            result[attr] = replaced
+                        else:
+                            setattr(result, attr, replaced)
+            except Exception:  # noqa: BLE001 — выдача важнее подмены названий
+                logger.exception("censor overrides in %s failed", fn.__name__)
+            return result
+
+        return wrapper
+
+    return decorator
+
+
+# ---------------------------------------------------------------------------
+# Кандидаты на SoundCloud
+# ---------------------------------------------------------------------------
+
+
+def _text_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9а-яё]+", "", (text or "").lower())
+
+
+def _artist_matches(candidate: str, artist: str) -> bool:
+    """Кандидат — один из артистов трека («GRILLYAZH, CUPSIZE»)."""
+    from app.routers.deezer import _same_text
+
+    if not candidate:
+        return False
+    parts = [p.strip() for p in re.split(r",|&|\bfeat\.?|\bft\.?", artist or "") if p.strip()]
+    return any(same_artist(candidate, p) or _same_text(candidate, p) for p in parts or [artist])
+
+
+def title_similarity(left: str, right: str) -> float:
+    a, b = _text_key(left), _text_key(right)
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def score_candidate(item: dict, title: str, artist: str, duration: int) -> Optional[dict]:
+    """Кандидат в оригиналы из объекта трека api-v2 или None (не подходит).
+
+    Название не требуем совпадающим — цензура его и меняет. Держимся за
+    артиста и длительность, отсекаем производные заливы; выше — заливы с
+    аккаунта самого артиста и похожие названия.
+    """
+    from app.routers import soundcloud
+
+    track_id = str(item.get("id") or "")
+    permalink = item.get("permalink_url") or ""
+    if not track_id or "soundcloud.com/" not in permalink:
+        return None
+    if not soundcloud._is_full_stream(item):
+        return None
+    cand_artist, cand_title = soundcloud._api_artist_title(item)
+    uploader = (item.get("user") or {}).get("username") or ""
+    official = _artist_matches(uploader, artist)
+    if not (official or _artist_matches(cand_artist, artist)):
+        return None
+    raw_title = item.get("title") or ""
+    if _DERIVATIVE.search(raw_title) and not _DERIVATIVE.search(title or ""):
+        return None
+    cand_duration = round((item.get("duration") or 0) / 1000)
+    delta = 0.0
+    if duration > 0:
+        tolerance = max(8.0, duration * 0.06)
+        delta = abs(cand_duration - duration)
+        if delta > tolerance:
+            return None
+        closeness = 1 - delta / tolerance
+    else:
+        closeness = 0.0
+    similarity = title_similarity(cand_title, title)
+    plays = int(item.get("playback_count") or 0)
+    has_publisher = bool((item.get("publisher_metadata") or {}).get("artist"))
+    # Похожесть названия весит больше аккаунта: у «Клей» цензура тронула
+    # только звук, и нужный залив — чужой перезалив с тем же названием, а не
+    # другой трек с официального аккаунта.
+    score = (
+        1.5 * official
+        + 0.5 * has_publisher
+        + 3.0 * similarity
+        + closeness
+        + 0.5 * min(math.log10(plays + 1) / 6, 1.0)
+    )
+    return {
+        "id": track_id,
+        "permalink": permalink,
+        "title": cand_title,
+        "artist": cand_artist,
+        "uploader": uploader,
+        "duration": cand_duration,
+        "cover_url": soundcloud._upscale_artwork(
+            item.get("artwork_url") or (item.get("user") or {}).get("avatar_url")
+        ),
+        "official": official,
+        "title_similarity": round(similarity, 3),
+        "playback_count": plays,
+        "score": round(score, 3),
+    }
+
+
+async def find_candidates(title: str, artist: str, duration: int, limit: int = 8) -> list[dict]:
+    """Кандидаты в оригиналы на SoundCloud, лучшие первыми."""
+    from app.routers import soundcloud
+
+    # Второй запрос — по одному артисту: у переименованного трека поиск по
+    # цензурному названию оригинал может и не найти.
+    queries = [f"{artist} {title}".strip(), artist.strip()]
+    found: dict[str, dict] = {}
+    for query in dict.fromkeys(q for q in queries if q):
+        data = await soundcloud._api_get("/search/tracks", {"q": query, "limit": 20})
+        if not isinstance(data, dict):
+            continue
+        for item in data.get("collection") or []:
+            candidate = score_candidate(item, title, artist, duration)
+            if candidate and candidate["id"] not in found:
+                found[candidate["id"]] = candidate
+    return sorted(found.values(), key=lambda c: -c["score"])[:limit]
+
+
+async def resolve_soundcloud_track(url_or_id: str) -> Optional[dict]:
+    """Объект трека api-v2 по ссылке soundcloud.com/… или числовому id."""
+    from app.routers import soundcloud
+
+    value = (url_or_id or "").strip()
+    if value.isdigit():
+        data = await soundcloud._api_get(f"/tracks/{value}", {})
+    elif re.match(r"https?://(www\.|m\.)?(soundcloud\.com|on\.soundcloud\.com)/", value):
+        data = await soundcloud._api_get("/resolve", {"url": value})
+    else:
+        return None
+    if not isinstance(data, dict) or data.get("kind") != "track":
+        return None
+    return data
+
+
+def looks_censored(censored_title: str, original_title: str) -> bool:
+    """Название каталога похоже на испорченное название оригинала.
+
+    Одинаковые названия — не сигнал: цензура могла тронуть только звук, а
+    может и не тронуть ничего, и отличить эти случаи по метаданным нельзя.
+    """
+    a, b = _text_key(censored_title), _text_key(original_title)
+    if not a or not b or a == b:
+        return False
+    if _CENSOR_GLYPHS.search(censored_title or ""):
+        return True
+    # Одно название целиком внутри другого — это другая версия той же песни
+    # («Шизоид» и «Шизоид (live)»), а не вырезанные слова.
+    if a in b or b in a:
+        return False
+    return title_similarity(censored_title, original_title) >= 0.4
+
+
+# Автопривязка — только когда ошибиться почти негде: залив с аккаунта самого
+# артиста, название явно испорчено, длительность почти та же, и такой кандидат
+# у трека один. Остальное остаётся подсказкой для админа.
+_AUTO_MIN_SIMILARITY = 0.5
+_AUTO_MAX_DURATION_DELTA = 6
+
+
+def auto_confirmable(title: str, duration: int, candidate: dict, rivals: list[dict]) -> bool:
+    """Можно ли привязать кандидата без админа.
+
+    rivals — остальные кандидаты: если ещё один залив артиста тоже похож на
+    оригинал этого трека, выбор неоднозначен и остаётся за админом.
+    """
+    if not candidate["official"] or not looks_censored(title, candidate["title"]):
+        return False
+    if duration <= 0 or abs(candidate["duration"] - duration) > _AUTO_MAX_DURATION_DELTA:
+        return False
+    if (
+        not _CENSOR_GLYPHS.search(title or "")
+        and title_similarity(title, candidate["title"]) < _AUTO_MIN_SIMILARITY
+    ):
+        return False
+    return not any(
+        other["id"] != candidate["id"]
+        and other["official"]
+        and looks_censored(title, other["title"])
+        for other in rivals
+    )
+
+
+def _save_suggestion_blocking(
+    video_id: str, title: str, artist: str, candidate: dict, status: str = STATUS_SUGGESTED
+) -> bool:
+    db = SessionLocal()
+    try:
+        exists = (
+            db.query(CensorOverride.id)
+            .filter(CensorOverride.source == "ytmusic", CensorOverride.external_id == video_id)
+            .first()
+        )
+        if exists:
+            return False
+        row = CensorOverride(
+            source="ytmusic",
+            external_id=video_id,
+            censored_title=title,
+            censored_artist=artist,
+            censored_key=censored_key(artist, title),
+            original_id=candidate["id"],
+            original_permalink=candidate["permalink"],
+            original_title=candidate["title"],
+            original_artist=candidate["artist"],
+            original_duration=candidate["duration"],
+            original_cover_url=candidate["cover_url"],
+            status=status,
+            score=candidate["score"],
+        )
+        db.add(row)
+        if status == STATUS_CONFIRMED:
+            db.flush()
+            sync_library_titles(db, row)
+        db.commit()
+        return True
+    except Exception:  # noqa: BLE001 — гонка двух воркеров на уникальном индексе
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
+async def suggest_for_video(video_id: str) -> Optional[dict]:
+    """Ищет оригинал для ytmusic-трека: надёжный — привязывает сразу
+    (auto_confirmable), остальное сохраняет подсказкой для админа."""
+    by_id, _by_key = await confirmed_overrides()
+    if video_id in by_id:
+        return None
+    from app.routers.deezer import _ytmusic_meta_blocking
+
+    meta = await asyncio.to_thread(_ytmusic_meta_blocking, video_id)
+    if not meta:
+        return None
+    title, artist, duration = meta
+    if not _CYRILLIC.search(f"{title} {artist}"):
+        return None
+    async with _suggest_sem:
+        candidates = await find_candidates(title, artist, duration)
+    best = next(
+        (c for c in candidates if c["official"] and looks_censored(title, c["title"])),
+        None,
+    )
+    if best is None:
+        return None
+    auto = auto_confirmable(title, duration, best, candidates)
+    status = STATUS_CONFIRMED if auto else STATUS_SUGGESTED
+    if await asyncio.to_thread(_save_suggestion_blocking, video_id, title, artist, best, status):
+        if auto:
+            invalidate()
+        logger.info(
+            "censor %s: ytmusic %s (%s — %s) → soundcloud %s (%s)",
+            "auto-link" if auto else "suggestion",
+            video_id, artist, title, best["id"], best["title"],
+        )
+    return best
+
+
+def schedule_suggestion(video_id: str) -> None:
+    """Фоновая проверка трека на цензуру при прослушивании (раз в месяц)."""
+    if not video_id or video_id in _suggest_inflight:
+        return
+
+    async def job():
+        try:
+            flag = f"censor:checked:{video_id}"
+            if await get_cache_async(flag):
+                return
+            await set_cache_async(flag, 1, expire=_SUGGEST_CHECK_TTL)
+            await suggest_for_video(video_id)
+        except Exception:  # noqa: BLE001 — фон, стрим его не ждёт
+            logger.warning("censor suggestion failed for %s", video_id, exc_info=True)
+        finally:
+            _suggest_inflight.discard(video_id)
+
+    _suggest_inflight.add(video_id)
+    asyncio.create_task(job())
+
+
+# ---------------------------------------------------------------------------
+# Изменения из админки
+# ---------------------------------------------------------------------------
+
+
+def original_fields(item: dict) -> dict:
+    """Поля оригинала для CensorOverride из объекта трека api-v2."""
+    from app.routers import soundcloud
+    from app.routers.ytdlp import clean_title
+
+    artist, title = soundcloud._api_artist_title(item)
+    return {
+        "original_id": str(item["id"]),
+        "original_permalink": item.get("permalink_url") or "",
+        "original_title": clean_title(title),
+        "original_artist": artist,
+        "original_duration": round((item.get("duration") or 0) / 1000),
+        "original_cover_url": soundcloud._upscale_artwork(
+            item.get("artwork_url") or (item.get("user") or {}).get("avatar_url")
+        ),
+    }
+
+
+def sync_library_titles(db, row: CensorOverride) -> None:
+    """Записи библиотеки этого трека: название оригинала, пока привязка
+    подтверждена, и цензурное обратно — когда её сняли."""
+    active = row.status == STATUS_CONFIRMED
+    for track in (
+        db.query(Track)
+        .filter(Track.source == row.source, Track.external_id == row.external_id)
+        .all()
+    ):
+        track.title = row.original_title if active else row.censored_title
+        if active and row.original_duration:
+            track.duration = row.original_duration

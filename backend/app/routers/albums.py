@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, insert
 from sqlalchemy.orm import Session
 
+from app import censorship
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, User, playlist_tracks
@@ -48,6 +49,7 @@ async def _album(request: Request, source: str, external_id: str) -> ExternalAlb
 
 
 @router.get("/{source}/{external_id}", response_model=ExternalAlbumDetail)
+@censorship.overrides_in_response("tracks")
 async def album_detail(source: str, external_id: str, request: Request):
     """Альбом целиком: метаданные релиза и его треки со ссылками на поток."""
     return await _album(request, source, external_id)
