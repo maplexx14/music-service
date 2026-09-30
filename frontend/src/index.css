@@ -395,6 +395,23 @@ code {
   background: #444;
 }
 
+/* Телефоны и планшеты: полосу прокрутки не показываем вовсе. Кастомные
+   ::-webkit-scrollbar выше превращают системную наложенную полосу (которая
+   сама прячется) в постоянную 12px-колонку, съедающую ширину экрана. Скролл
+   остаётся — пропадает только ползунок. Условие — по устройству ввода, а не
+   по ширине: на узком окне десктопа ползунок мыши нужен. */
+@media (hover: none) and (pointer: coarse) {
+  * {
+    scrollbar-width: none;
+  }
+
+  ::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

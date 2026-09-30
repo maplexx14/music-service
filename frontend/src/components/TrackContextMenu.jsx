@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Heart, ListPlus, X } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import './TrackContextMenu.css'
 
 const LONG_PRESS_MS = 450
@@ -142,6 +143,11 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
     toggleLikeForTrack(track).catch((error) => console.error('Context like failed:', error))
   }
 
+  const addToPlaylist = () => {
+    onClose()
+    openAddToPlaylist(track)
+  }
+
   return createPortal(
     <div
       className={`track-ctx-backdrop${isSheet ? ' sheet' : ''}`}
@@ -165,7 +171,7 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
           <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
           <span>{isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}</span>
         </button>
-        <button type="button" className="track-ctx-item" role="menuitem" disabled>
+        <button type="button" className="track-ctx-item" role="menuitem" onClick={addToPlaylist}>
           <ListPlus size={18} />
           <span>Добавить в плейлист…</span>
         </button>

@@ -12,6 +12,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useSwipe } from '../hooks/useSwipe'
+import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
 import { toast } from '../store/toastStore'
@@ -423,11 +424,6 @@ function PlayerInner() {
   const [isBuffering, setIsBuffering] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
-  const [showAddToPlaylist, setShowAddToPlaylist] = useState(false)
-  const [playlists, setPlaylists] = useState([])
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
-  const [loadingPlaylists, setLoadingPlaylists] = useState(false)
-  const [addError, setAddError] = useState('')
   const isExternalTrack = EXTERNAL_SOURCES.includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
@@ -466,18 +462,6 @@ function PlayerInner() {
     onSwipeRight: previousTrack,
     onSwipe: () => haptic(HAPTIC.selection),
     threshold: 60,
-  })
-
-  // Панель «добавить в плейлист» закрывается и свайпом вниз по ней —
-  // как нижний лист в нативных приложениях (крестик/«Отмена» остаются
-  // для десктопа, где тач-жестов нет). Зовётся здесь, до раннего
-  // `return null` — как и swipeHandlers выше.
-  const playlistPanelSwipe = useSwipe({
-    onSwipeDown: () => setShowAddToPlaylist(false),
-    onSwipe: (dir) => {
-      if (dir === 'down') haptic(HAPTIC.light)
-    },
-    threshold: 48,
   })
 
   // Открытие фуллскрина — чистый CSS-drawer (@starting-style-слайд вверх,
@@ -1434,9 +1418,6 @@ function PlayerInner() {
     // Прежнее обнуление оставляло окно, в котором duration === 0 — а на нулевой
     // длительности перемотка умножает позицию на ноль и прыгает в самое начало.
     setDuration(resolveTrackDuration(audio, currentTrack))
-    setShowAddToPlaylist(false)
-    setAddError('')
-    setSelectedPlaylistId('')
 
   }, [currentTrack?.id, setCurrentTime, setDuration])
 
@@ -2029,43 +2010,25 @@ function PlayerInner() {
     }
   }
 
-  const handleOpenAddToPlaylist = async () => {
-    if (!canInteract) return
-    setShowAddToPlaylist((prev) => !prev)
+  // «В плейлист» — общее окно (AddToPlaylistDialog). Трек фиксируем на момент
+  // нажатия: если за время выбора заиграет следующий, добавиться должен тот,
+  // что был на экране, а не новый текущий.
+  const handleOpenAddToPlaylist = () => {
+    if (!canInteract || !currentTrack) return
     haptic(HAPTIC.selection)
-    setAddError('')
-
-    if (playlists.length === 0 && !loadingPlaylists) {
-      setLoadingPlaylists(true)
-      try {
-        const response = await api.get('/playlists/me')
-        setPlaylists(response.data)
-      } catch (error) {
-        setAddError('Не удалось загрузить плейлисты')
-      } finally {
-        setLoadingPlaylists(false)
-      }
-    }
-  }
-
-  const handleAddToPlaylist = async () => {
-    if (!selectedPlaylistId) {
-      setAddError('Выберите плейлист')
-      return
-    }
-    setAddError('')
-    try {
-      const id = dbTrackId ?? (await materializeCurrentTrack())
-      if (!id) {
-        setAddError('Не удалось добавить трек')
-        return
-      }
-      await api.post(`/playlists/${selectedPlaylistId}/tracks/${id}`)
-      haptic(HAPTIC.success)
-      setShowAddToPlaylist(false)
-    } catch (error) {
-      setAddError(error.response?.data?.detail || 'Не удалось добавить трек')
-    }
+    const track = currentTrack
+    openAddToPlaylist(track, {
+      resolveId: async () => {
+        if (dbTrackId !== null && usePlayerStore.getState().currentTrack?.id === track.id) {
+          return dbTrackId
+        }
+        // Пока трек текущий, материализуем через стор — он заодно проставит
+        // db_id текущему треку (лайк, история). Иначе — просто по треку.
+        return usePlayerStore.getState().currentTrack?.id === track.id
+          ? materializeCurrentTrack()
+          : usePlayerStore.getState().materializeTrack(track)
+      },
+    })
   }
 
   // Ошибка <audio> у внешнего трека: только подтверждённый бэком 404 означает,
@@ -2247,42 +2210,6 @@ function PlayerInner() {
           </div>
         )}
       </div>
-
-      {showAddToPlaylist && (
-        <div className="playlist-add-panel" {...playlistPanelSwipe}>
-          {/* Ручка листа: визуальный аффорданс «можно утянуть вниз»,
-              как у системных bottom sheets. */}
-          <div className="playlist-add-grabber" aria-hidden="true" />
-          <div className="playlist-add-title">Добавить в плейлист</div>
-          {loadingPlaylists ? (
-            <div className="playlist-add-loading">Загрузка...</div>
-          ) : playlists.length === 0 ? (
-            <div className="playlist-add-empty">Нет плейлистов</div>
-          ) : (
-            <select
-              className="playlist-add-select"
-              value={selectedPlaylistId}
-              onChange={(e) => setSelectedPlaylistId(e.target.value)}
-            >
-              <option value="">Выберите плейлист</option>
-              {playlists.map((playlist) => (
-                <option key={playlist.id} value={playlist.id}>
-                  {playlist.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {addError && <div className="playlist-add-error">{addError}</div>}
-          <div className="playlist-add-actions">
-            <button className="playlist-add-cancel" onClick={() => setShowAddToPlaylist(false)}>
-              Отмена
-            </button>
-            <button className="playlist-add-confirm" onClick={handleAddToPlaylist}>
-              Добавить
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="player-center">
         <div className="player-controls">

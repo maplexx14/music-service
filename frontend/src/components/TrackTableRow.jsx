@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Heart, Plus } from 'lucide-react'
 import { trackIntentHandlers } from '../store/playerStore'
+import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import ArtistLink from './ArtistLink'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -17,7 +18,7 @@ const EAGER_ROWS = 12
 // КАЖДУЮ строку с её SVG-иконками — в «Понравившихся» после догрузки это
 // сотни строк на одно нажатие. Теперь пропсы строки — примитивы и стабильные
 // ссылки, и перерисовываются только строки, чьё состояние реально сменилось
-// (старый и новый текущий трек, лайкнутая строка, строка с открытым меню).
+// (старый и новый текущий трек, лайкнутая строка).
 //
 // Обработчики приходят через actionsRef (ref со свежими функциями страницы),
 // а не пропсами: страница пересоздаёт их на каждом рендере, и прямая передача
@@ -25,16 +26,15 @@ const EAGER_ROWS = 12
 //
 // isPlaying страница передаёт уже умноженным на isCurrent — иначе пауза
 // задевала бы все строки, хотя эквалайзер нарисован только в текущей.
-// menuPlaylists — список для открытого меню, у остальных строк null.
+// «В плейлист» открывает общее окно (AddToPlaylistDialog); excludePlaylistId —
+// плейлист, который в нём не предлагать (страница самого плейлиста).
 function TrackTableRow({
   track,
   index,
   isCurrent,
   isPlaying,
   isLiked,
-  menuOpen,
-  menuPlaylists,
-  menuEmptyText = 'Нет плейлистов',
+  excludePlaylistId,
   showAlbum = true,
   sourceLabel,
   showBadges = false,
@@ -106,35 +106,26 @@ function TrackTableRow({
         >
           <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
         </button>
-        <div className="add-to-playlist">
-          <button
-            type="button"
-            className="track-action-btn"
-            onClick={(e) => actionsRef.current.openMenu(track, e)}
-            title="Добавить в плейлист"
-            aria-label="Добавить в плейлист"
-          >
-            <Plus size={18} />
-          </button>
-          {menuOpen && (
-            <div className="add-to-playlist-menu" onClick={(e) => e.stopPropagation()}>
-              {menuPlaylists?.length > 0 ? (
-                menuPlaylists.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="add-to-playlist-option"
-                    onClick={(e) => actionsRef.current.addToPlaylist(track, p, e)}
-                  >
-                    {p.name}
-                  </button>
-                ))
-              ) : (
-                <div className="add-to-playlist-empty">{menuEmptyText}</div>
-              )}
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          className="track-action-btn"
+          onClick={(e) => {
+            // Строка целиком — «играть»; кнопка внутри её не запускает.
+            e.stopPropagation()
+            // resolveId страницы — её ensureDbId: он заодно проставляет db_id
+            // в списке, чтобы лайк у той же строки не импортировал трек снова.
+            const { resolveId } = actionsRef.current
+            openAddToPlaylist(track, {
+              excludePlaylistId,
+              resolveId: resolveId ? () => resolveId(track) : undefined,
+            })
+          }}
+          title="Добавить в плейлист"
+          aria-label="Добавить в плейлист"
+          aria-haspopup="dialog"
+        >
+          <Plus size={18} />
+        </button>
       </td>
     </tr>
   )

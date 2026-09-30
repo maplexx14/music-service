@@ -10,6 +10,7 @@ import Carousel from '../components/Carousel'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { plural } from '../utils/format'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { useCoverColors } from '../hooks/useCoverColors'
@@ -91,15 +92,6 @@ const ARTIST_FRESH_MS = 5 * 60 * 1000
 // бэк (см. routers/artists.py), фронт только склеивает списки в одну очередь.
 // Библиотека и внешние источники — одна очередь: пользователь видит «все
 // треки исполнителя» и слушает их подряд, не думая об источнике.
-// 1 трек, 2 трека, 5 треков.
-const plural = (n, one, few, many) => {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return one
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
-  return many
-}
-
 const artistTracks = (data) => (data ? [...(data.tracks || []), ...(data.external || [])] : [])
 
 function Artist() {
@@ -113,8 +105,6 @@ function Artist() {
   const [loading, setLoading] = useState(() => !peekCache(artistCacheKey(name)))
   const [liking, setLiking] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [myPlaylists, setMyPlaylists] = useState([])
-  const [menuTrackId, setMenuTrackId] = useState(null)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
@@ -179,13 +169,6 @@ function Artist() {
       playlist_id: artist.playlist_id,
     })
   }, [artist?.is_liked, artist?.playlist_id])
-
-  useEffect(() => {
-    if (menuTrackId === null) return
-    const close = () => setMenuTrackId(null)
-    document.addEventListener('click', close)
-    return () => document.removeEventListener('click', close)
-  }, [menuTrackId])
 
   const applyArtist = (data) => {
     setArtist(data)
@@ -320,48 +303,13 @@ function Artist() {
     }
   }
 
-  const handleOpenMenu = async (track, e) => {
-    e.stopPropagation()
-    if (menuTrackId === track.id) {
-      setMenuTrackId(null)
-      return
-    }
-    setMenuTrackId(track.id)
-    if (myPlaylists.length === 0) {
-      try {
-        const { data } = await api.get('/playlists/me')
-        setMyPlaylists(data)
-      } catch (error) {
-        console.error('Error fetching my playlists:', error)
-      }
-    }
-  }
-
-  const handleAddToPlaylist = async (track, target, e) => {
-    e.stopPropagation()
-    setMenuTrackId(null)
-    try {
-      const dbId = await ensureDbId(track)
-      await api.post(`/playlists/${target.id}/tracks/${dbId}`, null, { skipErrorToast: true })
-      toast.success(`Добавлено в «${target.name}»`)
-    } catch (error) {
-      if (error.response?.status === 400) {
-        toast.error('Трек уже есть в этом плейлисте')
-      } else {
-        console.error('Error adding track to playlist:', error)
-        toast.error('Не удалось добавить трек')
-      }
-    }
-  }
-
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
   const rowActions = useRef(null)
   rowActions.current = {
     play: (track, index) => handlePlayTrack(index),
     toggleLike: handleToggleLike,
-    openMenu: handleOpenMenu,
-    addToPlaylist: handleAddToPlaylist,
+    resolveId: ensureDbId,
   }
   const likedSet = useMemo(() => new Set(likedTrackIds), [likedTrackIds])
 
@@ -537,7 +485,6 @@ function Artist() {
                 const isLiked =
                   (dbId !== null && likedSet.has(dbId)) ||
                   pendingLikeKeys.includes(trackLikeKey(track))
-                const menuOpen = menuTrackId === track.id
                 return (
                   <TrackTableRow
                     key={track.id}
@@ -546,8 +493,6 @@ function Artist() {
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
                     isLiked={isLiked}
-                    menuOpen={menuOpen}
-                    menuPlaylists={menuOpen ? myPlaylists : null}
                     sourceLabel={SOURCE_LABEL[track.source]}
                     showBadges
                     showInlineMeta

@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Download, Trash2, Upload, Check, X } from 'lucide-react'
 import api from '../services/api'
-import { peekCache, writeCache, intentPrefetchHandlers, prefetchPlaylist } from '../services/pageCache'
+import {
+  peekCache,
+  writeCache,
+  intentPrefetchHandlers,
+  prefetchPlaylist,
+  LIBRARY_CACHE_KEY,
+} from '../services/pageCache'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
 import ImportCollectionPicker, {
@@ -14,8 +20,6 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
-
-const LIBRARY_CACHE_KEY = 'playlists:me'
 
 function Playlists() {
   const navigate = useNavigate()

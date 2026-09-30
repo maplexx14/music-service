@@ -33,8 +33,6 @@ function PlaylistDetail() {
   // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
   // падающих запросов.
   const [loadError, setLoadError] = useState(false)
-  const [myPlaylists, setMyPlaylists] = useState([])
-  const [menuTrackId, setMenuTrackId] = useState(null)
   // Взведён, пока «Перемешать» добирает окно треков перед стартом (см.
   // shufflePlaylist в store) — иначе нажатие ничем не отвечает.
   const [shuffling, setShuffling] = useState(false)
@@ -72,14 +70,6 @@ function PlaylistDetail() {
       total: totalTracks,
     })
   }, [playlist, totalTracks, loading, id])
-
-  useEffect(() => {
-    // Закрываем меню «добавить в плейлист» по клику в любом другом месте.
-    if (menuTrackId === null) return
-    const close = () => setMenuTrackId(null)
-    document.addEventListener('click', close)
-    return () => document.removeEventListener('click', close)
-  }, [menuTrackId])
 
   const fetchPlaylist = async () => {
     try {
@@ -171,49 +161,12 @@ function PlaylistDetail() {
     }
   }
 
-  const handleOpenMenu = async (track, e) => {
-    e.stopPropagation()
-    if (menuTrackId === track.id) {
-      setMenuTrackId(null)
-      return
-    }
-    setMenuTrackId(track.id)
-    if (myPlaylists.length === 0) {
-      try {
-        const { data } = await api.get('/playlists/me')
-        setMyPlaylists(data)
-      } catch (error) {
-        console.error('Error fetching my playlists:', error)
-      }
-    }
-  }
-
-  const handleAddToPlaylist = async (track, target, e) => {
-    e.stopPropagation()
-    setMenuTrackId(null)
-    try {
-      await api.post(`/playlists/${target.id}/tracks/${track.id}`, null, {
-        skipErrorToast: true,
-      })
-      toast.success(`Добавлено в «${target.name}»`)
-    } catch (error) {
-      if (error.response?.status === 400) {
-        toast.error('Трек уже есть в этом плейлисте')
-      } else {
-        console.error('Error adding track to playlist:', error)
-        toast.error('Не удалось добавить трек')
-      }
-    }
-  }
-
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
   const rowActions = useRef(null)
   rowActions.current = {
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
-    openMenu: handleOpenMenu,
-    addToPlaylist: handleAddToPlaylist,
   }
   const likedSet = useMemo(() => new Set(likedTrackIds), [likedTrackIds])
 
@@ -287,7 +240,6 @@ function PlaylistDetail() {
               {playlist.tracks.map((track, index) => {
                 const isCurrent = currentTrack?.id === track.id
                 const isLiked = likedSet.has(track.id)
-                const menuOpen = menuTrackId === track.id
                 return (
                   <TrackTableRow
                     key={track.id}
@@ -296,9 +248,7 @@ function PlaylistDetail() {
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
                     isLiked={isLiked}
-                    menuOpen={menuOpen}
-                    menuPlaylists={menuOpen ? myPlaylists.filter((p) => String(p.id) !== String(id)) : null}
-                    menuEmptyText="Нет других плейлистов"
+                    excludePlaylistId={id}
                     actionsRef={rowActions}
                   />
                 )

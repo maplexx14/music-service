@@ -26,8 +26,6 @@ function ExternalPlaylist() {
   const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
   const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [importing, setImporting] = useState(false)
-  const [myPlaylists, setMyPlaylists] = useState([])
-  const [menuTrackId, setMenuTrackId] = useState(null)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
@@ -54,13 +52,6 @@ function ExternalPlaylist() {
     fetchPlaylist()
     fetchLikedTracks()
   }, [id])
-
-  useEffect(() => {
-    if (menuTrackId === null) return
-    const close = () => setMenuTrackId(null)
-    document.addEventListener('click', close)
-    return () => document.removeEventListener('click', close)
-  }, [menuTrackId])
 
   // Материализация трека (db_id) правит список на месте — кэш следует за ним.
   useEffect(() => {
@@ -144,50 +135,13 @@ function ExternalPlaylist() {
     }
   }
 
-  const handleOpenMenu = async (track, e) => {
-    e.stopPropagation()
-    if (menuTrackId === track.id) {
-      setMenuTrackId(null)
-      return
-    }
-    setMenuTrackId(track.id)
-    if (myPlaylists.length === 0) {
-      try {
-        const { data } = await api.get('/playlists/me')
-        setMyPlaylists(data)
-      } catch (error) {
-        console.error('Error fetching my playlists:', error)
-      }
-    }
-  }
-
-  const handleAddToPlaylist = async (track, target, e) => {
-    e.stopPropagation()
-    setMenuTrackId(null)
-    try {
-      const dbId = await ensureDbId(track)
-      await api.post(`/playlists/${target.id}/tracks/${dbId}`, null, {
-        skipErrorToast: true,
-      })
-      toast.success(`Добавлено в «${target.name}»`)
-    } catch (error) {
-      if (error.response?.status === 400) {
-        toast.error('Трек уже есть в этом плейлисте')
-      } else {
-        console.error('Error adding track to playlist:', error)
-        toast.error('Не удалось добавить трек')
-      }
-    }
-  }
-
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
   const rowActions = useRef(null)
   rowActions.current = {
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
-    openMenu: handleOpenMenu,
-    addToPlaylist: handleAddToPlaylist,
+    resolveId: ensureDbId,
   }
   const likedSet = useMemo(() => new Set(likedTrackIds), [likedTrackIds])
 
@@ -260,7 +214,6 @@ function ExternalPlaylist() {
                 const isLiked =
                   (dbId ? likedSet.has(dbId) : false) ||
                   pendingLikeKeys.includes(trackLikeKey(track))
-                const menuOpen = menuTrackId === track.id
                 return (
                   <TrackTableRow
                     key={track.id}
@@ -269,8 +222,6 @@ function ExternalPlaylist() {
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
                     isLiked={isLiked}
-                    menuOpen={menuOpen}
-                    menuPlaylists={menuOpen ? myPlaylists : null}
                     actionsRef={rowActions}
                   />
                 )

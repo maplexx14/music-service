@@ -9,6 +9,7 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import Sidebar from './Sidebar'
 import Player from './Player'
 import ToastContainer from './Toast'
+import AddToPlaylistDialog from './AddToPlaylistDialog'
 import './Layout.css'
 
 // Полноэкранный плеер вместе с панелью текстов — отдельный чанк. Он и так
@@ -220,6 +221,7 @@ function Layout({ children }) {
       </main>
       <Player />
       <ToastContainer />
+      <AddToPlaylistDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже
           отрисованного мини-плеера, спиннер здесь мигал бы зря. */}
       {isFullScreen && (

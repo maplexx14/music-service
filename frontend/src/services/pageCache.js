@@ -100,6 +100,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Ключи и загрузчики общие для страниц и мест, которые их прогревают.
+export const LIBRARY_CACHE_KEY = 'playlists:me'
 export const artistCacheKey = (name) => `artist:${name}`
 export const prefetchArtist = (name) =>
   prefetchCache(artistCacheKey(name), '/artists', { params: { name }, maxAgeMs: 5 * 60000 })

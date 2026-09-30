@@ -1,0 +1,379 @@
+/* Окно «Добавить в плейлист». Десктоп — диалог по центру, телефон — нижняя
+   шторка (медиазапрос внизу). Выше мини-плеера и нижней навигации (1000–1003)
+   и ниже тостов (2000): тост об успехе должен быть виден поверх затемнения. */
+
+.atp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  animation: atp-fade 180ms var(--ease-out) both;
+  /* touch-action: none здесь нельзя: он действует и на потомков, и список
+     плейлистов перестал бы прокручиваться пальцем. Страница под окном и так
+     не скроллится — подложка ей не потомок. */
+  overscroll-behavior: contain;
+}
+
+.atp-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 440px;
+  max-height: min(640px, calc(100dvh - 48px));
+  background-color: #1c1c1f;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  outline: none;
+  animation: atp-pop 200ms var(--ease-out) both;
+}
+
+.atp-grabber {
+  display: none;
+}
+
+.atp-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 12px 12px 20px;
+}
+
+.atp-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.atp-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.3;
+}
+
+.atp-subtitle {
+  margin-top: 4px;
+  font-size: var(--text-base);
+  color: #9a9a9a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atp-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-top: -8px;
+  border: none;
+  border-radius: var(--radius-avatar);
+  background: transparent;
+  color: #b3b3b3;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+              background-color var(--duration-fast) var(--ease-out);
+}
+
+.atp-close:active {
+  transform: scale(0.94);
+}
+
+.atp-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 20px 8px;
+  padding: 0 14px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background-color: #2a2a2e;
+  color: #8a8a8a;
+}
+
+.atp-search:focus-within {
+  box-shadow: 0 0 0 2px var(--brand-accent);
+}
+
+.atp-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  font: inherit;
+  /* 16px — меньше iOS зумит страницу при фокусе. */
+  font-size: 16px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.atp-search input::placeholder {
+  color: #7a7a7a;
+}
+
+.atp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+}
+
+.atp-list {
+  list-style: none;
+}
+
+.atp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-card);
+  background: transparent;
+  color: #ffffff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.atp-row:active:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.atp-row:disabled {
+  cursor: default;
+}
+
+.atp-row:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -2px;
+}
+
+.atp-row-cover {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background-color: #2e2e33;
+  color: #8a8a8a;
+}
+
+.atp-row-cover-create {
+  background-color: var(--brand-accent-soft);
+  color: var(--brand-accent);
+}
+
+.atp-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.atp-row-name {
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atp-row-meta {
+  font-size: var(--text-sm);
+  color: #8a8a8a;
+  font-variant-numeric: tabular-nums;
+}
+
+.atp-row.is-exists .atp-row-meta {
+  color: #c9a0ff;
+}
+
+.atp-row-status {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  color: var(--brand-accent);
+}
+
+.atp-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--brand-accent);
+  border-radius: 50%;
+  animation: atp-spin 0.8s linear infinite;
+}
+
+.atp-status {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: var(--text-base);
+  color: #9a9a9a;
+}
+
+.atp-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 12px 12px;
+}
+
+.atp-create-input {
+  height: 48px;
+  padding: 0 16px;
+  border: 1px solid #333;
+  border-radius: var(--radius-card);
+  background-color: #2a2a2e;
+  color: #ffffff;
+  font: inherit;
+  font-size: 16px;
+  outline: none;
+}
+
+.atp-create-input:focus {
+  border-color: var(--brand-accent);
+}
+
+.atp-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.atp-btn {
+  min-height: 44px;
+  padding: 0 18px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.atp-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.atp-btn-primary {
+  background-color: var(--brand-accent);
+  color: #ffffff;
+}
+
+.atp-btn-primary:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+}
+
+.atp-btn-ghost {
+  background: transparent;
+  color: #d0d0d0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .atp-close:hover {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .atp-row:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .atp-btn-primary:hover:not(:disabled) {
+    background-color: var(--brand-accent-hover);
+  }
+
+  .atp-btn-ghost:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@keyframes atp-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes atp-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes atp-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes atp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Телефон: нижняя шторка --- */
+@media (max-width: 768px) {
+  .atp-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .atp-dialog {
+    max-width: none;
+    /* Отступ сверху под статус-бар: шторка не должна заходить под часы. */
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 24px);
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px 20px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: atp-sheet-in 240ms var(--ease-drawer) both;
+  }
+
+  .atp-grabber {
+    display: block;
+    width: 36px;
+    height: 4px;
+    margin: 8px auto 0;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .atp-header {
+    padding: 12px 8px 8px 20px;
+  }
+
+  .atp-search {
+    margin-inline: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atp-backdrop,
+  .atp-dialog,
+  .atp-spinner {
+    animation: none;
+  }
+}
