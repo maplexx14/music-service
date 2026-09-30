@@ -15,6 +15,119 @@
   font-size: 14px;
 }
 
+/* --- Вкладки --------------------------------------------------------------
+   Лента капсул той же ширины, что и карточки. На телефоне прокручивается
+   вбок и уходит к краям экрана — пять подписей в 360px не помещаются, а
+   перенос на вторую строку читался бы как два разных ряда. */
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  max-width: 600px;
+  margin-bottom: 20px;
+  padding: 4px;
+  border: 1px solid #242428;
+  border-radius: var(--radius-pill);
+  background: #141418;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tab {
+  position: relative;
+  flex: 1 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: #b3b3b3;
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+
+.settings-tab.active {
+  background: var(--brand-accent);
+  color: #ffffff;
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.settings-tab:active:not(.active) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .settings-tab:hover:not(.active) {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* Несохранённые предпочтения. На активной (фиолетовой) вкладке точка белая. */
+.settings-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand-accent);
+}
+
+.settings-tab.active .settings-tab-dot {
+  background: #ffffff;
+}
+
+.settings-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .settings-tabs {
+    margin-inline: -16px;
+    padding: 4px 16px;
+    max-width: none;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    scroll-padding-inline: 16px;
+  }
+
+  .settings-tab {
+    flex: none;
+    min-height: 44px;
+    background: #1a1a20;
+  }
+}
+
+@media (max-width: 380px) {
+  /* Поля страницы здесь 12px (Home.css). */
+  .settings-tabs {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}
+
 .settings-card {
   background: #141418;
   border: 1px solid #242428;
