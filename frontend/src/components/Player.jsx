@@ -22,6 +22,7 @@ import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
+import { registerSkipForward } from '../services/playerTransport'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
@@ -452,6 +453,12 @@ function PlayerInner() {
     if (!playAdjacentNow(1)) return
     nextTrack()
   }
+  // Фуллскрин и дизлайк переключают через этот же путь (services/playerTransport):
+  // только он умеет подменить элемент на прогретый буфер. Ref — потому что
+  // handleSkipForward пересоздаётся на каждом рендере.
+  const skipForwardRef = useRef(null)
+  skipForwardRef.current = handleSkipForward
+  useEffect(() => registerSkipForward(() => skipForwardRef.current?.()), [])
 
   // Горизонтальный свайп по области трека переключает треки (только тач).
   // ВАЖНО: хук вызывается здесь, до раннего `if (!currentTrack) return null`,
@@ -1094,6 +1101,9 @@ function PlayerInner() {
     // подхватит следующий трек.
     const srcChanged = audio.src !== abs && !sameStream(audio.src, abs)
     if (srcChanged) {
+      // Активный элемент начинает загрузку с нуля — handoff прошлой подмены
+      // (если он ещё идёт) больше не про этот элемент, см. dropHandoff.
+      dropHandoff()
       audio.src = abs
       loadStartedAtRef.current = performance.now()
     }
@@ -1263,6 +1273,7 @@ function PlayerInner() {
     if (!audio) return false
     pendingAdvanceRef.current = false
     diag('swap:start', { offset, ...snapshotAudio(audio) })
+    dropHandoff()
     audio.src = url
     loadStartedAtRef.current = performance.now()
     audio.load()
@@ -1272,6 +1283,21 @@ function PlayerInner() {
     // играющего элемента iOS считает концом воспроизведения.
     engine.releaseSession()
     return true
+  }
+
+  // Досрочное завершение handoff: глушим предыдущий элемент прямо сейчас.
+  //
+  // Handoff держит прежний трек звучащим, пока новый не запоёт (см.
+  // playAdjacentNow). На iOS volume только для чтения, так что это окно СЛЫШНО.
+  // Пока новый стартует за доли секунды — незаметно. Но если активный элемент
+  // тут же перезагружают с нуля (второй скип подряд, фуллскрин, ретрай) или
+  // ставят на паузу, 'playing' не приходит, и прежний трек играл дальше до
+  // проверки/страховочного таймера (2.5–3 с), а в фоне — до reconcile. Для
+  // пользователя это «трек резко скакнул на прошлый».
+  const dropHandoff = () => {
+    clearTimeout(swapVerifyTimerRef.current)
+    swapReleaseNowRef.current?.()
+    engine.finishSwap()
   }
 
   // Проверка, что подменённый элемент реально поехал. Событие 'playing' тут не
@@ -1529,6 +1555,14 @@ function PlayerInner() {
       }
     } else {
       audio.pause()
+      // Пауза из интерфейса — такой же явный отказ, как ⏸ на виджете (см.
+      // handlers.pause): глушим недоигравший handoff, снимаем отложенный переход
+      // и мост тишины. Иначе догрузившийся буфер (onIdleReady) или возврат на
+      // экран (handleVisibility) сами запускали следующий трек поверх паузы.
+      dropHandoff()
+      engine.pauseInactive()
+      pendingAdvanceRef.current = false
+      engine.releaseSession()
     }
 
     return () => {
@@ -1997,7 +2031,7 @@ function PlayerInner() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сетевого
     // запроса: кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) nextTrack()
+    if (!wasDislikedBefore) handleSkipForward()
     try {
       const id = dbTrackId ?? (await usePlayerStore.getState().materializeTrack(dislikedTrack))
       if (!id) return
@@ -2087,12 +2121,19 @@ function PlayerInner() {
       }, RETRY_DELAY_MS * retryCountRef.current)
     }
 
+    // Проба живёт до PROBE_TIMEOUT_MS. Если за это время пользователь переключил
+    // трек, её вердикт относится к прошлому: giveUp() промотал бы уже новый,
+    // исправно играющий трек.
+    const stillCurrent = () =>
+      usePlayerStore.getState().currentTrack?.id === trackAtError?.id && audioRef.current === audio
+
     const controller = new AbortController()
     const probeTimer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
     fetch(audio.src, { headers: { Range: 'bytes=0-1' }, signal: controller.signal })
       .then((res) => {
         clearTimeout(probeTimer)
         res.body?.cancel().catch(() => {})
+        if (!stillCurrent()) return
         if (res.status === 404) {
           giveUp(true)
           return
@@ -2107,6 +2148,7 @@ function PlayerInner() {
       })
       .catch(() => {
         clearTimeout(probeTimer)
+        if (!stillCurrent()) return
         // Запрос не прошёл (сеть/CORS/таймаут) — пробуем с другим URL.
         scheduleRetry()
       })

@@ -11,6 +11,7 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
@@ -207,19 +208,10 @@ function FullScreenPlayer() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || Boolean(currentTrack?.source)
 
-  const handleSkipForward = async () => {
-    // Очередь может быть короче плейлиста: страница грузит треки постранично
-    // (см. queuePager в playerStore). Дотягиваем хвост, иначе на его границе
-    // кнопка молча ничего не делала бы. Тот же хвост может ждать отложенный
-    // переход в Player — просыпаемся вместе, поэтому сверяем, что трек за
-    // время запроса не сменился: иначе промотали бы лишний.
-    if (!usePlayerStore.getState().getNextTrack(1) && usePlayerStore.getState().queuePager) {
-      const fromId = usePlayerStore.getState().currentTrack?.id
-      if (!(await usePlayerStore.getState().extendQueueIfNeeded(true))) return
-      if (usePlayerStore.getState().currentTrack?.id !== fromId) return
-    }
-    nextTrack()
-  }
+  // Переключение идёт через Player (services/playerTransport): только он умеет
+  // подменить элемент на прогретый буфер следующего трека, а заодно дотягивает
+  // хвост постраничной очереди (queuePager). Прямой nextTrack() — лишь фолбэк.
+  const handleSkipForward = () => skipForward(nextTrack)
 
   useEffect(() => {
     const checkLikedStatus = async () => {
@@ -272,7 +264,7 @@ function FullScreenPlayer() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сети:
     // кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) nextTrack()
+    if (!wasDislikedBefore) handleSkipForward()
     try {
       const id = dbTrackId ?? (await materializeTrack(dislikedTrack))
       if (!id) return
