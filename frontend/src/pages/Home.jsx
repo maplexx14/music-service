@@ -18,6 +18,7 @@ import Spinner from '../components/Spinner'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
+import { isSoftwareRendering } from '../utils/gpu'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import { toast } from '../store/toastStore'
@@ -149,6 +150,9 @@ function Home() {
   const heroColors = coverColors ?? DEFAULT_HERO_COLORS
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
+  // Без аппаратного ускорения WebGL-шейдер на весь hero считается на CPU —
+  // вместо него статичный CSS-градиент тех же цветов.
+  const noGpu = isSoftwareRendering()
   // Аватар в верхней шапке — вход в профиль и настройки на мобильных
   // (сайдбар скрыт, в нижней навигации профиля нет). Выход — там же.
   const user = useAuthStore((s) => s.user)
@@ -365,7 +369,7 @@ function Home() {
         }}
       >
         <div className="hero-grainient">
-          {liteMode ? (
+          {liteMode || noGpu ? (
             <div className="hero-grainient-static" />
           ) : (
             <Suspense fallback={<div className="hero-grainient-static" />}>

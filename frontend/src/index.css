@@ -529,6 +529,58 @@ body{
   }
 }
 
+/* Без аппаратного ускорения (класс ставит utils/gpu.js): браузер растеризует
+   и композитит на CPU. Анимации оставляем — transform/opacity сдвигают уже
+   нарисованные слои и остаются дешёвыми, — а убираем то, что без GPU стоит
+   дорого на каждом кадре:
+   - backdrop-filter: размытие того, что под панелью, пересчитывается на
+     каждый кадр скролла и анимаций под ней. Взамен — плотнее фон;
+   - filter: blur(64px) на фоне артиста: огромное ядро по слою 140% ширины;
+   - тени на снапшотах перехода экрана: полноэкранная размытая тень едет
+     вместе со снапшотом и растеризуется каждый кадр;
+   - переходы width/height/margin/left: это раскладка всей страницы на
+     каждом кадре; без GPU они дёргаются, поэтому применяются сразу. */
+html.no-gpu *,
+html.no-gpu *::before,
+html.no-gpu *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media (max-width: 768px) {
+  html.no-gpu .mobile-status-scrim {
+    background: rgba(5, 5, 5, 0.94);
+  }
+  html.no-gpu .mobile-topbar {
+    background: rgba(0, 0, 0, 0.95);
+  }
+  html.no-gpu .mobile-nav-global,
+  html.no-gpu .player {
+    background: rgba(18, 18, 22, 0.96);
+  }
+  html.no-gpu .mobile-player {
+    background: rgba(10, 10, 12, 0.94);
+  }
+}
+
+html.no-gpu .artist-hero-backdrop {
+  display: none;
+}
+
+html.no-gpu::view-transition-old(page),
+html.no-gpu::view-transition-new(page) {
+  box-shadow: none;
+}
+
+html.no-gpu .sidebar,
+html.no-gpu .main-content,
+html.no-gpu .player,
+html.no-gpu .fullscreen-art,
+html.no-gpu .fullscreen-art img,
+html.no-gpu .player-progress-top-track {
+  transition-property: none;
+}
+
 /* Больше контраста: плотный фон + чёткая граница на плавающих поверхностях. */
 @media (prefers-contrast: more) {
   .mobile-topbar,

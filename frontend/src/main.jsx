@@ -3,7 +3,10 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 import { installPressFeedback } from './services/pressFeedback'
+import { applyGpuClass } from './utils/gpu'
 
+// До первого рендера: облегчённые эффекты должны действовать с первого кадра.
+applyGpuClass()
 installPressFeedback()
 
 ReactDOM.createRoot(document.getElementById('root')).render(

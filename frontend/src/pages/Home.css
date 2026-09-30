@@ -810,27 +810,37 @@
 
 .home-skeleton-cover,
 .home-skeleton-line {
-  /* Бегущий блик: градиент шире блока, двигаем background-position. */
   background-color: #282828;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Бегущий блик: отдельный слой, который едет через transform. Прежний
+   вариант двигал background-position — это перерисовка каждого блока на
+   каждом кадре, а без аппаратного ускорения ещё и на CPU; transform
+   только сдвигает уже нарисованный слой. */
+.home-skeleton-cover::after,
+.home-skeleton-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   background-image: linear-gradient(
     90deg,
     rgba(255, 255, 255, 0) 0%,
     rgba(255, 255, 255, 0.06) 50%,
     rgba(255, 255, 255, 0) 100%
   );
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
+  transform: translateX(-100%);
   animation: home-skeleton-shimmer 1.2s ease-in-out infinite;
 }
 
 @keyframes home-skeleton-shimmer {
-  from { background-position: 150% 0; }
-  to   { background-position: -50% 0; }
+  to { transform: translateX(100%); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .home-skeleton-cover,
-  .home-skeleton-line {
+  .home-skeleton-cover::after,
+  .home-skeleton-line::after {
     animation: none;
   }
 }

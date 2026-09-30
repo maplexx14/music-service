@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
   postRecommendationEvent,
@@ -199,6 +199,9 @@ function reloadAtPosition(audio) {
   )
 }
 
+// Шагов квантования позиции прогресс-бара (см. writeProgress).
+const PROGRESS_STEPS = 2000
+
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
 // currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
 // этой подписки не перерисовывается на каждом тике — обложка, кнопки,
@@ -213,10 +216,20 @@ function PlayerProgress({ audioRef }) {
   const surfaceRef = useRef(null)
   const fillRef = useRef(null)
 
-  const writeProgress = useCallback(() => {
+  // Последнее записанное значение: запись переменной перекрашивает всю
+  // капсулу плеера (градиент surface) и двигает раскладку заливки. Позицию
+  // квантуем до 1/PROGRESS_STEPS длины — около пикселя даже на широкой
+  // полосе, — и пишем только при смене шага: на обычном треке это ~10 записей
+  // в секунду вместо 60. Без аппаратного ускорения каждая такая перерисовка
+  // идёт на CPU, и разница заметна.
+  const lastProgressRef = useRef(null)
+  const writeProgress = useCallback((force = false) => {
     const audio = audioRef.current
     if (!audio || !(duration > 0)) return
-    const pct = `${Math.min(100, (audio.currentTime / duration) * 100)}%`
+    const step = Math.round(Math.min(1, audio.currentTime / duration) * PROGRESS_STEPS)
+    if (!force && step === lastProgressRef.current) return
+    lastProgressRef.current = step
+    const pct = `${(step * 100) / PROGRESS_STEPS}%`
     surfaceRef.current?.style.setProperty('--player-progress', pct)
     fillRef.current?.style.setProperty('--player-progress', pct)
   }, [audioRef, duration])
@@ -236,7 +249,9 @@ function PlayerProgress({ audioRef }) {
   // позицию из audio, а не на округлённую store-версию (троттлинг ~1 с).
   useEffect(() => {
     if (!isPlaying) {
-      writeProgress()
+      // force: инлайновый style из store мог перезаписать переменную
+      // округлённым значением, кэш шага тут не показатель.
+      writeProgress(true)
       return
     }
     let raf
@@ -247,6 +262,14 @@ function PlayerProgress({ audioRef }) {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [isPlaying, writeProgress])
+
+  // Рендер по тику store пишет инлайновый style с округлённой store-позицией,
+  // а rAF-цикл из-за квантования может не перезаписать её до следующего шага —
+  // полоса на долю секунды отскакивала бы назад. Возвращаем точную позицию
+  // до отрисовки.
+  useLayoutEffect(() => {
+    writeProgress(true)
+  })
 
   const handleSeek = (e) => {
     const audio = audioRef.current

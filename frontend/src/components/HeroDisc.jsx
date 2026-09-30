@@ -19,10 +19,18 @@ const MAX_EXTRAPOLATION_SEC = 1.2
 // доезжает отдельным seek на отпускании, так что точность не теряется.
 const SEEK_THROTTLE_MS = 120
 
-// Прогресс 0..1 в градусы: ровно один оборот за трек. Угол квантуем до 0.1° —
-// за оборот это 3600 шагов, глазом неотличимо от плавного, но запись в
-// style.transform идёт не 60 раз в секунду, а примерно втрое реже.
-const ANGLE_STEPS = 3600
+// Прогресс 0..1 в градусы: ровно один оборот за трек. Угол квантуем так,
+// чтобы край диска за шаг сдвигался примерно на пиксель (шагов за оборот ≈
+// длина окружности): глазом неотличимо от плавного, а каждая запись в
+// style.transform — это перерастеризация повёрнутой обложки, без аппаратного
+// ускорения на CPU. Потолок — 0.1°.
+const MAX_ANGLE_STEPS = 3600
+
+function angleStepsFor(el) {
+  const size = el?.offsetWidth || 0
+  if (!(size > 0)) return MAX_ANGLE_STEPS
+  return Math.min(MAX_ANGLE_STEPS, Math.max(360, Math.round(Math.PI * size)))
+}
 
 // Длительность: store-версию выставляет Player (для внешних источников он
 // считает её точнее, чем audio.duration, — см. resolveTrackDuration). Метка
@@ -76,6 +84,17 @@ function HeroDisc() {
     // оценивается позиция между тиками: без этого диск делал бы один шаг в
     // секунду, а на коротком треке шаг доходит до десятков градусов.
     let sample = { time: -1, at: 0 }
+    // Шаг угла зависит от размера диска, а он меняется вместе с окном.
+    // Размер отслеживаем наблюдателем, а не читаем в кадре: чтение
+    // offsetWidth при грязной раскладке форсировало бы её на каждом тике.
+    let steps = angleStepsFor(rootRef.current)
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            steps = angleStepsFor(rootRef.current)
+          })
+        : null
+    if (rootRef.current) ro?.observe(rootRef.current)
 
     const tick = (now) => {
       raf = requestAnimationFrame(tick)
@@ -110,14 +129,17 @@ function HeroDisc() {
 
       const el = coverRef.current
       if (!el) return
-      const angle = Math.round(progress * ANGLE_STEPS) / (ANGLE_STEPS / 360)
+      const angle = Math.round(progress * steps) / (steps / 360)
       if (angle === lastAngleRef.current) return
       lastAngleRef.current = angle
       el.style.transform = `rotate(${angle}deg)`
     }
 
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro?.disconnect()
+    }
   }, [currentTrack])
 
   // Угол указателя относительно центра диска. Центр берём у корня, а не у
