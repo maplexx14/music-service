@@ -103,12 +103,35 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
   )
 })
 
+// Последняя выдача главной живёт в модуле и переживает размонтирование
+// страницы. Без неё каждый возврат на главную начинался со скелетона, карточки
+// монтировались с нуля, и в iOS PWA обложки проявлялись заново. Теперь прошлая
+// выдача рисуется сразу, а свежая подменяет её по ответу; если выдача та же
+// (кэш бэка), React оставляет те же <img>. Снимок привязан к юзеру: после
+// смены аккаунта чужая выдача не покажется.
+let homeSnapshot = null
+
+function readHomeSnapshot(userId) {
+  return homeSnapshot && homeSnapshot.userId === userId ? homeSnapshot : null
+}
+
+function writeHomeSnapshot(userId, patch) {
+  homeSnapshot = { ...(readHomeSnapshot(userId) || { userId }), ...patch }
+}
+
 function Home() {
-  const [recommendations, setRecommendations] = useState({ tracks: [], playlists: [] })
-  const [soundCloudPlaylists, setSoundCloudPlaylists] = useState([])
-  const [history, setHistory] = useState([])
-  const [loading, setLoading] = useState(true)
+  const userId = useAuthStore((s) => s.user?.id)
+  const [snapshot] = useState(() => readHomeSnapshot(userId))
+  const [recommendations, setRecommendations] = useState(
+    () => snapshot?.recommendations ?? { tracks: [], playlists: [] },
+  )
+  const [soundCloudPlaylists, setSoundCloudPlaylists] = useState(
+    () => snapshot?.soundCloudPlaylists ?? [],
+  )
+  const [history, setHistory] = useState(() => snapshot?.history ?? [])
+  const [loading, setLoading] = useState(!snapshot?.recommendations)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const historyRequestedRef = useRef(false)
   const [activeTab, setActiveTab] = useState('home')
   // Атомарные селекторы: подписка на весь store перерисовывала всю главную
   // (со всеми списками карточек) на каждом тике currentTime — 4 раза/сек
@@ -180,6 +203,7 @@ function Home() {
           playlists: res.data?.playlists || [],
         }
         setRecommendations(data)
+        writeHomeSnapshot(userId, { recommendations: data })
         // Если сиды из preferred_artists уже ушли параллельным эффектом —
         // второй раз не ходим: дедуп в api.get спасает только одновременные
         // запросы, а этот пришёл бы позже и стоил бы ещё раунд-трипа.
@@ -220,13 +244,18 @@ function Home() {
     }
 
     setSoundCloudPlaylists(playlists)
+    writeHomeSnapshot(userId, { soundCloudPlaylists: playlists })
   }
 
   const fetchHistory = async () => {
-    setHistoryLoading(true)
+    historyRequestedRef.current = true
+    // Спиннер только когда показать нечего: снимок прошлого захода остаётся
+    // на экране, пока свежая история не придёт.
+    if (history.length === 0) setHistoryLoading(true)
     try {
       const response = await api.get('/tracks/me/history', { params: { limit: 30 } })
       setHistory(response.data)
+      writeHomeSnapshot(userId, { history: response.data })
     } catch (error) {
       console.error('Error fetching history:', error)
     } finally {
@@ -424,7 +453,7 @@ function Home() {
           className={`home-tab-card ${activeTab === 'history' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('history')
-            if (history.length === 0 && !historyLoading) {
+            if ((!historyRequestedRef.current || history.length === 0) && !historyLoading) {
               fetchHistory()
             }
           }}
@@ -439,8 +468,10 @@ function Home() {
         </button>
       </div>
 
-      {activeTab === 'home' ? (
-        <>
+      {/* Обе вкладки остаются в DOM, неактивная скрыта. Условный рендер
+          размонтировал карточки на каждом переключении, и на iOS обложки
+          заново проходили lazy-загрузку и декод: мигали пустыми. */}
+      <div hidden={activeTab !== 'home'}>
           <div className="content-section content-section--tab-fade">
             <h2 className="section-title">Рекомендуемые треки</h2>
             {loading ? (
@@ -532,8 +563,8 @@ function Home() {
               />
             </div>
           )} */}
-        </>
-      ) : (
+      </div>
+      <div hidden={activeTab !== 'history'}>
         <div className="content-section content-section--tab-fade">
           <h2 className="section-title">История прослушиваний</h2>
           {historyLoading ? (
@@ -548,9 +579,7 @@ function Home() {
             </div>
           )}
         </div>
-      )}
-
-    
+      </div>
     </div>
   )
 }
