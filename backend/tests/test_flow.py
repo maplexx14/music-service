@@ -10,6 +10,7 @@ _local_candidates и к current_user.id — если закрытие что-т�
 
 import asyncio
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,6 +31,7 @@ from app.routers.flow import (
     _LIKED_REPLAY_COOLDOWN_DAYS,
     _liked_candidates,
     _persisted_flow_history,
+    _pick_favorite_artists,
     _taste_profile,
 )
 from app.schemas import ExternalTrackResponse
@@ -2548,3 +2550,56 @@ def test_first_portion_opens_with_instant_track(monkeypatch):
     # Локальный трек уже первым — перестановки нет.
     local_first = [{"source": "local", "id": 1}, *mix]
     assert asyncio.run(flow._front_instant_start(local_first)) == local_first
+
+
+def test_favorite_artist_rotation_reaches_collection_tail():
+    """Ротация каталогов проходит всю коллекцию, а не её голову.
+
+    Боевой симптом (2026-10-01): у владельца 257 артистов, но пул любимых брал
+    только первые ~25 имён списка — выбор решала позиция в коллекции, и
+    Sabaton (3-й по весу, 59-й в списке) не приходил ни разу.
+    """
+    catalog = [f"Artist{i}" for i in range(50)]
+    # Самые тяжёлые — в хвосте списка, как Sabaton у владельца.
+    weights = {"artist45": 60.0, "artist48": 40.0}
+    last_picked: dict = {}
+    seen: Counter = Counter()
+    now = 1_000_000.0
+    for step in range(20):
+        picked = _pick_favorite_artists(
+            catalog,
+            weights,
+            last_picked,
+            Counter(),
+            now_ts=now,
+            context=f"ctx-{step}",
+            limit=5,
+        )
+        assert len(picked) == 5 and len(set(picked)) == 5
+        seen.update(picked)
+        last_picked.update({a.lower(): now for a in picked})
+        now += 10 * 60
+
+    # Тяжёлые из хвоста приходят, и чаще среднего имени.
+    assert seen["Artist45"] >= 3 and seen["Artist48"] >= 3, seen
+    assert seen["Artist45"] > sum(seen.values()) / len(catalog)
+    # Остывание не даёт одному имени занять каждую подгрузку.
+    assert seen["Artist45"] < 20, seen
+    # До хвоста доходят и лёгкие имена: 100 выборов покрывают большую часть.
+    assert len(seen) >= 35, len(seen)
+    light_tail = [a for a in seen if a not in ("Artist45", "Artist48")]
+    assert any(int(a.removeprefix("Artist")) >= 30 for a in light_tail), seen
+
+
+def test_favorite_artist_rotation_dedupes_spellings():
+    """Одно имя в разных регистрах не съедает два сетевых запроса."""
+    picked = _pick_favorite_artists(
+        ["Серега Пират", "СЕРЕГА ПИРАТ", "Дора"],
+        {},
+        {},
+        Counter(),
+        now_ts=0.0,
+        context="ctx",
+        limit=5,
+    )
+    assert sorted(picked) == ["Дора", "Серега Пират"]

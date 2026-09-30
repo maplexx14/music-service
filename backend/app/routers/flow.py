@@ -266,6 +266,17 @@ _FAVORITE_CATALOG_LIMIT = 40
 # не меньше запрошенной порции — иначе у пользователя с одним-двумя артистами
 # выдача станет короче, чем он просил.
 _FAVORITE_ARTIST_WINDOW = 10
+# Ротация каталогов любимых артистов (см. _pick_favorite_artists). За подгрузку
+# сеть тянет каталоги лишь ~15 имён, а коллекция бывает в сотни артистов.
+# Раньше выбор решала позиция в списке коллекции — и волна крутила первые ~25
+# имён: прод, 2026-10-01, у владельца 257 артистов, Sabaton (3-й по весу, 59-й
+# в списке) из этого пула не пришёл ни разу. Взятое имя остывает по времени с
+# таким «полураспадом» в часах; отметки живут в Redis неделю.
+_FAVORITE_ROTATION_HOURS = 3.0
+_FAVORITE_ROTATION_TTL = 7 * 24 * 60 * 60
+# Шанс имени без накопленного сигнала (импорт, явное предпочтение без истории):
+# ниже любого проверенного артиста, но не ноль — хвост коллекции тоже звучит.
+_FAVORITE_ROTATION_FLOOR = 0.5
 # Сколько понравившихся треков доходит до ранкера за подгрузку (см.
 # _liked_candidates). Заметно больше квоты liked_slots: у ранкера должен быть
 # выбор, какой именно лайк уместен сейчас по жанру, акустике и контексту, —
@@ -2002,6 +2013,48 @@ async def _similar_pool_fetch(artist: str) -> List[ExternalTrackResponse]:
     return _neighbour_popular_mix(pools, artist_key(artist))
 
 
+def _pick_favorite_artists(
+    catalog_artists: List[str],
+    artist_weights: dict,
+    last_picked: dict,
+    recent_artist_counts: Counter,
+    *,
+    now_ts: float,
+    context: str,
+    limit: int,
+) -> List[str]:
+    """Чьи каталоги тянуть в этой подгрузке.
+
+    Взвешенная выборка без возвращения (Efraimidis–Spirakis, ключ u^(1/w)):
+    шанс растёт с весом артиста (корень — чтобы один артист с весом 120 не
+    забирал всё), только что взятое имя остывает по времени, а имя, уже
+    звучавшее в последних отданных треках, — по числу повторов. Случайность
+    детерминирована контекстом подгрузки: один запрос — один набор.
+    Позиция в списке коллекции на выбор не влияет — иначе волна крутит голову
+    списка и не доходит до хвоста.
+    """
+    candidates = {}
+    for artist in catalog_artists:
+        key = artist_key(artist)
+        if key and key not in candidates:
+            candidates[key] = artist
+
+    def _priority(key: str) -> float:
+        weight = _FAVORITE_ROTATION_FLOOR + math.sqrt(
+            max(float(artist_weights.get(key, 0.0) or 0.0), 0.0)
+        )
+        picked_at = last_picked.get(key)
+        if isinstance(picked_at, (int, float)):
+            hours = max(now_ts - picked_at, 0.0) / 3600
+            weight *= max(1.0 - math.exp(-hours / _FAVORITE_ROTATION_HOURS), 0.01)
+        weight /= 1 + recent_artist_counts.get(primary_artist_key(candidates[key]), 0)
+        u = max(stable_jitter(context, f"favorite-pick:{key}"), 1e-12)
+        return math.log(u) / weight
+
+    ordered = sorted(candidates, key=_priority, reverse=True)
+    return [candidates[key] for key in ordered[:limit]]
+
+
 async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
     """Каталог любимого/знакомого артиста — как можно глубже.
 
@@ -2706,21 +2759,12 @@ async def get_flow(
     # сверяет имя), поэтому «чужого» в поток он привести не может, а вот без
     # него импортированный артист не попадал в выдачу ни одним путём.
     catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
-    # Порядок: сначала лайки, затем курированные плейлистные имена, затем
-    # остальная коллекция. Число сетевых запросов ограничено ниже, а очередь
-    # ротируется по artist_history — не сыгранные имена (в том числе только что
-    # импортированные) поднимаются вперёд сами.
     catalog_artists = list(
         dict.fromkeys(
             (profile.get("liked_artists") or [])
             + (profile.get("playlist_artists") or [])
             + catalog_artists
         )
-    )
-    artist_history = Counter(history.get("artists") or [])
-    favorite_artists = sorted(
-        enumerate(catalog_artists),
-        key=lambda item: (artist_history[artist_key(item[1])], item[0]),
     )
     # Здесь ограничивается только стоимость сетевой генерации. Сколько треков
     # выбранного артиста дойдёт до ранкера, решает accept_limit ниже (считая уже
@@ -2731,9 +2775,33 @@ async def get_flow(
         _FAVORITE_EXPLORE_ARTISTS,
         min(len(catalog_artists), limit),
     )
-    favorite_artists = [artist for _, artist in favorite_artists][:favorite_explore_artists]
-    favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
     artist_weights = profile.get("artist_weight") or {}
+    rotation_key = f"flow:favorite-rotation:{user_id}"
+    last_picked = await get_cache_async(rotation_key) or {}
+    if not isinstance(last_picked, dict):
+        last_picked = {}
+    now_ts = ranking_now.timestamp()
+    favorite_artists = _pick_favorite_artists(
+        catalog_artists,
+        artist_weights,
+        last_picked,
+        recent_artist_counts,
+        now_ts=now_ts,
+        context=ranking_context,
+        limit=favorite_explore_artists,
+    )
+    if favorite_artists:
+        last_picked.update({artist_key(a): now_ts for a in favorite_artists})
+        await set_cache_async(
+            rotation_key,
+            {
+                k: ts for k, ts in last_picked.items()
+                if isinstance(ts, (int, float))
+                and now_ts - ts < _FAVORITE_ROTATION_TTL
+            },
+            expire=_FAVORITE_ROTATION_TTL,
+        )
+    favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
     favorite_window = max(limit, _FAVORITE_ARTIST_WINDOW)
 
     def _favorite_order(artist: str, pool) -> List[ExternalTrackResponse]:
