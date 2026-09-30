@@ -437,6 +437,12 @@ async def _songs_from_info(info: dict, limit: int) -> List[ExternalTrackResponse
             logger.warning("YouTube Music artist playlist failed for %s", playlist_id)
 
     tracks = [t for t in (_normalize(item) for item in items) if t]
+    # И превью, и плейлист «Songs» идут без views, но в порядке популярности у
+    # провайдера. Без этого места ранкер видел весь каталог одинаково
+    # «непопулярным» и вытаскивал глубокие треки наравне с хитами.
+    for rank, track in enumerate(tracks):
+        if not track.play_count:
+            track.provider_rank = rank
     return tracks[:limit] if limit else tracks
 
 

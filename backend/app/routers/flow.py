@@ -90,6 +90,7 @@ from app.recommendation_scoring import (
     LOCAL_POPULARITY_REFERENCE,
     SERVICE_POPULARITY_REFERENCE,
     popularity_score,
+    rank_popularity,
     population_quality_score,
     population_rejects,
     score_components,
@@ -2378,13 +2379,19 @@ async def get_flow(
             max(item_listener_count, population.get("listener_count", 0)),
             reference=LOCAL_POPULARITY_REFERENCE,
         )
-        service_popularity = (
-            popularity_score(
+        service_popularity = 0.0
+        if is_external:
+            service_popularity = popularity_score(
                 item_play_count, reference=SERVICE_POPULARITY_REFERENCE
             )
-            if is_external
-            else 0.0
-        )
+            if not item_play_count:
+                # Счётчика нет, но есть место в топе артиста (страница артиста
+                # YT Music): без него хит и глубокий трек шли на равных.
+                service_popularity = rank_popularity(
+                    item.get("provider_rank")
+                    if isinstance(item, dict)
+                    else getattr(item, "provider_rank", None)
+                )
         score_inputs = dict(
             user_id=user_id,
             artist_affinity=(profile.get("artist_weight") or {}).get(key, 0.0),

@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from app.acoustic_features import acoustic_similarity
 
-ALGORITHM_VERSION = "hybrid-v8"
+ALGORITHM_VERSION = "hybrid-v9"
 
 # Popularity must never overpower a user's explicit signal or a content match,
 # but it does have to separate a genuine hit from a no-name upload.  The weight
@@ -94,6 +94,22 @@ def popularity_score(
         raw = math.log1p(plays)
     scale = math.log1p(max(1.0, float(reference or LOCAL_POPULARITY_REFERENCE)))
     return max(0.0, min(1.0, raw / scale))
+
+
+def rank_popularity(rank: Any) -> float:
+    """Popularity from a position in the provider's top list (0 is the hit).
+
+    Used when the provider orders an artist's tracks by popularity but sends no
+    counter.  The curve halves by the fifth place so the artist's known songs
+    clearly beat the deep catalogue; ``None`` means no order and scores 0.
+    """
+    try:
+        position = int(rank)
+    except (TypeError, ValueError):
+        return 0.0
+    if position < 0:
+        return 0.0
+    return 1.0 / (1.0 + position / 4.0)
 
 
 def population_quality_score(positive_users: Any = 0, negative_users: Any = 0) -> float:

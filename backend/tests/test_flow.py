@@ -1994,6 +1994,44 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     ), delivered
 
 
+def test_artist_page_order_counts_as_popularity_without_views(client, db, monkeypatch):
+    """Страница артиста YT Music отдаёт топ без views, но по популярности.
+
+    Раньше у всего такого каталога popularity была 0, ранкер видел хит и
+    глубокий трек одинаковыми, и в волну шло что угодно из глубины. Здесь пул
+    нарочно перевёрнут: без provider_rank выиграли бы худшие места.
+    """
+    user = create_user(db, username="artist-page-rank-user")
+    _liked(db, user, artist="RankedArtist")
+
+    catalog = []
+    for rank in reversed(range(10)):
+        track = _popular("RankedArtist", rank, 0)
+        track.provider_rank = rank
+        catalog.append(track)
+
+    async def _favorite(request, artist):
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="artist-page-rank-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["external_id"] for track in resp.json()}
+    assert delivered == {f"cat{rank}" for rank in range(5)}, delivered
+
+
+def test_rank_popularity_prefers_the_head_of_the_top():
+    from app.recommendation_scoring import rank_popularity
+
+    assert rank_popularity(0) == 1.0
+    assert rank_popularity(0) > rank_popularity(4) > rank_popularity(20) > 0.0
+    assert rank_popularity(None) == 0.0
+
+
 def test_similar_artist_pool_leads_with_popular_tracks():
     """От похожего артиста в очередь идёт его популярный трек.
 

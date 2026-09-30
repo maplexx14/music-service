@@ -412,6 +412,10 @@ class ExternalTrackResponse(BaseModel):
     # SoundCloud playback_count).  Defaults keep older cached payloads valid.
     play_count: int = 0
     unique_listener_count: int = 0
+    # Место в топе артиста у провайдера (0 — самый популярный), когда счётчика
+    # нет, а порядок есть: треки со страницы артиста YT Music приходят без
+    # views, но отсортированы по популярности. None — провайдер порядка не дал.
+    provider_rank: Optional[int] = None
     # YT Music помечает оригинал (без цензуры) isExplicit; clean-версии флага
     # не имеют. False также для источников без такого понятия. При замене
     # цензурной версии звукозаписью из SoundCloud флаг переносится на неё —
