@@ -11,7 +11,9 @@
   justify-content: center;
   padding: 24px;
   background: rgba(0, 0, 0, 0.6);
-  animation: atp-fade 180ms var(--ease-out) both;
+  /* backwards, не both: анимация, удерживающая конечный кадр, перебивала бы
+     инлайн-стили перетаскивания шторки (см. useSheetDrag в компоненте). */
+  animation: atp-fade 180ms var(--ease-out) backwards;
   /* touch-action: none здесь нельзя: он действует и на потомков, и список
      плейлистов перестал бы прокручиваться пальцем. Страница под окном и так
      не скроллится — подложка ей не потомок. */
@@ -30,7 +32,7 @@
   border-radius: 16px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
   outline: none;
-  animation: atp-pop 200ms var(--ease-out) both;
+  animation: atp-pop 200ms var(--ease-out) backwards;
 }
 
 .atp-grabber {
@@ -349,7 +351,8 @@
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 20px 20px 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);
-    animation: atp-sheet-in 240ms var(--ease-drawer) both;
+    animation: atp-sheet-in 240ms var(--ease-drawer) backwards;
+    will-change: transform;
   }
 
   .atp-grabber {
