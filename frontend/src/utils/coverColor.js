@@ -9,9 +9,40 @@
 // вовсе — чёрные, серые, белые — получают градиент из собственной светлоты:
 // чёрная обложка даёт тёмный градиент, а не дефолтную фиолетовую палитру.
 
-// Размер выборки: 16×16 = 256 пикселей. Усредняет их сам браузер при
-// drawImage — это дешевле любого ручного прохода по полноразмерной обложке.
+// Размер выборки: 16×16 = 256 пикселей, каждый — среднее своей ячейки
+// обложки (см. boxDownsample).
 export const SAMPLE = 16
+
+// Честное усреднение в сетку SAMPLE×SAMPLE: каждая ячейка — среднее всех
+// пикселей исходника, попавших в неё. Уменьшать средствами drawImage нельзя:
+// при сжатии 120→16 за один шаг браузер берёт по несколько пикселей на ячейку
+// вместо усреднения, и на почти серой обложке случайные мазки задавали тон —
+// серо-белая обложка красила фон в мятно-зелёный.
+export function boxDownsample(data, width, height, size = SAMPLE) {
+  const sums = new Float64Array(size * size * 3)
+  const counts = new Uint32Array(size * size)
+  for (let y = 0; y < height; y += 1) {
+    const cy = Math.min(size - 1, Math.floor((y * size) / height))
+    for (let x = 0; x < width; x += 1) {
+      const cx = Math.min(size - 1, Math.floor((x * size) / width))
+      const cell = cy * size + cx
+      const i = (y * width + x) * 4
+      sums[cell * 3] += data[i]
+      sums[cell * 3 + 1] += data[i + 1]
+      sums[cell * 3 + 2] += data[i + 2]
+      counts[cell] += 1
+    }
+  }
+  const out = new Uint8ClampedArray(size * size * 4)
+  for (let cell = 0; cell < size * size; cell += 1) {
+    const n = counts[cell] || 1
+    out[cell * 4] = sums[cell * 3] / n
+    out[cell * 4 + 1] = sums[cell * 3 + 1] / n
+    out[cell * 4 + 2] = sums[cell * 3 + 2] / n
+    out[cell * 4 + 3] = 255
+  }
+  return out
+}
 
 // Корзины тона по 15°.
 const HUE_BINS = 24
@@ -44,6 +75,17 @@ const MIN_VIVID_PIXELS = SAMPLE
 const SOFT_MIN_SATURATION = 0.1
 const SOFT_MIN_WEIGHT = 0.8
 const SOFT_MIN_VIVID_PIXELS = 8
+// Цветом обложки мягкий тон считаем, только если он занимает заметную часть
+// картинки И тона пикселей смотрят в одну сторону. Серо-белая обложка с
+// редкими коричневыми и серо-голубыми мазками проходила порог по числу
+// пикселей, а их средний тон — сумма почти противоположных векторов —
+// указывал в случайную сторону. Такие обложки уходят в нейтральную палитру
+// с лёгким оттенком (см. neutralPalette).
+const SOFT_MIN_SHARE = 0.3
+const SOFT_MIN_COHERENCE = 0.5
+// Потолок насыщенности оттенка у нейтральной палитры: намёк на тон обложки,
+// а не цвет. Шейдер ещё поднимает насыщенность контрастом.
+const NEUTRAL_TINT_MAX_SATURATION = 0.16
 
 // Пределы светлоты стопов. Верхние сознательно ниже единицы: шейдер ещё раз
 // поднимает контраст (uContrast = 1.5), и светлый стоп на экране заметно
@@ -182,11 +224,20 @@ function softCluster(stats) {
     hue: (hue + 360) % 360,
     s: stats.softSSum / stats.softCount,
     l: stats.softLSum / stats.softCount,
+    // Доля слабо окрашенных пикселей в выборке.
+    share: stats.softCount / Math.max(1, stats.pixels),
+    // Длина среднего вектора тона: 1 — все пиксели одного тона, около 0 —
+    // тона гасят друг друга, и средний тон ничего не значит.
+    coherence: Math.hypot(stats.softSin, stats.softCos) / stats.softWeight,
   }
 }
 
-function paletteFromClusters(dominant, second) {
-  const sat = clamp(dominant.s, 0.35, 1)
+// satFloor — нижняя граница насыщенности. Для выраженного цвета 0.35: цвет
+// на уменьшенной копии тускнеет от усреднения, и без подъёма фон выходил
+// грязным. Для приглушённой обложки подъём ниже — иначе пастель превращалась
+// в сочный цвет, которого на обложке нет.
+function paletteFromClusters(dominant, second, satFloor = 0.35) {
+  const sat = clamp(dominant.s, satFloor, 1)
   const midL = clamp(Math.min(dominant.l, MID_LIGHTNESS[1]), MID_LIGHTNESS[0], MID_LIGHTNESS[1])
   const light = second
     ? hslToHex(
@@ -219,9 +270,14 @@ function paletteFromClusters(dominant, second) {
 // упирались в чёрный, и градиент для чёрной обложки оставался невидимым.
 // Поэтому отсчёт идёт от 0.32: на экране это ~0.23 — тёмный, но различимый
 // уголь, а не чёрный прямоугольник.
-function neutralPalette(stats) {
+function neutralPalette(stats, tint = null) {
   const l = stats.pixels > 0 ? stats.lTotal / stats.pixels : 0
-  const gray = (value) => hslToHex(0, 0, value)
+  // Лёгкий оттенок от слабо окрашенных пикселей, если они согласны между
+  // собой: тёплая серая обложка даёт тёплый серый фон, а не холодный.
+  const tintSat = tint
+    ? clamp(tint.s * tint.coherence * tint.share * 4, 0, NEUTRAL_TINT_MAX_SATURATION)
+    : 0
+  const gray = (value) => hslToHex(tint ? tint.hue : 0, tintSat, value)
   return [
     gray(clamp(0.32 + l * 0.2, 0.32, 0.52)),
     gray(clamp(0.21 + l * 0.17, 0.21, 0.38)),
@@ -237,8 +293,10 @@ export function paletteFromPixels(data) {
   const dominant = pickCluster(stats)
   if (dominant) return paletteFromClusters(dominant, pickCluster(stats, dominant.bin))
   const soft = softCluster(stats)
-  if (soft) return paletteFromClusters(soft, null)
-  return neutralPalette(stats)
+  if (soft && soft.share >= SOFT_MIN_SHARE && soft.coherence >= SOFT_MIN_COHERENCE) {
+    return paletteFromClusters(soft, null, 0.2)
+  }
+  return neutralPalette(stats, soft)
 }
 
 // Палитра по умолчанию — для трека без обложки и на время разбора. Это тот же

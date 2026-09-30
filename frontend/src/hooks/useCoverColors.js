@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { resolveCoverUrl } from '../utils/media'
-import { SAMPLE, paletteFromPixels } from '../utils/coverColor'
+import { SAMPLE, boxDownsample, paletteFromPixels } from '../utils/coverColor'
 
 // Хук отдаёт три цвета градиента hero по обложке текущего трека. Возвращает
 // null, только когда цвета взять неоткуда (обложка не загрузилась или canvas
@@ -44,24 +44,31 @@ function loadCoverImage(src) {
   })
 }
 
-// Пиксели уменьшенной копии обложки. Уменьшение делает сам браузер при
-// drawImage — это и есть усреднение по ячейке. Canvas один на модуль: разбор
-// идёт на каждой смене трека, и заводить под него новый элемент с буфером
-// каждый раз незачем.
+// Пиксели уменьшенной копии обложки. Картинку рисуем почти в натуральном
+// размере (thumb — 120-300px, потолок SOURCE_MAX), а в сетку SAMPLE×SAMPLE
+// усредняем сами (boxDownsample): drawImage при сжатии в разы не усредняет, а
+// выбирает отдельные пиксели, и тон фона зависел от случайных мазков.
+// Canvas один на модуль: разбор идёт на каждой смене трека, и заводить под
+// него новый элемент с буфером каждый раз незачем.
+const SOURCE_MAX = 128
 let sampleCanvas = null
 
 function samplePixels(img) {
   try {
-    if (!sampleCanvas) {
-      sampleCanvas = document.createElement('canvas')
-      sampleCanvas.width = SAMPLE
-      sampleCanvas.height = SAMPLE
-    }
+    const nw = img.naturalWidth || SAMPLE
+    const nh = img.naturalHeight || SAMPLE
+    const scale = Math.min(1, SOURCE_MAX / Math.max(nw, nh))
+    const w = Math.max(SAMPLE, Math.round(nw * scale))
+    const h = Math.max(SAMPLE, Math.round(nh * scale))
+    if (!sampleCanvas) sampleCanvas = document.createElement('canvas')
+    if (sampleCanvas.width !== w) sampleCanvas.width = w
+    if (sampleCanvas.height !== h) sampleCanvas.height = h
     const ctx = sampleCanvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) return null
     ctx.imageSmoothingEnabled = true
-    ctx.drawImage(img, 0, 0, SAMPLE, SAMPLE)
-    return ctx.getImageData(0, 0, SAMPLE, SAMPLE).data
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(img, 0, 0, w, h)
+    return boxDownsample(ctx.getImageData(0, 0, w, h).data, w, h)
   } catch {
     // Обложка с чужого origin без CORS-заголовков «портит» canvas, и
     // getImageData бросает. Фон — украшение: молча остаёмся на дефолте.
