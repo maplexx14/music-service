@@ -950,9 +950,10 @@ class EgressUnreachable(TransientResolveError):
 # в подписанный `sparams`, и запрос с другого адреса получает 403. Поэтому
 # резолв и скачивание ролика обязаны идти через ОДИН и тот же выход.
 #
-# Выходов два:
+# Выходы:
 #   * direct — основной: адрес сервера или статический STREAM_PROXY(_FILE);
-#   * warp   — бесплатный Cloudflare WARP (контейнер warp, YTDLP_WARP_PROXY).
+#   * warp   — бесплатный Cloudflare WARP (контейнер warp, YTDLP_WARP_PROXY);
+#   * proxyN — YTDLP_EXTRA_PROXIES, последний резерв.
 # Bot-check YouTube — это лимит на IP, а не на ролик. Когда основной выход его
 # ловит, резолв переезжает на WARP (другой адрес, свой лимит) до конца
 # бэкоффа, а не стоит 3 минуты целиком (см. _resolve_audio).
@@ -968,6 +969,31 @@ _EGRESS_WARP = "warp"
 _EGRESS_TAG = "egress="
 
 _WARP_PROXY = os.getenv("YTDLP_WARP_PROXY", "").strip()
+
+
+def _parse_extra_proxies(raw: str) -> List[str]:
+    """YTDLP_EXTRA_PROXIES → список URL прокси.
+
+    Через запятую; каждый — URL (http://user:pass@host:port, socks5://…) или
+    строка пула host:port[:user:pass], как в YANDEX_MUSIC_PROXY.
+    """
+    out: List[str] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "://" in item:
+            out.append(item)
+            continue
+        parts = item.split(":")
+        if len(parts) == 2:
+            out.append(f"http://{item}")
+        elif len(parts) == 4:
+            host, port, user, password = parts
+            out.append(f"http://{user}:{password}@{host}:{port}")
+        else:
+            logger.warning("YTDLP_EXTRA_PROXIES: не разобрана строка вида %s", _mask_proxy(item))
+    return out
 
 _STREAM_PROXY_STATIC = os.getenv("STREAM_PROXY", "").strip()
 # Файл важнее переменной: бэкенд перечитывает его по mtime — смена прокси не
@@ -1016,15 +1042,29 @@ def stream_proxy() -> Optional[str]:
     return cached or _STREAM_PROXY_STATIC or None
 
 
+# Дополнительные выходы (proxy1, proxy2, …) — пробуются после direct и WARP,
+# то есть трафик через них идёт только пока бесплатные выходы под bot-check.
+_EXTRA_PROXIES = _parse_extra_proxies(os.getenv("YTDLP_EXTRA_PROXIES", ""))
+_EGRESS_EXTRA_PREFIX = "proxy"
+
+
 def _egresses() -> List[str]:
-    """Выходы в порядке предпочтения: основной, затем WARP (если настроен)."""
-    return [_EGRESS_DIRECT, _EGRESS_WARP] if _WARP_PROXY else [_EGRESS_DIRECT]
+    """Выходы в порядке предпочтения: основной, WARP, затем YTDLP_EXTRA_PROXIES."""
+    out = [_EGRESS_DIRECT]
+    if _WARP_PROXY:
+        out.append(_EGRESS_WARP)
+    out.extend(f"{_EGRESS_EXTRA_PREFIX}{i}" for i in range(1, len(_EXTRA_PROXIES) + 1))
+    return out
 
 
 def _egress_proxy(egress: str) -> Optional[str]:
     """Прокси выхода или None (прямой адрес сервера)."""
     if egress == _EGRESS_WARP:
         return _WARP_PROXY or None
+    if egress.startswith(_EGRESS_EXTRA_PREFIX):
+        index = egress[len(_EGRESS_EXTRA_PREFIX):]
+        if index.isdigit() and 1 <= int(index) <= len(_EXTRA_PROXIES):
+            return _EXTRA_PROXIES[int(index) - 1]
     return stream_proxy()
 
 

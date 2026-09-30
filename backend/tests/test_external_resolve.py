@@ -528,3 +528,29 @@ def test_pick_audio_format_prefers_m4a_over_higher_bitrate_webm():
         ]
     }
     assert ytdlp._pick_audio_format(info)["format_id"] == "140"
+
+
+def test_bot_check_on_free_egresses_falls_back_to_extra_proxies(monkeypatch):
+    """direct и WARP под bot-check — резолв уходит на YTDLP_EXTRA_PROXIES по
+    порядку, ссылка помечена выходом и качается через тот же прокси."""
+    calls = []
+    gv = "https://rr1---sn-abc.googlevideo.com/videoplayback?ip=5.6.7.8"
+    extra = ytdlp._parse_extra_proxies("1.1.1.1:8000:u:p, http://kz:9000")
+    assert extra == ["http://u:p@1.1.1.1:8000", "http://kz:9000"]
+    monkeypatch.setattr(ytdlp, "_WARP_PROXY", _WARP)
+    monkeypatch.setattr(ytdlp, "_EXTRA_PROXIES", extra)
+    monkeypatch.setattr(ytdlp, "_resolve_via_ytdlp", _egress_resolver(
+        {
+            "direct": ytdlp.BotCheckError("v"),
+            "warp": ytdlp.BotCheckError("v"),
+            "proxy1": ytdlp.BotCheckError("v"),
+            "proxy2": (gv, ".m4a", 7),
+        },
+        calls,
+    ))
+
+    url, _, _ = asyncio.run(ytdlp._resolve_audio("v"))
+
+    assert calls == ["direct", "warp", "proxy1", "proxy2"]
+    assert url.endswith("#egress=proxy2")
+    assert ytdlp.proxy_for_url(url) == "http://kz:9000"

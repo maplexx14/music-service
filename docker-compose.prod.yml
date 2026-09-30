@@ -210,6 +210,9 @@ services:
       # до конца бэкоффа. GOST в контейнере слушает HTTP и SOCKS5 на одном
       # порту; HTTP — чтобы httpx обошёлся без socksio. Пусто — выход один.
       YTDLP_WARP_PROXY: ${YTDLP_WARP_PROXY:-http://warp:1080}
+      # Резервные выходы в YouTube после direct и WARP: через запятую, URL или
+      # host:port:user:pass. Пусто — только direct и WARP.
+      YTDLP_EXTRA_PROXIES: ${YTDLP_EXTRA_PROXIES:-}
       # Cookie-сессии YouTube против bot-check: анонимный датацентровый
       # трафик YouTube режет «Sign in to confirm you're not a bot», залогиненный
       # — нет. YTDLP_COOKIEFILE — Netscape-экспорт из браузера (положить файл
