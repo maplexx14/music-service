@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from app.acoustic_features import acoustic_similarity
 
-ALGORITHM_VERSION = "hybrid-v9"
+ALGORITHM_VERSION = "hybrid-v10"
 
 # Popularity must never overpower a user's explicit signal or a content match,
 # but it does have to separate a genuine hit from a no-name upload.  The weight

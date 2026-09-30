@@ -219,6 +219,14 @@ _ARTIST_HISTORY = 45
 # артистах выполнимо единственным способом — ротацией, поэтому за порядок
 # отвечает контекстный взвешенный выбор в diversity.interleave_artists.
 _MIN_ARTIST_GAP = 4
+# Штраф в ранкере за каждое появление артиста среди последних _ARTIST_HISTORY
+# отданных треков. Разнос выше меняет только ПОРЯДОК: отбор решает score, а у
+# знакомых артистов близость (до 2.4) даёт ~2.3 против ~0.6 у новых, и в каждую
+# подгрузку проходили одни и те же любимые имена (прод, 2026-09-30: Deep Purple
+# 46 раз за сутки из ~1000 показов). Потолок держит любимого артиста в ротации,
+# а не выкидывает его из волны.
+_ARTIST_REPEAT_PENALTY = 0.3
+_ARTIST_REPEAT_CAP = 1.2
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого окна «последние N записей» — иначе у активных
 # пользователей (сотни прослушиваний за сессию) более ранний, но всё ещё
@@ -2282,6 +2290,9 @@ async def get_flow(
         tuple(key) for key in (history.get("keys") or [])
         if isinstance(key, list) and len(key) == 2
     }
+    recent_artist_counts = Counter(
+        a for a in (history.get("artists") or []) if isinstance(a, str)
+    )
     ranking_context = (
         f"flow:{user_id}:"
         + "|".join(str(value) for value in list(history.get("ids") or [])[-50:])
@@ -2411,11 +2422,17 @@ async def get_flow(
         # enforced after ranking, so relevance still decides which new tracks
         # fill the requested new-artist portion.
         discovery_term = (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
-        score += discovery_term
+        repeat_term = -min(
+            _ARTIST_REPEAT_CAP,
+            _ARTIST_REPEAT_PENALTY * recent_artist_counts[primary_artist_key(artist)],
+        )
+        score += discovery_term + repeat_term
         score_by_item[score_key] = score
         # Компоненты считаются только для отданных позиций (см. телеметрию
         # ниже) — входы запоминаем, а не пересчитываем весь пул.
-        score_inputs_by_item[score_key] = (item, score_inputs, discovery_term)
+        score_inputs_by_item[score_key] = (
+            item, score_inputs, discovery_term, repeat_term
+        )
         return score
 
     def _score_features(item) -> dict:
@@ -2430,9 +2447,10 @@ async def get_flow(
             "discovery_effective": round(explore_ratio, 3),
         }
         if cached is not None:
-            source_item, inputs, discovery_term = cached
+            source_item, inputs, discovery_term, repeat_term = cached
             components = score_components(source_item, **inputs)
             components["discovery"] = discovery_term
+            components["repeat"] = repeat_term
             features["components"] = {
                 name: round(value, 4) for name, value in components.items()
             }

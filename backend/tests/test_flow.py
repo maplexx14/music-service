@@ -2024,6 +2024,47 @@ def test_artist_page_order_counts_as_popularity_without_views(client, db, monkey
     assert delivered == {f"cat{rank}" for rank in range(5)}, delivered
 
 
+def test_recently_delivered_artists_yield_to_the_rest_of_the_library(
+    client, db, monkeypatch
+):
+    """Любимые артисты не занимают каждую подгрузку целиком.
+
+    Разнос артистов между порциями менял только порядок, а отбор решал score:
+    у одних и тех же имён он был выше всех, и следующая порция снова состояла
+    из них. Недавно отданный артист теперь уступает остальной библиотеке.
+    """
+    user = create_user(db, username="artist-rotation-user")
+    artists = [f"Rotation{i}" for i in range(8)]
+    _imported_playlist(db, user, [(artist, "в коллекции") for artist in artists])
+
+    async def _favorite(request, artist):
+        index = artists.index(artist)
+        return [
+            _external(artist, f"трек {n}", f"rot{index}-{n}") for n in range(3)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    # Первые пять имён всегда «сильнее» трёх последних.
+    monkeypatch.setattr(
+        "app.routers.flow.score_track",
+        lambda item, **kwargs: 3.0 - 0.1 * artists.index(item.artist),
+    )
+    headers = auth_headers(client, username="artist-rotation-user")
+
+    first = client.get("/api/recommendations/flow?limit=5", headers=headers)
+    assert first.status_code == 200, first.text
+    first_artists = {track["artist"] for track in first.json()}
+    assert first_artists and not first_artists & set(artists[5:]), first_artists
+
+    exclude = ",".join(track["id"] for track in first.json())
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={exclude}", headers=headers
+    )
+    assert second.status_code == 200, second.text
+    second_artists = {track["artist"] for track in second.json()}
+    assert second_artists & set(artists[5:]), second_artists
+
+
 def test_rank_popularity_prefers_the_head_of_the_top():
     from app.recommendation_scoring import rank_popularity
 
