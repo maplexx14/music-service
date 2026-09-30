@@ -149,3 +149,33 @@ def test_soundcloud_failure_returns_to_original_youtube_track(monkeypatch, statu
 
     assert response.status_code == 307
     assert response.headers["location"] == "/api/ytdlp/stream/VIDEOID1?scfallback=1"
+
+
+def test_search_hides_previews_and_drm(monkeypatch):
+    def api_item(track_id, **kw):
+        item = _item(**kw)
+        item.update({
+            "id": track_id,
+            "permalink_url": f"https://soundcloud.com/a/{track_id}",
+            "title": f"Song {track_id}",
+            "user": {"username": "Artist"},
+            "duration": 130000,
+        })
+        return item
+
+    async def api_get(_path, _params):
+        return {"collection": [
+            api_item(1),
+            api_item(2, policy="SNIP"),
+            api_item(3, policy="MONETIZE", protocols=("ctr-encrypted-hls",)),
+        ]}
+
+    monkeypatch.setattr(soundcloud, "_api_get", api_get)
+    request = Request({
+        "type": "http", "method": "GET", "path": "/", "query_string": b"",
+        "headers": [], "server": ("test", 80), "scheme": "http", "root_path": "",
+    })
+
+    results = asyncio.run(soundcloud._search_api(request, "q", 10))
+
+    assert [t.external_id for t in results] == ["1"]

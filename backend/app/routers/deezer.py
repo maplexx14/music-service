@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from typing import Optional
 
 import httpx
@@ -62,9 +63,11 @@ _BAD_ARL_BACKOFF = 600
 
 _MATCH_TTL = 7 * 24 * 3600
 _MATCH_MISS_TTL = 6 * 3600
-# Одна и та же запись на двух сервисах расходится на секунду-две (трим тишины);
-# радио-версия/ремастер — сильнее.
-_MATCH_DURATION_TOLERANCE = 3
+# Одна и та же запись на двух сервисах расходится на секунду-две (трим тишины),
+# длинные треки — сильнее (Deep Purple, 7:06 в ytmusic против 7:00 в Deezer).
+# Радио-версия/ремастер обычно отличается сильнее и этим окном отсекается.
+_MATCH_DURATION_TOLERANCE = 5
+_MATCH_DURATION_TOLERANCE_RATIO = 0.02
 _MATCH_SCHEDULE_LIMIT = 16
 # Сколько /stream ждёт идущий поиск матча. Поиск в api.deezer.com — ~0.2 с.
 _MATCH_STREAM_WAIT = 3.0
@@ -207,8 +210,24 @@ def decrypt(data: bytes, sng_id: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 
+# Стилизация латинских имён кириллическими буквами-двойниками: «KoЯn»,
+# «NIИ». Сводим, только если в слове есть и латиница, — у настоящего
+# кириллического названия эти буквы трогать нельзя.
+_FAUX_CYRILLIC = str.maketrans({"я": "r", "и": "n", "д": "a", "ш": "w", "ф": "o", "ё": "e"})
+
+
 def _key(text: str) -> str:
-    return re.sub(r"[^a-z0-9а-яё]+", "", (text or "").lower())
+    """Форма для сравнения: без регистра, диакритики и пунктуации."""
+    text = unicodedata.normalize("NFKD", (text or "").lower())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch) or ch == "\u0306")
+    # NFKD разбивает «й» на «и» + бреве; собираем обратно, чтобы не путать с «и».
+    text = unicodedata.normalize("NFC", text)
+    words = []
+    for word in text.split():
+        if re.search(r"[a-z]", word) and re.search(r"[а-яё]", word):
+            word = word.translate(_FAUX_CYRILLIC)
+        words.append(word)
+    return re.sub(r"[^a-z0-9а-яё]+", "", "".join(words))
 
 
 def _same_text(left: str, right: str) -> bool:
@@ -234,7 +253,8 @@ def is_same_recording(
     """
     if duration <= 0 or cand_duration <= 0:
         return False
-    if abs(cand_duration - duration) > _MATCH_DURATION_TOLERANCE:
+    tolerance = max(_MATCH_DURATION_TOLERANCE, duration * _MATCH_DURATION_TOLERANCE_RATIO)
+    if abs(cand_duration - duration) > tolerance:
         return False
     if not (_same_text(cand_artist, artist) or same_artist(cand_artist, artist)):
         return False
@@ -400,8 +420,8 @@ async def await_deezer_match(video_id: str, timeout: float = _MATCH_STREAM_WAIT)
 # ---------------------------------------------------------------------------
 
 
-async def _media_url(sng_id: str) -> tuple[str, str, int]:
-    """(url на CDN, id для ключа расшифровки, ожидаемый размер) MP3 128."""
+async def _media_url(sng_id: str) -> tuple[str, str, int, int]:
+    """(url на CDN, id для ключа расшифровки, ожидаемый размер, длительность) MP3 128."""
     song = await _gw("song.getData", {"sng_id": sng_id})
     # Трек недоступен в стране аккаунта — Deezer подставляет замену (тот же
     # релиз под другим id) в FALLBACK. Ключ расшифровки — от id замены.
@@ -410,6 +430,7 @@ async def _media_url(sng_id: str) -> tuple[str, str, int]:
         song = fallback
     real_id = str(song.get("SNG_ID") or sng_id)
     size = int(song.get("FILESIZE_MP3_128") or 0)
+    duration = int(song.get("DURATION") or 0)
     session = await _login()
     r = await _client.post(_MEDIA_URL, json={
         "license_token": session["license_token"],
@@ -421,12 +442,29 @@ async def _media_url(sng_id: str) -> tuple[str, str, int]:
     media = item.get("media") or []
     if not media or not media[0].get("sources"):
         raise DeezerError(f"no media for {sng_id}: {item.get('errors')}")
-    return media[0]["sources"][0]["url"], real_id, size
+    return media[0]["sources"][0]["url"], real_id, size, duration
+
+
+# MP3 128 кбит/с — 16000 байт на секунду звука.
+_MP3_128_BYTES_PER_SEC = 16000
+
+
+def is_full_length(size: int, duration: int) -> bool:
+    """Файл покрывает всю длительность трека, а не 30-секундное превью.
+
+    Превью Deezer отдаёт вместо трека, если у аккаунта нет прав на полный
+    (страна, лейбл). Размер у него честный для самого превью, поэтому сверка с
+    FILESIZE_MP3_128 его не ловит — сверяем объём с длительностью трека.
+    Запас 20% — на VBR-хвосты и тишину; превью короче в разы.
+    """
+    if duration <= 0:
+        return size > 0
+    return size >= duration * _MP3_128_BYTES_PER_SEC * 0.8
 
 
 async def _download(sng_id: str, dest: str) -> None:
     """Скачивает и расшифровывает трек в ``dest`` (через .part)."""
-    url, real_id, expected = await _media_url(sng_id)
+    url, real_id, expected, duration = await _media_url(sng_id)
     key = _bf_key(real_id)
     part = dest + ".part"
     written = 0
@@ -450,6 +488,8 @@ async def _download(sng_id: str, dest: str) -> None:
                 written += len(buf)
         if expected and written != expected:
             raise DeezerError(f"{sng_id}: скачано {written} из {expected} байт")
+        if not is_full_length(written, duration):
+            raise DeezerError(f"{sng_id}: {written} байт на {duration} с — похоже на превью")
         os.replace(part, dest)
     finally:
         if os.path.exists(part):

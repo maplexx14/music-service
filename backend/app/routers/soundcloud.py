@@ -321,6 +321,12 @@ async def _search_api(request: Request, q: str, limit: int) -> List[ExternalTrac
         raise RuntimeError("SoundCloud api-v2 search returned no data")
     results: List[ExternalTrackResponse] = []
     for item in data.get("collection") or []:
+        # Go+-треки анонимному клиенту SoundCloud отдаёт 30-секундным превью,
+        # монетизированные — под DRM. В выдаче они выглядели обычными треками
+        # (длительность 0:30) и играли обрывок; та же запись почти всегда есть
+        # в выдаче ytmusic и играет целиком (Deezer/Soulseek/YouTube).
+        if not _is_full_stream(item):
+            continue
         track = _normalize_api(request, item)
         if track:
             results.append(track)

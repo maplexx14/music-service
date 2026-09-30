@@ -212,3 +212,24 @@ def test_lazy_archive_uses_youtube_after_deezer_download_failed(monkeypatch):
     monkeypatch.setattr(deezer, "await_deezer_match", match)
 
     assert asyncio.run(external_archive._deezer_serves("WITHMATCH")) is False
+
+
+def test_preview_sized_file_is_rejected():
+    # 132 с трека: полный MP3 128 — 2 113 200 байт, превью 30 с — ~480 КБ.
+    assert deezer.is_full_length(2_113_200, 132)
+    assert not deezer.is_full_length(480_000, 132)
+    assert deezer.is_full_length(1_000, 0)
+    assert not deezer.is_full_length(0, 0)
+
+
+def test_matching_handles_stylized_names_accents_and_long_tracks():
+    ok = deezer.is_same_recording
+    # «KoЯn» в Deezer против «Korn» в YouTube Music.
+    assert ok("Thoughtless", "KoЯn", 272, "Thoughtless", "Korn", 273)
+    assert ok("Ace of Spades", "Motörhead", 169, "Ace of Spades", "Motorhead", 168)
+    # Длинный трек: 7:00 против 7:06 — одна запись.
+    assert ok("Knocking At Your Back Door", "Deep Purple", 420, "Knocking At Your Back Door", "Deep Purple", 426)
+    # Кавер-группа с тем же названием и близкой длительностью — нет.
+    assert not ok("Thoughtless", "Klones Of Nu Metal", 275, "Thoughtless", "Korn", 273)
+    # Настоящая кириллица не ломается: «й» не превращается в «и».
+    assert deezer._key("Мумий Тролль") != deezer._key("Мумии Тролль")
