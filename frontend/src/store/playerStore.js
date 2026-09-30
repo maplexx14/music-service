@@ -11,7 +11,7 @@ function shuffleArray(arr) {
 }
 
 // Ключ прогрева резолва трека — зеркалит логику prefetchTracks. Нужен, чтобы
-// понять, завершился ли резолв следующего трека (гейт скипа вперёд).
+// понять, завершился ли резолв трека (см. isTrackResolved).
 // Возвращает null для локальных/несписочных треков: им резолв не нужен, они
 // «готовы» всегда.
 function prefetchKeyFor(track) {
@@ -52,10 +52,7 @@ function isTrackResolved(track) {
 const requestedPrefetchIds = new Set()
 
 // Ключи треков, для которых прогрев резолва на бэке УЖЕ ЗАВЕРШИЛСЯ (POST
-// вернулся). Гейтит скип вперёд: пока резолв следующего не готов, кнопка
-// «следующий» заблокирована, чтобы не прыгать на ещё не подгруженный трек.
-// Дублируется в store.resolvedPrefetchVersion (счётчик) для реактивности —
-// сам Set держим на уровне модуля, чтобы переживал ре-рендеры.
+// вернулся). Set держим на уровне модуля, чтобы переживал ре-рендеры.
 const resolvedPrefetchKeys = new Set()
 
 // Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
@@ -458,8 +455,8 @@ const usePlayerStore = create((set, get) => ({
   // ВАЖНО: POST /prefetch — fire-and-forget (ставит фоновую задачу и сразу
   // отвечает "queued", см. schedule_prefetch на бэке). Поэтому «POST вернулся»
   // НЕ значит «трек готов». Готовность узнаём отдельным поллингом
-  // GET /prefetch/{id}/ready — только он даёт настоящий сигнal для гейта
-  // скипа вперёд (см. _pollPrefetchReady / isNextTrackReady).
+  // GET /prefetch/{id}/ready — только он даёт настоящий сигнал готовности
+  // (см. _pollPrefetchReady / isTrackResolved).
   prefetchTracks: (tracks, count = 1) => {
     const list = (tracks || []).filter(Boolean).slice(0, count)
     for (const track of list) {
@@ -488,10 +485,9 @@ const usePlayerStore = create((set, get) => ({
 
   // Поллит GET /prefetch/{id}/ready, пока бэк не подтвердит, что резолв трека
   // реально готов (URL в Redis или кэш-файл на диске) — тогда помечает ключ
-  // готовым (снимает гейт скипа вперёд). Лёгкий запрос (без запуска работы на
-  // бэке), интервал ~600 мс, кап попыток, чтобы зависший резолв не поллился
-  // вечно. При исчерпании попыток ключ всё равно помечаем готовым — гейт не
-  // должен запирать пользователя навсегда из-за медленного/битого источника.
+  // готовым. Лёгкий запрос (без запуска работы на бэке), интервал ~600 мс,
+  // кап попыток, чтобы зависший резолв не поллился вечно. При исчерпании
+  // попыток ключ всё равно помечаем готовым.
   _pollPrefetchReady: (key, readyUrl) => {
     if (!key || resolvedPrefetchKeys.has(key)) return
     const POLL_INTERVAL_MS = 600
@@ -520,26 +516,11 @@ const usePlayerStore = create((set, get) => ({
   },
 
   // Прогрев резолва трека реально завершён (ready=True с бэка) — помечаем ключ
-  // готовым и бьём счётчик реактивности, чтобы гейт скипа (isNextTrackReady) в
-  // UI пересчитался. Local/несписочные треки резолва не требуют — их
-  // prefetchKeyFor даёт null, и гейт считает их готовыми и без этой записи.
-  resolvedPrefetchVersion: 0,
+  // готовым. Local/несписочные треки резолва не требуют — их prefetchKeyFor
+  // даёт null, и isTrackResolved считает их готовыми и без этой записи.
   _markPrefetchResolved: (key) => {
-    if (!key || resolvedPrefetchKeys.has(key)) return
+    if (!key) return
     resolvedPrefetchKeys.add(key)
-    set((state) => ({ resolvedPrefetchVersion: state.resolvedPrefetchVersion + 1 }))
-  },
-
-  // Готов ли к скипу вперёд следующий трек: его резолв на бэке уже завершён,
-  // либо трек резолва не требует (локальный/списочный — prefetchKeyFor=null),
-  // либо очередь кончилась (гейтить нечего). Читается в Player для блокировки
-  // кнопки «следующий»/свайпа/виджета.
-  isNextTrackReady: () => {
-    const next = get().getNextTrack(1)
-    if (!next) return true // конец очереди — гейтить нечего
-    const key = prefetchKeyFor(next)
-    if (!key) return true // резолв не нужен
-    return resolvedPrefetchKeys.has(key)
   },
 
   // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы
@@ -547,8 +528,7 @@ const usePlayerStore = create((set, get) => ({
   // PREFETCH_WINDOW треков вперёд — при быстром пролистывании очереди (не
   // только next-next) следующие треки тоже успевают попасть в Redis-кэш.
   // Окно небольшое: каждый ytmusic-прогрев — резолв в YouTube, а объём
-  // резолвов с одного IP и вызывает bot-check. Гейту скипа нужен только
-  // следующий трек, второй — запас на быстрое пролистывание.
+  // резолвов с одного IP и вызывает bot-check.
   prefetchNext: () => {
     const PREFETCH_WINDOW = 2
     const upcoming = Array.from({ length: PREFETCH_WINDOW }, (_, i) => get().getNextTrack(i + 1)).filter(Boolean)

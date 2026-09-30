@@ -68,7 +68,6 @@ function FullScreenPlayer() {
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const previousTrack = usePlayerStore((s) => s.previousTrack)
   const nextTrack = usePlayerStore((s) => s.nextTrack)
-  const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
   const closeFullScreen = usePlayerStore((s) => s.closeFullScreen)
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
   const isShuffle = usePlayerStore((s) => s.isShuffle)
@@ -208,7 +207,6 @@ function FullScreenPlayer() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   const canInteract = dbTrackId !== null || Boolean(currentTrack?.source)
 
-  const canSkipNext = resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()
   const handleSkipForward = async () => {
     // Очередь может быть короче плейлиста: страница грузит треки постранично
     // (см. queuePager в playerStore). Дотягиваем хвост, иначе на его границе
@@ -220,7 +218,6 @@ function FullScreenPlayer() {
       if (!(await usePlayerStore.getState().extendQueueIfNeeded(true))) return
       if (usePlayerStore.getState().currentTrack?.id !== fromId) return
     }
-    if (!usePlayerStore.getState().isNextTrackReady()) return
     nextTrack()
   }
 
@@ -418,9 +415,8 @@ function FullScreenPlayer() {
         <button
           className="fullscreen-icon"
           onClick={handleSkipForward}
-          disabled={!canSkipNext}
           aria-label="Вперёд"
-          title={canSkipNext ? 'Вперёд' : 'Следующий трек ещё загружается'}
+          title="Вперёд"
         >
           <SkipForward size={20} />
         </button>

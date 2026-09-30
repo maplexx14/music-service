@@ -598,7 +598,7 @@ export function onSwap(cb) {
   return () => swapListeners.delete(cb)
 }
 
-// Подписка на «заряженный элемент догрузился» — снимает гейт скипа вперёд.
+// Подписка на «заряженный элемент догрузился» — доигрывает отложенный переход.
 export function onIdleReady(cb) {
   idleReadyListeners.add(cb)
   return () => idleReadyListeners.delete(cb)

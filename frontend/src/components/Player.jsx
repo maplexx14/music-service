@@ -325,10 +325,6 @@ function PlayerInner() {
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const seekRequest = usePlayerStore((s) => s.seekRequest)
   const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
-  // Версия-счётчик резолвов растёт, когда прогрев следующего трека завершается —
-  // подписка заставляет пересчитать canSkipNext (гейт кнопки «следующий»).
-  const resolvedPrefetchVersion = usePlayerStore((s) => s.resolvedPrefetchVersion)
-
   const audioRef = useRef(null)
   // Обложка мини-плеера — источник морфа при открытии фуллскрина.
   const miniCoverRef = useRef(null)
@@ -345,8 +341,6 @@ function PlayerInner() {
   // Растёт при подмене активного элемента: заставляет эффекты, навешивающие
   // слушатели, перевеситься на новый элемент.
   const [swapVersion, setSwapVersion] = useState(0)
-  // Растёт, когда заряженный элемент догрузился — пересчитывает гейт скипа.
-  const [idleReadyVersion, setIdleReadyVersion] = useState(0)
 
   useEffect(() => {
     engine.mount()
@@ -359,7 +353,6 @@ function PlayerInner() {
       setSwapVersion((v) => v + 1)
     })
     const offIdleReady = engine.onIdleReady(() => {
-      setIdleReadyVersion((v) => v + 1)
       // Буфер следующего трека доехал — если переход был отложен (кончился трек
       // в фоне, играть было нечего), доигрываем его прямо сейчас.
       resumeDeferredRef.current?.()
@@ -442,27 +435,8 @@ function PlayerInner() {
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
 
-  // Гейт скипа вперёд: пока резолв следующего трека на бэке не завершён,
-  // кнопку «следующий»/свайп-влево/виджет блокируем — чтобы не прыгать на ещё
-  // не подгруженный трек. Подписка на resolvedPrefetchVersion выше заставляет
-  // пересчитать canSkipNext на завершении резолва; на смене трека — рендер
-  // и так происходит. Конец очереди/локальный трек — готов всегда (см.
-  // isNextTrackReady). Естественное окончание трека (handleEnded) гейт НЕ
-  // трогает — там переход штатный, не пользовательский скип.
-  // isNextTrackReady читает актуальный store; resolvedPrefetchVersion в
-  // зависимостях подписки гарантирует пересчёт при завершении резолва.
-  //
-  // Второе основание готовности — заряженный движком элемент: если следующий
-  // трек уже догружен в буфер, скипать можно независимо от того, что думает
-  // бэковый прогрев (буфер — более сильный сигнал, чем «резолв завершён»).
-  // idleReadyVersion в подписке пересчитывает гейт по факту догрузки.
-  const canSkipNext =
-    (resolvedPrefetchVersion >= 0 && usePlayerStore.getState().isNextTrackReady()) ||
-    (idleReadyVersion >= 0 && engine.isReady(nextTrackUrl()))
-
-  // Пользовательский скип вперёд (кнопка/свайп): выполняем только если
-  // следующий трек готов. Готовность читаем из store в момент вызова —
-  // защита от устаревшего замыкания в обработчиках свайпа.
+  // Пользовательский скип вперёд (кнопка/свайп). Состояние читаем из store в
+  // момент вызова — защита от устаревшего замыкания в обработчиках свайпа.
   const handleSkipForward = async () => {
     // Следующего трека нет, но плейлист загружен не весь (см. queuePager):
     // дотягиваем хвост и уходим вперёд по нему. Проактивная догрузка обычно
@@ -479,7 +453,6 @@ function PlayerInner() {
       if (!(await usePlayerStore.getState().extendQueueIfNeeded(true))) return
       if (usePlayerStore.getState().currentTrack?.id !== fromId) return
     }
-    if (!usePlayerStore.getState().isNextTrackReady() && !engine.isReady(nextTrackUrl())) return
     if (!playAdjacentNow(1)) return
     nextTrack()
   }
@@ -1874,26 +1847,6 @@ function PlayerInner() {
           })
           return
         }
-        // Тот же гейт, что и на кнопке: не прыгаем на ещё не подгруженный трек.
-        // Гейт действует и в фоне — там он даже важнее: прыжок на трек, резолв
-        // которого на бэке ещё не готов, означает секунды тишины. Отказ же
-        // ничего не ломает: текущий трек продолжает играть, а гейт открывается
-        // сам, как только доедет прогрев (_pollPrefetchReady, потолок ~24 с).
-        // Заодно пинаем прогрев, чтобы следующее нажатие сработало раньше.
-        //
-        // Заряженный движком буфер гейт открывает сразу и минуя бэковый
-        // прогрев: если байты следующего трека уже лежат во втором элементе,
-        // ждать нечего — это и есть та готовность, ради которой гейт заводился.
-        const url = nextTrackUrl(1)
-        if (!engine.isReady(url) && !usePlayerStore.getState().isNextTrackReady()) {
-          diag('gate:nextNotReady', {})
-          usePlayerStore.getState().prefetchNext()
-          // Прогрев по-хорошему стартует по таймеру воспроизведения, но раз
-          // пользователь уже жмёт «вперёд» — заряжаем второй элемент немедленно,
-          // не дожидаясь окна по полосе. Следующее нажатие сработает мгновенно.
-          if (url) engine.preload(url)
-          return
-        }
         // Фоновое правило («стартуем только на загруженном буфере») живёт внутри
         // playAdjacentNow — там же, где выбирается подмена или загрузка с нуля.
         if (!playAdjacentNow(1)) return
@@ -2355,9 +2308,8 @@ function PlayerInner() {
             type="button"
             className="control-btn"
             onClick={handleSkipForward}
-            disabled={!canSkipNext}
             aria-label="Следующий"
-            title={canSkipNext ? 'Следующий' : 'Следующий трек ещё загружается'}
+            title="Следующий"
           >
             <SkipForward size={20} />
           </button>
