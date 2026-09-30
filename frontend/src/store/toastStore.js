@@ -1,34 +1,46 @@
 import { create } from 'zustand'
 
 let nextId = 1
+let hideTimer = null
+let removeTimer = null
 
-const useToastStore = create((set) => ({
-  toasts: [],
+const LEAVE_MS = 180
+
+const clearTimers = () => {
+  clearTimeout(hideTimer)
+  clearTimeout(removeTimer)
+  hideTimer = null
+  removeTimer = null
+}
+
+// На экране одновременно не больше одного уведомления: новое заменяет
+// текущее, а не встаёт в стопку. Повтор того же текста не перезапускает
+// анимацию — только продлевает показ.
+const useToastStore = create((set, get) => ({
+  toast: null,
 
   addToast: (message, type = 'info', duration = 4000) => {
-    const id = nextId++
-    set((state) => ({ toasts: [...state.toasts, { id, message, type }] }))
+    clearTimers()
+    const current = get().toast
+    const same = current && !current.leaving && current.message === message && current.type === type
+    const id = same ? current.id : nextId++
+    if (!same) set({ toast: { id, message, type } })
     if (duration > 0) {
-      setTimeout(() => {
-        useToastStore.getState().dismissToast(id)
-      }, duration)
+      hideTimer = setTimeout(() => get().dismissToast(id), duration)
     }
     return id
   },
 
-  // Плавное скрытие: сначала помечаем toast как уходящий (CSS-анимация),
-  // затем удаляем из списка.
+  // Плавное скрытие: сначала помечаем уходящим (CSS-анимация), затем убираем.
   dismissToast: (id) => {
-    set((state) => ({
-      toasts: state.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)),
-    }))
-    setTimeout(() => {
-      useToastStore.getState().removeToast(id)
-    }, 180)
+    const current = get().toast
+    if (!current || (id != null && current.id !== id) || current.leaving) return
+    clearTimers()
+    set({ toast: { ...current, leaving: true } })
+    removeTimer = setTimeout(() => {
+      if (get().toast?.id === current.id) set({ toast: null })
+    }, LEAVE_MS)
   },
-
-  removeToast: (id) =>
-    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 }))
 
 export const toast = {

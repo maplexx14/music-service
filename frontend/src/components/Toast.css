@@ -1,94 +1,128 @@
+/* Одно уведомление на экране (см. toastStore). Десктоп — по центру над
+   плеером (низ плеера 12px, высота 76px), мобильные — сверху под статус-баром. */
 .toast-container {
+  --toast-enter-y: 12px;
   position: fixed;
-  bottom: 100px;
-  right: 16px;
+  left: 0;
+  right: 0;
+  bottom: 104px;
   z-index: 2000;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 360px;
+  justify-content: center;
+  padding: 0 16px;
+  /* Контейнер на всю ширину — клики мимо карточки проходят к странице. */
+  pointer-events: none;
 }
 
 .toast {
+  --toast-accent: #60a5fa;
+  pointer-events: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: rgba(30, 30, 34, 0.95);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  gap: 12px;
+  width: max-content;
+  max-width: min(440px, 100%);
+  min-height: 52px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 16px;
+  /* Плотный фон без backdrop-filter: читается на любом контенте и не
+     пересчитывает размытие под собой. */
+  background: #1f1f24;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
-  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform 260ms var(--ease-out);
 }
 
 @starting-style {
   .toast {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--toast-enter-y)) scale(0.96);
   }
 }
+
 .toast-leaving {
   opacity: 0;
-  transform: translateY(8px);
-  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  transform: translateY(var(--toast-enter-y)) scale(0.96);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.toast-success {
+  --toast-accent: var(--status-success);
+}
+
+.toast-error {
+  --toast-accent: #f87171;
 }
 
 .toast-icon {
   flex-shrink: 0;
-}
-
-.toast-success .toast-icon {
-  color: var(--status-success);
-}
-
-.toast-error .toast-icon {
-  color: #f87171;
-}
-
-.toast-info .toast-icon {
-  color: #60a5fa;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--toast-accent);
+  background: color-mix(in srgb, var(--toast-accent) 16%, transparent);
 }
 
 .toast-message {
   flex: 1;
-  font-size: 14px;
-  line-height: 1.4;
-  word-break: break-word;
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .toast-close {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.6);
-  cursor: pointer;
-  padding: 2px;
-  display: flex;
   flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
 }
 
-.toast-close:hover {
-  color: #fff;
+@media (hover: hover) and (pointer: fine) {
+  .toast-close:hover {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
 }
 
 @media (max-width: 768px) {
   .toast-container {
-    left: 16px;
-    right: 16px;
-    /* Над мини-плеером (Player.css: низ на safe-area + 80px, высота 72px) с
-       зазором 12px. Раньше стояло 140px без safe-area — тост ложился поверх
-       плеера и закрывал кнопки, а на iPhone с «домом» ещё и уезжал ниже. */
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 164px);
-    max-width: none;
+    --toast-enter-y: -16px;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    bottom: auto;
+    padding: 0 12px;
   }
 
-  /* Крестик — под палец: сама иконка мелкая, а цель — 44px. */
+  .toast {
+    width: 100%;
+    max-width: none;
+    min-height: 56px;
+  }
+
+  /* Крестик — под палец: цель 44px. */
   .toast-close {
     width: 44px;
     height: 44px;
-    margin: -12px -12px -12px 0;
-    align-items: center;
-    justify-content: center;
+    margin: -6px -6px -6px 0;
   }
 }
