@@ -1,9 +1,116 @@
-/* Страница исполнителя переиспользует разметку PlaylistDetail (шапка + таблица
-   треков) — здесь только то, чем она от плейлиста отличается. */
+/* Страница исполнителя берёт у PlaylistDetail кнопки и таблицу треков; шапка
+   своя — hero-карточка в тон аватара. */
 
-/* Аватар артиста — круглый, в отличие от квадратной обложки плейлиста. */
-.artist-header-cover {
-  border-radius: 50%;
+/* --- Шапка --- */
+
+/* Hero-карточка в тон аватара. Цвета приходят инлайном из useCoverColors
+   (--hero-c1..c3, та же палитра, что у hero главной); здесь только дефолт на
+   случай, если инлайна нет. Карточка, а не заливка во всю ширину: отступы
+   .page-container живут в Home.css, и вылезать за них отрицательными полями —
+   значит зависеть от чужого файла. */
+.artist-hero {
+  --hero-c1: #b070ff;
+  --hero-c2: #8929ff;
+  --hero-c3: #440f85;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  padding: 72px 32px 32px;
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--hero-c1) 55%, transparent), transparent 60%),
+    linear-gradient(160deg, var(--hero-c2) 0%, var(--hero-c3) 55%, #121212 100%);
+  transition: background var(--duration-base) var(--ease-out);
+}
+
+/* Размытый аватар поверх градиента — фактура; сверху затемняем низ, чтобы
+   белый текст читался на любой обложке. */
+.artist-hero-backdrop {
+  position: absolute;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  object-fit: cover;
+  filter: blur(64px) saturate(1.3);
+  opacity: 0.45;
+  z-index: -2;
+  pointer-events: none;
+}
+
+.artist-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 30%, rgba(0, 0, 0, 0.55) 100%);
+  pointer-events: none;
+}
+
+.artist-hero-content {
+  display: flex;
+  align-items: flex-end;
+  gap: 32px;
+}
+
+.artist-avatar {
+  flex: none;
+  width: 208px;
+  height: 208px;
+  object-fit: cover;
+  border-radius: var(--radius-avatar);
+  background-color: #333;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.artist-hero-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.artist-kicker {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 8px;
+}
+
+.artist-name {
+  font-size: clamp(40px, 6vw, 88px);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  color: #ffffff;
+  margin-bottom: 16px;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.25);
+}
+
+.artist-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.artist-stats li {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  background-color: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Кнопки под карточкой, а не внутри: на цветном фоне фиолетовая «Воспроизвести»
+   спорила бы с палитрой аватара. */
+.artist-toolbar {
+  padding: 24px 0 8px;
 }
 
 /* Лайк исполнителя: у .action-button из PlaylistDetail.css нет активного
@@ -34,10 +141,21 @@
 }
 
 .artist-section-title {
-  font-size: 20px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--text-xl);
   font-weight: 700;
+  letter-spacing: -0.01em;
   color: #ffffff;
-  margin: 24px 0 8px;
+  margin: 32px 0 12px;
+}
+
+.artist-section-count {
+  font-size: var(--text-base);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: #8a8a8a;
 }
 
 /* --- Карусель релизов --- */
@@ -49,9 +167,9 @@
 .album-card {
   display: flex;
   flex-direction: column;
-  background-color: #181818;
-  border-radius: 8px;
-  padding: 16px;
+  background-color: transparent;
+  border-radius: var(--radius-card);
+  padding: 10px;
   color: inherit;
   text-decoration: none;
   min-width: 0;
@@ -60,7 +178,7 @@
 }
 
 .album-card:hover {
-  background-color: #282828;
+  background-color: #1f1f1f;
 }
 
 .album-card:active {
@@ -82,9 +200,10 @@
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
-  border-radius: 4px;
-  margin-bottom: 12px;
+  border-radius: var(--radius-card);
+  margin-bottom: 10px;
   background-color: #333;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .album-name {
@@ -116,6 +235,36 @@
 
 /* --- Мобильная адаптация --- */
 @media (max-width: 768px) {
+  .artist-hero {
+    padding: 40px 16px 20px;
+    margin-top: 8px;
+  }
+
+  .artist-hero-content {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+  }
+
+  .artist-avatar {
+    width: 148px;
+    height: 148px;
+  }
+
+  .artist-name {
+    font-size: clamp(30px, 10vw, 44px);
+    margin-bottom: 12px;
+  }
+
+  .artist-stats {
+    justify-content: center;
+  }
+
+  .artist-toolbar {
+    padding-top: 16px;
+  }
+
   /* В шапке исполнителя кнопок три, а не две, как у плейлиста: «Воспроизвести»,
      «Добавить в медиатеку» и лайк. В одну строку они не помещаются — длинная
      подпись второй кнопки переносится и ряд разъезжается. Раскладываем сеткой:
@@ -166,12 +315,12 @@
   }
 
   .artist-section-title {
-    font-size: 17px;
-    margin: 20px 0 8px;
+    font-size: 18px;
+    margin: 24px 0 8px;
   }
 
   .album-card {
-    padding: 10px;
+    padding: 6px;
   }
 
   .album-cover {

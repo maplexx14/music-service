@@ -11,6 +11,8 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { useCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
 import './Artist.css'
 
@@ -39,8 +41,8 @@ function AlbumsRow({ title, albums }) {
   if (albums.length === 0) return null
 
   return (
-    <div className="artist-albums">
-      <h2 className="artist-section-title">{title}</h2>
+    <section className="artist-albums">
+      <SectionTitle count={albums.length}>{title}</SectionTitle>
       <Carousel
         items={albums}
         label={title}
@@ -66,7 +68,16 @@ function AlbumsRow({ title, albums }) {
           )
         }}
       />
-    </div>
+    </section>
+  )
+}
+
+function SectionTitle({ count, children }) {
+  return (
+    <h2 className="artist-section-title">
+      {children}
+      {count > 0 && <span className="artist-section-count">{count}</span>}
+    </h2>
   )
 }
 
@@ -79,6 +90,15 @@ const ARTIST_FRESH_MS = 5 * 60 * 1000
 // бэк (см. routers/artists.py), фронт только склеивает списки в одну очередь.
 // Библиотека и внешние источники — одна очередь: пользователь видит «все
 // треки исполнителя» и слушает их подряд, не думая об источнике.
+// 1 трек, 2 трека, 5 треков.
+const plural = (n, one, few, many) => {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return one
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
+  return many
+}
+
 const artistTracks = (data) => (data ? [...(data.tracks || []), ...(data.external || [])] : [])
 
 function Artist() {
@@ -104,6 +124,9 @@ function Artist() {
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
+  // Шапка красится в тон аватара — как hero на главной по обложке трека. До
+  // разбора (и без аватара) — фирменная палитра, чтобы не мигать серым.
+  const heroColors = useCoverColors(artist?.cover_url) || DEFAULT_HERO_COLORS
 
   // Каталог исполнителя (библиотека + оба внешних источника) приходит одним
   // ответом и легко переваливает за сотню строк — рисуем партиями по мере
@@ -320,77 +343,100 @@ function Artist() {
 
   return (
     <div className="page-container">
-      <div className="playlist-header">
-        <img
-          src={resolveCoverUrl(artist.cover_url) || defaultCover}
-          alt={artist.name}
-          className="playlist-header-cover artist-header-cover"
-          onError={handleCoverError}
-        />
-        <div className="playlist-header-info">
-          <div className="playlist-type">Исполнитель</div>
-          <h1 className="playlist-title">{artist.name}</h1>
-          <div className="playlist-meta">
-            <span>{tracks.length} треков</span>
-            {libraryCount > 0 && (
-              <>
-                <span>•</span>
-                <span>{libraryCount} в медиатеке</span>
-              </>
-            )}
+      <header
+        className="artist-hero"
+        style={{
+          '--hero-c1': heroColors[0],
+          '--hero-c2': heroColors[1],
+          '--hero-c3': heroColors[2],
+        }}
+      >
+        {/* Размытый аватар — фактура под градиентом: сплошная заливка тоном
+            смотрится плоско. Декоративный, поэтому alt пустой. */}
+        {artist.cover_url && (
+          <img
+            src={resolveCoverUrl(artist.cover_url)}
+            alt=""
+            aria-hidden="true"
+            className="artist-hero-backdrop"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+        <div className="artist-hero-content">
+          <img
+            src={resolveCoverUrl(artist.cover_url) || defaultCover}
+            alt={artist.name}
+            className="artist-avatar"
+            onError={handleCoverError}
+          />
+          <div className="artist-hero-info">
+            <div className="artist-kicker">Исполнитель</div>
+            <h1 className="artist-name">{artist.name}</h1>
+            <ul className="artist-stats">
+              <li>{tracks.length} {plural(tracks.length, 'трек', 'трека', 'треков')}</li>
+              {albums.length > 0 && (
+                <li>{albums.length} {plural(albums.length, 'релиз', 'релиза', 'релизов')}</li>
+              )}
+              {libraryCount > 0 && <li>{libraryCount} в медиатеке</li>}
+            </ul>
           </div>
-          <div className="playlist-actions artist-actions">
-            <button className="play-button-large" onClick={handlePlay} disabled={tracks.length === 0}>
-              <Play size={24} fill="currentColor" />
-              Воспроизвести
-            </button>
-            <button
-              className="play-button-large secondary"
-              onClick={handleSaveToLibrary}
-              disabled={saving || tracks.length === 0}
-              title={
-                artist.playlist_id
-                  ? 'Плейлист исполнителя уже в медиатеке — открыть'
-                  : 'Сохранить все треки исполнителя плейлистом'
-              }
-            >
-              <Plus size={20} />
-              {saving
-                ? 'Добавление...'
-                : artist.playlist_id
-                  ? 'Открыть в медиатеке'
-                  : 'Добавить в медиатеку'}
-            </button>
-            <button
-              type="button"
-              className={`action-button${artist.is_liked ? ' liked' : ''}`}
-              onClick={handleToggleArtistLike}
-              disabled={liking}
-              title={
-                artist.is_liked
-                  ? 'Убрать исполнителя из понравившихся'
-                  : 'Добавить исполнителя в понравившиеся'
-              }
-              aria-label={
-                artist.is_liked
-                  ? 'Убрать исполнителя из понравившихся'
-                  : 'Добавить исполнителя в понравившиеся'
-              }
-              aria-pressed={!!artist.is_liked}
-            >
-              <Heart size={20} fill={artist.is_liked ? 'currentColor' : 'none'} />
-            </button>
-          </div>
+        </div>
+      </header>
+
+      <div className="artist-toolbar">
+        <div className="playlist-actions artist-actions">
+          <button className="play-button-large" onClick={handlePlay} disabled={tracks.length === 0}>
+            <Play size={24} fill="currentColor" />
+            Воспроизвести
+          </button>
+          <button
+            className="play-button-large secondary"
+            onClick={handleSaveToLibrary}
+            disabled={saving || tracks.length === 0}
+            title={
+              artist.playlist_id
+                ? 'Плейлист исполнителя уже в медиатеке — открыть'
+                : 'Сохранить все треки исполнителя плейлистом'
+            }
+          >
+            <Plus size={20} />
+            {saving
+              ? 'Добавление...'
+              : artist.playlist_id
+                ? 'Открыть в медиатеке'
+                : 'Добавить в медиатеку'}
+          </button>
+          <button
+            type="button"
+            className={`action-button${artist.is_liked ? ' liked' : ''}`}
+            onClick={handleToggleArtistLike}
+            disabled={liking}
+            title={
+              artist.is_liked
+                ? 'Убрать исполнителя из понравившихся'
+                : 'Добавить исполнителя в понравившиеся'
+            }
+            aria-label={
+              artist.is_liked
+                ? 'Убрать исполнителя из понравившихся'
+                : 'Добавить исполнителя в понравившиеся'
+            }
+            aria-pressed={!!artist.is_liked}
+          >
+            <Heart size={20} fill={artist.is_liked ? 'currentColor' : 'none'} />
+          </button>
         </div>
       </div>
 
       <AlbumsRow title="Альбомы" albums={fullAlbums} />
-      <AlbumsRow title="Синглы и Альбомы" albums={shortReleases} />
+      <AlbumsRow title="Синглы и EP" albums={shortReleases} />
 
       <div className="playlist-tracks">
         {/* Заголовок нужен только когда выше есть карусели: иначе таблица и так
             единственный блок страницы, и подписывать её нечем. */}
-        {albums.length > 0 && <h2 className="artist-section-title">Треки</h2>}
+        {albums.length > 0 && <SectionTitle count={tracks.length}>Треки</SectionTitle>}
         {tracks.length > 0 ? (
           <table className="tracks-table">
             <thead>
