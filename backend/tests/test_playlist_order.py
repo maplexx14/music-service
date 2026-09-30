@@ -98,3 +98,28 @@ def test_liked_playlist_sorted_by_add_order(client, db):
     resp = client.get("/api/playlists/me/liked", headers=headers)
     assert resp.status_code == 200, resp.text
     assert [t["play_count"] for t in resp.json()["tracks"]] == [40, 90, 2]
+
+
+def test_adding_track_bumps_playlist_updated_at(client, db):
+    """Окно «Добавить в плейлист» сортирует плейлисты по updated_at. Трек
+    вставляется в таблицу связей напрямую, мимо ORM-объекта, и onupdate сам не
+    срабатывает — эндпоинт обязан обновить отметку явно."""
+    user = create_user(db, "adder")
+    playlist = make_playlist(db, user, plays=[])
+    assert playlist.updated_at is None
+    track = Track(title="new", artist="Artist", duration=120, file_path="/music_files/new.mp3")
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+
+    resp = client.post(
+        f"/api/playlists/{playlist.id}/tracks/{track.id}",
+        headers=auth_headers(client, "adder"),
+    )
+    assert resp.status_code == 200, resp.text
+
+    db.refresh(playlist)
+    assert playlist.updated_at is not None
+
+    summary = client.get("/api/playlists/me", headers=auth_headers(client, "adder")).json()
+    assert summary[0]["updated_at"] is not None

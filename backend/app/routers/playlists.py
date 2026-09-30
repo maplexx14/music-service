@@ -281,6 +281,11 @@ def add_track_to_playlist(
         position=max_position + 1
     )
     db.execute(stmt)
+    # Трек вставляется в таблицу связей напрямую, мимо ORM-объекта плейлиста,
+    # поэтому onupdate у Playlist.updated_at не срабатывает. Обновляем явно:
+    # окно «Добавить в плейлист» сортирует по нему, и плейлист, куда только
+    # что добавляли, должен подниматься наверх.
+    playlist.updated_at = func.now()
     db.commit()
     invalidate_recommendation_cache(current_user.id)
     

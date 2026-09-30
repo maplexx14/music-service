@@ -175,11 +175,24 @@ function Dialog({ request, onClose }) {
     }
   }, [onClose])
 
+  // Свежие сверху: /playlists/me отдаёт плейлисты без сортировки, и при
+  // десятках плейлистов нужный (обычно тот, с которым работали недавно)
+  // терялся в середине списка.
   const visible = useMemo(() => {
-    const list = (playlists ?? []).filter((p) => String(p.id) !== String(excludePlaylistId ?? ''))
+    const recency = (p) => Date.parse(p.updated_at || p.created_at) || 0
+    const list = (playlists ?? [])
+      .filter((p) => String(p.id) !== String(excludePlaylistId ?? ''))
+      .sort((a, b) => recency(b) - recency(a))
     const q = query.trim().toLowerCase()
     return q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list
   }, [playlists, excludePlaylistId, query])
+
+  // Новый запрос — список с начала: иначе совпадения могли оказаться выше
+  // прокрученной области, и казалось бы, что ничего не нашлось.
+  const bodyRef = useRef(null)
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0
+  }, [query])
 
   const totalCount = (playlists ?? []).length
 
@@ -309,7 +322,7 @@ function Dialog({ request, onClose }) {
           </label>
         )}
 
-        <div className="atp-body">
+        <div className="atp-body" ref={bodyRef}>
           {creating ? (
             <form className="atp-create-form" onSubmit={createAndAdd}>
               <input
