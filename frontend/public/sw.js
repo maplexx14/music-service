@@ -8,8 +8,8 @@
 // запрос, который не попал в кэш-кандидаты, проходит насквозь к сети.
 //
 // Стратегии:
-//   * навигация (HTML) — network-first с кэш-фолбэком: свежий деплой виден
-//     сразу, офлайн — каркас из кэша;
+//   * навигация (HTML) — network-first с таймаутом и кэш-фолбэком: свежий
+//     деплой виден сразу, на медленной сети и офлайн — каркас из кэша;
 //   * /assets/* — cache-first (имена хэшированы, immutable);
 //   * прочая статика (шрифты, иконки, сплэши, манифест) — stale-while-
 //     revalidate: отдаём из кэша мгновенно, фоном обновляем.
@@ -21,6 +21,7 @@
 // а на iOS она самая тесная из всех платформ.
 const CACHE_VERSION = 'bolt-shell-v3'
 const PRECACHE = ['/', '/manifest.webmanifest']
+const NAV_TIMEOUT_MS = 1500
 
 // Обложки внешних треков (/api/tracks/cover-proxy) — отдельный кэш, cache-first.
 // HTTP-кэш WebKit в standalone-PWA на iOS выселяется агрессивно: после
@@ -114,16 +115,26 @@ self.addEventListener('fetch', (event) => {
   if (request.destination === 'audio' || request.destination === 'video' || request.destination === 'media') return
   if (request.headers.get('range')) return
 
-  // Навигация: network-first, кэш-фолбэк для офлайна.
+  // Навигация: network-first с таймаутом. Пока ответа нет, iOS после сплэша
+  // держит пустой белый WebView — на медленной мобильной сети секундами.
+  // Если сеть не ответила за NAV_TIMEOUT_MS, отдаём каркас из кэша (его
+  // хэшированные ассеты лежат там же), а свежий ответ фоном кладём в кэш —
+  // он подхватится при следующем запуске.
   if (request.mode === 'navigate') {
+    const network = fetch(request).then((response) => {
+      if (response.ok) {
+        const copy = response.clone()
+        caches.open(CACHE_VERSION).then((cache) => cache.put('/', copy)).catch(() => {})
+      }
+      return response
+    })
+    event.waitUntil(network.catch(() => {}))
+    const timeout = new Promise((resolve) => setTimeout(resolve, NAV_TIMEOUT_MS))
+    const cachedAfterTimeout = timeout.then(() => caches.match('/')).then((cached) => cached || network)
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE_VERSION).then((cache) => cache.put('/', copy)).catch(() => {})
-          return response
-        })
-        .catch(() => caches.match('/').then((cached) => cached || Response.error())),
+      Promise.race([network, cachedAfterTimeout]).catch(() =>
+        caches.match('/').then((cached) => cached || Response.error()),
+      ),
     )
     return
   }
