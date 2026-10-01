@@ -435,13 +435,12 @@ function Home() {
                 {...waveIntentHandlers}
               >
                 {isWavePlaying ? (
-                  <Pause size={30} fill="currentColor" strokeWidth={0} />
+                  <Pause size={40} fill="currentColor" strokeWidth={0} />
                 ) : (
                   // Треугольник визуально тяжелее слева — сдвиг вправо
                   // ставит его в оптический центр круга.
-                  <Play size={30} fill="currentColor" strokeWidth={0} className="wave-title-play" />
+                  <Play size={44} fill="currentColor" strokeWidth={0} className="wave-title-play" />
                 )}
-                <span aria-hidden="true">поток</span>
               </button>
             )}
           </div>

@@ -226,39 +226,25 @@
   z-index: 2;
 }
 
-/* Кнопка потока — круг в центре диска. Светлое «стекло» поверх обложки
-   читается как кнопка сразу, а не как подпись: тёмная пилюля на тёмной
-   обложке терялась. */
+/* Кнопка потока — сплошной круг акцентного цвета с одной иконкой в центре
+   диска. Полупрозрачные варианты терялись на обложке и не читались как
+   кнопка; плотная заливка сразу говорит «нажми». */
 .wave-title {
   position: relative;
   width: 128px;
   height: 128px;
   border-radius: 50%;
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  display: grid;
+  place-items: center;
   padding: 0;
-  font-size: var(--text-sm);
-  font-family: 'Unbounded', sans-serif;
-  font-weight: 700;
-  letter-spacing: 0.3px;
   color: #ffffff;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.2);
-  -webkit-backdrop-filter: blur(14px) saturate(1.4);
-  backdrop-filter: blur(14px) saturate(1.4);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: var(--brand-accent);
+  border: none;
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
-  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
-}
-
-.wave-title svg {
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
+    0 14px 36px rgba(0, 0, 0, 0.35),
+    0 0 0 6px rgba(162, 89, 255, 0.25);
+  transition: transform 0.2s ease, background 0.2s ease;
 }
 
 .wave-title-play {
@@ -272,7 +258,7 @@
   position: absolute;
   inset: -1px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.55);
+  border: 2px solid rgba(162, 89, 255, 0.8);
   pointer-events: none;
   animation: waveTitleHalo 2.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
 }
@@ -288,8 +274,7 @@
 }
 
 .wave-title:hover {
-  background: rgba(255, 255, 255, 0.3);
-  border-color: rgba(255, 255, 255, 0.7);
+  background: var(--brand-accent-hover);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -299,6 +284,7 @@
 }
 
 .wave-title:active {
+  background: var(--brand-accent-active);
   transform: scale(0.96);
   transition-duration: 100ms;
 }
