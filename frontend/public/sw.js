@@ -19,7 +19,7 @@
 // (favicon-64.png и apple-touch-icon.png), которые index.html больше не
 // запрашивает: сами по себе они безвредны, но занимают квоту Cache Storage,
 // а на iOS она самая тесная из всех платформ.
-const CACHE_VERSION = 'bolt-shell-v2'
+const CACHE_VERSION = 'bolt-shell-v3'
 const PRECACHE = ['/', '/manifest.webmanifest']
 
 // Обложки внешних треков (/api/tracks/cover-proxy) — отдельный кэш, cache-first.
