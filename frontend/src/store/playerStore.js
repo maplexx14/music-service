@@ -248,15 +248,25 @@ const usePlayerStore = create((set, get) => ({
 
     // Числовой id БД кладём в отдельное поле db_id, НЕ трогая id — иначе <audio>
     // перезагрузится и трек начнётся заново. id остаётся ключом стриминга.
-    const merged = {
-      ...currentTrack,
+    //
+    // Импорт — сетевой раундтрип (на проде секунды), и за это время юзер мог
+    // переключить трек. Раньше merged собирался из снимка ДО запроса и
+    // безусловно ставился в currentTrack: после скипа плеер возвращался на
+    // прошлый трек, как только импорт отвечал (его зовёт запись play на 60-й
+    // секунде). Вшиваем db_id в строки очереди этого трека, а currentTrack
+    // трогаем, только если играет всё ещё он — как toggleLikeForTrack.
+    const withDbId = (track) => ({
+      ...track,
       db_id: data.id,
-      external_id: currentTrack.external_id ?? data.external_id,
-      stream_url: currentTrack.stream_url || data.stream_url,
-    }
+      external_id: track.external_id ?? data.external_id,
+      stream_url: track.stream_url || data.stream_url,
+    })
     set((state) => ({
-      currentTrack: merged,
-      queue: state.queue.map((t) => (t.id === currentTrack.id ? merged : t)),
+      currentTrack:
+        state.currentTrack && state.currentTrack.id === currentTrack.id
+          ? withDbId(state.currentTrack)
+          : state.currentTrack,
+      queue: state.queue.map((t) => (t.id === currentTrack.id ? withDbId(t) : t)),
     }))
     return data.id
   },
