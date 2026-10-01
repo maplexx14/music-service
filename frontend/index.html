@@ -46,6 +46,9 @@
          с бандлом сохраняется — defer и модули идут в порядке документа. -->
     <script defer src="/config.js"></script>
     <title>bolt — музыка</title>
+    <!-- Фон до загрузки бандла CSS: иначе после сплэша iOS на мгновение
+         показывает белый WebView. Цвет — как у сплэша (make_splash.py). -->
+    <style>html, body { background-color: #050505; }</style>
   </head>
   <body>
     <div id="root"></div>
