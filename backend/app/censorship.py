@@ -556,7 +556,7 @@ def _remove(path: Optional[str]) -> None:
 
 
 async def compare_with_candidates(
-    video_id: str, candidates: list[dict]
+    video_id: str, candidates: list[dict], report: Optional[dict] = None
 ) -> tuple[Optional[dict], Optional[Any]]:
     """Сравнивает звук трека каталога с лучшими кандидатами.
 
@@ -566,22 +566,33 @@ async def compare_with_candidates(
     """
     from app import audio_compare
 
-    if not candidates or not await asyncio.to_thread(audio_compare.available):
+    report = report if report is not None else {}
+    comparisons = report.setdefault("comparisons", [])
+    if not candidates:
+        return None, None
+    if not await asyncio.to_thread(audio_compare.available):
+        report["problem"] = "fpcalc не установлен"
         return None, None
     catalog, catalog_tmp = await _catalog_audio(video_id)
     if not catalog:
+        report["problem"] = "нет звука трека каталога (ни своей копии, ни Deezer)"
         return None, None
     try:
         for candidate in candidates[:_AUDIO_CANDIDATES]:
+            entry = {"id": candidate["id"], "title": candidate["title"], "uploader": candidate["uploader"]}
+            comparisons.append(entry)
             audio = await _soundcloud_audio(candidate)
             if not audio:
+                entry["verdict"] = "не скачался"
                 continue
             try:
                 result = await asyncio.to_thread(audio_compare.compare, catalog, audio)
             finally:
                 _remove(audio)
             if result is None:
+                entry["verdict"] = "не сравнился"
                 continue
+            entry.update(result.as_dict())
             logger.info(
                 "censor check: ytmusic %s vs soundcloud %s → %s",
                 video_id, candidate["id"], result.as_dict(),
@@ -598,7 +609,7 @@ async def compare_with_candidates(
     return None, None
 
 
-async def suggest_for_video(video_id: str) -> Optional[dict]:
+async def suggest_for_video(video_id: str, report: Optional[dict] = None) -> Optional[dict]:
     """Ищет оригинал для ytmusic-трека и привязывает его, если уверен.
 
     Главный способ — сравнение звука (compare_with_candidates): «та же запись,
@@ -606,22 +617,32 @@ async def suggest_for_video(video_id: str) -> Optional[dict]:
     отличий» — трек не цензурный. Если сравнить нечем (нет звука каталога,
     кандидаты не скачались), остаются метаданные: auto_confirmable или
     подсказка админу.
+
+    report — что выяснилось по шагам (для ручной проверки из админки и
+    срока следующей фоновой): outcome — итог, см. CONCLUSIVE_OUTCOMES.
     """
+    report = report if report is not None else {}
     by_id, _by_key = await confirmed_overrides()
     if video_id in by_id:
+        report["outcome"] = "already"
         return None
     from app.routers.deezer import _ytmusic_meta_blocking
 
     meta = await asyncio.to_thread(_ytmusic_meta_blocking, video_id)
     if not meta:
+        report["outcome"] = "no_meta"
         return None
     title, artist, duration = meta
+    report.update(title=title, artist=artist, duration=duration)
     if not _CYRILLIC.search(f"{title} {artist}"):
+        report["outcome"] = "not_russian"
         return None
     async with _suggest_sem:
         candidates = await find_candidates(title, artist, duration)
-        matched, comparison = await compare_with_candidates(video_id, candidates)
+        report["candidates"] = len(candidates)
+        matched, comparison = await compare_with_candidates(video_id, candidates, report)
     if comparison is not None and comparison.verdict == "same":
+        report["outcome"] = "clean"
         return None
     if comparison is not None:
         best, status, evidence = matched, STATUS_CONFIRMED, comparison.as_dict()
@@ -631,9 +652,19 @@ async def suggest_for_video(video_id: str) -> Optional[dict]:
             None,
         )
         if best is None:
+            if not candidates:
+                report["outcome"] = "no_candidates"
+            elif report.get("problem") or not any(
+                c.get("verdict") in _COMPARED for c in report.get("comparisons", [])
+            ):
+                report["outcome"] = "audio_failed"
+            else:
+                report["outcome"] = "not_found"
             return None
         status = STATUS_CONFIRMED if auto_confirmable(title, duration, best, candidates) else STATUS_SUGGESTED
         evidence = None
+    report["outcome"] = "linked" if status == STATUS_CONFIRMED else "suggested"
+    report["original"] = {"id": best["id"], "title": best["title"], "uploader": best["uploader"]}
     if await asyncio.to_thread(
         _save_suggestion_blocking, video_id, title, artist, best, status, evidence
     ):
@@ -648,18 +679,39 @@ async def suggest_for_video(video_id: str) -> Optional[dict]:
     return best
 
 
+# Версия проверки в ключе флага: улучшенная проверка (сравнение звука) должна
+# пересмотреть треки, которые старая уже пометила проверенными на месяц.
+_CHECK_VERSION = 2
+# Итоги, после которых трек не трогаем _SUGGEST_CHECK_TTL. Остальные (нет
+# кандидатов, звук не скачался) — сбои окружения: повтор через _RETRY_CHECK_TTL.
+CONCLUSIVE_OUTCOMES = {"already", "not_russian", "clean", "linked", "suggested", "not_found"}
+_RETRY_CHECK_TTL = 6 * 3600
+# Вердикты, при которых сравнение реально состоялось (см. audio_compare).
+_COMPARED = {"censored", "same", "different", "uncertain"}
+
+
+def _checked_key(video_id: str) -> str:
+    return f"censor:checked:v{_CHECK_VERSION}:{video_id}"
+
+
 def schedule_suggestion(video_id: str) -> None:
     """Фоновая проверка трека на цензуру при прослушивании (раз в месяц)."""
     if not video_id or video_id in _suggest_inflight:
         return
 
     async def job():
+        flag = _checked_key(video_id)
         try:
-            flag = f"censor:checked:{video_id}"
             if await get_cache_async(flag):
                 return
-            await set_cache_async(flag, 1, expire=_SUGGEST_CHECK_TTL)
-            await suggest_for_video(video_id)
+            # Сразу — короткий флаг: пока проверка идёт, другие прослушивания
+            # её не дублируют, а упавшая повторится скоро, а не через месяц.
+            await set_cache_async(flag, 1, expire=_RETRY_CHECK_TTL)
+            report: dict = {}
+            await suggest_for_video(video_id, report)
+            if report.get("outcome") in CONCLUSIVE_OUTCOMES:
+                await set_cache_async(flag, 1, expire=_SUGGEST_CHECK_TTL)
+            logger.info("censor check %s: %s", video_id, report)
         except Exception:  # noqa: BLE001 — фон, стрим его не ждёт
             logger.warning("censor suggestion failed for %s", video_id, exc_info=True)
         finally:

@@ -20,12 +20,15 @@ export default function CensorOverrideDialog() {
   const [loading, setLoading] = useState(false)
   const [link, setLink] = useState('')
   const [saving, setSaving] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [report, setReport] = useState(null)
 
   useEffect(() => {
     if (!track) return undefined
     let cancelled = false
     setCandidates([])
     setLink('')
+    setReport(null)
     setLoading(true)
     api
       .get('/censorship/candidates', {
@@ -74,6 +77,24 @@ export default function CensorOverrideDialog() {
     }
   }
 
+  // Проверка по звуку сейчас, с отчётом по шагам: видно, почему трек не
+  // привязался сам (нет кандидатов, звук не скачался, записи разные…).
+  const checkAudio = async () => {
+    setChecking(true)
+    setReport(null)
+    try {
+      const response = await api.post('/censorship/check', { video_id: track.external_id })
+      setReport(response.data)
+      if (response.data.outcome === 'linked') {
+        toast.success(`Теперь играет оригинал: ${response.data.original?.title}`)
+      }
+    } catch (error) {
+      console.error('Censor check failed:', error)
+    } finally {
+      setChecking(false)
+    }
+  }
+
   const onSubmit = (e) => {
     e.preventDefault()
     linkOriginal(link.trim())
@@ -115,6 +136,13 @@ export default function CensorOverrideDialog() {
             </button>
           </div>
         </form>
+
+        <div className="censor-check">
+          <button type="button" className="atp-btn atp-btn-ghost" onClick={checkAudio} disabled={checking || saving}>
+            {checking ? 'Сравниваем звук…' : 'Проверить по звуку'}
+          </button>
+          {report && <CheckReport report={report} />}
+        </div>
 
         <div className="atp-body">
           <div className="censor-hint">Или выберите залив из найденных на SoundCloud</div>
@@ -162,5 +190,40 @@ export default function CensorOverrideDialog() {
       </div>
     </div>,
     document.body,
+  )
+}
+
+const OUTCOME_TEXT = {
+  linked: 'Цензура найдена — оригинал привязан',
+  suggested: 'Есть кандидат, но без уверенности — он в админке на подтверждение',
+  clean: 'Звук совпал с заливом артиста — трек не цензурный',
+  not_found: 'Ни один кандидат не оказался оригиналом',
+  no_candidates: 'На SoundCloud не нашлось подходящих заливов',
+  audio_failed: 'Сравнить звук не получилось',
+  not_russian: 'Трек не русский — не проверяем',
+  no_meta: 'Нет данных о треке в каталоге',
+  already: 'Оригинал уже привязан',
+}
+
+const VERDICT_TEXT = {
+  censored: 'цензура',
+  same: 'та же запись',
+  different: 'другая запись',
+  uncertain: 'не уверены',
+}
+
+function CheckReport({ report }) {
+  return (
+    <div className="censor-report" role="status">
+      <div className="censor-report-outcome">{OUTCOME_TEXT[report.outcome] || report.outcome}</div>
+      {report.problem && <div>{report.problem}</div>}
+      {(report.comparisons || []).map((c) => (
+        <div key={c.id}>
+          {c.uploader} — {c.title}: {VERDICT_TEXT[c.verdict] || c.verdict}
+          {(c.segments || []).length > 0 &&
+            ` (${c.segments.map(([start, length, db]) => `${formatDuration(start) || '0:00'}, ${length} с, ${db} дБ`).join('; ')})`}
+        </div>
+      ))}
+    </div>
   )
 }

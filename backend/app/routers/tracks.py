@@ -374,6 +374,10 @@ async def stream_track(
             return RedirectResponse(
                 censorship.soundcloud_stream_path(override, track.external_id), status_code=307
             )
+        # Проверка на цензуру — и для треков библиотеки: они играют отсюда,
+        # прямо из MinIO, мимо /api/ytdlp/stream (так «Клей» ни разу не
+        # проверился после выката сравнения звука).
+        censorship.schedule_suggestion(track.external_id)
 
     # Заархивированный трек (в т.ч. изначально внешний ytmusic/soundcloud) лежит в
     # объектном хранилище. Проксируем его через бэкенд (тот же origin/https,

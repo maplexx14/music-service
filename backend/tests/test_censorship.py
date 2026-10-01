@@ -355,3 +355,74 @@ def test_audio_skips_reupload_of_censored_version(db, monkeypatch):
 
     assert asyncio.run(censorship.suggest_for_video("KLEI000001"))["id"] == "22"
     assert compared == ["21", "22"]
+
+
+def test_admin_check_reports_why_nothing_was_linked(client, db, monkeypatch):
+    from app.routers import deezer
+
+    create_user(db, "admin", is_admin=True)
+    monkeypatch.setattr(deezer, "_ytmusic_meta_blocking", lambda vid: ("Клей", "CUPSIZE", 147))
+
+    async def candidates(title, artist, duration):
+        return [censorship.score_candidate(_sc_item("CUPSIZE - Клей", "everlov3d", 144, 11), title, artist, duration)]
+
+    monkeypatch.setattr(censorship, "find_candidates", candidates)
+    _stub_audio(monkeypatch, {"11": "same"})
+
+    report = client.post("/api/censorship/check", json={"video_id": "KLEI000001"},
+                         headers=auth_headers(client, "admin")).json()
+
+    assert report["outcome"] == "not_found"
+    assert report["comparisons"][0]["verdict"] == "same"
+
+
+def test_inconclusive_background_check_is_retried_soon(db, monkeypatch, _isolated):
+    # Звук не скачался — флаг «проверено» короткий, а не на месяц.
+    from app.routers import deezer
+
+    monkeypatch.setattr(deezer, "_ytmusic_meta_blocking", lambda vid: ("Клей", "CUPSIZE", 147))
+
+    async def candidates(title, artist, duration):
+        return [censorship.score_candidate(_sc_item("CUPSIZE - Клей", "everlov3d", 144, 11), title, artist, duration)]
+
+    monkeypatch.setattr(censorship, "find_candidates", candidates)
+    ttl = {}
+
+    async def set_cache(key, value, expire=None):
+        ttl[key] = expire
+
+    monkeypatch.setattr(censorship, "set_cache_async", set_cache)
+
+    async def run():
+        censorship.schedule_suggestion("KLEI000001")
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+
+    assert ttl == {"censor:checked:v2:KLEI000001": censorship._RETRY_CHECK_TTL}
+
+
+def test_library_stream_schedules_censor_check(client, db, monkeypatch):
+    # Трек библиотеки играет из MinIO через /tracks/{id}/stream — проверка на
+    # цензуру должна запускаться и отсюда.
+    from app import storage
+
+    create_user(db, "bob")
+    track = Track(title="Клей", artist="CUPSIZE", duration=147, source="ytmusic",
+                  external_id="bruZDcRPOD0", file_path="minio://music/external/ytmusic/bruZDcRPOD0.m4a")
+    db.add(track)
+    db.commit()
+    scheduled = []
+    monkeypatch.setattr(censorship, "schedule_suggestion", scheduled.append)
+
+    async def minio_response(*_a, **_kw):
+        from fastapi.responses import Response
+
+        return Response(b"audio", media_type="audio/mp4")
+
+    monkeypatch.setattr(storage, "minio_range_response_async", minio_response)
+
+    response = client.get(f"/api/tracks/{track.id}/stream", headers=auth_headers(client, "bob"))
+
+    assert response.status_code == 200
+    assert scheduled == ["bruZDcRPOD0"]

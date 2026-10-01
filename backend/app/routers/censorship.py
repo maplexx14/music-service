@@ -112,6 +112,26 @@ async def create_override(
     return await asyncio.to_thread(save)
 
 
+class CheckRequest(BaseModel):
+    video_id: str
+
+
+@router.post("/check")
+async def check_video(
+    payload: CheckRequest,
+    current_user: User = Depends(get_current_admin_user),
+) -> dict:
+    """Проверить трек на цензуру сейчас, мимо фонового расписания.
+
+    Отдаёт отчёт по шагам: метаданные, сколько кандидатов нашлось на
+    SoundCloud, результат сравнения звука с каждым и итог (outcome) — видно,
+    на каком шаге трек не привязался.
+    """
+    report: dict = {"video_id": payload.video_id}
+    await censorship.suggest_for_video(payload.video_id, report)
+    return report
+
+
 @router.post("/overrides/{override_id}/confirm")
 def confirm_override(
     override_id: int,

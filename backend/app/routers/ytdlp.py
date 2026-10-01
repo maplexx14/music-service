@@ -2695,6 +2695,9 @@ async def prefetch_ytmusic(video_id: str):
             return await soundcloud.prefetch_soundcloud(
                 soundcloud._encode_token(override["original_id"], override["original_permalink"])
             )
+        # Проверяем заранее, пока трек ждёт в очереди: тогда цензурным не
+        # окажется даже первое прослушивание.
+        censorship.schedule_suggestion(video_id)
     except Exception:  # noqa: BLE001 — прогрев best-effort
         logger.warning("censor override prefetch failed for %s", video_id, exc_info=True)
     try:
