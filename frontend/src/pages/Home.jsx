@@ -431,10 +431,17 @@ function Home() {
                 type="button"
                 onClick={handleWaveClick}
                 className="wave-title"
+                aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
                 {...waveIntentHandlers}
               >
-                {isWavePlaying ? <Pause size={20} /> : <Play size={20} />}
-                <span>поток</span>
+                {isWavePlaying ? (
+                  <Pause size={30} fill="currentColor" strokeWidth={0} />
+                ) : (
+                  // Треугольник визуально тяжелее слева — сдвиг вправо
+                  // ставит его в оптический центр круга.
+                  <Play size={30} fill="currentColor" strokeWidth={0} className="wave-title-play" />
+                )}
+                <span aria-hidden="true">поток</span>
               </button>
             )}
           </div>

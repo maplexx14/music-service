@@ -226,38 +226,93 @@
   z-index: 2;
 }
 
+/* Кнопка потока — круг в центре диска. Светлое «стекло» поверх обложки
+   читается как кнопка сразу, а не как подпись: тёмная пилюля на тёмной
+   обложке терялась. */
 .wave-title {
+  position: relative;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  font-size: var(--text-xl);
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  font-size: var(--text-sm);
   font-family: 'Unbounded', sans-serif;
   font-weight: 700;
-  color: #ffffff;
   letter-spacing: 0.3px;
+  color: #ffffff;
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 999px;
-  padding: 14px 28px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  background: rgba(255, 255, 255, 0.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
   transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
+.wave-title svg {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
+}
+
+.wave-title-play {
+  transform: translateX(2px);
+}
+
+/* В покое от кнопки расходится кольцо — как волны градиента от диска.
+   Подсказывает, что сюда нажимать; во время игры кольцо не нужно. */
+.wave-title::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  animation: waveTitleHalo 2.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+.wave-widget.is-playing .wave-title::before {
+  animation: none;
+  opacity: 0;
+}
+
+@keyframes waveTitleHalo {
+  0% { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+
 .wave-title:hover {
-  background: rgba(0, 0, 0, 0.45);
-  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .wave-title:hover {
-    transform: translateY(-1px);
+    transform: scale(1.04);
   }
 }
 
 .wave-title:active {
-  transform: translateY(0) scale(0.97);
+  transform: scale(0.96);
   transition-duration: 100ms;
+}
+
+.wave-title:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-title::before {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 .wave-gif-button {
@@ -683,8 +738,8 @@
   }
 
   .wave-title {
-    font-size: var(--text-md);
-    padding: 12px 22px;
+    width: 108px;
+    height: 108px;
   }
 
   .content-section {
