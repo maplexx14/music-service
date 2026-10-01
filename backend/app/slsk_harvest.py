@@ -41,6 +41,10 @@ _harvest_sem: Optional[asyncio.Semaphore] = None
 # Наблюдатели закачек живут в фоне прохода: сильная ссылка, иначе asyncio
 # может собрать задачу до завершения (см. _match_inflight в soulseek.py).
 _watch_inflight: set[asyncio.Task] = set()
+# Только mp3: FLAC/WAV больше лимита архива (ARCHIVE_MAX_AUDIO_BYTES), в MinIO
+# не уносятся и лишь копились в slskd_downloads — ~12 ГБ в сутки, диск прода
+# заполнился 2026-10-01.
+_HARVEST_EXTENSIONS = (".mp3",)
 
 
 def _pick_artist(revisit_seconds: int) -> Optional[str]:
@@ -202,6 +206,7 @@ async def _harvest_one(artist: str, track) -> str:
             track.artist,
             track.duration,
             sem_for_search=_get_harvest_sem(),
+            extensions=_HARVEST_EXTENSIONS,
         )
         if not token:
             return ""

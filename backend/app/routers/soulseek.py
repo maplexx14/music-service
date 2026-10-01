@@ -284,8 +284,14 @@ async def find_soulseek_equivalent(
     duration: int,
     *,
     sem_for_search: Optional[asyncio.Semaphore] = None,
+    extensions: Optional[Tuple[str, ...]] = None,
 ) -> Optional[str]:
     """Токен файла-эквивалента в Soulseek для трека YouTube Music.
+
+    extensions — брать только файлы с этими расширениями (харвест берёт mp3:
+    FLAC больше лимита архива и в MinIO не уносится, только копится на диске).
+    Матч с фильтром кэшируется под своим ключом: стрим по-прежнему видит
+    лучший файл любого формата.
 
     None — точного совпадения нет (или slskd недоступен): вызывающий код
     откатывается на SoundCloud/YouTube.
@@ -301,6 +307,8 @@ async def find_soulseek_equivalent(
     if not SOULSEEK_USERNAME:
         return None
     key = f"ytmusic:slskmatch:{video_id}"
+    if extensions:
+        key = f"ytmusic:slskmatch:{','.join(sorted(extensions))}:{video_id}"
     cached = await get_cache_async(key)
     if cached:
         # Промах тоже кэшируем — иначе каждый стрим гонял бы slskd-поиск заново.
@@ -337,6 +345,8 @@ async def find_soulseek_equivalent(
         for file in response.get("files") or []:
             filename = file.get("filename") or ""
             if not _is_audio(filename):
+                continue
+            if extensions and not _basename(filename).lower().endswith(extensions):
                 continue
             try:
                 f_duration = int(file.get("length") or 0)

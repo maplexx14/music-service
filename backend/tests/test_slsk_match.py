@@ -248,3 +248,66 @@ def test_search_create_retries_slskd_429(monkeypatch):
     assert responses == [{"username": "peer", "files": []}]
     assert [m for m, _ in calls].count("POST") == 3
     assert ("DELETE", "/api/v0/searches/s1") in calls
+
+
+# --- только mp3 для харвеста --------------------------------------------------
+
+
+def _two_formats(q, timeout=None):
+    flac = _peer_response("Nicholas Britell - Andante Risoluto.flac", _DURATION, size=30_000_000)
+    flac["files"][0]["bitRate"] = 1000
+    flac["uploadSpeed"] = 900_000
+    mp3 = _peer_response("Nicholas Britell - Andante Risoluto.mp3", _DURATION)
+    mp3["username"] = "mp3peer"
+
+    async def run():
+        return [flac, mp3]
+
+    return run()
+
+
+def test_extension_filter_skips_flac_and_keeps_own_cache(monkeypatch):
+    """Харвест берёт mp3, даже если FLAC «лучше» по рангу; стрим — лучший файл.
+
+    Кэши раздельные: mp3-матч харвеста не подменяет стриму FLAC и наоборот.
+    """
+    cache = _patch_io(monkeypatch)
+    monkeypatch.setattr(soulseek, "_slskd_search_responses", _two_formats)
+
+    mp3_token = asyncio.run(_real_find("vidX", _TITLE, _ARTIST, _DURATION, extensions=(".mp3",)))
+    any_token = asyncio.run(_real_find("vidX", _TITLE, _ARTIST, _DURATION))
+
+    assert soulseek._token_decode(mp3_token)[1].endswith(".mp3")
+    assert soulseek._token_decode(any_token)[1].endswith(".flac")
+    assert set(cache) == {"ytmusic:slskmatch:.mp3:vidX", "ytmusic:slskmatch:vidX"}
+
+
+def test_extension_filter_misses_when_only_flac(monkeypatch):
+    _patch_io(monkeypatch)
+
+    async def _search(q, timeout=None):
+        return [_peer_response("Nicholas Britell - Andante Risoluto.flac", _DURATION)]
+
+    monkeypatch.setattr(soulseek, "_slskd_search_responses", _search)
+    assert asyncio.run(_real_find("vidY", _TITLE, _ARTIST, _DURATION, extensions=(".mp3",))) is None
+
+
+def test_harvest_asks_for_mp3_only(monkeypatch):
+    from app import slsk_harvest
+    from app.routers import ytdlp
+
+    seen = {}
+
+    async def find(*_a, extensions=None, **_kw):
+        seen["extensions"] = extensions
+        return None
+
+    async def not_archived(_key):
+        return None
+
+    monkeypatch.setattr(soulseek, "find_soulseek_equivalent", find)
+    monkeypatch.setattr(ytdlp, "archived_music_path", not_archived)
+
+    asyncio.run(slsk_harvest._harvest_one("Tester", _Track(1)))
+
+    assert seen["extensions"] == (".mp3",)
