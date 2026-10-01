@@ -40,6 +40,11 @@ uniform float uZoom;
 uniform vec3 uColor1;
 uniform vec3 uColor2;
 uniform vec3 uColor3;
+uniform vec2 uRippleCenter;
+uniform float uRippleRadius;
+uniform float uRippleTime;
+uniform float uRippleStrength;
+uniform float uRippleFreq;
 out vec4 fragColor;
 #define S(a,b,t) smoothstep(a,b,t)
 mat2 Rot(float a){float s=sin(a),c=cos(a);return mat2(c,-s,s,c);} 
@@ -51,6 +56,29 @@ void mainImage(out vec4 o, vec2 C){
   float ratio=iResolution.x/iResolution.y;
   vec2 tuv=uv-0.5+uCenterOffset;
   tuv/=max(uZoom,0.001);
+
+  // Волны от диска: кольца рождаются на его кромке и расходятся наружу.
+  // Расстояние считаем в долях высоты (rp.x домножен на ratio), иначе на
+  // широком hero кольца сплющивались бы в эллипсы. Кромку слегка колышет
+  // шум по углу (cos/sin вместо самого угла — без шва на ±π), чтобы фронт
+  // волны не был циркульно-ровным.
+  float rippleW=0.0;
+  float rippleFade=0.0;
+  if(uRippleStrength>0.0){
+    vec2 rp=uv-uRippleCenter;
+    rp.x*=ratio;
+    float r=length(rp);
+    float ang=atan(rp.y,rp.x);
+    float wob=(noise(vec2(cos(ang),sin(ang))*1.6+t*0.05)-0.5)*0.08;
+    float d=max(r-uRippleRadius+wob,0.0);
+    rippleW=sin(d*uRippleFreq-uRippleTime);
+    // Затухание по мере удаления: у диска волна сильнее, к краям hero
+    // растворяется в обычном градиенте. Мягкий вход у самой кромки — чтобы
+    // на границе диска не было ступеньки.
+    rippleFade=exp(-d*1.4)*S(0.0,0.03,d)*uRippleStrength;
+    // Радиальное смещение поля: сам градиент «качается» вместе с волной.
+    tuv+=(rp/max(r,0.0001))*rippleW*0.035*rippleFade;
+  }
 
   float degree=noise(vec2(t*0.1,tuv.x*tuv.y)*uNoiseScale);
   tuv.y*=1.0/ratio;
@@ -77,6 +105,9 @@ void mainImage(out vec4 o, vec2 C){
   vec3 layer1=mix(colDark,colOrg,S(edge0,edge1,blendX));
   vec3 layer2=mix(colOrg,colLav,S(edge0,edge1,blendX));
   vec3 col=mix(layer1,layer2,S(v0,v1,tuv.y));
+  // Гребни волн светлее и тянутся к первому цвету, впадины темнее.
+  col*=1.0+rippleW*0.14*rippleFade;
+  col=mix(col,colLav,S(0.55,1.0,rippleW)*0.22*rippleFade);
 
   vec2 grainUv=uv*max(uGrainScale,0.001);
   if(uGrainAnimated>0.5){grainUv+=vec2(iTime*0.05);} 
@@ -150,6 +181,14 @@ const Grainient = ({
   // если на конкретном пресете проступают ступеньки на границах цветов или
   // включён заметный grainAmount (зерно при апскейле становится крупным).
   renderScale = 0.5,
+  // Волны от элемента-источника (диск в hero): селектор ищется по документу,
+  // центр и радиус колец берутся из его rect. 0 — волн нет.
+  rippleFrom = null,
+  rippleStrength = 0,
+  rippleFrequency = 14,
+  // Меняется, когда источник появляется/исчезает (диска нет без трека) —
+  // повод перемерить его положение.
+  rippleKey = null,
   className = ''
 }) => {
   const containerRef = useRef(null);
@@ -164,6 +203,7 @@ const Grainient = ({
   const colorsRef = useRef({ color1, color2, color3 });
   colorsRef.current = { color1, color2, color3 };
   const applyColorsRef = useRef(null);
+  const measureRippleRef = useRef(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -232,7 +272,12 @@ const Grainient = ({
         uZoom: { value: zoom },
         uColor1: { value: new Float32Array(hexToRgb(c1)) },
         uColor2: { value: new Float32Array(hexToRgb(c2)) },
-        uColor3: { value: new Float32Array(hexToRgb(c3)) }
+        uColor3: { value: new Float32Array(hexToRgb(c3)) },
+        uRippleCenter: { value: new Float32Array([0.5, 0.5]) },
+        uRippleRadius: { value: 0 },
+        uRippleTime: { value: 0 },
+        uRippleStrength: { value: rippleStrength },
+        uRippleFreq: { value: rippleFrequency }
       }
     });
 
@@ -248,7 +293,33 @@ const Grainient = ({
       res[1] = gl.drawingBufferHeight;
     };
 
-    const ro = new ResizeObserver(setSize);
+    // Центр и радиус колец в координатах шейдера: x/y в долях canvas (y
+    // снизу вверх, как gl_FragCoord), радиус — в долях высоты. Источника нет
+    // (ничего не играет) — кольца идут из центра.
+    const measureRipple = () => {
+      const center = program.uniforms.uRippleCenter.value;
+      const el = rippleFrom ? document.querySelector(rippleFrom) : null;
+      const box = container.getBoundingClientRect();
+      if (!el || !(box.width > 0) || !(box.height > 0)) {
+        center[0] = 0.5;
+        center[1] = 0.5;
+        program.uniforms.uRippleRadius.value = 0;
+      } else {
+        const r = el.getBoundingClientRect();
+        center[0] = (r.left + r.width / 2 - box.left) / box.width;
+        center[1] = 1 - (r.top + r.height / 2 - box.top) / box.height;
+        program.uniforms.uRippleRadius.value = r.width / 2 / box.height;
+      }
+      if (!running) renderer.render({ scene: mesh });
+    };
+    measureRippleRef.current = measureRipple;
+
+    // Размер диска задан через vw/vh, поэтому он меняется вместе с hero —
+    // перемеряем на том же ResizeObserver.
+    const ro = new ResizeObserver(() => {
+      setSize();
+      measureRipple();
+    });
     ro.observe(container);
     setSize();
 
@@ -258,6 +329,7 @@ const Grainient = ({
       warpSpeed: 0.7,
       warpAmplitude: 75,
       rotationAmount: 120,
+      rippleSpeed: 1.2,
     };
     const playing = {
       timeSpeed: 3,
@@ -265,11 +337,13 @@ const Grainient = ({
       warpSpeed: 3.2,
       warpAmplitude: 32,
       rotationAmount: 700,
+      rippleSpeed: 3.5,
     };
 
     let mixFactor = activeRef.current ? 1 : 0;
     let animationTime = 0;
     let warpTime = 0;
+    let rippleTime = 0;
     // Время последнего отрисованного кадра, а не последнего тика rAF: дельта
     // должна покрывать весь промежуток, включая пропущенные по капу тики,
     // иначе анимация замедлится пропорционально капу.
@@ -280,6 +354,7 @@ const Grainient = ({
     // И контейнер во вьюпорте. Скрытая вкладка / фон за пределами экрана —
     // ноль работы GPU и CPU вместо постоянного полноэкранного шейдера.
     let running = false;
+    measureRipple();
     let pageVisible = !document.hidden;
     let inViewport = true;
 
@@ -342,6 +417,10 @@ const Grainient = ({
       const timeFactor = deltaTime * currentTimeSpeed;
       animationTime += timeFactor;
       warpTime += timeFactor * warpSpeed;
+      // Волны идут от реального времени, а не от timeSpeed: тот у главной
+      // разогнан до 5, и кольца с ним мелькали бы.
+      rippleTime += deltaTime * (idle.rippleSpeed + (playing.rippleSpeed - idle.rippleSpeed) * mixFactor);
+      program.uniforms.uRippleTime.value = rippleTime;
 
       program.uniforms.uAnimationTime.value = animationTime;
       program.uniforms.uWarpTime.value = warpTime;
@@ -384,6 +463,7 @@ const Grainient = ({
     return () => {
       stopLoop();
       applyColorsRef.current = null;
+      measureRippleRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
       io.disconnect();
       ro.disconnect();
@@ -419,6 +499,9 @@ const Grainient = ({
     centerX,
     centerY,
     zoom,
+    rippleFrom,
+    rippleStrength,
+    rippleFrequency,
     // color1..color3 здесь сознательно НЕ в зависимостях: эффект строит
     // WebGL-контекст и программу, а цвета пишутся в юниформы отдельным
     // эффектом ниже — смена цвета не должна пересобирать контекст.
@@ -430,6 +513,11 @@ const Grainient = ({
   useEffect(() => {
     applyColorsRef.current?.(color1, color2, color3);
   }, [color1, color2, color3]);
+
+  // Источник волн появился/исчез — перемеряем его после коммита DOM.
+  useEffect(() => {
+    measureRippleRef.current?.();
+  }, [rippleKey]);
 
   return <div ref={containerRef} className={`grainient-container ${className}`.trim()} />;
 };

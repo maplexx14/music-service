@@ -396,6 +396,9 @@ function Home() {
                 centerX={0}
                 centerY={0}
                 zoom={0.9}
+                rippleFrom=".hero-disc"
+                rippleStrength={1}
+                rippleKey={currentTrack ? 1 : 0}
                 active={isWavePlaying}
               />
             </Suspense>
