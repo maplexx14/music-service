@@ -324,6 +324,10 @@ class CensorOverride(Base):
     # отклонено (не предлагать эту пару снова).
     status = Column(String(16), nullable=False, default="suggested", server_default="suggested", index=True)
     score = Column(Float, nullable=True)
+    # Результат сравнения звука (app/audio_compare.Comparison.as_dict): где и
+    # насколько цензурная версия расходится с оригиналом. NULL — привязка без
+    # сравнения (вручную или по метаданным).
+    evidence = Column(JSON, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

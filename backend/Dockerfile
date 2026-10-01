@@ -29,11 +29,14 @@ RUN set -eux; \
             > /etc/apt/sources.list.d/contrib-nonfree.list; \
     fi
 
+# libchromaprint-tools — fpcalc: сравнение записей по звуку для поиска
+# оригиналов треков, зацензуренных по закону РФ (app/audio_compare.py).
 RUN apt-get update && apt-get install -y \
     gcc \
     postgresql-client \
     ffmpeg \
     fdkaac \
+    libchromaprint-tools \
     nodejs \
     && rm -rf /var/lib/apt/lists/*
 

@@ -261,3 +261,97 @@ def test_admin_links_original_and_library_follows(client, db, monkeypatch):
     listed = client.get("/api/censorship/overrides", params={"status": "rejected"},
                         headers=auth_headers(client, "admin"))
     assert [o["external_id"] for o in listed.json()] == ["CENSORED01"]
+
+
+class _Cmp:
+    def __init__(self, verdict, segments=()):
+        self.verdict = verdict
+        self.segments = list(segments)
+
+    def as_dict(self):
+        return {"verdict": self.verdict, "segments": [list(x) for x in self.segments]}
+
+
+def _stub_audio(monkeypatch, verdicts):
+    """verdicts: {id кандидата SoundCloud: verdict сравнения с каталогом}."""
+    from app import audio_compare
+
+    monkeypatch.setattr(censorship, "compare_with_candidates", _real_compare_with_candidates)
+    monkeypatch.setattr(audio_compare, "available", lambda: True)
+
+    async def catalog(_video_id):
+        return "/cache/catalog.mp3", None
+
+    async def download(candidate):
+        return f"/tmp/{candidate['id']}.mp3"
+
+    monkeypatch.setattr(censorship, "_catalog_audio", catalog)
+    monkeypatch.setattr(censorship, "_soundcloud_audio", download)
+    monkeypatch.setattr(censorship, "_remove", lambda path: None)
+    compared = []
+
+    def compare(_catalog, audio):
+        track_id = audio.rsplit("/", 1)[1].split(".")[0]
+        compared.append(track_id)
+        verdict = verdicts[track_id]
+        return _Cmp(verdict, [(2.0, 1.4, -8.1)] if verdict == "censored" else [])
+
+    monkeypatch.setattr(audio_compare, "compare", compare)
+    return compared
+
+
+_real_compare_with_candidates = censorship.compare_with_candidates
+
+
+def test_audio_links_reupload_when_title_unchanged(db, monkeypatch):
+    # Случай «Клей»: название цензура не тронула, оригинал — только в
+    # перезаливах. Метаданные тут бессильны, звук — нет.
+    from app.routers import deezer
+
+    monkeypatch.setattr(deezer, "_ytmusic_meta_blocking", lambda vid: ("Клей", "CUPSIZE", 147))
+
+    async def candidates(title, artist, duration):
+        return [
+            censorship.score_candidate(_sc_item("CUPSIZE - Клей", "everlov3d", 144, 11), title, artist, duration),
+            censorship.score_candidate(_sc_item("CUPSIZE - Клей", "fluffy", 142, 12), title, artist, duration),
+        ]
+
+    monkeypatch.setattr(censorship, "find_candidates", candidates)
+    compared = _stub_audio(monkeypatch, {"11": "censored", "12": "censored"})
+
+    assert asyncio.run(censorship.suggest_for_video("KLEI000001"))["id"] == "11"
+
+    row = db.query(CensorOverride).one()
+    assert (row.status, row.original_id) == ("confirmed", "11")
+    assert row.evidence["segments"] == [[2.0, 1.4, -8.1]]
+    assert compared == ["11"]
+
+
+def test_audio_same_as_artist_upload_means_not_censored(db, monkeypatch):
+    # По метаданным это была бы автопривязка, но звук совпал с заливом
+    # артиста целиком — трек не цензурный.
+    _stub_search(monkeypatch, _sc_item("В этой траве", "СЕРЕГА ПИРАТ", 129, 7))
+    _stub_audio(monkeypatch, {"7": "same"})
+
+    assert asyncio.run(censorship.suggest_for_video("CENSORED01")) is None
+    assert db.query(CensorOverride).count() == 0
+
+
+def test_audio_skips_reupload_of_censored_version(db, monkeypatch):
+    # Первый перезалив сделан уже с цензурной версии (совпал целиком), второй
+    # — оригинал.
+    from app.routers import deezer
+
+    monkeypatch.setattr(deezer, "_ytmusic_meta_blocking", lambda vid: ("Клей", "CUPSIZE", 147))
+
+    async def candidates(title, artist, duration):
+        return [
+            censorship.score_candidate(_sc_item("CUPSIZE - Клей", "copycat", 147, 21), title, artist, duration),
+            censorship.score_candidate(_sc_item("CUPSIZE - Клей", "everlov3d", 144, 22), title, artist, duration),
+        ]
+
+    monkeypatch.setattr(censorship, "find_candidates", candidates)
+    compared = _stub_audio(monkeypatch, {"21": "same", "22": "censored"})
+
+    assert asyncio.run(censorship.suggest_for_video("KLEI000001"))["id"] == "22"
+    assert compared == ["21", "22"]

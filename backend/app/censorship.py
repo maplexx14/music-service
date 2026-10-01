@@ -103,6 +103,7 @@ def _snapshot(row: CensorOverride) -> dict:
         # Нет автора — привязал сам сервис (auto_confirmable) или это
         # подсказка, которую ещё никто не трогал.
         "auto": row.created_by is None,
+        "evidence": row.evidence,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -415,7 +416,12 @@ def auto_confirmable(title: str, duration: int, candidate: dict, rivals: list[di
 
 
 def _save_suggestion_blocking(
-    video_id: str, title: str, artist: str, candidate: dict, status: str = STATUS_SUGGESTED
+    video_id: str,
+    title: str,
+    artist: str,
+    candidate: dict,
+    status: str = STATUS_SUGGESTED,
+    evidence: Optional[dict] = None,
 ) -> bool:
     db = SessionLocal()
     try:
@@ -440,6 +446,7 @@ def _save_suggestion_blocking(
             original_cover_url=candidate["cover_url"],
             status=status,
             score=candidate["score"],
+            evidence=evidence,
         )
         db.add(row)
         if status == STATUS_CONFIRMED:
@@ -454,9 +461,152 @@ def _save_suggestion_blocking(
         db.close()
 
 
+# Сравнение звука (app/audio_compare.py): сколько лучших кандидатов качаем и
+# сравниваем с записью каталога. Каждый — ~3 МБ с CDN SoundCloud и ~2 с CPU.
+_AUDIO_CANDIDATES = 3
+_MAX_AUDIO_BYTES = 30 * 1024 * 1024
+
+
+async def _catalog_audio(video_id: str) -> tuple[Optional[str], Optional[str]]:
+    """(путь к звуку, который играет у трека каталога; временный файл к удалению).
+
+    Сравнивать надо именно то, что слышит пользователь: свою копию (диск или
+    MinIO), иначе запись из Deezer — она первая в цепочке стрима. YouTube не
+    трогаем: резолв с адресов сервера ловит bot-check.
+    """
+    import os
+    import tempfile
+
+    from app import storage
+    from app.routers import deezer, ytdlp
+
+    path = ytdlp._cached_file(video_id)
+    if path:
+        return path, None
+    archived = await ytdlp.archived_music_path(f"ytmusic/{video_id}")
+    if archived:
+        fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(archived)[1] or ".m4a")
+        os.close(fd)
+        try:
+            await asyncio.to_thread(storage.download_music_file, archived, tmp)
+            return tmp, tmp
+        except Exception:  # noqa: BLE001 — сравнение best-effort
+            logger.warning("censor check: archive download failed for %s", video_id, exc_info=True)
+            _remove(tmp)
+    if deezer.enabled():
+        sng_id = await deezer.await_deezer_match(video_id)
+        if sng_id:
+            path = await deezer.fetch_to_cache(video_id, sng_id)
+            if path:
+                return path, None
+    return None, None
+
+
+async def _soundcloud_audio(candidate: dict) -> Optional[str]:
+    """Временный файл со звуком кандидата или None.
+
+    Звук качается напрямую с CDN SoundCloud, без прокси (trust_env=False — и
+    мимо переменных окружения): ссылка к IP не привязана, а платный выход
+    на мегабайты аудио тратить незачем.
+    """
+    import os
+    import tempfile
+
+    import httpx
+
+    from app.routers import soundcloud
+
+    try:
+        url, ext, _total, _fresh = await soundcloud._resolve_cached(
+            candidate["id"], candidate["permalink"]
+        )
+    except Exception:  # noqa: BLE001 — HLS-only/DRM/сбой резолва: кандидат пропускается
+        logger.info("censor check: soundcloud %s not resolvable", candidate["id"])
+        return None
+    fd, tmp = tempfile.mkstemp(suffix=ext or ".mp3")
+    os.close(fd)
+    written = 0
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True, trust_env=False
+        ) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                with open(tmp, "wb") as fh:
+                    async for chunk in response.aiter_bytes():
+                        written += len(chunk)
+                        if written > _MAX_AUDIO_BYTES:
+                            raise RuntimeError("слишком большой файл")
+                        fh.write(chunk)
+        return tmp
+    except Exception:  # noqa: BLE001
+        logger.warning("censor check: soundcloud %s download failed", candidate["id"], exc_info=True)
+        _remove(tmp)
+        return None
+
+
+def _remove(path: Optional[str]) -> None:
+    import os
+
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+async def compare_with_candidates(
+    video_id: str, candidates: list[dict]
+) -> tuple[Optional[dict], Optional[Any]]:
+    """Сравнивает звук трека каталога с лучшими кандидатами.
+
+    (кандидат, сравнение): verdict censored — найден оригинал; same — трек
+    каталога не цензурный (кандидат — та же запись без отличий); (None, None)
+    — сравнить не получилось или ни один кандидат не той же записи.
+    """
+    from app import audio_compare
+
+    if not candidates or not await asyncio.to_thread(audio_compare.available):
+        return None, None
+    catalog, catalog_tmp = await _catalog_audio(video_id)
+    if not catalog:
+        return None, None
+    try:
+        for candidate in candidates[:_AUDIO_CANDIDATES]:
+            audio = await _soundcloud_audio(candidate)
+            if not audio:
+                continue
+            try:
+                result = await asyncio.to_thread(audio_compare.compare, catalog, audio)
+            finally:
+                _remove(audio)
+            if result is None:
+                continue
+            logger.info(
+                "censor check: ytmusic %s vs soundcloud %s → %s",
+                video_id, candidate["id"], result.as_dict(),
+            )
+            if result.verdict == "censored":
+                return candidate, result
+            # Совпал залив самого артиста — значит, каталог и есть оригинал.
+            # Совпавший перезалив мог быть залит уже с цензурной версии —
+            # смотрим следующих кандидатов.
+            if result.verdict == "same" and candidate["official"]:
+                return candidate, result
+    finally:
+        _remove(catalog_tmp)
+    return None, None
+
+
 async def suggest_for_video(video_id: str) -> Optional[dict]:
-    """Ищет оригинал для ytmusic-трека: надёжный — привязывает сразу
-    (auto_confirmable), остальное сохраняет подсказкой для админа."""
+    """Ищет оригинал для ytmusic-трека и привязывает его, если уверен.
+
+    Главный способ — сравнение звука (compare_with_candidates): «та же запись,
+    но с заглушёнными участками» привязывается сразу, «та же запись без
+    отличий» — трек не цензурный. Если сравнить нечем (нет звука каталога,
+    кандидаты не скачались), остаются метаданные: auto_confirmable или
+    подсказка админу.
+    """
     by_id, _by_key = await confirmed_overrides()
     if video_id in by_id:
         return None
@@ -470,21 +620,30 @@ async def suggest_for_video(video_id: str) -> Optional[dict]:
         return None
     async with _suggest_sem:
         candidates = await find_candidates(title, artist, duration)
-    best = next(
-        (c for c in candidates if c["official"] and looks_censored(title, c["title"])),
-        None,
-    )
-    if best is None:
+        matched, comparison = await compare_with_candidates(video_id, candidates)
+    if comparison is not None and comparison.verdict == "same":
         return None
-    auto = auto_confirmable(title, duration, best, candidates)
-    status = STATUS_CONFIRMED if auto else STATUS_SUGGESTED
-    if await asyncio.to_thread(_save_suggestion_blocking, video_id, title, artist, best, status):
-        if auto:
+    if comparison is not None:
+        best, status, evidence = matched, STATUS_CONFIRMED, comparison.as_dict()
+    else:
+        best = next(
+            (c for c in candidates if c["official"] and looks_censored(title, c["title"])),
+            None,
+        )
+        if best is None:
+            return None
+        status = STATUS_CONFIRMED if auto_confirmable(title, duration, best, candidates) else STATUS_SUGGESTED
+        evidence = None
+    if await asyncio.to_thread(
+        _save_suggestion_blocking, video_id, title, artist, best, status, evidence
+    ):
+        if status == STATUS_CONFIRMED:
             invalidate()
         logger.info(
-            "censor %s: ytmusic %s (%s — %s) → soundcloud %s (%s)",
-            "auto-link" if auto else "suggestion",
+            "censor %s: ytmusic %s (%s — %s) → soundcloud %s (%s)%s",
+            "auto-link" if status == STATUS_CONFIRMED else "suggestion",
             video_id, artist, title, best["id"], best["title"],
+            " by audio" if evidence else "",
         )
     return best
 

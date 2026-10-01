@@ -280,6 +280,11 @@ def _no_external_pool_network(request, monkeypatch):
         return []
 
     monkeypatch.setattr("app.censorship.find_candidates", _no_candidates)
+
+    async def _no_audio_check(*_args, **_kwargs):
+        return None, None
+
+    monkeypatch.setattr("app.censorship.compare_with_candidates", _no_audio_check)
     monkeypatch.setattr("app.routers.deezer._ytmusic_meta_blocking", lambda *_a, **_kw: None)
     yield
 

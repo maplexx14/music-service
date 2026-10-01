@@ -117,8 +117,16 @@ function CensorOverrides() {
                 <div className="admin-censor-meta">
                   {CENSOR_STATUS_LABEL[item.status]}
                   {item.status === 'confirmed' && item.auto ? ' (автоматически)' : ''}
-                  {' · '}{item.original_artist} · {formatClock(item.original_duration)}
+                  {' · '}{item.original_artist}
+                  {' · '}{formatClock(item.original_duration)}
                 </div>
+                {item.evidence?.segments?.length > 0 && (
+                  <div className="admin-censor-meta">
+                    По звуку: {item.evidence.segments.map(([start, length, db]) => (
+                      `${formatClock(start)} — ${length} с, ${db > 0 ? '+' : ''}${db} дБ`
+                    )).join('; ')}
+                  </div>
+                )}
               </div>
               <div className="admin-censor-actions">
                 {item.status !== 'confirmed' && (
