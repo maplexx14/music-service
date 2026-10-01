@@ -167,6 +167,18 @@ _DEEP_CATALOG_MIN_TRACKS = 5
 # Сколько ждём Last.fm в мейнстрим-фильтре сверх сетевых источников. Не успевшие
 # запросы догреют кэш в фоне — см. mainstream.artist_hits.
 _MAINSTREAM_WAIT = 1.5
+# Хиты похожих артистов — источник под мейнстрим-фильтр: сам фильтр только
+# отбирает, а radio и Last.fm getSimilar приносят у соседа что попало, и сосед
+# выпадал целиком вместо того, чтобы прийти своими хитами. Сид — артист (любимый
+# или из свежих позитивов), _SIMILAR_HITS_SEEDS на запрос. У сида проверяем
+# известность первых _SIMILAR_HITS_CHECK соседей, берём _SIMILAR_HITS_ARTISTS
+# известных и по _SIMILAR_HITS_PER_ARTIST трека из их топа. Резолв — поиск у
+# провайдеров на трек, поэтому пул кэшируется на сид.
+_SIMILAR_HITS_SEEDS = 2
+_SIMILAR_HITS_CHECK = 12
+_SIMILAR_HITS_ARTISTS = 5
+_SIMILAR_HITS_PER_ARTIST = 2
+_SIMILAR_HITS_TTL = 6 * 60 * 60
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -470,6 +482,50 @@ def _external_population_stats_on_bind(bind, items, now=None) -> dict:
         local_db.close()
 
 
+def _collection_rows(db: Session, user_id: int) -> list:
+    """Вся коллекция юзера (лайки и свои плейлисты) строками для ключей песен."""
+    return (
+        db.query(
+            Track.id,
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.external_id,
+            Track.album,
+        )
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user_id)
+        .all()
+    )
+
+
+def deep_catalog_artist_keys(collection_rows, excluded=()) -> List[str]:
+    """Любимые артисты: от _DEEP_CATALOG_MIN_TRACKS разных песен в коллекции.
+
+    Им волна и лента отдают глубокий каталог, остальным — только хиты
+    (app/mainstream.py). Считаются разные песни, а не строки: один трек в двух
+    плейлистах — это один выбор. ``collection_rows`` — из ``_collection_rows``.
+    """
+    songs_by_artist: dict[str, set] = {}
+    for _track_id, artist, title, source, _external_id, album in collection_rows:
+        effective_artist, effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        key = _norm_key(effective_artist, effective_title)
+        if all(key):
+            songs_by_artist.setdefault(primary_artist_key(effective_artist), set()).add(key)
+    excluded = set(excluded)
+    return sorted(
+        artist
+        for artist, songs in songs_by_artist.items()
+        if artist and len(songs) >= _DEEP_CATALOG_MIN_TRACKS and artist not in excluded
+    )
+
+
 def _taste_profile(db: Session, user_id: int) -> dict:
     """Собирает профиль вкуса пользователя из лайков и истории (блокирующая)."""
     liked_playlist_id = find_liked_playlist_id(db, user_id)
@@ -502,23 +558,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # not. A large likes/import playlist can push an old track past the taste
     # window; it must still never re-enter the flow by id, provider id, or the
     # normalized artist/title pair.
-    collection_rows = (
-        db.query(
-            Track.id,
-            Track.artist,
-            Track.title,
-            Track.source,
-            Track.external_id,
-            Track.album,
-        )
-        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
-        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
-        .filter(Playlist.owner_id == user_id)
-        .all()
-    )
+    collection_rows = _collection_rows(db, user_id)
     collection_keys = set()
     collection_external_ids = set()
-    collection_songs_by_artist: dict[str, set] = {}
     for _track_id, artist, title, source, external_id, album in collection_rows:
         effective_artist, effective_title = effective_artist_title(
             title or "",
@@ -529,9 +571,6 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = _norm_key(effective_artist, effective_title)
         if all(key):
             collection_keys.add(key)
-            collection_songs_by_artist.setdefault(
-                primary_artist_key(effective_artist), set()
-            ).add(key)
         if external_id:
             collection_external_ids.add(external_id)
     # Часто играемые: порог применяем к АРТИСТУ ниже (artist_play_totals), а не
@@ -1212,12 +1251,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         # Любимые — им можно давать глубокий каталог, остальным только хиты
         # (см. app/mainstream.py). Считаются разные песни, а не строки: один
         # трек в двух плейлистах — это один выбор.
-        "deep_catalog_artist_keys": sorted(
-            key
-            for key, songs in collection_songs_by_artist.items()
-            if key
-            and len(songs) >= _DEEP_CATALOG_MIN_TRACKS
-            and key not in excluded_artists
+        "deep_catalog_artist_keys": deep_catalog_artist_keys(
+            collection_rows, excluded_artists
         ),
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
@@ -1962,6 +1997,59 @@ async def _lastfm_pool_fetch(
         key,
         [t.model_dump() for t in pool],
         expire=_LASTFM_POOL_TTL if pool else 600,
+    )
+    return pool
+
+
+async def _similar_hits_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
+    """Хиты известных соседей артиста по Last.fm, уже играбельные, с кэшем."""
+    key = f"flow:similar_hits:v1:{artist_key(artist)}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+    return await _pool_single_flight(
+        key, lambda: _similar_hits_pool_fetch(request, artist, key)
+    )
+
+
+async def _similar_hits_pool_fetch(
+    request: Request, artist: str, key: str
+) -> List[ExternalTrackResponse]:
+    names = [
+        name
+        for name in await mainstream.similar_artists(artist)
+        if artist_key(name) != artist_key(artist)
+    ][:_SIMILAR_HITS_CHECK]
+    if not names:
+        return []
+    # Ждём все ответы: пул сам по себе фоновый (_gather_within его не отменяет),
+    # а недождавшийся артист выпал бы из кэша пула на все 6 часов.
+    infos = await mainstream.artist_hits(names, timeout=60)
+    famous = [
+        (name, infos.get(artist_key(name)))
+        for name in names
+        if mainstream.is_famous(infos.get(artist_key(name)))
+    ][:_SIMILAR_HITS_ARTISTS]
+    wanted = [
+        (name, title)
+        for name, info in famous
+        for title in (info.get("top") or [])[:_SIMILAR_HITS_PER_ARTIST]
+    ]
+    resolved = await asyncio.gather(
+        *(_resolve_similar(request, name, title) for name, title in wanted)
+    )
+    # Сначала первый хит каждого артиста, потом вторые: обрезка пула ниже по
+    # потоку не должна съедать одного соседа целиком.
+    by_rank = sorted(
+        (index % _SIMILAR_HITS_PER_ARTIST, index, track)
+        for index, track in enumerate(resolved)
+        if track is not None
+    )
+    pool = [track for _rank, _index, track in by_rank]
+    await set_cache_async(
+        key,
+        [t.model_dump() for t in pool],
+        expire=_SIMILAR_HITS_TTL if pool else 600,
     )
     return pool
 
@@ -3001,14 +3089,44 @@ async def get_flow(
     # волнами по два: при большом exclude каждая пустая волна добавляла полный
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
     discovery = [_radio_pool(seed) for seed in seeds]
-    if favorite_jobs or lastfm_jobs or discovery:
+
+    # Сиды хитов похожих: один артист из свежих позитивов и остальные из
+    # любимых (у кого нет любимых — из доверенных артистов вкуса), с ротацией.
+    hits_seed_artists: List[str] = []
+    if mainstream.available():
+        def _rotated(values, salt):
+            return sorted(
+                dict.fromkeys(v for v in values if v),
+                key=lambda value: stable_jitter(ranking_context, f"{salt}:{value}"),
+                reverse=True,
+            )
+
+        fresh_artists = _rotated(
+            (primary_artist_key(pair[0]) for pair in profile.get("fresh_seed_tracks") or []),
+            "hits-fresh",
+        )
+        anchor_artists = _rotated(
+            profile.get("deep_catalog_artist_keys")
+            or profile.get("trusted_artist_keys")
+            or [],
+            "hits-anchor",
+        )
+        for artist in [*fresh_artists[:1], *anchor_artists]:
+            if len(hits_seed_artists) >= _SIMILAR_HITS_SEEDS:
+                break
+            if artist not in hits_seed_artists and artist not in banned:
+                hits_seed_artists.append(artist)
+    hits_jobs = [_similar_hits_pool(request, artist) for artist in hits_seed_artists]
+
+    if favorite_jobs or lastfm_jobs or hits_jobs or discovery:
         stage_started = loop.time()
         pools = await _gather_within(
-            [*favorite_jobs, *lastfm_jobs, *discovery], network_deadline
+            [*favorite_jobs, *lastfm_jobs, *hits_jobs, *discovery], network_deadline
         )
         _mark_stage("pools", stage_started)
         favorite_count = len(favorite_jobs)
         lastfm_count = len(lastfm_jobs)
+        hits_count = len(hits_jobs)
         # По артисту отдельным вызовом: бюджет favorite_window должен считаться
         # на каждого, иначе первый же артист с глубоким каталогом съедает его
         # целиком и остальные знакомые имена до ранкера не доходят.
@@ -3029,10 +3147,19 @@ async def get_flow(
             similar_explore,
             origin="lastfm_similar",
         )
+        hits_start = favorite_count + lastfm_count
+        _add_explore(
+            (
+                t for t in _interleave(pools[hits_start : hits_start + hits_count])
+                if _matches_related(t)
+            ),
+            similar_explore,
+            origin="similar_hits",
+        )
         _add_explore(
             (
                 t
-                for pool in pools[favorite_count + lastfm_count :]
+                for pool in pools[hits_start + hits_count :]
                 for t in pool
                 if _matches_related(t)
             ),
@@ -3289,35 +3416,31 @@ async def get_flow(
             {_gate_artist(c) for c in gated}, timeout=_MAINSTREAM_WAIT
         )
         gated_ids = {_item_identity(c) for c in gated}
-        kept, reserve = [], []
+        before = len(unified_candidates)
+        kept, hit_by_item = mainstream.gate(
+            unified_candidates,
+            infos=hits,
+            exempt=lambda item: _item_identity(item) not in gated_ids,
+            artist_of=_gate_artist,
+            title_of=lambda item: _norm_key(*_item_artist_title(item))[1],
+            norm_title=lambda name: _norm_key("", name)[1],
+            limit=limit,
+            popularity=lambda item: (
+                item.get("play_count", 0)
+                if isinstance(item, dict)
+                else getattr(item, "play_count", 0)
+            ),
+        )
         for candidate in unified_candidates:
-            identity = _item_identity(candidate)
-            if identity not in gated_ids:
-                kept.append(candidate)
-                continue
-            hit = mainstream.is_hit(
-                hits.get(_gate_artist(candidate)),
-                _norm_key(*_item_artist_title(candidate))[1],
-                lambda name: _norm_key("", name)[1],
-            )
-            hit_by_identity[identity] = hit
-            (kept if hit else reserve).append(candidate)
-        if len(kept) < limit and reserve:
-            reserve.sort(
-                key=lambda item: (
-                    item.get("play_count", 0)
-                    if isinstance(item, dict)
-                    else getattr(item, "play_count", 0)
-                ) or 0,
-                reverse=True,
-            )
-            kept.extend(reserve[: limit - len(kept)])
+            if id(candidate) in hit_by_item:
+                hit_by_identity[_item_identity(candidate)] = hit_by_item[id(candidate)]
+        hits_count = sum(hit_by_item.values())
         logger.debug(
             "flow mainstream user=%s gated=%d hits=%d reserve_used=%d",
             user_id,
             len(gated),
-            sum(hit_by_identity.values()),
-            max(0, len(kept) - (len(unified_candidates) - len(reserve))),
+            hits_count,
+            len(kept) - (before - len(gated)) - hits_count,
         )
         unified_candidates = kept
         _mark_stage("mainstream", stage_started)

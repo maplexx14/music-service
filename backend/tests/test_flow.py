@@ -2714,3 +2714,67 @@ def test_flow_keeps_only_hits_of_non_favorite_artists(client, db, monkeypatch):
     titles = {t["title"] for t in resp.json()}
     assert titles, "волна пустая"
     assert not titles & {"Deep cut", "Garage demo"}, titles
+
+
+def test_similar_hits_pool_takes_top_tracks_of_famous_neighbours(monkeypatch):
+    import asyncio
+
+    from app import mainstream
+    from app.routers import flow
+
+    clear_pattern("flow:similar_hits:*")
+
+    async def _similar(artist):
+        assert artist == "seed"
+        return ["Seed", "Famous A", "Tiny", "Famous B"]
+
+    async def _hits(artists, timeout):
+        info = {
+            "famous a": {"listeners": 900_000, "top": ["A1", "A2", "A3"]},
+            "tiny": {"listeners": 900, "top": ["T1"]},
+            "famous b": {"listeners": 120_000, "top": ["B1", "B2"]},
+        }
+        assert "seed" not in set(artists), "сам сид — не сосед"
+        return {key: info.get(key) for key in (a.lower() for a in artists)}
+
+    async def _resolve(request, artist, title):
+        return _external(artist, title, f"{artist}-{title}".replace(" ", ""))
+
+    monkeypatch.setattr(mainstream, "similar_artists", _similar)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+    monkeypatch.setattr(flow, "_resolve_similar", _resolve)
+
+    pool = asyncio.run(flow._similar_hits_pool(None, "seed"))
+
+    assert [(t.artist, t.title) for t in pool] == [
+        ("Famous A", "A1"), ("Famous B", "B1"), ("Famous A", "A2"), ("Famous B", "B2"),
+    ]
+    clear_pattern("flow:similar_hits:*")
+
+
+def test_flow_brings_hits_of_similar_artists(client, db, monkeypatch):
+    """Фильтр не только отсеивает: хиты соседей любимого артиста приходят сами."""
+    from app import mainstream
+
+    clear_pattern("flow:similar_hits:*")
+    user = create_user(db)
+    _collection(db, user, "FavArtist", [f"own {i}" for i in range(5)])
+
+    seen_seeds = []
+
+    async def _hits_pool(request, artist):
+        seen_seeds.append(artist)
+        return [_external("Neighbour", f"Big hit {i}", f"nb{i}") for i in range(3)]
+
+    async def _hits(artists, timeout):
+        return {key: {"listeners": 10**6, "top": [f"Big hit {i}" for i in range(3)]}
+                for key in artists}
+
+    monkeypatch.setattr("app.routers.flow._similar_hits_pool", _hits_pool)
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+    assert "favartist" in seen_seeds
+    assert any(t["artist"] == "Neighbour" for t in resp.json()), resp.json()

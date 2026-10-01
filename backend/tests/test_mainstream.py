@@ -95,3 +95,21 @@ def test_without_key_nothing_is_fetched(monkeypatch):
 
     monkeypatch.setattr(mainstream, "_call", _boom)
     assert asyncio.run(mainstream.artist_hits(["x"], timeout=1)) == {"x": None}
+
+
+def test_similar_artists_cached_and_not_found(monkeypatch):
+    calls = []
+
+    async def _call(client, method, artist, **params):
+        calls.append(artist)
+        if artist == "ghost":
+            return {"error": 6, "message": "not found"}
+        return {"similarartists": {"artist": [{"name": "Seether"}, {"name": "Breaking Benjamin"}]}}
+
+    monkeypatch.setattr(mainstream, "_call", _call)
+
+    assert asyncio.run(mainstream.similar_artists("Three Days Grace")) == ["Seether", "Breaking Benjamin"]
+    assert asyncio.run(mainstream.similar_artists("three days grace")) == ["Seether", "Breaking Benjamin"]
+    assert asyncio.run(mainstream.similar_artists("ghost")) == []
+    assert asyncio.run(mainstream.similar_artists("ghost")) == []
+    assert calls == ["Three Days Grace", "ghost"]

@@ -958,3 +958,102 @@ def test_artist_skips_lower_score_of_untrusted_artist(client, db, monkeypatch):
     }
     assert clean_candidate.id in scores
     assert scores.get(skipped_candidate.id, float("-inf")) < scores[clean_candidate.id]
+
+
+def _own_playlist(db, user, artist, titles):
+    playlist = Playlist(name=f"own-{artist}", is_public=False, is_liked=False, owner_id=user.id)
+    db.add(playlist)
+    db.commit()
+    for position, title in enumerate(titles):
+        track = _track(db, f"{artist} {title}", artist)
+        db.execute(playlist_tracks.insert().values(
+            playlist_id=playlist.id, track_id=track.id, position=position
+        ))
+    db.commit()
+
+
+def test_home_keeps_only_hits_of_non_favorite_artists(client, db, monkeypatch):
+    """Лента живёт по тому же мейнстрим-правилу, что и волна."""
+    from app import mainstream
+
+    user = create_user(db, username="home-mainstream-user")
+    _own_playlist(db, user, "FavArtist", [f"own {i}" for i in range(5)])
+
+    pool_kwargs = {}
+
+    async def _external_pool(*_args, **kwargs):
+        pool_kwargs.update(kwargs)
+        return [
+            *(_external(f"hit{i}", title=f"Hit {i}", artist="Famous") for i in range(6)),
+            _external("deep", title="Deep cut", artist="Famous"),
+            _external("demo", title="Garage demo", artist="Nobody", play_count=0),
+            _external("rare", title="Rare b-side", artist="FavArtist"),
+        ]
+
+    async def _hits(artists, timeout):
+        info = {
+            "famous": {"listeners": 2_000_000, "top": [f"Hit {i}" for i in range(6)]},
+            "nobody": {"listeners": 300, "top": ["Garage demo"]},
+        }
+        assert "favartist" not in set(artists)
+        return {key: info.get(key) for key in artists}
+
+    monkeypatch.setattr(
+        "app.routers.recommendations._external_recommendation_pool", _external_pool
+    )
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+
+    resp = client.get(
+        "/api/recommendations/?limit=5",
+        headers=auth_headers(client, username="home-mainstream-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    titles = {t["title"] for t in resp.json()["tracks"]}
+    assert titles, "лента пустая"
+    assert not titles & {"Deep cut", "Garage demo"}, titles
+    assert pool_kwargs.get("hits_seed_artists") == ("favartist",)
+
+
+def test_home_external_pool_puts_similar_hits_first(monkeypatch):
+    import asyncio
+
+    from app import mainstream
+    from app.routers import flow as flow_router
+    from app.routers import recommendations as recs
+
+    async def _hits_pool(request, artist):
+        assert artist == "favartist"
+        return [_external("nb1", title="Big hit", artist="Neighbour")]
+
+    async def _lastfm(request, artist, title):
+        return [_external("lf1", title="Similar", artist="Other")]
+
+    async def _empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(flow_router, "_similar_hits_pool", _hits_pool)
+    monkeypatch.setattr(flow_router, "_lastfm_pool", _lastfm)
+    monkeypatch.setattr(flow_router, "_favorite_artist_pool", _empty)
+    monkeypatch.setattr(flow_router, "_similar_pool", _empty)
+    monkeypatch.setattr(flow_router, "_tag_pool", _empty)
+    monkeypatch.setattr(flow_router.ytdlp, "_schedule_audio_matches", lambda items: None)
+
+    class _Request:
+        base_url = "http://test/"
+
+    track = Track(title="seed song", artist="SeedArtist", duration=100, source="local")
+    pool = asyncio.run(recs._external_recommendation_pool(
+        _Request(),
+        liked=[(track, None)],
+        playlisted=[],
+        played=[],
+        preferred_artists=[],
+        preferred_genres=[],
+        limit=5,
+        excluded_external=set(),
+        hits_seed_artists=("favartist",),
+    ))
+
+    assert [t.title for t in pool][:2] == ["Big hit", "Similar"]

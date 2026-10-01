@@ -11,7 +11,7 @@ import logging
 import math
 import os
 import re
-from app import censorship
+from app import censorship, mainstream
 from app.database import get_db
 from app.cache import (
     get_cache,
@@ -102,6 +102,14 @@ _RECS_TTL = 300
 _EXTERNAL_SEED_TRACKS = 3
 _EXTERNAL_ARTISTS = 4
 _EXTERNAL_SIMILAR_ARTISTS = 2
+# Мейнстрим-правило то же, что в волне (app/mainstream.py): у артиста не из
+# любимых — только хиты. Сиды хитов похожих артистов (flow._similar_hits_pool)
+# — любимые артисты, ротация по часу: пул ленты живёт ~80с, а пул хитов на сид
+# кэшируется на 6 часов, так что ротация почти ничего не стоит.
+_EXTERNAL_HITS_SEEDS = 2
+# Ожидание Last.fm в фильтре ленты короче, чем в волне: главная чувствительна
+# к задержке, а недождавшиеся артисты догреются фоном к следующему заходу.
+_MAINSTREAM_WAIT = 1.0
 _EXTERNAL_GENRES = 1
 _EXTERNAL_POOL_FACTOR = 4
 
@@ -608,6 +616,7 @@ async def _external_recommendation_pool(
     limit: int,
     excluded_external: set[tuple[str, str]],
     excluded_track_keys: Optional[set[tuple[str, str]]] = None,
+    hits_seed_artists: tuple = (),
 ) -> list[ExternalTrackResponse]:
     """Retrieve provider candidates from the user's actual collection signals.
 
@@ -702,6 +711,11 @@ async def _external_recommendation_pool(
             break
 
     jobs = []
+    # Хиты похожих артистов — первыми: результат режется по лимиту в порядке
+    # пулов, а это ровно то, чего лента должна давать больше всего.
+    if mainstream.available():
+        for artist in hits_seed_artists:
+            jobs.append(flow_router._similar_hits_pool(request, artist))
     for artist, title in deduped_seeds:
         jobs.append(flow_router._lastfm_pool(request, artist, title))
     for artist in catalog_artists:
@@ -986,6 +1000,7 @@ def _compute_recommendations(
     bucket: Optional[str],
     cache_key: str,
     pool_fetch,
+    hits_fetch=None,
 ) -> RecommendationResponse:
     """Всё тело эндпоинта /recommendations: синхронно, НО не на event loop.
 
@@ -1194,6 +1209,8 @@ def _compute_recommendations(
     artist_skip_penalty = {}
     genres = list(preferred_genres)
     score_by_track = {}
+    # Прошёл ли трек мейнстрим-фильтр — в features отдачи (только проверенные).
+    hit_features: dict = {}
     context_profile = build_context_profile(db, current_user.id, bucket, now=ranking_now)
 
     # Curated local playlists are the strongest content signal, imported
@@ -1288,7 +1305,26 @@ def _compute_recommendations(
     # _EXTERNAL_POOL_WAIT, дальше отдаём локальную выдачу, пул догреется
     # фоном (см. _external_pool_cached). pool_fetch — мост к основному
     # event loop: сама корутина пула асинхронная.
+    # Любимые артисты — те же, что в волне (flow.deep_catalog_artist_keys).
+    deep_catalog_keys = set(
+        flow_router.deep_catalog_artist_keys(
+            flow_router._collection_rows(db, current_user.id), excluded_artist_keys
+        )
+    )
+    hits_anchor = deep_catalog_keys or {
+        primary_artist_key(effective_track_artist_title(track)[0])
+        for track, _added_at in liked
+    }
+    hits_context = f"home-hits:{current_user.id}:{ranking_now:%Y%m%d%H}"
+    hits_seed_artists = tuple(
+        sorted(
+            (a for a in hits_anchor if a and a not in excluded_artist_keys),
+            key=lambda value: stable_jitter(hits_context, value),
+            reverse=True,
+        )[:_EXTERNAL_HITS_SEEDS]
+    )
     external_candidates, external_degraded = pool_fetch(
+        hits_seed_artists=hits_seed_artists,
         liked=liked,
         playlisted=playlisted,
         played=played,
@@ -1924,6 +1960,38 @@ def _compute_recommendations(
             for track in popular:
                 candidate_pool.setdefault(track.id, track)
 
+        # Мейнстрим-фильтр (app/mainstream.py): у артиста не из любимых — только
+        # его хиты. hits_fetch — мост к event loop, как pool_fetch; без него
+        # (прямой вызов из скрипта) фильтр не применяется.
+        if hits_fetch is not None and mainstream.available():
+            def _gate_artist(track) -> str:
+                return primary_artist_key(effective_track_artist_title(track)[0])
+
+            gate_items = list(candidate_pool.values())
+            infos = hits_fetch(
+                {
+                    _gate_artist(t)
+                    for t in gate_items
+                    if _gate_artist(t) not in deep_catalog_keys
+                }
+            )
+            kept, hit_by_item = mainstream.gate(
+                gate_items,
+                infos=infos,
+                exempt=lambda t: _gate_artist(t) in deep_catalog_keys,
+                artist_of=_gate_artist,
+                title_of=lambda t: flow_router._norm_key(
+                    *effective_track_artist_title(t)
+                )[1],
+                norm_title=lambda name: flow_router._norm_key("", name)[1],
+                limit=limit,
+                popularity=lambda t: getattr(t, "play_count", 0),
+            )
+            candidate_pool = {t.id: t for t in kept}
+            hit_features.update(
+                {t.id: {"hit": hit_by_item[id(t)]} for t in kept if id(t) in hit_by_item}
+            )
+
         ranked_pool = [
             track
             for track in candidate_pool.values()
@@ -2041,6 +2109,7 @@ def _compute_recommendations(
         surface="library",
         request_id=request_id,
         scores=score_by_track,
+        features=hit_features or None,
         algorithm_version=ALGORITHM_VERSION,
     )
 
@@ -2119,6 +2188,13 @@ async def get_recommendations(
         )
         return future.result()
 
+    def hits_fetch(artists):
+        future = asyncio.run_coroutine_threadsafe(
+            mainstream.artist_hits(artists, timeout=_MAINSTREAM_WAIT),
+            loop,
+        )
+        return future.result()
+
     return await loop.run_in_executor(
         _COMPUTE_EXECUTOR,
         partial(
@@ -2132,6 +2208,7 @@ async def get_recommendations(
             bucket=bucket,
             cache_key=cache_key,
             pool_fetch=pool_fetch,
+            hits_fetch=hits_fetch,
         ),
     )
 

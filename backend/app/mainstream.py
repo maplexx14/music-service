@@ -32,6 +32,8 @@ MIN_ARTIST_LISTENERS = 50_000
 TOP_TRACKS = 10
 _API_URL = "https://ws.audioscrobbler.com/2.0/"
 _CACHE_KEY = "mainstream:artist:v1:{}"
+_SIMILAR_KEY = "mainstream:similar:v1:{}"
+SIMILAR_LIMIT = 30
 _TTL = 7 * 24 * 60 * 60
 # Last.fm не знает артиста — это тоже ответ («не известен»), но имя могло прийти
 # с опечаткой провайдера, так что держим его меньше.
@@ -152,10 +154,47 @@ async def artist_hits(artists: Iterable[str], timeout: float) -> dict[str, Optio
     return result
 
 
+async def similar_artists(artist: str) -> list[str]:
+    """Соседи артиста по Last.fm (artist.getSimilar), самые похожие первыми.
+
+    Кэш на ``_TTL``: граф похожести меняется медленно. Ошибка или нет ключа —
+    пустой список без кэша.
+    """
+    key = _SIMILAR_KEY.format(artist_key(artist))
+    cached = await get_cache_async(key)
+    if isinstance(cached, list):
+        return cached
+    if not available():
+        return []
+    try:
+        async with _sem():
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                payload = await _call(
+                    client, "artist.getsimilar", artist, limit=SIMILAR_LIMIT
+                )
+    except Exception as exc:  # noqa: BLE001 — внешний сервис не должен ронять волну
+        logger.info("mainstream similar failed artist=%r: %s", artist, exc)
+        return []
+    if "error" in payload:
+        if payload.get("error") == _NOT_FOUND:
+            await set_cache_async(key, [], expire=_UNKNOWN_TTL)
+        return []
+    found = (payload.get("similarartists") or {}).get("artist") or []
+    if isinstance(found, dict):
+        found = [found]
+    names = [str(item.get("name") or "") for item in found if item.get("name")]
+    await set_cache_async(key, names, expire=_TTL if names else _UNKNOWN_TTL)
+    return names
+
+
+def is_famous(info: Optional[dict]) -> bool:
+    return bool(info) and int(info.get("listeners") or 0) >= MIN_ARTIST_LISTENERS
+
+
 def is_hit(info: Optional[dict], title_key: str, norm_title) -> bool:
     """Трек — хит известного артиста? ``norm_title`` нормализует название из топа
     так же, как ``title_key`` у кандидата."""
-    if not info or int(info.get("listeners") or 0) < MIN_ARTIST_LISTENERS:
+    if not is_famous(info):
         return False
     if not title_key:
         return False
@@ -171,3 +210,36 @@ def is_hit(info: Optional[dict], title_key: str, norm_title) -> bool:
         if len(shorter) >= 5 and longer.startswith(shorter):
             return True
     return False
+
+
+def gate(
+    items: list,
+    *,
+    infos: dict,
+    exempt,
+    artist_of,
+    title_of,
+    norm_title,
+    limit: int,
+    popularity,
+) -> tuple[list, dict[int, bool]]:
+    """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
+
+    ``infos`` — ответ ``artist_hits`` по ключам ``artist_of(item)``. Если
+    прошедших меньше ``limit``, добирает отсеянных по убыванию ``popularity``:
+    пустая выдача хуже нарушения правила. Возвращает (оставленные в исходном
+    порядке, {id(item): хит ли}) — второе только для проверенных, в телеметрию.
+    """
+    hit_by_item: dict[int, bool] = {}
+    kept, reserve = [], []
+    for item in items:
+        if exempt(item):
+            kept.append(item)
+            continue
+        hit = is_hit(infos.get(artist_of(item)), title_of(item), norm_title)
+        hit_by_item[id(item)] = hit
+        (kept if hit else reserve).append(item)
+    if len(kept) < limit and reserve:
+        reserve.sort(key=lambda item: popularity(item) or 0, reverse=True)
+        kept.extend(reserve[: limit - len(kept)])
+    return kept, hit_by_item
