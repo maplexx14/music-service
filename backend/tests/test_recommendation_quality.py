@@ -577,10 +577,24 @@ def test_external_population_stats_count_distinct_users_on_sqlite(db):
             source="ytmusic",
             external_id="accepted",
             event_type="listen",
+            value=0.95,
             surface="flow",
             algorithm_version="hybrid-v5",
         )
     )
+    # Скип всегда сопровождается listen с долей прослушивания: это не позитив.
+    for event_type, value in (("skip", 0.05), ("listen", 0.05)):
+        db.execute(
+            recommendation_events.insert().values(
+                user_id=users[3].id,
+                source="ytmusic",
+                external_id="widely-skipped",
+                event_type=event_type,
+                value=value,
+                surface="flow",
+                algorithm_version="hybrid-v5",
+            )
+        )
     db.commit()
 
     items = [
@@ -607,7 +621,8 @@ def test_external_population_stats_count_distinct_users_on_sqlite(db):
     stats = _external_population_stats_on_bind(db.get_bind(), items)
 
     skipped = stats["ytmusic:widely-skipped"]
-    assert skipped["negative_users"] == 3
+    assert skipped["negative_users"] == 4
+    assert skipped["positive_users"] == 0
     assert skipped["quality"] < 0.0
     assert population_rejects(skipped["positive_users"], skipped["negative_users"])
     assert stats["ytmusic:accepted"]["positive_users"] == 1

@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import and_, case, desc, func, or_, select, tuple_
+from sqlalchemy import and_, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app import artist_probe, beets_genre, beets_similar, censorship, storage
@@ -102,6 +102,7 @@ from app.acoustic_features import (
     acoustic_similarity,
     weighted_centroid,
 )
+from app.feedback_labels import FEEDBACK_EVENT_TYPES, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
@@ -381,44 +382,39 @@ def _external_population_stats_on_bind(bind, items, now=None) -> dict:
             )
 
         since = (now or datetime.now(timezone.utc)) - timedelta(days=90)
-        positive_user = case(
-            (
-                recommendation_events.c.event_type.in_(("play", "listen", "like")),
-                recommendation_events.c.user_id,
-            ),
-            else_=None,
-        )
-        negative_user = case(
-            (
-                recommendation_events.c.event_type.in_(("skip", "dislike")),
-                recommendation_events.c.user_id,
-            ),
-            else_=None,
-        )
-        feedback_rows = local_db.execute(
+        # Исход на юзера, а не «есть ли хоть одно позитивное событие»: listen
+        # приходит и после скипа, и прежний подсчёт делал почти каждого
+        # скипнувшего ещё и «позитивным» (см. app.feedback_labels).
+        trackers: dict[tuple[str, int], OutcomeTracker] = {}
+        for source, external_id, user, event_type, value in local_db.execute(
             select(
                 recommendation_events.c.source,
                 recommendation_events.c.external_id,
-                func.count(func.distinct(positive_user)).label("positive_users"),
-                func.count(func.distinct(negative_user)).label("negative_users"),
+                recommendation_events.c.user_id,
+                recommendation_events.c.event_type,
+                recommendation_events.c.value,
             ).where(
                 recommendation_events.c.surface == "flow",
                 recommendation_events.c.occurred_at >= since,
+                recommendation_events.c.event_type.in_(FEEDBACK_EVENT_TYPES),
                 tuple_(
                     recommendation_events.c.source,
                     recommendation_events.c.external_id,
                 ).in_(identities),
-            ).group_by(
-                recommendation_events.c.source,
-                recommendation_events.c.external_id,
-            )
-        ).all()
-        for source, external_id, positive_users, negative_users in feedback_rows:
-            row = stats.get(f"{source}:{external_id}")
+            ).order_by(recommendation_events.c.occurred_at, recommendation_events.c.id)
+        ).all():
+            trackers.setdefault(
+                (f"{source}:{external_id}", user), OutcomeTracker()
+            ).add(event_type, value)
+        for (identity, _user), tracker in trackers.items():
+            row = stats.get(identity)
             if row is None:
                 continue
-            row["positive_users"] = int(positive_users or 0)
-            row["negative_users"] = int(negative_users or 0)
+            if tracker.good:
+                row["positive_users"] += 1
+            elif tracker.bad:
+                row["negative_users"] += 1
+        for row in stats.values():
             row["quality"] = population_quality_score(
                 row["positive_users"], row["negative_users"]
             )

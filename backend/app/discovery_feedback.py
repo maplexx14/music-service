@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cache import get_cache, set_cache
+from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.models import (
     Playlist,
     Track,
@@ -37,8 +38,6 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 30
-GOOD_COMPLETION = 0.8
-BAD_COMPLETION = 0.25
 PRIOR_WEIGHT = 50.0
 MIN_FACTOR = 0.2
 # Меньше знакомых артистов — фактор не применяется. У тонкого профиля
@@ -48,7 +47,6 @@ MIN_FACTOR = 0.2
 MIN_FAMILIAR_ARTISTS = 10
 _CACHE_KEY = "discovery:acceptance:v1:{}"
 _CACHE_TTL = 3600
-_FEEDBACK_TYPES = ("listen", "like", "skip", "dislike")
 
 
 def _utc(value: Optional[datetime]) -> Optional[datetime]:
@@ -80,8 +78,7 @@ def delivery_outcomes(
 ) -> list[dict]:
     """Отданные позиции с исходом: новизна артиста, хорошо/плохо, features.
 
-    «Хорошо» — лайк или дослушивание до ``GOOD_COMPLETION``; «плохо» — скип,
-    дизлайк или уход раньше ``BAD_COMPLETION``. Позиции без единого события
+    Исход размечает ``app.feedback_labels``. Позиции без единого события
     (не дошёл до них) не возвращаются.
     """
     since = _utc(since)
@@ -107,7 +104,7 @@ def delivery_outcomes(
     if not deliveries:
         return []
 
-    outcomes: dict[tuple[str, str], dict] = {}
+    outcomes: dict[tuple[str, str], OutcomeTracker] = {}
     for request_id, track_id, source, external_id, event_type, value in db.execute(
         select(
             recommendation_events.c.request_id,
@@ -121,29 +118,13 @@ def delivery_outcomes(
             recommendation_events.c.surface == surface,
             recommendation_events.c.occurred_at >= since,
             recommendation_events.c.request_id.isnot(None),
-            recommendation_events.c.event_type.in_(_FEEDBACK_TYPES),
-        )
+            recommendation_events.c.event_type.in_(FEEDBACK_EVENT_TYPES),
+        ).order_by(recommendation_events.c.occurred_at, recommendation_events.c.id)
     ).all():
         ident = _identity(track_id, source, external_id)
         if ident is None:
             continue
-        state = outcomes.setdefault(
-            (request_id, ident), {"good": False, "bad": False, "completion": None}
-        )
-        if event_type == "like":
-            state["good"] = True
-        elif event_type in ("skip", "dislike"):
-            state["bad"] = True
-        elif event_type == "listen" and value is not None:
-            state["completion"] = max(state["completion"] or 0.0, float(value))
-    for state in outcomes.values():
-        completion = state["completion"]
-        if completion is not None and completion >= GOOD_COMPLETION:
-            state["good"] = True
-        if completion is not None and completion < BAD_COMPLETION:
-            state["bad"] = True
-        if state["good"]:
-            state["bad"] = False
+        outcomes.setdefault((request_id, ident), OutcomeTracker()).add(event_type, value)
     # Внешний трек мог материализоваться между отдачей и событием: тогда в
     # событии уже track_id, а в строке показа — provider id. Сопоставляем по обоим.
     external_to_local = {}
@@ -178,9 +159,9 @@ def delivery_outcomes(
         rows.append(
             {
                 "novel": bool(novel),
-                "good": state["good"],
-                "bad": state["bad"],
-                "completion": state["completion"],
+                "good": state.good,
+                "bad": state.bad,
+                "completion": state.completion,
                 "score": score,
                 "position": position,
                 "algorithm_version": algorithm_version,
