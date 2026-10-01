@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import random
 from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -47,6 +49,18 @@ MIN_FACTOR = 0.2
 MIN_FAMILIAR_ARTISTS = 10
 _CACHE_KEY = "discovery:acceptance:v1:{}"
 _CACHE_TTL = 3600
+# Априор источника кандидата (features.origin) по фактическому приёму. На проде
+# (2026-10-01, 14 дней) источники расходились в 20 раз: liked 12.5% «хорошо»,
+# local 0.6% при 84% «плохо», а ручной скор этого не видел — у local высокий
+# affinity знакомого артиста. Доля сглажена к общей с весом ORIGIN_PRIOR_WEIGHT.
+ORIGIN_PRIOR_WEIGHT = 30.0
+ORIGIN_MIN_OUTCOMES = 100
+ORIGIN_TERM_WEIGHT = 0.6
+# Поправка — логарифм отношения к общей доле, зажатый в коридор. Вверх зажим
+# узкий: лучший источник (лайки) и так держит квота, а широкий бонус вернул бы
+# волну к повтору коллекции.
+ORIGIN_LOG_RATIO_RANGE = (-1.5, 0.5)
+_ORIGIN_CACHE_KEY = "discovery:origins:v1:{}"
 
 
 def _utc(value: Optional[datetime]) -> Optional[datetime]:
@@ -242,6 +256,64 @@ def cached_acceptance_factor(db: Session, user_id: int) -> float:
         return 1.0
     set_cache(key, factor, expire=_CACHE_TTL)
     return factor
+
+
+def origin_counts(db: Session, user_id: int, now: Optional[datetime] = None) -> dict:
+    """Исходы по источникам кандидатов: {origin: [good, n]} за ``WINDOW_DAYS``."""
+    now = _utc(now) or datetime.now(timezone.utc)
+    counts: dict[str, list[int]] = {}
+    for row in delivery_outcomes(db, user_id, since=now - timedelta(days=WINDOW_DAYS)):
+        origin = row["features"].get("origin")
+        if not origin or origin == "unknown":
+            continue
+        bucket = counts.setdefault(origin, [0, 0])
+        bucket[0] += int(row["good"])
+        bucket[1] += 1
+    return counts
+
+
+def cached_origin_counts(db: Session, user_id: int) -> dict:
+    """``origin_counts`` с часовым кэшем; при ошибке — пусто (поправки нет)."""
+    key = _ORIGIN_CACHE_KEY.format(user_id)
+    cached = get_cache(key)
+    if isinstance(cached, dict):
+        return cached
+    try:
+        counts = origin_counts(db, user_id)
+    except Exception:  # noqa: BLE001 — телеметрия не должна ронять выдачу
+        db.rollback()
+        logger.exception("origin acceptance failed user=%s", user_id)
+        return {}
+    set_cache(key, counts, expire=_CACHE_TTL)
+    return counts
+
+
+def origin_terms(counts: dict, seed: str) -> dict[str, float]:
+    """Поправка скора на источник, сэмплом Томпсона: {origin: term}.
+
+    Доля «хорошо» источника берётся сэмплом из Beta-апостериора, а не точкой:
+    источник с малым числом исходов получает разброс в обе стороны и шанс
+    проявиться, хорошо изученный — почти постоянную поправку. ``seed`` делает
+    сэмпл стабильным внутри одного запроса. Пока исходов меньше
+    ``ORIGIN_MIN_OUTCOMES``, поправок нет — источник ``"*"`` (не встречавшийся)
+    тоже получает 0.
+    """
+    total = sum(n for _good, n in counts.values())
+    if total < ORIGIN_MIN_OUTCOMES:
+        return {}
+    pooled = sum(good for good, _n in counts.values()) / total
+    if pooled <= 0:
+        return {}
+    rng = random.Random(seed)
+    low, high = ORIGIN_LOG_RATIO_RANGE
+    terms = {}
+    for origin, (good, n) in sorted(counts.items()):
+        alpha = good + ORIGIN_PRIOR_WEIGHT * pooled
+        beta = (n - good) + ORIGIN_PRIOR_WEIGHT * (1.0 - pooled)
+        sample = max(rng.betavariate(alpha, beta), 1e-6)
+        ratio = math.log(sample / pooled)
+        terms[origin] = ORIGIN_TERM_WEIGHT * max(low, min(high, ratio))
+    return terms
 
 
 def discovery_acceptance(db: Session, user_id: int, familiar_artist_count: int) -> float:

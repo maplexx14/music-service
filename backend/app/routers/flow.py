@@ -68,7 +68,7 @@ from app.discovery import (
     effective_discovery_ratio,
     liked_slots,
 )
-from app.discovery_feedback import discovery_acceptance
+from app.discovery_feedback import cached_origin_counts, discovery_acceptance, origin_terms
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -102,7 +102,7 @@ from app.acoustic_features import (
     acoustic_similarity,
     weighted_centroid,
 )
-from app.feedback_labels import FEEDBACK_EVENT_TYPES, OutcomeTracker
+from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
 from app.recommendation_telemetry import new_request_id, record_delivery
@@ -118,6 +118,7 @@ from app.models import (
     User,
     Playlist,
     playlist_tracks,
+    user_play_events,
     user_track_plays,
     user_track_skips,
     recommendation_events,
@@ -310,6 +311,14 @@ _LASTFM_NAMES_TTL = 24 * 60 * 60
 _LASTFM_POOL_TTL = 6 * 60 * 60
 # Сколько свежих курированных треков держим в профиле как потенциальные сиды.
 _SEED_TRACK_LIMIT = 20
+# Свежие позитивы — дослушанное до GOOD_COMPLETION или лайкнутое за последние
+# _FRESH_SEED_DAYS. Сиды раньше брались только из коллекции с ротацией, и
+# похожесть строилась вокруг давно импортированного, а не того, что юзер
+# слушает сейчас. Из свежих берётся _FRESH_SEED_SHARE сидов каждого вида
+# (Last.fm и radio); остальное по-прежнему ротация по коллекции.
+_FRESH_SEED_DAYS = 14
+_FRESH_SEED_LIMIT = 12
+_FRESH_SEED_SHARE = 2
 # Confidence bonus треку, который фоновый воркер выбрал сравнением артистов по
 # косинусу (см. app/artist_probe.py). Выше, чем у соседа по графу (0.08), и
 # выше точного каталога любимого артиста (0.12): за этим треком стоит
@@ -327,6 +336,35 @@ def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
         ts = ts.replace(tzinfo=timezone.utc)
     age_days = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400)
     return 0.5 ** (age_days / half_life_days)
+
+
+def _as_aware(ts) -> datetime:
+    """Метка времени в UTC; None — эпоха (старее любого окна)."""
+    if ts is None:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+def _mix_fresh_seeds(fresh, rest, total: int, context: str, salt: str) -> list:
+    """До _FRESH_SEED_SHARE свежих сидов, остальное — ротация по ``rest``.
+
+    Обе части ротируются контекстным хэшем, как и раньше: каждая подгрузка
+    ходит к своим сидам, а не к одному самому свежему.
+    """
+    def rotated(values):
+        return sorted(
+            values,
+            key=lambda value: stable_jitter(context, f"{salt}:{value}"),
+            reverse=True,
+        )
+
+    picked = rotated(list(dict.fromkeys(fresh)))[: min(_FRESH_SEED_SHARE, total)]
+    for value in rotated(list(dict.fromkeys(rest))):
+        if len(picked) >= total:
+            break
+        if value not in picked:
+            picked.append(value)
+    return picked
 
 
 def _norm_key(artist: str, title: str) -> tuple:
@@ -493,6 +531,20 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         .filter(user_track_plays.c.user_id == user_id)
         .order_by(desc(user_track_plays.c.last_played))
         .limit(_TASTE_QUERY_LIMIT)
+        .all()
+    )
+    fresh_since = datetime.now(timezone.utc) - timedelta(days=_FRESH_SEED_DAYS)
+    fresh_played = (
+        db.query(Track, func.max(user_play_events.c.played_at).label("played_at"))
+        .join(user_play_events, user_play_events.c.track_id == Track.id)
+        .filter(
+            user_play_events.c.user_id == user_id,
+            user_play_events.c.completion >= GOOD_COMPLETION,
+            user_play_events.c.played_at >= fresh_since,
+        )
+        .group_by(Track.id)
+        .order_by(desc("played_at"))
+        .limit(_FRESH_SEED_LIMIT * 3)
         .all()
     )
     # Суммарные прослушивания на артиста в этом окне — отсекают разовые клики
@@ -1059,6 +1111,35 @@ def _taste_profile(db: Session, user_id: int) -> dict:
                 seed_tracks.append(pairs[index])
     seed_tracks = seed_tracks[:_SEED_TRACK_LIMIT]
 
+    # Свежие позитивы — только артистов с положительным весом в профиле.
+    # Дослушанный трек незнакомого артиста ещё не доказывает вкус, а радио от
+    # него — тот самый жанровый дрейф, от которого сиды и держат в профиле
+    # (см. выбор сидов в get_flow). Свой проход дедупа: свежий лайк должен
+    # остаться и в сидах коллекции, пересечение снимает _mix_fresh_seeds.
+    fresh_rows = [
+        (track, ts)
+        for track, ts in sorted(
+            [
+                *((t, a) for t, a in liked if _as_aware(a) >= fresh_since),
+                *fresh_played,
+            ],
+            key=lambda row: _as_aware(row[1]),
+            reverse=True,
+        )
+        if artist_weight.get(artist_key(effective_track_artist_title(track)[0]), 0) > 0
+    ]
+    seen_seed_track.clear()
+    fresh_seed_tracks = _seed_pairs(fresh_rows)[:_FRESH_SEED_LIMIT]
+    fresh_seeds = list(
+        dict.fromkeys(
+            track.external_id
+            for track, _ts in fresh_rows
+            if track.source == "ytmusic"
+            and track.external_id
+            and track.external_id not in skipped_video_ids
+        )
+    )[:_FRESH_SEED_LIMIT]
+
     acoustic_rows = []
     for track, added_at in liked:
         acoustic_rows.append((track.acoustic_features, 3.0 * _decay(added_at)))
@@ -1094,6 +1175,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         ],
         "seeds": seeds,
         "seed_tracks": seed_tracks,
+        "fresh_seed_tracks": fresh_seed_tracks,
+        "fresh_seeds": fresh_seeds,
         "playlist_artists": playlist_artists,
         "playlist_seeds": playlist_seeds,
         "artists": top_artists,
@@ -2360,6 +2443,12 @@ async def get_flow(
         len(profile.get("artist_weight") or {}),
     )
     explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
+    # Поправка скора на источник кандидата по тому, как юзер принимал его
+    # отдачу (см. discovery_feedback.origin_terms).
+    origin_term_by_name = origin_terms(
+        await asyncio.to_thread(cached_origin_counts, db, user_id),
+        f"origin:{ranking_context}",
+    )
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
     # Последовательно, а не в gather: Session не потокобезопасна, и обе функции
@@ -2412,7 +2501,10 @@ async def get_flow(
         identity = _item_identity(item)
         if content_bonus is None:
             content_bonus = content_bonus_by_identity.get(identity, 0.0)
-        score_key = f"{identity}:{content_bonus:.3f}"
+        origin_term = origin_term_by_name.get(
+            origin_by_identity.get(identity, "unknown"), 0.0
+        )
+        score_key = f"{identity}:{content_bonus:.3f}:{origin_term:.4f}"
         if score_key in score_by_item:
             return score_by_item[score_key]
         artist, _title = _item_artist_title(item)
@@ -2476,31 +2568,36 @@ async def get_flow(
             _ARTIST_REPEAT_CAP,
             _ARTIST_REPEAT_PENALTY * recent_artist_counts[primary_artist_key(artist)],
         )
-        score += discovery_term + repeat_term
+        score += discovery_term + repeat_term + origin_term
         score_by_item[score_key] = score
         # Компоненты считаются только для отданных позиций (см. телеметрию
         # ниже) — входы запоминаем, а не пересчитываем весь пул.
         score_inputs_by_item[score_key] = (
-            item, score_inputs, discovery_term, repeat_term
+            item, score_inputs, discovery_term, repeat_term, origin_term
         )
         return score
 
     def _score_features(item) -> dict:
         identity = _item_identity(item)
         content_bonus = content_bonus_by_identity.get(identity, 0.0)
-        cached = score_inputs_by_item.get(f"{identity}:{content_bonus:.3f}")
+        origin = origin_by_identity.get(identity, "unknown")
+        origin_term = origin_term_by_name.get(origin, 0.0)
+        cached = score_inputs_by_item.get(
+            f"{identity}:{content_bonus:.3f}:{origin_term:.4f}"
+        )
         artist, _title = _item_artist_title(item)
         features = {
-            "origin": origin_by_identity.get(identity, "unknown"),
+            "origin": origin,
             "novel": artist_key(artist) not in (profile.get("artist_weight") or {}),
             "discovery_requested": round(requested_ratio, 3),
             "discovery_effective": round(explore_ratio, 3),
         }
         if cached is not None:
-            source_item, inputs, discovery_term, repeat_term = cached
+            source_item, inputs, discovery_term, repeat_term, origin_term = cached
             components = score_components(source_item, **inputs)
             components["discovery"] = discovery_term
             components["repeat"] = repeat_term
+            components["origin"] = origin_term
             features["components"] = {
                 name: round(value, 4) for name, value in components.items()
             }
@@ -2707,11 +2804,13 @@ async def get_flow(
     profile_seeds = list(dict.fromkeys(profile["playlist_seeds"]))
     if not profile_seeds:
         profile_seeds = list(dict.fromkeys(profile["seeds"]))
-    profile_seeds.sort(
-        key=lambda value: stable_jitter(ranking_context, f"profile-seed:{value}"),
-        reverse=True,
+    seeds = _mix_fresh_seeds(
+        profile.get("fresh_seeds") or [],
+        profile_seeds,
+        _PROFILE_SEEDS,
+        ranking_context,
+        "profile-seed",
     )
-    seeds = profile_seeds[:_PROFILE_SEEDS]
 
     # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
     # profile["artists"] здесь ротируется хэшем текущей history, поэтому это
@@ -2859,12 +2958,13 @@ async def get_flow(
     # фильтрации и статистики качества. Никакого отдельного места в выдаче этот
     # пул не получает. Сиды перемешиваем, чтобы каждая подгрузка не ходила к
     # одному и тому же самому свежему лайку.
-    seed_tracks = list(profile.get("seed_tracks") or [])
-    seed_tracks.sort(
-        key=lambda pair: stable_jitter(ranking_context, f"lastfm-seed:{pair[0]}:{pair[1]}"),
-        reverse=True,
+    seed_tracks = _mix_fresh_seeds(
+        [tuple(pair) for pair in profile.get("fresh_seed_tracks") or []],
+        [tuple(pair) for pair in profile.get("seed_tracks") or []],
+        _LASTFM_SEED_TRACKS,
+        ranking_context,
+        "lastfm-seed",
     )
-    seed_tracks = seed_tracks[:_LASTFM_SEED_TRACKS]
     lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
 
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли

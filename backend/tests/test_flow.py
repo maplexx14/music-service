@@ -2603,3 +2603,50 @@ def test_favorite_artist_rotation_dedupes_spellings():
         limit=5,
     )
     assert sorted(picked) == ["Дора", "Серега Пират"]
+
+
+def test_mix_fresh_seeds_takes_share_from_fresh_then_rotates_collection():
+    from app.routers.flow import _FRESH_SEED_SHARE, _mix_fresh_seeds
+
+    fresh = ["f1", "f2", "f3"]
+    rest = ["c1", "c2", "f1", "c3"]
+    picked = _mix_fresh_seeds(fresh, rest, 4, "ctx", "salt")
+    assert len(picked) == 4 and len(set(picked)) == 4
+    assert all(value in fresh for value in picked[:_FRESH_SEED_SHARE])
+    assert _mix_fresh_seeds([], rest, 2, "ctx", "salt") == _mix_fresh_seeds([], rest, 2, "ctx", "salt")
+    assert len(_mix_fresh_seeds([], rest, 2, "ctx", "salt")) == 2
+    assert _mix_fresh_seeds(fresh, [], 1, "ctx", "salt")[0] in fresh
+
+
+def test_fresh_seeds_are_recent_completions_of_known_artists(db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import user_play_events
+
+    user = create_user(db, username="fresh-seed-user")
+    _liked(db, user, artist="GoodArtist", title="old-like")
+    now = datetime.now(timezone.utc)
+    rows = []
+    for title, artist, completion, age in (
+        ("fresh-hit", "GoodArtist", 0.95, 1),
+        ("half", "GoodArtist", 0.5, 1),
+        ("stranger", "Stranger", 0.95, 1),
+        ("old-hit", "GoodArtist", 0.95, 40),
+    ):
+        track = Track(title=title, artist=artist, duration=100, source="ytmusic",
+                      external_id=f"vid-{title}")
+        db.add(track)
+        db.commit()
+        rows.append({"user_id": user.id, "track_id": track.id,
+                     "played_at": now - timedelta(days=age), "completion": completion})
+    db.execute(user_play_events.insert(), rows)
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+
+    assert ("GoodArtist", "fresh-hit") in profile["fresh_seed_tracks"]
+    assert ("GoodArtist", "old-like") in profile["fresh_seed_tracks"]
+    assert not {("GoodArtist", "half"), ("Stranger", "stranger"), ("GoodArtist", "old-hit")} & set(
+        profile["fresh_seed_tracks"]
+    )
+    assert profile["fresh_seeds"] == ["vid-fresh-hit"]

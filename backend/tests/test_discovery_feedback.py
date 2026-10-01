@@ -159,3 +159,44 @@ def test_discovery_acceptance_skips_thin_profiles(db, monkeypatch):
     assert discovery_acceptance(db, 1, familiar_artist_count=4) == 1.0
     assert discovery_acceptance(db, 1, familiar_artist_count=9) == 1.0
     assert discovery_acceptance(db, 1, familiar_artist_count=10) == 0.3
+
+
+def test_origin_terms_follow_acceptance_and_stay_bounded():
+    from app.discovery_feedback import ORIGIN_TERM_WEIGHT, origin_terms
+
+    # Прод, 2026-10-01: local почти не принимают, лайки — лучше всех.
+    counts = {"local": [2, 323], "liked": [30, 240], "radio": [4, 100], "favorite": [18, 315]}
+    terms = origin_terms(counts, "seed")
+    assert terms["local"] < -0.5
+    assert 0 < terms["liked"] <= 0.5 * ORIGIN_TERM_WEIGHT
+    assert terms["local"] < terms["radio"] < terms["liked"]
+    # Сэмпл стабилен внутри запроса и меняется между запросами.
+    assert origin_terms(counts, "seed") == terms
+    assert origin_terms(counts, "other") != terms
+
+
+def test_origin_terms_need_evidence():
+    from app.discovery_feedback import origin_terms
+
+    assert origin_terms({"local": [0, 40], "liked": [5, 40]}, "s") == {}
+    assert origin_terms({"local": [0, 400]}, "s") == {}
+
+
+def test_origin_counts_group_outcomes_by_logged_origin(db):
+    from app.discovery_feedback import origin_counts
+
+    user = create_user(db, username="origin-user")
+    now = datetime.now(timezone.utc)
+    for ext, origin, event, value in (
+        ("a", "local", "skip", 0.05),
+        ("b", "local", "listen", 0.95),
+        ("c", "radio", "like", None),
+        ("d", None, "listen", 0.95),
+    ):
+        _delivery(db, user, request_id="r1", artist="X", external_id=ext,
+                  shown_at=now - timedelta(hours=1),
+                  features={"origin": origin} if origin else {})
+        _event(db, user, request_id="r1", external_id=ext, event_type=event, value=value, at=now)
+    db.commit()
+
+    assert origin_counts(db, user.id, now=now) == {"local": [1, 2], "radio": [1, 1]}
