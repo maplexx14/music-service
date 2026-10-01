@@ -64,8 +64,22 @@ function usable(r) {
 }
 
 function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
-  const fromRadius = getComputedStyle(fromImg).borderRadius
-  const toRadius = getComputedStyle(toImg).borderRadius
+  const fromRadius = parseFloat(getComputedStyle(fromImg).borderRadius) || 0
+  const toRadius = parseFloat(getComputedStyle(toImg).borderRadius) || 0
+  // Клон живёт в размере БОЛЬШЕГО прямоугольника и только уменьшается
+  // (scale ≤ 1). WebKit растеризует слой в его собственном размере: клон
+  // мини-обложки, растянутый scale(8), мылился бы весь полёт и резко
+  // «прояснялся» в конце, а его радиус раздувался бы в круг.
+  const base = toRect.width >= fromRect.width ? toRect : fromRect
+  // Кадр морфа: прямоугольник rect с экранным радиусом radius. Радиус — в
+  // координатах клона (до scale), иначе после масштаба он будет не тем.
+  const frame = (rect, radius) => {
+    const scale = rect.width / base.width
+    return {
+      transform: `translate(${rect.left - base.left}px, ${rect.top - base.top}px) scale(${scale})`,
+      borderRadius: `${radius / scale}px`,
+    }
+  }
   const clone = document.createElement('img')
   // srcOverride — hi-res обложка на открытии: мини-плеер показывает
   // уменьшенную, растянутая до размеров фуллскрина она мылилась бы в полёте.
@@ -73,28 +87,27 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
   clone.alt = ''
   clone.style.cssText = [
     'position:fixed',
-    `left:${fromRect.left}px`,
-    `top:${fromRect.top}px`,
-    `width:${fromRect.width}px`,
-    `height:${fromRect.height}px`,
+    `left:${base.left}px`,
+    `top:${base.top}px`,
+    `width:${base.width}px`,
+    `height:${base.height}px`,
     'object-fit:cover',
     'transform-origin:top left',
-    `border-radius:${fromRadius}`,
     'z-index:1300',
     'pointer-events:none',
   ].join(';')
+  const first = frame(fromRect, fromRadius)
+  // Стартовый кадр сразу в стиле: до первого тика анимации клон не должен
+  // мелькнуть в полном размере.
+  clone.style.transform = first.transform
+  clone.style.borderRadius = first.borderRadius
   document.body.appendChild(clone)
 
-  const dx = toRect.left - fromRect.left
-  const dy = toRect.top - fromRect.top
-  const scale = toRect.width / fromRect.width
-  const anim = clone.animate(
-    [
-      { transform: 'translate(0px, 0px) scale(1)', borderRadius: fromRadius },
-      { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: toRadius },
-    ],
-    { duration, easing: drawerEase(), fill: 'forwards' },
-  )
+  const anim = clone.animate([first, frame(toRect, toRadius)], {
+    duration,
+    easing: drawerEase(),
+    fill: 'forwards',
+  })
   return new Promise((resolve) => {
     anim.onfinish = () => {
       clone.remove()

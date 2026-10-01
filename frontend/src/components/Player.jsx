@@ -516,8 +516,9 @@ function PlayerInner() {
       return
     }
     const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
-    if (hiRes) await preloadCover(hiRes)
-    beginOpenMorph(miniCoverRef.current, hiRes)
+    // Не успела прогреться — клон летит с мини-обложкой: мягче, но не пустой.
+    const hiResReady = hiRes ? await preloadCover(hiRes) : false
+    beginOpenMorph(miniCoverRef.current, hiResReady ? hiRes : undefined)
     openFullScreen(karaoke)
   }
 
