@@ -2650,3 +2650,67 @@ def test_fresh_seeds_are_recent_completions_of_known_artists(db):
         profile["fresh_seed_tracks"]
     )
     assert profile["fresh_seeds"] == ["vid-fresh-hit"]
+
+
+def _collection(db, user, artist, titles):
+    playlist = Playlist(name=f"pl-{artist}", is_public=False, is_liked=False, owner_id=user.id)
+    db.add(playlist)
+    db.commit()
+    for position, title in enumerate(titles):
+        track = Track(title=title, artist=artist, duration=100, source="local")
+        db.add(track)
+        db.commit()
+        db.execute(playlist_tracks.insert().values(
+            playlist_id=playlist.id, track_id=track.id, position=position
+        ))
+    db.commit()
+
+
+def test_deep_catalog_artists_need_five_distinct_songs(db):
+    user = create_user(db, username="deep-catalog-user")
+    _collection(db, user, "FavArtist", [f"song {i}" for i in range(5)])
+    _collection(db, user, "Casual", [f"song {i}" for i in range(4)])
+    # Та же песня во втором плейлисте — это не пятая песня.
+    _collection(db, user, "Casual", ["song 0"])
+
+    profile = _taste_profile(db, user.id)
+
+    assert "favartist" in profile["deep_catalog_artist_keys"]
+    assert "casual" not in profile["deep_catalog_artist_keys"]
+
+
+def test_flow_keeps_only_hits_of_non_favorite_artists(client, db, monkeypatch):
+    """Цель продукта: у подходящих артистов — хиты, глубокий каталог — любимым."""
+    from app import mainstream
+
+    user = create_user(db)
+    _liked(db, user)
+    _collection(db, user, "FavArtist", [f"own {i}" for i in range(5)])
+
+    pool = [
+        *(_external("Famous", f"Hit {i}", f"hit{i}") for i in range(6)),
+        _external("Famous", "Deep cut", "deep"),
+        _external("Nobody", "Garage demo", "nobody"),
+        _external("FavArtist", "Rare b-side", "rare"),
+    ]
+
+    async def _similar(artist):
+        return pool
+
+    async def _hits(artists, timeout):
+        info = {
+            "famous": {"listeners": 2_000_000, "top": [f"Hit {i}" for i in range(6)]},
+            "nobody": {"listeners": 300, "top": ["Garage demo"]},
+        }
+        assert "favartist" not in set(artists), "любимого артиста проверять не нужно"
+        return {key: info.get(key) for key in artists}
+
+    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+
+    resp = client.get("/api/recommendations/flow?limit=5", headers=auth_headers(client))
+    assert resp.status_code == 200, resp.text
+    titles = {t["title"] for t in resp.json()}
+    assert titles, "волна пустая"
+    assert not titles & {"Deep cut", "Garage demo"}, titles

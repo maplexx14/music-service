@@ -124,6 +124,7 @@ from app.models import (
     recommendation_events,
     recommendation_impressions,
 )
+from app import mainstream
 from app.routers import soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import ExternalTrackResponse, TrackResponse
@@ -158,6 +159,14 @@ _PLAYED_ARTIST_MIN_PLAYS = 2
 # иначе артист с одним-двумя треками не доходил до потока вообще — см. комментарий
 # у catalog_artist_keys в _taste_profile.
 _PLAYLIST_ARTIST_MIN_TRACKS = 3
+# Сколько разных песен артиста в коллекции (лайки и свои плейлисты) делают его
+# любимым в смысле мейнстрим-фильтра: только любимым волна отдаёт глубокий
+# каталог, у остальных — лишь хиты (app/mainstream.py). Выбор владельца
+# продукта, 2026-10-01; у активных юзеров это 15 и 9 артистов.
+_DEEP_CATALOG_MIN_TRACKS = 5
+# Сколько ждём Last.fm в мейнстрим-фильтре сверх сетевых источников. Не успевшие
+# запросы догреют кэш в фоне — см. mainstream.artist_hits.
+_MAINSTREAM_WAIT = 1.5
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -509,6 +518,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     )
     collection_keys = set()
     collection_external_ids = set()
+    collection_songs_by_artist: dict[str, set] = {}
     for _track_id, artist, title, source, external_id, album in collection_rows:
         effective_artist, effective_title = effective_artist_title(
             title or "",
@@ -519,6 +529,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = _norm_key(effective_artist, effective_title)
         if all(key):
             collection_keys.add(key)
+            collection_songs_by_artist.setdefault(
+                primary_artist_key(effective_artist), set()
+            ).add(key)
         if external_id:
             collection_external_ids.add(external_id)
     # Часто играемые: порог применяем к АРТИСТУ ниже (artist_play_totals), а не
@@ -1196,6 +1209,16 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             )
         ],
         "artist_weight": {k: v for k, v in artist_weight.items() if v > 0},
+        # Любимые — им можно давать глубокий каталог, остальным только хиты
+        # (см. app/mainstream.py). Считаются разные песни, а не строки: один
+        # трек в двух плейлистах — это один выбор.
+        "deep_catalog_artist_keys": sorted(
+            key
+            for key, songs in collection_songs_by_artist.items()
+            if key
+            and len(songs) >= _DEEP_CATALOG_MIN_TRACKS
+            and key not in excluded_artists
+        ),
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
         "genres": list(dict.fromkeys(genres)),
@@ -2588,6 +2611,11 @@ async def get_flow(
         artist, _title = _item_artist_title(item)
         features = {
             "origin": origin,
+            **(
+                {"hit": hit_by_identity[identity]}
+                if identity in hit_by_identity
+                else {}
+            ),
             "novel": artist_key(artist) not in (profile.get("artist_weight") or {}),
             "discovery_requested": round(requested_ratio, 3),
             "discovery_effective": round(explore_ratio, 3),
@@ -2689,6 +2717,8 @@ async def get_flow(
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
     origin_by_identity: dict[str, str] = {}
+    # Прошёл ли кандидат мейнстрим-фильтр (только для проверенных) — в телеметрию.
+    hit_by_identity: dict[str, bool] = {}
 
     def _add_explore(
         tracks,
@@ -3236,6 +3266,64 @@ async def get_flow(
         unified_identities.add(identity)
         unified_keys.add(key)
         unified_candidates.append(candidate)
+
+    # Мейнстрим-фильтр: у артиста не из любимых (deep_catalog_artist_keys) в
+    # волну идут только его хиты — см. app/mainstream.py. Свои лайки юзера
+    # фильтр не трогает. Если доказанных хитов меньше порции, добираем самыми
+    # популярными из отсеянных: пустая волна хуже нарушения правила.
+    if mainstream.available():
+        stage_started = loop.time()
+        deep_ok = set(profile.get("deep_catalog_artist_keys") or [])
+        liked_identity_set = {_item_identity(t) for t in liked_candidates}
+
+        def _gate_artist(item) -> str:
+            return primary_artist_key(_item_artist_title(item)[0])
+
+        gated = [
+            c
+            for c in unified_candidates
+            if _item_identity(c) not in liked_identity_set
+            and _gate_artist(c) not in deep_ok
+        ]
+        hits = await mainstream.artist_hits(
+            {_gate_artist(c) for c in gated}, timeout=_MAINSTREAM_WAIT
+        )
+        gated_ids = {_item_identity(c) for c in gated}
+        kept, reserve = [], []
+        for candidate in unified_candidates:
+            identity = _item_identity(candidate)
+            if identity not in gated_ids:
+                kept.append(candidate)
+                continue
+            hit = mainstream.is_hit(
+                hits.get(_gate_artist(candidate)),
+                _norm_key(*_item_artist_title(candidate))[1],
+                lambda name: _norm_key("", name)[1],
+            )
+            hit_by_identity[identity] = hit
+            (kept if hit else reserve).append(candidate)
+        if len(kept) < limit and reserve:
+            reserve.sort(
+                key=lambda item: (
+                    item.get("play_count", 0)
+                    if isinstance(item, dict)
+                    else getattr(item, "play_count", 0)
+                ) or 0,
+                reverse=True,
+            )
+            kept.extend(reserve[: limit - len(kept)])
+        logger.debug(
+            "flow mainstream user=%s gated=%d hits=%d reserve_used=%d",
+            user_id,
+            len(gated),
+            sum(hit_by_identity.values()),
+            max(0, len(kept) - (len(unified_candidates) - len(reserve))),
+        )
+        unified_candidates = kept
+        _mark_stage("mainstream", stage_started)
+        response.headers["Server-Timing"] = ", ".join(
+            f"{name};dur={duration:.0f}" for name, duration in stage_timings
+        )
     # Явный лайк — самый сильный первичный сигнал, какой у нас есть про
     # КОНКРЕТНЫЙ трек, поэтому bonus выше, чем у точного каталога любимого
     # артиста. На попадание в порцию это влияет только внутри своей квоты (см.
