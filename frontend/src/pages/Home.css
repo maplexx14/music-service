@@ -226,6 +226,26 @@
   z-index: 2;
 }
 
+/* Заголовок потока: крупно, жирно, белым поверх диска и градиента — как
+   вывеска над кнопкой. Мягкая тень вместо обводки отделяет буквы от светлых
+   участков обложки. */
+.wave-heading {
+  position: absolute;
+  bottom: calc(100% + 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: 'Unbounded', sans-serif;
+  font-weight: 800;
+  font-size: clamp(44px, 6vw, 84px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  text-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Кнопка потока — сплошной круг акцентного цвета с одной иконкой в центре
    диска. Полупрозрачные варианты терялись на обложке и не читались как
    кнопка; плотная заливка сразу говорит «нажми». */
@@ -726,6 +746,11 @@
   .wave-title {
     width: 108px;
     height: 108px;
+  }
+
+  .wave-heading {
+    font-size: clamp(40px, 13vw, 60px);
+    bottom: calc(100% + 16px);
   }
 
   .content-section {

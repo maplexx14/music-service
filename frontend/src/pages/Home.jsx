@@ -410,6 +410,10 @@ function Home() {
         <HeroDisc />
         <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
           <div className="wave-center">
+            {/* Крупный заголовок над кнопкой. Висит абсолютно, чтобы сама
+                кнопка оставалась ровно в центре диска. Для скринридеров
+                название несёт aria-label кнопки. */}
+            <div className="wave-heading" aria-hidden="true">поток</div>
             {waveGif ? (
               <button
                 type="button"
