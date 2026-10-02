@@ -3,8 +3,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart, ArrowLeft } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScrollRestoration } from '../hooks/useScrollRestoration'
-import { useEdgeSwipeBack } from '../hooks/useEdgeSwipeBack'
-import { isTabRoot, tabOf, canGoBack, isIOSStandalone } from '../services/navigation'
+import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
+import { isTabRoot, tabOf, canGoBack, isStandalone } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import Sidebar from './Sidebar'
 import Player from './Player'
@@ -154,9 +154,14 @@ function Layout({ children }) {
   }
 
   useScrollRestoration(mainRef)
-  useEdgeSwipeBack(mainRef, {
-    enabled: isIOSStandalone && showMobileBack && !isFullScreen && canGoBack(),
-    onBack: () => navigate(-1),
+  // Свайпы — только в установленном PWA: во вкладке браузера горизонтальный
+  // жест у края уже занят его собственным «Назад».
+  const tabIndex = MOBILE_NAV.findIndex(({ to }) => to === location.pathname)
+  useSwipeNavigation(mainRef, {
+    enabled: isStandalone && isMobile && !isFullScreen,
+    onBack: showMobileBack ? goBack : null,
+    onPrev: tabIndex > 0 ? () => navigate(MOBILE_NAV[tabIndex - 1].to) : null,
+    onNext: tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? () => navigate(MOBILE_NAV[tabIndex + 1].to) : null,
   })
 
   // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
