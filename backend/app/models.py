@@ -331,3 +331,21 @@ class CensorOverride(Base):
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UserPlayerState(Base):
+    """Последнее состояние плеера юзера: трек, очередь, позиция, режимы.
+
+    Клиент (frontend/src/services/playerPersist.js) держит ту же запись в
+    localStorage, а сюда шлёт копию — чтобы на другом устройстве или после
+    очистки данных браузера плеер открывался там же. Содержимое — снимок
+    клиента как есть: сервер его не разбирает, только хранит последний.
+    """
+    __tablename__ = "user_player_states"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(JSON, nullable=False)
+    # Время снимка по часам клиента (мс) — им клиент сравнивает серверную
+    # запись со своей локальной и берёт свежую.
+    saved_at = Column(Float, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

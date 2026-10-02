@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import json
 import logging
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
-from app.models import User, Track
+from app.models import User, Track, UserPlayerState
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
 from app import lastfm_genres
 from app.genre_keywords import GENRE_KEYWORDS
@@ -390,6 +390,47 @@ def update_now_playing(
 @router.delete("/me/now-playing")
 def clear_now_playing(current_user: User = Depends(get_current_active_user)):
     delete_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}")
+    return {"ok": True}
+
+
+# --- Состояние плеера между устройствами (см. models.UserPlayerState) ---
+
+# Снимок несёт окно очереди до ~300 треков с метаданными; потолок с запасом,
+# чтобы один клиент не мог складывать в БД мегабайты.
+PLAYER_STATE_MAX_BYTES = 1_000_000
+
+
+class PlayerStatePayload(BaseModel):
+    state: Dict[str, Any]
+    saved_at: float = Field(..., ge=0)
+
+
+@router.get("/me/player-state")
+def get_player_state(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    row = db.get(UserPlayerState, current_user.id)
+    if not row:
+        return {"state": None, "saved_at": None}
+    return {"state": row.state, "saved_at": row.saved_at}
+
+
+@router.put("/me/player-state")
+def save_player_state(
+    payload: PlayerStatePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    if len(json.dumps(payload.state, ensure_ascii=False).encode()) > PLAYER_STATE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Player state too large")
+    row = db.get(UserPlayerState, current_user.id)
+    if row is None:
+        row = UserPlayerState(user_id=current_user.id)
+        db.add(row)
+    row.state = payload.state
+    row.saved_at = payload.saved_at
+    db.commit()
     return {"ok": True}
 
 
