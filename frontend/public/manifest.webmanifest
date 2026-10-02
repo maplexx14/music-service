@@ -8,8 +8,8 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#252933",
-  "theme_color": "#252933",
+  "background_color": "#050505",
+  "theme_color": "#050505",
   "categories": [
     "music",
     "entertainment"
