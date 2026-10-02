@@ -128,28 +128,30 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       }
       busy = true
       haptic(HAPTIC.selection)
+      // Переход запускаем СРАЗУ, параллельно с уездом старого экрана. Раньше
+      // он стартовал только после того, как экран уехал целиком, и всё время
+      // рендера нового экрана на месте ленты был пустой чёрный фон (видна
+      // одна нижняя панель). Теперь, пока роутер готовит новый экран, старый
+      // ещё виден и доезжает; на коммите нового сдвиг снимается до первого
+      // кадра. Экран уже увезён пальцем — штатная анимация перехода не нужна.
       setOffset(dir * width, true)
-      setTimeout(() => {
-        // Экран уже увезён пальцем — штатная анимация перехода не нужна.
-        // Сдвиг снимаем в коммите нового экрана, до его первого кадра.
-        skipNextTransitionAnimation()
-        let fallback = 0
-        const cancel = afterNextRouteCommit(() => {
-          clearTimeout(fallback)
-          reset()
-          busy = false
-          el.animate(
-            [{ transform: `translate3d(${-dir * ENTER_SHIFT * 100}%, 0, 0)` }, { transform: 'none' }],
-            { duration: ENTER_MS, easing: EASE },
-          )
-        })
-        fallback = setTimeout(() => {
-          cancel()
-          reset()
-          busy = false
-        }, 800)
-        action()
-      }, EXIT_MS)
+      skipNextTransitionAnimation()
+      let fallback = 0
+      const cancel = afterNextRouteCommit(() => {
+        clearTimeout(fallback)
+        reset()
+        busy = false
+        el.animate(
+          [{ transform: `translate3d(${-dir * ENTER_SHIFT * 100}%, 0, 0)` }, { transform: 'none' }],
+          { duration: ENTER_MS, easing: EASE },
+        )
+      })
+      fallback = setTimeout(() => {
+        cancel()
+        reset()
+        busy = false
+      }, 1500)
+      action()
     }
 
     // Касание отобрала система (входящий звонок, жест iOS) — возвращаем экран
