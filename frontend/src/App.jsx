@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect } from 'react'
+import { Suspense, useEffect, useLayoutEffect } from 'react'
 import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
@@ -6,6 +6,7 @@ import Spinner from './components/Spinner'
 import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted } from './services/navigation'
+import { lazyWithReload } from './services/staleBuild'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
 const appHistory = createAppHistory()
@@ -22,23 +23,23 @@ if (typeof window !== 'undefined' && window.launchQueue?.setConsumer) {
   })
 }
 
-const Login = lazy(() => import('./pages/Login'))
-const Register = lazy(() => import('./pages/Register'))
-const VerifyEmail = lazy(() => import('./pages/VerifyEmail'))
-const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
-const ResetPassword = lazy(() => import('./pages/ResetPassword'))
-const PreferencesOnboarding = lazy(() => import('./pages/PreferencesOnboarding'))
-const Home = lazy(() => import('./pages/Home'))
-const Search = lazy(() => import('./pages/Search'))
-const Playlists = lazy(() => import('./pages/Playlists'))
-const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'))
-const ExternalPlaylist = lazy(() => import('./pages/ExternalPlaylist'))
-const Album = lazy(() => import('./pages/Album'))
-const Artist = lazy(() => import('./pages/Artist'))
-const LikedSongs = lazy(() => import('./pages/LikedSongs'))
-const UploadTrack = lazy(() => import('./pages/UploadTrack'))
-const Settings = lazy(() => import('./pages/Settings'))
-const Admin = lazy(() => import('./pages/Admin'))
+const Login = lazyWithReload(() => import('./pages/Login'))
+const Register = lazyWithReload(() => import('./pages/Register'))
+const VerifyEmail = lazyWithReload(() => import('./pages/VerifyEmail'))
+const ForgotPassword = lazyWithReload(() => import('./pages/ForgotPassword'))
+const ResetPassword = lazyWithReload(() => import('./pages/ResetPassword'))
+const PreferencesOnboarding = lazyWithReload(() => import('./pages/PreferencesOnboarding'))
+const Home = lazyWithReload(() => import('./pages/Home'))
+const Search = lazyWithReload(() => import('./pages/Search'))
+const Playlists = lazyWithReload(() => import('./pages/Playlists'))
+const PlaylistDetail = lazyWithReload(() => import('./pages/PlaylistDetail'))
+const ExternalPlaylist = lazyWithReload(() => import('./pages/ExternalPlaylist'))
+const Album = lazyWithReload(() => import('./pages/Album'))
+const Artist = lazyWithReload(() => import('./pages/Artist'))
+const LikedSongs = lazyWithReload(() => import('./pages/LikedSongs'))
+const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
+const Settings = lazyWithReload(() => import('./pages/Settings'))
+const Admin = lazyWithReload(() => import('./pages/Admin'))
 
 // Стоит после <Routes>: layout-эффекты соседей идут по порядку, так что
 // сигнал уходит, когда новый экран уже закоммичен и прокручен на место.

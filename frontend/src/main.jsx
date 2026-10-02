@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 import { installPressFeedback } from './services/pressFeedback'
 import { applyGpuClass } from './utils/gpu'
@@ -11,9 +12,13 @@ installPressFeedback()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 )
+// Сторож в index.html: бандл исполнился, восстанавливать нечего.
+window.__boltBooted = true
 
 // Service worker: app-shell (см. public/sw.js). Он кэширует только каркас
 // (HTML, /assets, шрифты, иконки) для мгновенного старта PWA; аудио, API и

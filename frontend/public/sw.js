@@ -18,9 +18,10 @@
 // кэши с другими именами. v2 — чтобы выселить два мастер-PNG по 331 КБ
 // (favicon-64.png и apple-touch-icon.png), которые index.html больше не
 // запрашивает: сами по себе они безвредны, но занимают квоту Cache Storage,
-// а на iOS она самая тесная из всех платформ.
-const CACHE_VERSION = 'bolt-shell-v3'
-const PRECACHE = ['/', '/manifest.webmanifest']
+// а на iOS она самая тесная из всех платформ. v4 — выселить каркасы,
+// закэшированные без своих ассетов (см. cacheShell).
+const CACHE_VERSION = 'bolt-shell-v4'
+const PRECACHE = ['/manifest.webmanifest']
 const NAV_TIMEOUT_MS = 1500
 
 // Обложки внешних треков (/api/tracks/cover-proxy) — отдельный кэш, cache-first.
@@ -41,10 +42,10 @@ const STATIC_CACHE_RE = /^\/(fonts|apple-splash-|icon-|favicon-|apple-touch-icon
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE_VERSION)
-      .then((cache) => cache.addAll(PRECACHE))
-      .catch(() => {}),
+    Promise.all([
+      caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE)),
+      fetch('/', { cache: 'no-store' }).then((response) => (response.ok ? cacheShell(response) : undefined)),
+    ]).catch(() => {}),
   )
   self.skipWaiting()
 })
@@ -96,6 +97,32 @@ function coverResponse(event, request) {
   )
 }
 
+// Каркас в кэше обязан быть самодостаточным. Раньше '/' клался сразу, а его
+// бандлы — лишь когда страница их запросит; после деплоя кэш отдавал
+// index.html, чьих /assets/* нет ни в кэше, ни на сервере (старые хэши
+// удалены) — модуль не грузился, на iOS-PWA оставался чёрный экран.
+// Теперь сначала докачиваем всё, на что ссылается HTML, и только потом
+// подменяем '/'. Не докачалось — в кэше остаётся прежний целый каркас.
+const SHELL_ASSET_RE = /(?:src|href)="(\/assets\/[^"]+)"/g
+
+function cacheShell(response) {
+  return response.text().then((html) => {
+    const assets = [...new Set([...html.matchAll(SHELL_ASSET_RE)].map((m) => m[1]))]
+    return caches.open(CACHE_VERSION).then((cache) =>
+      Promise.all(
+        assets.map((path) =>
+          cache.match(path).then((hit) => hit || cache.add(path)),
+        ),
+      ).then(() =>
+        cache.put(
+          '/',
+          new Response(html, { status: response.status, statusText: response.statusText, headers: response.headers }),
+        ),
+      ),
+    )
+  })
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET') return
@@ -121,14 +148,8 @@ self.addEventListener('fetch', (event) => {
   // хэшированные ассеты лежат там же), а свежий ответ фоном кладём в кэш —
   // он подхватится при следующем запуске.
   if (request.mode === 'navigate') {
-    const network = fetch(request).then((response) => {
-      if (response.ok) {
-        const copy = response.clone()
-        caches.open(CACHE_VERSION).then((cache) => cache.put('/', copy)).catch(() => {})
-      }
-      return response
-    })
-    event.waitUntil(network.catch(() => {}))
+    const network = fetch(request)
+    event.waitUntil(network.then((response) => (response.ok ? cacheShell(response.clone()) : undefined)).catch(() => {}))
     const timeout = new Promise((resolve) => setTimeout(resolve, NAV_TIMEOUT_MS))
     const cachedAfterTimeout = timeout.then(() => caches.match('/')).then((cached) => cached || network)
     event.respondWith(

@@ -49,6 +49,46 @@
     <!-- Фон до загрузки бандла CSS: иначе после сплэша iOS на мгновение
          показывает белый WebView. Цвет — как у сплэша (make_splash.py). -->
     <style>html, body { background-color: #000; }</style>
+    <!-- Сторож загрузки. SW на медленной сети отдаёт index.html из кэша, и
+         тот может ссылаться на бандл прошлого деплоя, которого на сервере уже
+         нет: модуль не исполнится, React не стартует — чёрный экран навсегда.
+         Ловим ошибку загрузки /assets/*, выбрасываем кэш каркаса SW и один раз
+         перезагружаемся (логика и ключ флага — как в src/services/staleBuild.js).
+         Если бандл так и не стартовал — показываем кнопку вместо пустоты. -->
+    <script>
+      (function () {
+        var KEY = 'bolt-stale-reload-at'
+        function recover(force) {
+          try {
+            if (!force && Date.now() - Number(sessionStorage.getItem(KEY) || 0) < 60000) return false
+            sessionStorage.setItem(KEY, String(Date.now()))
+          } catch (e) {}
+          var reload = function () { location.reload() }
+          if (!window.caches) return reload(), true
+          caches.keys().then(function (keys) {
+            return Promise.all(keys.filter(function (k) { return k.indexOf('bolt-shell') === 0 }).map(function (k) { return caches.delete(k) }))
+          }).then(reload, reload)
+          return true
+        }
+        function showFallback() {
+          if (window.__boltBooted || document.getElementById('boot-fallback')) return
+          if (!document.body) return void document.addEventListener('DOMContentLoaded', showFallback)
+          var box = document.createElement('div')
+          box.id = 'boot-fallback'
+          box.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#fff;font:17px -apple-system,system-ui,sans-serif'
+          box.innerHTML = '<div>Не удалось загрузить приложение</div><button type="button" style="padding:12px 24px;border:0;border-radius:12px;background:#fff;color:#000;font-size:16px">Обновить</button>'
+          box.querySelector('button').onclick = function () { recover(true) }
+          document.body.appendChild(box)
+        }
+        window.addEventListener('error', function (e) {
+          var el = e.target
+          var src = el && (el.src || el.href)
+          if (window.__boltBooted || !src || src.indexOf('/assets/') === -1) return
+          if (!recover(false)) showFallback()
+        }, true)
+        setTimeout(function () { if (!window.__boltBooted) showFallback() }, 15000)
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
