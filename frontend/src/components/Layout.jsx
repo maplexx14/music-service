@@ -166,6 +166,11 @@ function Layout({ children }) {
 
   // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
   const handleNavClick = (event, to, isActive) => {
+    // Клик, завершивший протяжку пальцем по панели: переход уже сделан там.
+    if (performance.now() < navSuppressClickUntil.current) {
+      event.preventDefault()
+      return
+    }
     if (isActive && location.pathname === to) {
       event.preventDefault()
       mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -190,10 +195,85 @@ function Layout({ children }) {
   useEffect(() => {
     if (lastNavIndex.current === activeNavIndex) return
     lastNavIndex.current = activeNavIndex
+    setPendingNavIndex(null)
     setNavDeform(true)
     const timer = setTimeout(() => setNavDeform(false), 400)
     return () => clearTimeout(timer)
   }, [activeNavIndex])
+
+  // Протяжка пальцем по панели, как в Telegram: капсула едет за пальцем,
+  // подсвечивается вкладка под ним, отпустили — открылась она. Короткий тап
+  // по-прежнему обычный клик по ссылке.
+  //
+  // Пока палец на панели, капсулу двигаем напрямую (style.transform в px), без
+  // React-рендера на каждое движение. После отпускания её ведёт CSS-переход к
+  // выбранной ячейке: pendingNavIndex держит её там, пока роутер не закоммитит
+  // новый экран, — иначе она дёрнулась бы назад к старой вкладке.
+  const navRef = useRef(null)
+  const navPillRef = useRef(null)
+  const navDragRef = useRef(null)
+  const navSuppressClickUntil = useRef(0)
+  const [navHoverIndex, setNavHoverIndex] = useState(null)
+  const [pendingNavIndex, setPendingNavIndex] = useState(null)
+  const displayNavIndex = navHoverIndex ?? pendingNavIndex ?? activeNavIndex
+
+  const navGeometry = () => {
+    const rect = navRef.current.getBoundingClientRect()
+    return { rect, cell: rect.width / MOBILE_NAV.length }
+  }
+  const navIndexAt = (clientX) => {
+    const { rect, cell } = navGeometry()
+    return Math.min(MOBILE_NAV.length - 1, Math.max(0, Math.floor((clientX - rect.left) / cell)))
+  }
+  const releaseNavPill = () => {
+    const pill = navPillRef.current
+    if (!pill) return
+    pill.style.transition = ''
+    pill.style.transform = ''
+  }
+
+  const handleNavPointerDown = (event) => {
+    if (event.pointerType === 'mouse' || !event.isPrimary) return
+    navDragRef.current = { id: event.pointerId, x: event.clientX, dragging: false, index: navIndexAt(event.clientX) }
+  }
+  const handleNavPointerMove = (event) => {
+    const drag = navDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    if (!drag.dragging) {
+      if (Math.abs(event.clientX - drag.x) < 8) return
+      drag.dragging = true
+      navRef.current.setPointerCapture?.(event.pointerId)
+      setNavHoverIndex(drag.index)
+    }
+    const { rect, cell } = navGeometry()
+    const x = Math.min(rect.width - cell, Math.max(0, event.clientX - rect.left - cell / 2))
+    const pill = navPillRef.current
+    if (pill) {
+      pill.style.transition = 'none'
+      pill.style.transform = `translateX(${x}px)`
+    }
+    const index = navIndexAt(event.clientX)
+    if (index !== drag.index) {
+      drag.index = index
+      haptic(HAPTIC.selection)
+      setNavHoverIndex(index)
+    }
+  }
+  const handleNavPointerEnd = (event) => {
+    const drag = navDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    navDragRef.current = null
+    if (!drag.dragging) return
+    navSuppressClickUntil.current = performance.now() + 400
+    setNavHoverIndex(null)
+    releaseNavPill()
+    if (event.type === 'pointercancel') return
+    const { to } = MOBILE_NAV[drag.index]
+    if (drag.index !== activeNavIndex || location.pathname !== to) {
+      setPendingNavIndex(drag.index)
+      navigate(to)
+    }
+  }
 
   return (
     <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
@@ -237,24 +317,36 @@ function Layout({ children }) {
         </Suspense>
       )}
       {isMobile && (
-        <nav className="mobile-nav-global" aria-label="Нижняя навигация">
+        <nav
+          ref={navRef}
+          className="mobile-nav-global"
+          aria-label="Нижняя навигация"
+          onPointerDown={handleNavPointerDown}
+          onPointerMove={handleNavPointerMove}
+          onPointerUp={handleNavPointerEnd}
+          onPointerCancel={handleNavPointerEnd}
+        >
           <span
-            className={`mobile-nav-global-pill ${navDeform ? 'moving' : ''}`}
-            style={{ '--nav-index': activeNavIndex }}
+            ref={navPillRef}
+            className={`mobile-nav-global-pill ${navDeform || navHoverIndex !== null ? 'moving' : ''}`}
+            style={{ '--nav-index': displayNavIndex }}
             aria-hidden="true"
           >
             <span className="mobile-nav-global-pill-inner" />
           </span>
-          {MOBILE_NAV.map(({ to, icon: Icon, label }) => {
+          {MOBILE_NAV.map(({ to, icon: Icon, label }, index) => {
             const isActive =
               to === '/'
                 ? location.pathname === '/'
                 : location.pathname.startsWith(to)
+            // Подсветка иконки идёт за пальцем (и за выбранной, пока экран
+            // меняется); aria-current — только за реальным маршрутом.
+            const isLit = index === displayNavIndex
             return (
               <Link
                 key={to}
                 to={to}
-                className={`mobile-nav-global-item ${isActive ? 'active' : ''}`}
+                className={`mobile-nav-global-item ${isLit ? 'active' : ''}`}
                 aria-current={isActive ? 'page' : undefined}
                 aria-label={label}
                 onPointerEnter={() => prefetchRouteChunk(to)}
@@ -262,7 +354,7 @@ function Layout({ children }) {
                 onClick={(event) => handleNavClick(event, to, isActive)}
               >
                 <span className="mobile-nav-global-icon">
-                  <Icon size={22} fill={isActive ? 'currentColor' : 'none'} />
+                  <Icon size={22} fill={isLit ? 'currentColor' : 'none'} />
                 </span>
               </Link>
             )
