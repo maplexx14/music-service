@@ -485,6 +485,13 @@ const useAuthStore = create((set, get) => ({
         // гасить явно — иначе следующий вход открывает чужой запрос.
         useSearchStore.getState().resetSearch()
         clearPageCache()
+        // Сохранённая очередь плеера (services/playerPersist, ключ
+        // PLAYER_PERSIST_KEY) — чужому аккаунту на этом устройстве её не видеть.
+        try {
+          localStorage.removeItem('bolt-player-v1')
+        } catch {
+          /* noop */
+        }
       },
       
       checkAuth: async () => {

@@ -140,6 +140,18 @@ let swapStartedAt = 0
 
 const swapListeners = new Set()
 const idleReadyListeners = new Set()
+const idleFailedListeners = new Set()
+
+// Неудачные прогревы. Раньше ошибка загрузки заряжаемого элемента оставляла
+// в нём src, и preload/hasPrimedSrc считали трек «уже заряженным» — повторной
+// загрузки не было никогда. Если трек кончался в фоне, переход ждал
+// готовности буфера, которой не будет, а мост тишины играл бесконечно (▶ на
+// виджете шёл тем же путём и тоже ничего не делал). Теперь ошибка — повод
+// повторить с нарастающей паузой, а после PRELOAD_RETRY_DELAYS_MS.length
+// повторов трек объявляется незагружаемым (onIdleFailed) — Player переходит
+// через него. Ключ — абсолютный URL; запись живёт до прогрева другого трека.
+const PRELOAD_RETRY_DELAYS_MS = [2000, 6000]
+let preloadFailure = null // { url, count, retryAt, timer }
 
 function absolutize(url) {
   if (!url) return null
@@ -373,6 +385,10 @@ function watchPreload(el, abs) {
   const onCanPlay = () => {
     diag('preload:ready', { url: shortUrl(abs), rs: el.readyState })
     stop()
+    if (preloadFailure?.url === abs) {
+      clearTimeout(preloadFailure.timer)
+      preloadFailure = null
+    }
     // Готовность заряженного элемента — это и есть настоящий сигнал «следующий
     // трек можно включать мгновенно»: он снимает гейт кнопки/виджета «вперёд».
     idleReadyListeners.forEach((cb) => {
@@ -386,18 +402,47 @@ function watchPreload(el, abs) {
   const onError = () => {
     diag('preload:error', { url: shortUrl(abs), code: el.error?.code })
     stop()
-    // Прогрев не удался — оставляем элемент заряженным, но без данных: isReady
-    // вернёт false (readyState не дорос), и переход честно уйдёт на медленный
-    // путь со своей загрузкой и своими ретраями вместо ожидания буфера,
-    // которого не будет.
+    notePreloadFailure(el, abs)
   }
   detachPreloadWatch = stop
   el.addEventListener('canplay', onCanPlay)
   el.addEventListener('error', onError)
 }
 
+function notePreloadFailure(el, abs) {
+  const count = preloadFailure?.url === abs ? preloadFailure.count + 1 : 1
+  clearTimeout(preloadFailure?.timer)
+  if (count > PRELOAD_RETRY_DELAYS_MS.length) {
+    preloadFailure = { url: abs, count, retryAt: Infinity, timer: null }
+    diag('preload:failed', { url: shortUrl(abs), count })
+    idleFailedListeners.forEach((cb) => {
+      try {
+        cb(abs)
+      } catch {
+        /* noop */
+      }
+    })
+    return
+  }
+  const delay = PRELOAD_RETRY_DELAYS_MS[count - 1]
+  // Повтор сам, по таймеру: в отложенном переходе (трек кончился) timeupdate
+  // уже не идёт, и звать preload снаружи было бы некому.
+  const timer = setTimeout(() => {
+    if (getIdle() === el && el.src === abs && el.error) preload(abs)
+  }, delay)
+  // Запас 100 мс: таймер не должен упереться в собственный retryAt.
+  preloadFailure = { url: abs, count, retryAt: Date.now() + delay - 100, timer }
+}
+
+// Трек признан незагружаемым: все повторы прогрева кончились ошибкой.
+export function hasFailed(url) {
+  const abs = absolutize(url)
+  return Boolean(abs && preloadFailure?.url === abs && preloadFailure.retryAt === Infinity)
+}
+
 // Заряжает свободный элемент указанным URL и начинает тянуть байты.
-// Идемпотентно: повторный вызов с тем же URL ничего не перезапускает.
+// Идемпотентно: повторный вызов с тем же URL ничего не перезапускает —
+// кроме случая, когда прошлая загрузка кончилась ошибкой (см. preloadFailure).
 export function preload(url) {
   reconcile()
   const abs = absolutize(url)
@@ -406,7 +451,12 @@ export function preload(url) {
   // Во время handoff «idle» — это ещё звучащий предыдущий слот. Подмена его
   // src остановила бы трек до старта нового и снова порвала аудиосессию.
   if (pendingRelease?.previous === idle) return false
-  if (idle.src === abs) return true
+  if (idle.src === abs && !idle.error) return true
+  if (preloadFailure?.url === abs && Date.now() < preloadFailure.retryAt) return false
+  if (preloadFailure && preloadFailure.url !== abs) {
+    clearTimeout(preloadFailure.timer)
+    preloadFailure = null
+  }
   idle.preload = 'auto'
   idle.volume = sharedVolume
   idle.src = abs
@@ -426,7 +476,7 @@ export function preload(url) {
 export function hasPrimedSrc(url) {
   const abs = absolutize(url)
   const idle = getIdle()
-  return Boolean(abs && idle && idle.src === abs)
+  return Boolean(abs && idle && idle.src === abs && !idle.error)
 }
 
 // Готов ли свободный элемент играть этот URL прямо сейчас, без обращения к
@@ -602,6 +652,12 @@ export function onSwap(cb) {
 export function onIdleReady(cb) {
   idleReadyListeners.add(cb)
   return () => idleReadyListeners.delete(cb)
+}
+
+// Подписка на «трек не загрузился и после повторов» (аргумент — его URL).
+export function onIdleFailed(cb) {
+  idleFailedListeners.add(cb)
+  return () => idleFailedListeners.delete(cb)
 }
 
 // Громкость держим общей: после подмены новый активный элемент должен играть

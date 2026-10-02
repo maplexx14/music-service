@@ -24,6 +24,7 @@ import { useLyrics } from '../hooks/useLyrics'
 import { diag, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
+import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
@@ -59,6 +60,13 @@ const SWAP_VERIFY_MS = 2500
 // readyState элемента может остаться прежним — needsFreshLoad этого не видит, и
 // play() «проходит» без звука (см. reloadAtPosition).
 const LONG_PAUSE_RELOAD_MS = 60 * 1000
+// Отложенный переход (трек кончился в фоне, следующий не готов): сколько
+// треков подряд можно пропустить как незагружаемые и сколько держать мост
+// тишины. Дальше — честная пауза на виджете вместо бесконечной тишины.
+const DEFERRED_MAX_OFFSET = 3
+const DEFERRED_BRIDGE_MAX_MS = 60 * 1000
+// Паузы между повторами догрузки хвоста очереди после сетевой ошибки.
+const QUEUE_EXTEND_RETRY_MS = [3000, 10000, 30000]
 // Потолок handoff берём из движка (engine.SWAP_RELEASE_MAX_MS): принудительное
 // завершение просроченной подмены (engine.reconcile) сверяется с тем же
 // дедлайном, и разъезд двух констант означал бы, что таймер отпускает элемент
@@ -384,9 +392,15 @@ function PlayerInner() {
       // в фоне, играть было нечего), доигрываем его прямо сейчас.
       resumeDeferredRef.current?.()
     })
+    const offIdleFailed = engine.onIdleFailed(() => {
+      // Следующий трек не грузится и после повторов — отложенный переход
+      // целится дальше по очереди (primeDeferred пропускает незагружаемые).
+      if (pendingAdvanceRef.current) primeDeferredRef.current?.()
+    })
     return () => {
       offSwap()
       offIdleReady()
+      offIdleFailed()
     }
   }, [])
 
@@ -440,6 +454,13 @@ function PlayerInner() {
   // движок по факту догрузки буфера.
   const pendingAdvanceRef = useRef(false)
   const resumeDeferredRef = useRef(null)
+  // На сколько треков вперёд целится отложенный переход: растёт, когда
+  // следующий признан незагружаемым (engine.onIdleFailed).
+  const deferredOffsetRef = useRef(1)
+  const deferredSinceRef = useRef(0)
+  const deferredGaveUpRef = useRef(false)
+  const primeDeferredRef = useRef(null)
+  const giveUpDeferredRef = useRef(null)
   // URL вместе с владельцем-треком. При swapTo активный <audio> меняется
   // синхронно, а React ещё может держать в состоянии URL предыдущего трека.
   // Без trackId эффект ниже успевал записать старый URL в новый слот и отменял
@@ -451,6 +472,11 @@ function PlayerInner() {
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
   const isAdmin = useAuthStore((s) => Boolean(s.user?.is_admin))
+  const userId = useAuthStore((s) => s.user?.id ?? null)
+  // Очередь и позиция с прошлого запуска (iOS выгружает PWA из памяти).
+  useEffect(() => {
+    restorePlayer(userId)
+  }, [userId])
   const isExternalTrack = EXTERNAL_SOURCES.includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
@@ -584,6 +610,7 @@ function PlayerInner() {
       const sec = Math.floor(audio.currentTime)
       if (sec === lastTickSecond) return
       lastTickSecond = sec
+      if (sec % 5 === 0) notePosition(audio.currentTime)
       if (!document.hidden) setCurrentTime(audio.currentTime)
       syncPositionState()
       maybePreloadNext(audio)
@@ -703,11 +730,8 @@ function PlayerInner() {
         // Вернулись на видимый экран с отложенным переходом (трек кончился в
         // фоне, буфера не было). Здесь старт с нуля уже безопасен — доигрываем.
         if (pendingAdvanceRef.current) {
-          diag('deferred:foreground', {})
-          if (playAdjacentNow(1)) {
-            nextTrack()
-            return
-          }
+          diag('deferred:foreground', { offset: deferredOffsetRef.current })
+          if (resumeDeferredRef.current?.()) return
         }
         setCurrentTime(audio.currentTime)
         const { isPlaying: playing } = usePlayerStore.getState()
@@ -864,10 +888,9 @@ function PlayerInner() {
         // состоянии «играю» без звука.
         if (!usePlayerStore.getState().getNextTrack(1)) {
           if (usePlayerStore.getState().queuePager) {
-            pendingAdvanceRef.current = true
             // Сессию держим тишиной, пока летит запрос: отдать её сейчас значит
             // остаться без права на play() к моменту, когда хвост приедет.
-            engine.holdSession()
+            startDeferred()
             diag('ended:queueExtend', {})
             resumeAfterQueueExtend()
           } else {
@@ -876,12 +899,14 @@ function PlayerInner() {
         } else if (playAdjacentNow(1)) {
           nextTrack()
         } else {
-          pendingAdvanceRef.current = true
           // Пока ждём буфер, держим аудиосессию тишиной: если отдать её сейчас,
           // то к моменту готовности следующего трека включать его будет уже
           // некому — play() без жеста iOS не разрешит (см. holdSession).
-          engine.holdSession()
-          diag('ended:deferred', {})
+          startDeferred()
+          // Следующий мог быть уже признан незагружаемым (прогрев упал ещё
+          // во время игры) — тогда целимся дальше, а не ждём его вечно.
+          primeDeferred()
+          diag('ended:deferred', { offset: deferredOffsetRef.current })
         }
       }
     }
@@ -902,6 +927,15 @@ function PlayerInner() {
       // ~раз в минуту всё же выстреливает — и каждый выстрел закрывает
       // просроченный handoff, не дожидаясь возврата на видимый экран.
       engine.reconcile()
+      // Мост тишины не держим вечно: если отложенный переход так и не
+      // доигрался, честная пауза на виджете лучше бесконечной тишины.
+      if (
+        pendingAdvanceRef.current &&
+        !deferredGaveUpRef.current &&
+        Date.now() - deferredSinceRef.current > DEFERRED_BRIDGE_MAX_MS
+      ) {
+        giveUpDeferredRef.current?.('timeout')
+      }
       if (!isLive()) return
       const { isPlaying: playing } = usePlayerStore.getState()
       if (!playing || !audio.src || audio.ended) {
@@ -1138,6 +1172,23 @@ function PlayerInner() {
     // Without it, iOS may not begin fetching the audio data.
     if (srcChanged && isIOS) {
       audio.load()
+    }
+    // Восстановленная после выгрузки PWA позиция (services/playerPersist).
+    // Только для локальных файлов: перемотка свежего потока внешнего трека
+    // (Opus/WebM от yt-dlp без индекса) в WebKit залипает в seeking — см.
+    // kickStalled. Внешний трек начнётся сначала.
+    const restoreAt = srcChanged ? takeRestorePosition(currentTrack?.id) : 0
+    if (restoreAt > 0 && !EXTERNAL_SOURCES.includes(currentTrack?.source)) {
+      const apply = () => {
+        try {
+          audio.currentTime = restoreAt
+          setCurrentTime(restoreAt)
+        } catch {
+          /* элемент сменил источник — позиция уже не актуальна */
+        }
+      }
+      if (audio.readyState >= audio.HAVE_METADATA) apply()
+      else audio.addEventListener('loadedmetadata', apply, { once: true })
     }
     if (usePlayerStore.getState().isPlaying && audio.paused) {
       playWithDiag(audio, 'effect:srcChanged')
@@ -1377,11 +1428,58 @@ function PlayerInner() {
   // который нечего играть (ровно симптом «время идёт, звука нет»). Элемент по
   // событию ended сам встаёт на паузу, виджет показывает рабочую ▶, а переход
   // доигрывается автоматически, как только движок догрузит буфер.
+  //
+  // Возвращает true, если переход состоялся.
   resumeDeferredRef.current = () => {
-    if (!pendingAdvanceRef.current) return
-    diag('deferred:resume', {})
-    if (playAdjacentNow(1)) nextTrack()
+    if (!pendingAdvanceRef.current) return false
+    const offset = deferredOffsetRef.current
+    diag('deferred:resume', { offset })
+    if (!playAdjacentNow(offset)) return false
+    usePlayerStore.getState().advanceBy(offset)
+    return true
   }
+
+  // Начало отложенного перехода: держим сессию тишиной и засекаем время —
+  // мост не должен играть вечно (см. DEFERRED_BRIDGE_MAX_MS).
+  const startDeferred = () => {
+    pendingAdvanceRef.current = true
+    deferredOffsetRef.current = 1
+    deferredSinceRef.current = Date.now()
+    deferredGaveUpRef.current = false
+    engine.holdSession()
+  }
+
+  // Заряжает трек, на который целится отложенный переход, пропуская
+  // незагружаемые (engine.hasFailed). Не дальше DEFERRED_MAX_OFFSET: подряд
+  // несколько битых треков — скорее нет сети, чем битые треки.
+  const primeDeferred = () => {
+    while (deferredOffsetRef.current <= DEFERRED_MAX_OFFSET) {
+      const url = nextTrackUrl(deferredOffsetRef.current)
+      if (!url) break
+      if (!engine.hasFailed(url)) {
+        diag('deferred:prime', { offset: deferredOffsetRef.current })
+        engine.preload(url)
+        return
+      }
+      deferredOffsetRef.current += 1
+    }
+    giveUpDeferred('noPlayable')
+  }
+  primeDeferredRef.current = primeDeferred
+
+  // Сдаёмся: отпускаем мост и честно показываем паузу — на виджете появится
+  // рабочая ▶. Отметку перехода не снимаем: возврат на экран (handleVisibility)
+  // или догрузившийся буфер ещё могут его доиграть.
+  const giveUpDeferred = (reason) => {
+    if (deferredGaveUpRef.current) return
+    deferredGaveUpRef.current = true
+    diag('deferred:giveUp', { reason, offset: deferredOffsetRef.current })
+    engine.releaseSession()
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused'
+    }
+  }
+  giveUpDeferredRef.current = giveUpDeferred
 
   // Очередь кончилась, но плейлист — нет: страница успела загрузить только
   // первые страницы треков (ленивая подгрузка по прокрутке). Дотягиваем хвост
@@ -1398,7 +1496,17 @@ function PlayerInner() {
     // получают ОДИН промис догрузки и проснутся вместе). Без этой отметки оба
     // двинули бы очередь, и переход промотал бы два трека вместо одного.
     const fromId = usePlayerStore.getState().currentTrack?.id
-    const grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+    let grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+    // null — запрос упал (сеть пропала на ходу), а не плейлист кончился.
+    // Раньше это читалось как конец, и музыка вставала посреди плейлиста.
+    // Повторяем с паузами, пока мост держит сессию.
+    for (const delay of QUEUE_EXTEND_RETRY_MS) {
+      if (grew !== null || !pendingAdvanceRef.current) break
+      diag('queueExtend:retry', { delay })
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      if (!pendingAdvanceRef.current || usePlayerStore.getState().currentTrack?.id !== fromId) break
+      grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+    }
     // Пока летел запрос, пользователь мог нажать паузу или включить другой
     // трек — тогда доигрывать этот переход уже нельзя.
     if (!pendingAdvanceRef.current) return
@@ -1411,9 +1519,10 @@ function PlayerInner() {
       return
     }
     if (!grew) {
-      // Хвоста нет — плейлист правда кончился. Отпускаем сессию и честно
-      // встаём на паузу, иначе тишина моста играла бы вечно.
-      diag('queueExtend:empty', {})
+      // Хвоста нет — плейлист правда кончился (или сеть так и не вернулась).
+      // Отпускаем сессию и честно встаём на паузу, иначе тишина моста играла
+      // бы вечно.
+      diag(grew === null ? 'queueExtend:failed' : 'queueExtend:empty', {})
       pendingAdvanceRef.current = false
       engine.releaseSession()
       nextTrack()
@@ -1791,14 +1900,12 @@ function PlayerInner() {
         // и даёт «время идёт, звука нет»), а доводим прогрев: доигрывание
         // случится автоматически по onIdleReady.
         if (pendingAdvanceRef.current) {
-          diag('widget:play:deferred', {})
-          if (playAdjacentNow(1)) {
-            usePlayerStore.getState().nextTrack()
+          diag('widget:play:deferred', { offset: deferredOffsetRef.current })
+          if (resumeDeferredRef.current?.()) {
             if (!usePlayerStore.getState().isPlaying) togglePlayPause()
             return
           }
-          const url = nextTrackUrl(1)
-          if (url) engine.preload(url)
+          primeDeferredRef.current?.()
           return
         }
         try {

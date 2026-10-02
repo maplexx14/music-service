@@ -710,7 +710,9 @@ const usePlayerStore = create((set, get) => ({
   // Дотягивает следующую страницу очереди, когда до её конца осталось меньше
   // QUEUE_EXTEND_LEAD треков. Возвращает промис, который резолвится в true,
   // если очередь реально выросла — вызывающему (handleEnded) это нужно, чтобы
-  // понять, появился ли следующий трек, или плейлист правда кончился.
+  // понять, появился ли следующий трек, или плейлист правда кончился. null —
+  // запрос упал (сеть): это НЕ конец плейлиста, пейджер цел и запрос можно
+  // повторить. Для проверок на истинность null и false равнозначны.
   //
   // Ленивую отрисовку списка на странице это не трогает: очередь живёт в store
   // и ничего не рисует, поэтому её хвост можно тянуть независимо от того,
@@ -767,7 +769,7 @@ const usePlayerStore = create((set, get) => ({
         return true
       } catch (error) {
         console.error('Queue extend error:', error)
-        return false
+        return null
       } finally {
         queueExtendPromise = null
       }
@@ -977,6 +979,37 @@ const usePlayerStore = create((set, get) => ({
     } else {
       set({ isPlaying: false, seekRequest: null })
     }
+  },
+
+  // Переход сразу на n треков вперёд — когда промежуточные не загрузились
+  // (см. отложенный переход в Player). Скип пишем только по треку, с которого
+  // уходим: пропущенные незагружаемые пользователь не отвергал, и сигнал
+  // «скип» по ним испортил бы рекомендации.
+  advanceBy: (n) => {
+    if (n <= 1) {
+      get().nextTrack()
+      return
+    }
+    get()._recordSkipIfNeeded()
+    get()._recordListenProgress()
+    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
+    const moved = { isPlaying: true, currentTime: 0, seekRequest: null }
+    if (isShuffle && shuffledOrder.length > 0) {
+      const shuffleIndex = currentShuffleIndex + n
+      if (shuffleIndex >= shuffledOrder.length) {
+        set({ isPlaying: false, seekRequest: null })
+        return
+      }
+      const index = shuffledOrder[shuffleIndex]
+      set({ ...moved, currentTrack: queue[index], currentIndex: index, currentShuffleIndex: shuffleIndex })
+      return
+    }
+    const index = currentIndex + n
+    if (index >= queue.length) {
+      set({ isPlaying: false, seekRequest: null })
+      return
+    }
+    set({ ...moved, currentTrack: queue[index], currentIndex: index })
   },
 
   previousTrack: () => {
