@@ -357,10 +357,18 @@ const Grainient = ({
     measureRipple();
     let pageVisible = !document.hidden;
     let inViewport = true;
+    // Пока ленту прокручивают, шейдер стоит: полноэкранный рендер 30 раз в
+    // секунду делит GPU с самой прокруткой и с блюром нижних панелей поверх
+    // него — на телефоне это и давало рывки. Медленный градиент, замерший на
+    // время жеста, глазу не заметен; цикл возобновляется через
+    // SCROLL_IDLE_MS после последнего события прокрутки.
+    let scrolling = false;
+    let scrollIdleTimer = 0;
+    const SCROLL_IDLE_MS = 180;
 
     const startLoop = () => {
       if (running || reducedMotion) return;
-      if (!pageVisible || !inViewport) return;
+      if (!pageVisible || !inViewport || scrolling) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
       raf = requestAnimationFrame(loop);
@@ -446,6 +454,20 @@ const Grainient = ({
     };
     canvas.addEventListener('webglcontextlost', onContextLost);
 
+    const onScroll = () => {
+      if (!scrolling) {
+        scrolling = true;
+        stopLoop();
+      }
+      clearTimeout(scrollIdleTimer);
+      scrollIdleTimer = setTimeout(() => {
+        scrolling = false;
+        startLoop();
+      }, SCROLL_IDLE_MS);
+    };
+    // В фазе перехвата на document: прокручивается не окно, а .main-content.
+    document.addEventListener('scroll', onScroll, { passive: true, capture: true });
+
     const io = new IntersectionObserver((entries) => {
       inViewport = entries[0]?.isIntersecting ?? true;
       if (inViewport) startLoop();
@@ -465,6 +487,8 @@ const Grainient = ({
       applyColorsRef.current = null;
       measureRippleRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('scroll', onScroll, { capture: true });
+      clearTimeout(scrollIdleTimer);
       io.disconnect();
       ro.disconnect();
       canvas.removeEventListener('webglcontextlost', onContextLost);
