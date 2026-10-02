@@ -388,10 +388,24 @@
   pointer-events: none;
 }
 
+/* Обрезка заливки по скруглению полосы: у scaleX-заливки собственный
+   радиус сплющивался бы. Отдельный слой, а не overflow на самой полосе —
+   иначе обрезалась бы и её увеличенная зона нажатия (::before). */
+.fullscreen-progress-track {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 .fullscreen-progress-fill {
   height: 100%;
   background: #a259ff;
-  border-radius: inherit;
+  /* Длина — через scaleX (FullScreenProgress двигает её каждый кадр):
+     композитинг вместо раскладки. */
+  transform-origin: left center;
+  will-change: transform;
 }
 
 .fullscreen-progress-time {

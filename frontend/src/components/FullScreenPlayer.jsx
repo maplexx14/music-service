@@ -13,6 +13,7 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
+import { getActive } from '../services/audioEngine'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -25,14 +26,35 @@ function formatTime(seconds) {
 }
 
 // Прогресс-блок вынесен в отдельный компонент: только он подписан на
-// currentTime (тикает ~4 раза/сек). Остальной полноэкранный плеер (обложка,
-// кнопки, жесты) не перерисовывается на каждом тике воспроизведения.
+// currentTime. Остальной полноэкранный плеер (обложка, кнопки, жесты) не
+// перерисовывается на каждом тике воспроизведения.
+//
+// Store тикает раз в секунду (троттлинг timeupdate в Player), и полоса,
+// нарисованная по нему, прыгала секундными шагами. Пока играет, двигаем её
+// каждый кадр прямо из <audio> (как мини-плеер) — через transform: scaleX,
+// это только композитинг, без раскладки и перерисовки.
 function FullScreenProgress() {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
+  const fillRef = useRef(null)
 
-  const progressPercent = duration ? Math.min(100, (currentTime / duration) * 100) : 0
+  const ratio = duration ? Math.min(1, currentTime / duration) : 0
+
+  useEffect(() => {
+    if (!isPlaying || !(duration > 0)) return undefined
+    let raf
+    const tick = () => {
+      const audio = getActive()
+      if (audio && fillRef.current) {
+        fillRef.current.style.transform = `scaleX(${Math.min(1, audio.currentTime / duration)})`
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isPlaying, duration])
 
   const handleSeek = (e) => {
     if (!duration) return
@@ -52,7 +74,9 @@ function FullScreenProgress() {
         aria-valuemax={Math.floor(duration || 0)}
         aria-valuenow={Math.floor(currentTime || 0)}
       >
-        <div className="fullscreen-progress-fill" style={{ width: `${progressPercent}%` }} />
+        <div className="fullscreen-progress-track">
+          <div ref={fillRef} className="fullscreen-progress-fill" style={{ transform: `scaleX(${ratio})` }} />
+        </div>
       </div>
       <div className="fullscreen-progress-time">
         <span>{formatTime(currentTime)}</span>
