@@ -251,8 +251,8 @@
    кнопка; плотная заливка сразу говорит «нажми». */
 .wave-title {
   position: relative;
-  width: 128px;
-  height: 128px;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -744,8 +744,8 @@
   }
 
   .wave-title {
-    width: 108px;
-    height: 108px;
+    width: 84px;
+    height: 84px;
   }
 
   .wave-heading {
