@@ -4,11 +4,13 @@ import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 import { installPressFeedback } from './services/pressFeedback'
+import { installTouchGuard } from './services/touchGuard'
 import { applyGpuClass } from './utils/gpu'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
 applyGpuClass()
 installPressFeedback()
+installTouchGuard()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

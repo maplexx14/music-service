@@ -171,6 +171,8 @@ function Settings() {
   // и выход — последний пункт меню. Полная перезагрузка на /login, как и
   // раньше: сбрасывает сторы, кэш страниц и плеер прошлого пользователя.
   const handleLogout = () => {
+    // Пункт последний в меню, у нижней навигации — легко задеть пальцем.
+    if (!window.confirm('Выйти из аккаунта?')) return
     logout()
     window.location.href = '/login'
   }
@@ -451,6 +453,7 @@ function Settings() {
                     type="button"
                     className="settings-save-btn"
                     onClick={() => {
+                      if (!window.confirm('Очистить журнал диагностики?')) return
                       clearDiag()
                       setDiagText('Лог очищен.')
                     }}

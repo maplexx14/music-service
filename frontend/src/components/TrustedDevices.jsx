@@ -56,6 +56,7 @@ function TrustedDevices() {
   }, [load, user?.id])
 
   const handleRevoke = async (device) => {
+    if (!window.confirm('Отозвать доверие к устройству? На нём снова понадобится второй фактор.')) return
     setBusyId(device.id)
     setError('')
     const result = await revokeTrustedDevice(device.id)
@@ -71,6 +72,7 @@ function TrustedDevices() {
   }
 
   const handleRevokeAll = async () => {
+    if (!window.confirm('Отозвать все доверенные устройства, кроме текущего?')) return
     setRevokingAll(true)
     setError('')
     const result = await revokeOtherDevices()
