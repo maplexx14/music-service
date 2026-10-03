@@ -199,7 +199,10 @@ export function markScreenLoading() {
 // или данные ещё грузятся, переход доиграет как есть, а контент появится сам.
 const READY_TIMEOUT_MS = 500
 
-function waitForCommit(key) {
+// waitReady=false — только коммит, без ожидания данных: свайп между
+// вкладками уже отпущен пальцем, и замерший на полсекунды кадр там
+// ощущается зависанием, а не аккуратностью.
+function waitForCommit(key, waitReady = true) {
   return new Promise((resolve) => {
     let done = false
     const finish = () => {
@@ -212,10 +215,18 @@ function waitForCommit(key) {
     }
     const timer = setTimeout(finish, READY_TIMEOUT_MS)
     commitWaiters.set(key, () => {
-      if (loadingScreens === 0) finish()
+      if (!waitReady || loadingScreens === 0) finish()
       else readyWaiters.add(finish)
     })
   })
+}
+
+let activeTransition = null
+
+// Новый жест поверх доигрывающего перехода: анимацию сразу доводим до конца
+// (живой экран вместо снапшотов), чтобы касание не ждало её окончания.
+export function finishActiveTransition() {
+  activeTransition?.skipTransition()
 }
 
 export function createAppHistory() {
@@ -242,14 +253,16 @@ export function createAppHistory() {
       const transition = document.startViewTransition(() => {
         // transition уже присвоен: колбэк обновления вызывается асинхронно.
         capture?.(transition.finished)
-        const committed = waitForCommit(update.location.key)
+        const committed = waitForCommit(update.location.key, kind !== 'swipe')
         fn(update)
         return committed
       })
       active = transition
+      activeTransition = transition
       const release = holdHeavyAnimations()
       transition.finished.finally(() => {
         release()
+        if (activeTransition === transition) activeTransition = null
         if (active === transition) {
           active = null
           delete root.dataset.nav

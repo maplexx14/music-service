@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import {
   afterNextRouteCommit,
+  finishActiveTransition,
   holdHeavyAnimations,
   skipNextTransitionAnimation,
   swipeNextTransition,
@@ -87,6 +88,9 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
 
     let g = null
     let busy = false
+    // Свайп-переход уже снял сдвиг (onCapture) и доигрывает анимацию — экран
+    // живой и новый жест можно начинать, оборвав анимацию.
+    let interruptible = false
     let settleTimer = 0
     // Пауза WebGL-фона, пока экран под пальцем или доезжает (см. navigation.js).
     let releaseHeavy = null
@@ -127,6 +131,11 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     }
 
     const onStart = (e) => {
+      if (busy && interruptible && e.touches.length === 1) {
+        finishActiveTransition()
+        busy = false
+        interruptible = false
+      }
       if (busy || e.touches.length !== 1) {
         g = null
         return
@@ -218,8 +227,10 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const cancelSwipe = swipeNextTransition((finished) => {
         clearTimeout(fallback)
         reset()
+        interruptible = true
         finished.finally(() => {
           busy = false
+          interruptible = false
         })
       })
       if (cancelSwipe) {
