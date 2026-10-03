@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Renderer, Program, Mesh, Triangle } from 'ogl';
 import './Grainient.css';
+import { heavyAnimationsHeld, onHeavyAnimationsHold } from '../services/navigation';
 
 const hexToRgb = hex => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -411,6 +412,7 @@ const Grainient = ({
     // время жеста, глазу не заметен; цикл возобновляется через
     // SCROLL_IDLE_MS после последнего события прокрутки.
     let scrolling = false;
+    let held = heavyAnimationsHeld();
     let scrollIdleTimer = 0;
     const SCROLL_IDLE_MS = 180;
 
@@ -423,7 +425,7 @@ const Grainient = ({
 
     const startLoop = () => {
       if (running || reducedMotion || tier.frozen) return;
-      if (!pageVisible || !inViewport || scrolling) return;
+      if (!pageVisible || !inViewport || scrolling || held) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
       // Паузу между остановкой и стартом за медленный тик не считаем.
@@ -568,6 +570,14 @@ const Grainient = ({
     // В фазе перехвата на document: прокручивается не окно, а .main-content.
     document.addEventListener('scroll', onScroll, { passive: true, capture: true });
 
+    // Свайп между экранами и анимация перехода двигают экран из JS — на это
+    // время фон стоит, иначе горизонталь идёт рывками.
+    const offHold = onHeavyAnimationsHold((value) => {
+      held = value;
+      if (held) stopLoop();
+      else startLoop();
+    });
+
     const io = new IntersectionObserver((entries) => {
       inViewport = entries[0]?.isIntersecting ?? true;
       if (inViewport) startLoop();
@@ -588,6 +598,7 @@ const Grainient = ({
       measureRippleRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('scroll', onScroll, { capture: true });
+      offHold();
       clearTimeout(scrollIdleTimer);
       io.disconnect();
       ro.disconnect();

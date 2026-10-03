@@ -1,5 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { afterNextRouteCommit, skipNextTransitionAnimation, swipeNextTransition } from '../services/navigation'
+import {
+  afterNextRouteCommit,
+  holdHeavyAnimations,
+  skipNextTransitionAnimation,
+  swipeNextTransition,
+} from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 
 // Навигация свайпами в PWA: вправо — «Назад» на вложенных экранах, влево/
@@ -63,6 +68,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     let g = null
     let busy = false
     let settleTimer = 0
+    // Пауза WebGL-фона, пока экран под пальцем или доезжает (см. navigation.js).
+    let releaseHeavy = null
 
     // Сколько ехать distance px, чтобы стартовать со скоростью пальца v (px/мс).
     const settleMs = (distance, v) => {
@@ -80,6 +87,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       el.style.transform = ''
       el.style.willChange = ''
       el.style.overflowY = ''
+      releaseHeavy?.()
+      releaseHeavy = null
     }
 
     // Возврат экрана на место. Таймер сброса снимается новым жестом: иначе
@@ -120,6 +129,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         }
         g.axis = 'x'
         clearTimeout(settleTimer)
+        if (!releaseHeavy) releaseHeavy = holdHeavyAnimations()
         el.style.willChange = 'transform'
         // Горизонтальный жест забираем целиком: список под пальцем не должен
         // одновременно прокручиваться. Через overflow, а не preventDefault —

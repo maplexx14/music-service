@@ -69,6 +69,34 @@ export function morphTransition(name, update) {
   })
 }
 
+// Пока экран едет (свайп пальцем или анимация перехода), тяжёлый декор —
+// WebGL-фон главной (Grainient) — ставится на паузу. Вертикальную прокрутку
+// он и так пропускает (её ведёт система вне главного потока), а горизонталь
+// двигается из JS: каждый кадр WebGL отнимал у неё время, и экран шёл
+// рывками. holdHeavyAnimations возвращает отпускание (повторный вызов — no-op).
+let heavyHolds = 0
+const heavyListeners = new Set()
+
+export function holdHeavyAnimations() {
+  heavyHolds += 1
+  if (heavyHolds === 1) heavyListeners.forEach((fn) => fn(true))
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    heavyHolds -= 1
+    if (heavyHolds === 0) heavyListeners.forEach((fn) => fn(false))
+  }
+}
+
+// fn(held) — при смене состояния; сразу не вызывается. Возвращает отписку.
+export function onHeavyAnimationsHold(fn) {
+  heavyListeners.add(fn)
+  return () => heavyListeners.delete(fn)
+}
+
+export const heavyAnimationsHeld = () => heavyHolds > 0
+
 // Свайп уже увёз экран пальцем — штатная анимация перехода была бы лишней.
 // undefined — выбрать по навигации, null — без анимации, 'swipe' — доиграть
 // жест (useSwipeNavigation).
@@ -219,7 +247,9 @@ export function createAppHistory() {
         return committed
       })
       active = transition
+      const release = holdHeavyAnimations()
       transition.finished.finally(() => {
+        release()
         if (active === transition) {
           active = null
           delete root.dataset.nav
