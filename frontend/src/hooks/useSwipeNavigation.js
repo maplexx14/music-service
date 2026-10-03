@@ -62,6 +62,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
 
     let g = null
     let busy = false
+    let settleTimer = 0
 
     // Сколько ехать distance px, чтобы стартовать со скоростью пальца v (px/мс).
     const settleMs = (distance, v) => {
@@ -79,6 +80,15 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       el.style.transform = ''
       el.style.willChange = ''
       el.style.overflowY = ''
+    }
+
+    // Возврат экрана на место. Таймер сброса снимается новым жестом: иначе
+    // reset() сработал бы посреди следующей протяжки — кадр с экраном на нуле
+    // и прокрутка списка под пальцем.
+    const settle = (ms) => {
+      setOffset(0, ms)
+      clearTimeout(settleTimer)
+      settleTimer = setTimeout(reset, ms + 40)
     }
 
     const onStart = (e) => {
@@ -109,6 +119,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
           return
         }
         g.axis = 'x'
+        clearTimeout(settleTimer)
         el.style.willChange = 'transform'
         // Горизонтальный жест забираем целиком: список под пальцем не должен
         // одновременно прокручиваться. Через overflow, а не preventDefault —
@@ -138,9 +149,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const commit =
         action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > 30))
       if (!commit) {
-        const ms = settleMs(Math.abs(dx), -v * dir)
-        setOffset(0, ms)
-        setTimeout(reset, ms + 40)
+        settle(settleMs(Math.abs(dx), -v * dir))
         return
       }
       busy = true
@@ -159,10 +168,15 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       root.setProperty('--swipe-shadow', `${-dir * 12}px`)
       root.setProperty('--swipe-ms', `${ms}ms`)
       let fallback = 0
-      const cancelSwipe = swipeNextTransition(() => {
+      // Новый жест — только когда переход доиграл: дерево ::view-transition
+      // пропускает касания к живому экрану под снапшотами, и протяжка во
+      // время анимации невидимо двигала бы его, а по окончании он прыгал бы.
+      const cancelSwipe = swipeNextTransition((finished) => {
         clearTimeout(fallback)
         reset()
-        busy = false
+        finished.finally(() => {
+          busy = false
+        })
       })
       if (cancelSwipe) {
         // Навигации не случилось — вернуть экран на место.
@@ -191,6 +205,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         clearTimeout(fallback)
         reset()
         busy = false
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
         el.animate(
           [{ transform: `translate3d(${-dir * ENTER_SHIFT * 100}%, 0, 0)` }, { transform: 'none' }],
           { duration: ENTER_MS, easing: EASE },
@@ -211,8 +226,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const wasDragging = g.axis === 'x'
       g = null
       if (!wasDragging) return
-      setOffset(0, MAX_MS)
-      setTimeout(reset, MAX_MS + 40)
+      settle(MAX_MS)
     }
 
     el.addEventListener('touchstart', onStart, { passive: true })
@@ -224,6 +238,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       el.removeEventListener('touchmove', onMove)
       el.removeEventListener('touchend', onEnd)
       el.removeEventListener('touchcancel', onCancel)
+      clearTimeout(settleTimer)
       reset()
     }
   }, [scrollerRef, enabled])

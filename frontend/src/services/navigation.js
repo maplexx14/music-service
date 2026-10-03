@@ -64,6 +64,7 @@ export function skipNextTransitionAnimation() {
 // там, где его оставил палец, и уезжает, а новый в это же время въезжает
 // из-под него. onCapture зовётся, когда старый кадр уже снят, а новый ещё не
 // рендерился, — в нём снимают сдвиг пальца, чтобы новый кадр был без него.
+// Аргумент — transition.finished: конец анимации.
 // Возвращает отмену на случай, если навигации так и не случилось.
 export function swipeNextTransition(onCapture) {
   if (!viewTransitionsEnabled()) return null
@@ -165,7 +166,8 @@ export function createAppHistory() {
       const capture = kind === 'swipe' ? onSwipeCapture : null
       onSwipeCapture = null
       const transition = document.startViewTransition(() => {
-        capture?.()
+        // transition уже присвоен: колбэк обновления вызывается асинхронно.
+        capture?.(transition.finished)
         const committed = waitForCommit(update.location.key)
         fn(update)
         return committed
