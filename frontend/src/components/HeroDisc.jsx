@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { useUiSettingsStore } from '../store/uiSettingsStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './HeroDisc.css'
@@ -130,12 +129,6 @@ function HeroDisc() {
 
       const el = coverRef.current
       if (!el) return
-      // Облегчённый режим: постоянное вращение выключено — каждый поворот
-      // это новый кадр окна, а на слабом железе (и на интеловском маке с
-      // Firefox) их стоимость заметна. Поворот раз в секунду читался как
-      // подтормаживание, неподвижный диск выглядит чище. Жест остаётся: это
-      // прямое управление.
-      if (!drag && useUiSettingsStore.getState().liteMode) return
       const angle = Math.round(progress * steps) / (steps / 360)
       if (angle === lastAngleRef.current) return
       lastAngleRef.current = angle
