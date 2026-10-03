@@ -102,7 +102,14 @@ def _save_album_tracks(db: Session, current_user: User, album, tracks) -> AlbumS
         db.commit()
         db.refresh(playlist)
 
-    existing_ids = {t.id for t in playlist.tracks}
+    # Только id, без ORM-объектов: playlist.tracks грузил бы весь плейлист
+    # целиком (у сохранённого артиста — сотни треков).
+    existing_ids = {
+        track_id
+        for (track_id,) in db.query(playlist_tracks.c.track_id).filter(
+            playlist_tracks.c.playlist_id == playlist.id
+        )
+    }
 
     track_ids: List[int] = []
     for ext in tracks:

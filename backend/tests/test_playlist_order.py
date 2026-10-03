@@ -123,3 +123,34 @@ def test_adding_track_bumps_playlist_updated_at(client, db):
 
     summary = client.get("/api/playlists/me", headers=auth_headers(client, "adder")).json()
     assert summary[0]["updated_at"] is not None
+
+
+def test_add_and_remove_track_check_membership(client, db):
+    """Повторное добавление и удаление отсутствующего трека — 400, удаление
+    убирает ровно одну связь и не трогает остальные треки плейлиста."""
+    user = create_user(db, "remover")
+    playlist = make_playlist(db, user, plays=[5, 3])
+    headers = auth_headers(client, "remover")
+    url = f"/api/playlists/{playlist.id}/tracks"
+    track_ids = [
+        track_id
+        for (track_id,) in db.query(playlist_tracks.c.track_id).filter(
+            playlist_tracks.c.playlist_id == playlist.id
+        )
+    ]
+
+    assert client.post(f"{url}/{track_ids[0]}", headers=headers).status_code == 400
+
+    resp = client.delete(f"{url}/{track_ids[0]}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert client.delete(f"{url}/{track_ids[0]}", headers=headers).status_code == 400
+
+    remaining = [
+        track_id
+        for (track_id,) in db.query(playlist_tracks.c.track_id).filter(
+            playlist_tracks.c.playlist_id == playlist.id
+        )
+    ]
+    assert remaining == track_ids[1:]
+
+    assert client.post(f"{url}/{track_ids[0]}", headers=headers).status_code == 200

@@ -969,13 +969,15 @@ def _save_playlist(
     db.add(new_playlist)
     db.flush()  # получить new_playlist.id до вставки связей
 
-    for position, track_id in enumerate(track_ids):
+    # Одним executemany, а не INSERT на трек: импорт на тысячу треков делал
+    # тысячу round-trip'ов к Postgres.
+    if track_ids:
         db.execute(
-            insert(playlist_tracks).values(
-                playlist_id=new_playlist.id,
-                track_id=track_id,
-                position=position,
-            )
+            insert(playlist_tracks),
+            [
+                {"playlist_id": new_playlist.id, "track_id": track_id, "position": position}
+                for position, track_id in enumerate(track_ids)
+            ],
         )
 
     db.commit()

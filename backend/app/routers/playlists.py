@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
+from sqlalchemy import exists
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -16,6 +17,17 @@ from app.recommendation_cache import invalidate_recommendation_cache
 # остальное подгружается кнопкой «Показать ещё» (см. get_playlist/
 # get_my_liked_playlist) постранично тем же limit-ом.
 DEFAULT_TRACKS_LIMIT = 20
+
+
+def _track_in_playlist(db: Session, playlist_id: int, track_id: int) -> bool:
+    """EXISTS по таблице связей: `track in playlist.tracks` грузил весь
+    плейлист ORM-объектами ради проверки одной строки."""
+    return db.query(
+        exists().where(
+            playlist_tracks.c.playlist_id == playlist_id,
+            playlist_tracks.c.track_id == track_id,
+        )
+    ).scalar()
 
 
 def _paginated_playlist_response(
@@ -263,7 +275,7 @@ def add_track_to_playlist(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
-    if track in playlist.tracks:
+    if _track_in_playlist(db, playlist_id, track_id):
         raise HTTPException(status_code=400, detail="Track already in playlist")
     
     # Get current max position
@@ -310,10 +322,16 @@ def remove_track_from_playlist(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     
-    if track not in playlist.tracks:
+    # Прямой DELETE вместо playlist.tracks.remove: тот грузил весь плейлист
+    # ORM-объектами ради одной строки связи.
+    deleted = db.execute(
+        playlist_tracks.delete().where(
+            playlist_tracks.c.playlist_id == playlist_id,
+            playlist_tracks.c.track_id == track_id,
+        )
+    ).rowcount
+    if not deleted:
         raise HTTPException(status_code=400, detail="Track not in playlist")
-    
-    playlist.tracks.remove(track)
     db.commit()
     invalidate_recommendation_cache(current_user.id)
     return {"message": "Track removed from playlist"}

@@ -7,7 +7,7 @@ from typing import List, Tuple
 from fastapi import APIRouter, Query, Request
 
 from app import censorship
-from app.cache import get_cache, set_cache
+from app.cache import get_cache_async, set_cache_async
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import (
@@ -356,7 +356,7 @@ async def search_external_playlists(
     """
     normalized_q = " ".join(q.lower().split())
     cache_key = f"search:external:playlists:{normalized_q}:{limit}"
-    cached = get_cache(cache_key)
+    cached = await get_cache_async(cache_key)
     if cached is not None:
         return [ExternalPlaylistResponse(**item) for item in cached]
     try:
@@ -364,7 +364,7 @@ async def search_external_playlists(
     except Exception:  # noqa: BLE001
         logger.exception("external playlist search failed")
         return []
-    set_cache(
+    await set_cache_async(
         cache_key,
         [p.model_dump(mode="json") for p in playlists],
         expire=_EXTERNAL_PLAYLISTS_TTL,

@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -70,13 +72,15 @@ async def artists_by_genres(
 
     if len(names) < limit:
         existing = {artist_key(n) for n in names}
-        rows = (
+        # GROUP BY по всей таблице треков — в тредпул: хендлер async, и
+        # синхронный SQLAlchemy в event loop останавливал весь воркер.
+        rows = await asyncio.to_thread(
             db.query(Track.artist)
             .filter(Track.artist.isnot(None))
             .group_by(Track.artist)
             .order_by(func.coalesce(func.sum(Track.play_count), 0).desc())
             .limit(limit * 2)
-            .all()
+            .all
         )
         for (artist,) in rows:
             if not artist or artist_key(artist) in existing:
@@ -104,16 +108,22 @@ async def suggest_artists(
     query = db.query(Track.artist).filter(Track.artist.isnot(None))
     if term:
         query = query.filter(Track.artist.ilike(f"%{term}%"))
-    rows = (
+    # Локальный GROUP BY — в тредпул (не держать event loop на SQL), и
+    # параллельно с YouTube Music: эндпоинт дёргается на каждый ввод символа,
+    # и последовательно ответ ждал сумму двух задержек.
+    local_rows = asyncio.to_thread(
         query.group_by(Track.artist)
         .order_by(func.coalesce(func.sum(Track.play_count), 0).desc())
         .limit(min(max(limit, 1), 50))
-        .all()
+        .all
     )
-    local_names = [r[0] for r in rows if r[0]]
-
     if term:
-        yt_names = await search_ytmusic_artists(term, limit=limit)
+        rows, yt_names = await asyncio.gather(
+            local_rows, search_ytmusic_artists(term, limit=limit)
+        )
+    else:
+        rows = await local_rows
+    local_names = [r[0] for r in rows if r[0]]
 
     merged: List[str] = list(local_names)
     existing_keys = {artist_key(n) for n in merged}

@@ -53,6 +53,7 @@ from app.recommendation_cache import (
     invalidate_recommendation_cache,
     recommendation_cache_key,
     remember_delivery,
+    store_recommendations,
 )
 from app.diversity import cap_per_artist, interleave_artists, mmr, primary_artist_key, soft_artist_rerank
 from app.artist_utils import (
@@ -1022,7 +1023,7 @@ def _compute_recommendations(
         # attributed to the actual viewport session rather than the cache fill.
         # Повторная отдача в окне DELIVERY_DEDUP_TTL — та же выдача: берём её
         # request_id и строк показа не пишем (см. recommendation_cache).
-        existing_request_id = claim_delivery(cache_key, request_id)
+        existing_request_id = claim_delivery(current_user.id, cache_key, request_id)
         if existing_request_id:
             request_id = existing_request_id
         cached_payload = dict(cached)
@@ -2153,7 +2154,8 @@ def _compute_recommendations(
     # subsequent feedback with the exact non-cached generation.
     # Деградировавший ответ (внешний пул ещё греется) кэшируем лишь на время
     # ожидания пула — тощая выдача не должна закрепиться на полные _RECS_TTL.
-    set_cache(
+    store_recommendations(
+        current_user.id,
         cache_key,
         response.model_dump(mode="json"),
         expire=_DEGRADED_TTL if external_degraded else _RECS_TTL,
