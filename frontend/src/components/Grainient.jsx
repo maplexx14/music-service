@@ -129,70 +129,130 @@ void main(){
 }
 `;
 
-const lerp = (a, b, t) => a + (b - a) * t;
+// Градиент — не живой шейдер, а снятый с него кадр, который медленно плывёт
+// CSS-трансформом. Живой рендер стоил дорого не шейдером, а самим фактом
+// нового кадра: браузер и WindowServer заново композитили окно 20-30 раз в
+// секунду, и на интеловском маке (встроенная графика в одном кристалле с CPU)
+// это грело процессор при любом капе FPS. Готовая картинка рисуется один раз
+// на смену цветов или размера, а дальше GPU только двигает текстуру.
 
-// Уровни качества. Кап FPS: фон — медленно плывущий градиент, на 20 кадрах он
-// читается так же плавно, как на 144. Дорог здесь не столько шейдер, сколько
-// сам факт нового кадра: браузер и WindowServer заново композитят окно, и на
-// интеловском маке (встроенная графика в одном кристалле с CPU) при 30 fps
-// это давало ~100% CPU суммарно по процессам и нагрев. Поэтому кадров ровно
-// столько, сколько нужно для плавности. В покое (ничего не играет) — вдвое
-// меньше: медленное движение в покое глазом не отличается.
-// Слабое устройство (rAF сам не вытягивает частоту, см. SLOW_TICK) спускается
-// по уровням: меньше кадров, ниже разрешение (scale — множитель к
-// renderScale), без колец от диска (atan + шум + exp на каждый пиксель), а на
-// последнем — один статичный кадр. FPS — делители 60, иначе на 60 Гц кап
-// округляется вниз до ближайшего делителя.
-const QUALITY_TIERS = [
-  { activeFps: 20, idleFps: 10, scale: 1, ripples: true },
-  { activeFps: 15, idleFps: 10, scale: 0.75, ripples: true },
-  { activeFps: 12, idleFps: 6, scale: 0.5, ripples: false },
-  { frozen: true, scale: 0.5, ripples: false }
+// Момент анимации шейдера, который снимается в кадр. Подобран так, чтобы
+// цвета легли крупными мягкими пятнами, а не полосами.
+const FRAME_TIME = 3.0;
+const FRAME_WARP_TIME = 6.0;
+
+// Дрейф: сдвиг, поворот и масштаб слоя на 140% контейнера (inset -20% в
+// CSS), чтобы при повороте не открывались края. Один проход — минута,
+// туда-обратно.
+const DRIFT_KEYFRAMES = [
+  { transform: 'translate3d(0, 0, 0) rotate(0deg) scale(1)' },
+  { transform: 'translate3d(-3%, 2%, 0) rotate(6deg) scale(1.06)' },
+  { transform: 'translate3d(2%, -2%, 0) rotate(-4deg) scale(1.1)' }
 ];
-// Тик rAF длиннее 40 мс (<25 Гц) — устройство не успевает. Порог выше 33 мс,
-// чтобы iOS в режиме энергосбережения (rAF ровно 30 Гц) не считался слабым.
-const SLOW_TICK = 0.04;
-// Окно замера в тиках и доля медленных, после которой уровень понижается.
-const PERF_WINDOW = 45;
-const SLOW_SHARE = 0.5;
-// Первые тики после старта цикла не считаем: там догрузка страницы, сборка
-// шейдера и разогрев GPU — они медленные на любом устройстве.
-const PERF_WARMUP = 15;
-// Уровень запоминается на сессию вкладки (как детект GPU в utils/gpu.js):
-// иначе каждый заход на главную заново проходил бы через тормозящие уровни.
-const TIER_KEY = 'grainient-tier';
+const DRIFT_DURATION = 60000;
+// Ступенчатый тайминг: 360 шагов на минуту — 6 смен положения в секунду в
+// покое и 15 при игре. Смещение за шаг меньше пикселя, поэтому движение
+// выглядит плавным, а значение трансформа между шагами не меняется и
+// композитору нечего перерисовывать — в отличие от линейной анимации, которая
+// обновляет слой на каждом кадре монитора.
+const DRIFT_STEPS = 360;
+// Играет трек — фон плывёт быстрее, как раньше разгонялся шейдер.
+const ACTIVE_RATE = 2.5;
+// Смена кадра (новый трек — новые цвета) — перекрёстным затуханием.
+const FADE_MS = 700;
+// Перерисовываем кадр на ресайзе, только если размер ушёл заметно: картинка
+// мягкая и растягивается через object-fit без видимой разницы.
+const RESIZE_THRESHOLD = 0.15;
+const RESIZE_DEBOUNCE_MS = 250;
 
-const initialTier = () => {
+// Разовый рендер кадра в PNG. Контекст создаётся на один кадр и сразу
+// освобождается: браузер держит жёсткий лимит живых WebGL-контекстов, а на
+// маках с двумя видеокартами живой контекст ещё и держит включённой
+// дискретную. Компиляция шейдера — десятки миллисекунд раз на трек.
+const renderFrame = (params, colors, width, height, dpr) => {
+  let renderer;
   try {
-    const stored = Number(sessionStorage.getItem(TIER_KEY));
-    if (stored > 0 && stored < QUALITY_TIERS.length) return stored;
+    renderer = new Renderer({
+      webgl: 2,
+      alpha: false,
+      antialias: false,
+      // Без этой подсказки на MacBook Pro 15/16 WebGL будит дискретную Radeon.
+      powerPreference: 'low-power',
+      // Буфер читается через toBlob уже после render — без сохранения он мог
+      // бы оказаться очищен.
+      preserveDrawingBuffer: true,
+      dpr
+    });
   } catch {
-    // Storage недоступен — решаем по железу.
+    return Promise.resolve(null);
   }
-  // Заведомо слабое железо стартует сразу со второго уровня, не дожидаясь
-  // замера. deviceMemory есть только в Chromium; Safari его не отдаёт.
-  const memory = navigator.deviceMemory;
-  const cores = navigator.hardwareConcurrency;
-  const saveData = navigator.connection?.saveData;
-  if ((memory && memory <= 2) || (cores && cores <= 2) || saveData) return 1;
-  return 0;
-};
-// Допуск ~4 мс: на 60 Гц rAF тикает каждые 16.7 мс, и без допуска кадр на
-// отметке 33.3 мс проваливает сравнение из-за плавающей точки — каждый второй
-// тик отбрасывался бы и вместо 30 fps получалось 20.
-const FRAME_TOLERANCE = 0.004;
+  const gl = renderer.gl;
+  // Контекста может не быть (лимит, софтверный блеклист, экономия батареи):
+  // фон — украшение, остаёмся на подложке hero.
+  if (!gl) return Promise.resolve(null);
+  const release = () => gl.getExtension('WEBGL_lose_context')?.loseContext();
 
-// Скорость сходимости mixFactor idle→playing, в единицах в секунду. Раньше
-// лерп шёл с шагом 0.025 за кадр, то есть зависел от частоты монитора и от
-// капа FPS: 1.5 = 0.025 × 60 сохраняет прежнюю длительность перехода.
-const MIX_RATE = 1.5;
+  try {
+    renderer.setSize(width, height);
+    const program = new Program(gl, {
+      vertex,
+      fragment,
+      uniforms: {
+        iTime: { value: 0 },
+        iResolution: { value: new Float32Array([gl.drawingBufferWidth, gl.drawingBufferHeight]) },
+        uAnimationTime: { value: FRAME_TIME },
+        uWarpTime: { value: FRAME_WARP_TIME },
+        uColorBalance: { value: params.colorBalance },
+        uWarpStrength: { value: params.warpStrength },
+        uWarpFrequency: { value: params.warpFrequency },
+        uWarpAmplitude: { value: params.warpAmplitude },
+        uBlendAngle: { value: params.blendAngle },
+        uBlendSoftness: { value: params.blendSoftness },
+        uRotationAmount: { value: params.rotationAmount },
+        uNoiseScale: { value: params.noiseScale },
+        uGrainAmount: { value: params.grainAmount },
+        uGrainScale: { value: params.grainScale },
+        uGrainAnimated: { value: 0 },
+        uContrast: { value: params.contrast },
+        uGamma: { value: params.gamma },
+        uSaturation: { value: params.saturation },
+        uCenterOffset: { value: new Float32Array([params.centerX, params.centerY]) },
+        uZoom: { value: params.zoom },
+        uColor1: { value: new Float32Array(hexToRgb(colors[0])) },
+        uColor2: { value: new Float32Array(hexToRgb(colors[1])) },
+        uColor3: { value: new Float32Array(hexToRgb(colors[2])) },
+        uRippleCenter: { value: new Float32Array([0.5, 0.5]) },
+        uRippleRadius: { value: 0 },
+        uRippleTime: { value: 0 },
+        // Кольца — волна во времени, в застывшем кадре они не читаются.
+        uRippleStrength: { value: 0 },
+        uRippleFreq: { value: 0 }
+      }
+    });
+    const mesh = new Mesh(gl, { geometry: new Triangle(gl), program });
+    renderer.render({ scene: mesh });
+  } catch {
+    release();
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      gl.canvas.toBlob(resolve, 'image/png');
+    } catch {
+      resolve(null);
+    }
+  }).finally(release);
+};
+
+const removeFrame = (img) => {
+  URL.revokeObjectURL(img.src);
+  img.remove();
+};
 
 const Grainient = ({
-  timeSpeed = 0.25,
   colorBalance = 0.0,
   warpStrength = 1.0,
   warpFrequency = 5.0,
-  warpSpeed = 2.0,
   warpAmplitude = 50.0,
   blendAngle = 0.0,
   blendSoftness = 0.05,
@@ -200,7 +260,6 @@ const Grainient = ({
   noiseScale = 2.0,
   grainAmount = 0.1,
   grainScale = 2.0,
-  grainAnimated = false,
   contrast = 1.5,
   gamma = 1.0,
   saturation = 1.0,
@@ -211,439 +270,145 @@ const Grainient = ({
   color2 = '#5227FF',
   color3 = '#B19EEF',
   active = false,
-  // Разрешение рендера в долях CSS-пикселя. Стоимость шейдера линейна по
-  // площади, а градиент мягкий и без мелких деталей — CSS растягивает canvas
-  // билинейно, и разницы не видно. 0.5 — вчетверо меньше фрагментов, чем при
-  // полном разрешении (на retina — в 16 раз против прежнего cap 1.5). Поднять,
-  // если на конкретном пресете проступают ступеньки на границах цветов или
-  // включён заметный grainAmount (зерно при апскейле становится крупным).
+  // Разрешение кадра в долях CSS-пикселя. Градиент мягкий и без мелких
+  // деталей — растянутая картинка неотличима от полноразмерной, а PNG и
+  // рендер вчетверо меньше. Поднять, если включён заметный grainAmount
+  // (зерно при апскейле становится крупным).
   renderScale = 0.5,
-  // Волны от элемента-источника (диск в hero): селектор ищется по документу,
-  // центр и радиус колец берутся из его rect. 0 — волн нет.
-  rippleFrom = null,
-  rippleStrength = 0,
-  rippleFrequency = 14,
-  // Меняется, когда источник появляется/исчезает (диска нет без трека) —
-  // повод перемерить его положение.
-  rippleKey = null,
   className = ''
 }) => {
   const containerRef = useRef(null);
+  const driftRef = useRef(null);
+  const animRef = useRef(null);
   const activeRef = useRef(active);
   activeRef.current = active;
 
-  // Цвета читаются из ref, а не из пропсов напрямую: они меняются на лету
-  // (фон главной окрашивается под обложку текущего трека), а пересобирать
-  // ради смены цвета весь контекст нельзя — браузер держит жёсткий лимит
-  // живых WebGL-контекстов, и эффект ниже сознательно освобождает свой при
-  // размонтировании. Живое обновление цветов — отдельным эффектом в конце.
-  const colorsRef = useRef({ color1, color2, color3 });
-  colorsRef.current = { color1, color2, color3 };
-  const applyColorsRef = useRef(null);
-  const measureRippleRef = useRef(null);
-
+  // Кадр: перерисовывается на смену цветов (обложка нового трека), параметров
+  // шейдера и заметный ресайз. Старый кадр не удаляется сразу — новый
+  // проявляется поверх, и только потом старый уходит.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const { color1: c1, color2: c2, color3: c3 } = colorsRef.current;
-
-    // prefers-reduced-motion: анимацию не крутим — рендерим один статичный
-    // кадр градиента и останавливаемся (доступность + экономия GPU).
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
-
-    let tierIndex = initialTier();
-    let tier = QUALITY_TIERS[tierIndex];
-
-    // Контекста может не быть: браузер держит лимит живых WebGL-контекстов на
-    // страницу (~8-16), их выбивает софтверный блеклист/экономия батареи, а ogl
-    // на отказ getContext только пишет в консоль и падает дальше на gl.renderer.
-    // Фон — украшение: молча остаёмся на CSS-заглушке вместо краша страницы.
-    let renderer;
-    try {
-      renderer = new Renderer({
-        webgl: 2,
-        // Непрозрачный буфер: шейдер и так пишет alpha = 1, а с alpha: true
-        // композитор смешивает canvas с подложкой на каждом кадре и не может
-        // считать слой непрозрачным.
-        alpha: false,
-        antialias: false,
-        // На маках с двумя видеокартами (MacBook Pro 15/16) WebGL-контекст без
-        // этой подсказки будит дискретную Radeon: она держится включённой, пока
-        // жив контекст, и греет ноутбук сама по себе, независимо от нагрузки.
-        // Мягкому градиенту в пониженном разрешении встроенной хватает с запасом.
-        powerPreference: 'low-power',
-        // Рендерим ниже разрешения экрана и растягиваем средствами CSS. Фон —
-        // мягкий размытый градиент без мелких деталей, визуальной разницы нет,
-        // а фрагментов на retina вчетверо меньше, чем при прежнем cap 1.5.
-        // Абсолютное значение, а не доля devicePixelRatio: важна физическая
-        // плотность пикселей у градиента, и она одинаково достаточна на любом
-        // экране.
-        dpr: renderScale * tier.scale
-      });
-    } catch {
-      return;
-    }
-    if (!renderer.gl) return;
-
-    const gl = renderer.gl;
-    const canvas = gl.canvas;
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.display = 'block';
-
     const container = containerRef.current;
-    container.appendChild(canvas);
+    const drift = driftRef.current;
+    if (!container || !drift) return undefined;
 
-    const geometry = new Triangle(gl);
-    const program = new Program(gl, {
-      vertex,
-      fragment,
-      uniforms: {
-        iTime: { value: 0 },
-        iResolution: { value: new Float32Array([1, 1]) },
-        uAnimationTime: { value: 0 },
-        uWarpTime: { value: 0 },
-        uColorBalance: { value: colorBalance },
-        uWarpStrength: { value: warpStrength },
-        uWarpFrequency: { value: warpFrequency },
-        uWarpAmplitude: { value: warpAmplitude },
-        uBlendAngle: { value: blendAngle },
-        uBlendSoftness: { value: blendSoftness },
-        uRotationAmount: { value: rotationAmount },
-        uNoiseScale: { value: noiseScale },
-        uGrainAmount: { value: grainAmount },
-        uGrainScale: { value: grainScale },
-        uGrainAnimated: { value: grainAnimated ? 1.0 : 0.0 },
-        uContrast: { value: contrast },
-        uGamma: { value: gamma },
-        uSaturation: { value: saturation },
-        uCenterOffset: { value: new Float32Array([centerX, centerY]) },
-        uZoom: { value: zoom },
-        uColor1: { value: new Float32Array(hexToRgb(c1)) },
-        uColor2: { value: new Float32Array(hexToRgb(c2)) },
-        uColor3: { value: new Float32Array(hexToRgb(c3)) },
-        uRippleCenter: { value: new Float32Array([0.5, 0.5]) },
-        uRippleRadius: { value: 0 },
-        uRippleTime: { value: 0 },
-        uRippleStrength: { value: tier.ripples ? rippleStrength : 0 },
-        uRippleFreq: { value: rippleFrequency }
+    const params = {
+      colorBalance, warpStrength, warpFrequency, warpAmplitude, blendAngle,
+      blendSoftness, rotationAmount, noiseScale, grainAmount, grainScale,
+      contrast, gamma, saturation, centerX, centerY, zoom
+    };
+    let cancelled = false;
+    let seq = 0;
+    let drawn = null;
+    let resizeTimer = 0;
+
+    const draw = async () => {
+      const rect = drift.getBoundingClientRect();
+      // Размер слоя дрейфа без учёта его трансформа: offsetWidth/Height.
+      const width = Math.floor(drift.offsetWidth || rect.width);
+      const height = Math.floor(drift.offsetHeight || rect.height);
+      if (!(width > 0) || !(height > 0)) return;
+      const id = ++seq;
+      drawn = { width, height };
+      const blob = await renderFrame(params, [color1, color2, color3], width, height, renderScale);
+      if (cancelled || id !== seq || !blob) return;
+
+      const img = document.createElement('img');
+      img.className = 'grainient-frame';
+      img.alt = '';
+      img.src = URL.createObjectURL(blob);
+      // Вставляем уже декодированную картинку, иначе затухание началось бы
+      // с пустого кадра.
+      await img.decode().catch(() => {});
+      if (cancelled || id !== seq) {
+        URL.revokeObjectURL(img.src);
+        return;
       }
-    });
-
-    const mesh = new Mesh(gl, { geometry, program });
-
-    const setSize = () => {
-      const rect = container.getBoundingClientRect();
-      const width = Math.max(1, Math.floor(rect.width));
-      const height = Math.max(1, Math.floor(rect.height));
-      renderer.setSize(width, height);
-      const res = program.uniforms.iResolution.value;
-      res[0] = gl.drawingBufferWidth;
-      res[1] = gl.drawingBufferHeight;
+      const previous = Array.from(drift.children);
+      drift.appendChild(img);
+      requestAnimationFrame(() => img.classList.add('is-visible'));
+      setTimeout(() => previous.forEach(removeFrame), FADE_MS);
     };
 
-    // Центр и радиус колец в координатах шейдера: x/y в долях canvas (y
-    // снизу вверх, как gl_FragCoord), радиус — в долях высоты. Источника нет
-    // (ничего не играет) — кольца идут из центра.
-    const measureRipple = () => {
-      const center = program.uniforms.uRippleCenter.value;
-      const el = rippleFrom ? document.querySelector(rippleFrom) : null;
-      const box = container.getBoundingClientRect();
-      if (!el || !(box.width > 0) || !(box.height > 0)) {
-        center[0] = 0.5;
-        center[1] = 0.5;
-        program.uniforms.uRippleRadius.value = 0;
-      } else {
-        const r = el.getBoundingClientRect();
-        center[0] = (r.left + r.width / 2 - box.left) / box.width;
-        center[1] = 1 - (r.top + r.height / 2 - box.top) / box.height;
-        program.uniforms.uRippleRadius.value = r.width / 2 / box.height;
-      }
-      if (!running) renderer.render({ scene: mesh });
-    };
-    measureRippleRef.current = measureRipple;
-
-    // Размер диска задан через vw/vh, поэтому он меняется вместе с hero —
-    // перемеряем на том же ResizeObserver.
     const ro = new ResizeObserver(() => {
-      setSize();
-      measureRipple();
+      if (!drawn) {
+        draw();
+        return;
+      }
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        const width = drift.offsetWidth;
+        const height = drift.offsetHeight;
+        const changed =
+          Math.abs(width - drawn.width) > drawn.width * RESIZE_THRESHOLD ||
+          Math.abs(height - drawn.height) > drawn.height * RESIZE_THRESHOLD;
+        if (changed) draw();
+      }, RESIZE_DEBOUNCE_MS);
     });
     ro.observe(container);
-    setSize();
 
-    const idle = {
-      timeSpeed: 1.2,
-      warpStrength: 0.65,
-      warpSpeed: 0.7,
-      warpAmplitude: 75,
-      rotationAmount: 120,
-      rippleSpeed: 1.2,
+    return () => {
+      cancelled = true;
+      clearTimeout(resizeTimer);
+      ro.disconnect();
     };
-    const playing = {
-      timeSpeed: 3,
-      warpStrength: 1.9,
-      warpSpeed: 3.2,
-      warpAmplitude: 32,
-      rotationAmount: 700,
-      rippleSpeed: 3.5,
-    };
+  }, [
+    color1, color2, color3,
+    colorBalance, warpStrength, warpFrequency, warpAmplitude, blendAngle,
+    blendSoftness, rotationAmount, noiseScale, grainAmount, grainScale,
+    contrast, gamma, saturation, centerX, centerY, zoom, renderScale
+  ]);
 
-    let mixFactor = activeRef.current ? 1 : 0;
-    let animationTime = 0;
-    let warpTime = 0;
-    let rippleTime = 0;
-    // Время последнего отрисованного кадра, а не последнего тика rAF: дельта
-    // должна покрывать весь промежуток, включая пропущенные по капу тики,
-    // иначе анимация замедлится пропорционально капу.
-    let lastT = null;
+  // Дрейф. Web Animations, а не CSS-класс: скорость при старте/паузе трека
+  // меняется через playbackRate без скачка позиции, а смена
+  // animation-duration в CSS пересчитала бы прогресс и дёрнула слой.
+  useEffect(() => {
+    const drift = driftRef.current;
+    const container = containerRef.current;
+    if (!drift || typeof drift.animate !== 'function') return undefined;
+    // prefers-reduced-motion: фон стоит.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return undefined;
 
-    let raf = 0;
-    // Управление циклом рендера: rAF крутится только когда вкладка видима
-    // И контейнер во вьюпорте. Скрытая вкладка / фон за пределами экрана —
-    // ноль работы GPU и CPU вместо постоянного полноэкранного шейдера.
-    let running = false;
-    measureRipple();
-    let pageVisible = !document.hidden;
-    let inViewport = true;
-    // Пока ленту прокручивают, шейдер стоит: полноэкранный рендер 30 раз в
-    // секунду делит GPU с самой прокруткой и с блюром нижних панелей поверх
-    // него — на телефоне это и давало рывки. Медленный градиент, замерший на
-    // время жеста, глазу не заметен; цикл возобновляется через
-    // SCROLL_IDLE_MS после последнего события прокрутки.
-    let scrolling = false;
-    let scrollIdleTimer = 0;
-    const SCROLL_IDLE_MS = 180;
+    const anim = drift.animate(DRIFT_KEYFRAMES, {
+      duration: DRIFT_DURATION,
+      iterations: Infinity,
+      direction: 'alternate',
+      easing: `steps(${DRIFT_STEPS})`
+    });
+    anim.playbackRate = activeRef.current ? ACTIVE_RATE : 1;
+    animRef.current = anim;
 
-    // Замер производительности: интервалы между тиками rAF, а не между
-    // отрисованными кадрами — кап FPS отбрасывает тики сам, а частота тиков
-    // показывает, успевает ли устройство вообще (главный поток + GPU).
-    let prevTick = null;
-    let perfTicks = 0;
-    let slowTicks = 0;
-
-    const startLoop = () => {
-      if (running || reducedMotion || tier.frozen) return;
-      if (!pageVisible || !inViewport || scrolling) return;
-      running = true;
-      lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
-      // Паузу между остановкой и стартом за медленный тик не считаем.
-      prevTick = null;
-      perfTicks = -PERF_WARMUP;
-      slowTicks = 0;
-      raf = requestAnimationFrame(loop);
-    };
-
-    const stopLoop = () => {
-      if (!running) return;
-      running = false;
-      cancelAnimationFrame(raf);
-    };
-
-    // Смена цветов без пересборки контекста (см. colorsRef выше). Если цикл
-    // рендера сейчас стоит (reduced motion, скрытая вкладка, контейнер вне
-    // вьюпорта), дорисовываем один кадр вручную — иначе новый цвет не был бы
-    // виден до следующего запуска цикла.
-    applyColorsRef.current = (nextC1, nextC2, nextC3) => {
-      program.uniforms.uColor1.value = new Float32Array(hexToRgb(nextC1));
-      program.uniforms.uColor2.value = new Float32Array(hexToRgb(nextC2));
-      program.uniforms.uColor3.value = new Float32Array(hexToRgb(nextC3));
-      if (!running) renderer.render({ scene: mesh });
-    };
-
-    // Понижение уровня на ходу: контекст и программа те же, меняются только
-    // размер буфера, юниформ колец и кап. Обратно в рамках сессии не
-    // поднимаемся — иначе на границе уровни качались бы туда-обратно.
-    const degrade = () => {
-      if (tierIndex >= QUALITY_TIERS.length - 1) return;
-      tierIndex += 1;
-      tier = QUALITY_TIERS[tierIndex];
-      try {
-        sessionStorage.setItem(TIER_KEY, String(tierIndex));
-      } catch {
-        // Ignore
-      }
-      renderer.dpr = renderScale * tier.scale;
-      setSize();
-      if (!tier.ripples) program.uniforms.uRippleStrength.value = 0;
-      perfTicks = -PERF_WARMUP;
-      slowTicks = 0;
-      if (tier.frozen) {
-        stopLoop();
-        renderer.render({ scene: mesh });
-      }
-    };
-
-    const loop = (t) => {
-      if (!running) return;
-      // Следующий тик просим сразу: кадр может быть отброшен по капу, и выход
-      // до планирования остановил бы цикл насовсем.
-      raf = requestAnimationFrame(loop);
-
-      const now = t * 0.001;
-
-      if (prevTick !== null) {
-        perfTicks += 1;
-        if (perfTicks > 0) {
-          if (now - prevTick > SLOW_TICK) slowTicks += 1;
-          if (perfTicks >= PERF_WINDOW) {
-            if (slowTicks >= PERF_WINDOW * SLOW_SHARE) {
-              prevTick = now;
-              degrade();
-              if (!running) return;
-            } else {
-              perfTicks = 0;
-              slowTicks = 0;
-            }
-          }
-        }
-      }
-      prevTick = now;
-      // Кап считается от текущего состояния: играет трек — активный кап уровня (переход
-      // idle→playing виден глазом), покой — кап покоя. Пока идёт сам переход
-      // (mixFactor ещё не догорел), держим активный кап: иначе затухание
-      // отрисовывалось бы вдвое реже и дёргалось. Время кадра берётся из
-      // дельты, поэтому смена капа на ходу анимацию не сбивает.
-      const isActive = activeRef.current;
-      const frameInterval = 1 / (isActive || mixFactor > 0.01 ? tier.activeFps : tier.idleFps);
-      if (lastT !== null && now - lastT < frameInterval - FRAME_TOLERANCE) return;
-
-      const deltaTime = lastT !== null ? Math.min(now - lastT, 0.1) : 0;
-      lastT = now;
-
-      const targetMix = isActive ? 1 : 0;
-      // Экспоненциальное сглаживание вместо лерпа с фиксированным шагом:
-      // длительность перехода теперь не зависит ни от частоты монитора, ни от
-      // капа FPS, ни от просадок.
-      mixFactor = lerp(mixFactor, targetMix, 1 - Math.exp(-deltaTime * MIX_RATE));
-
-      const currentTimeSpeed = idle.timeSpeed + (playing.timeSpeed - idle.timeSpeed) * mixFactor;
-      const warpStrength = idle.warpStrength + (playing.warpStrength - idle.warpStrength) * mixFactor;
-      const warpSpeed = idle.warpSpeed + (playing.warpSpeed - idle.warpSpeed) * mixFactor;
-      const warpAmplitude = idle.warpAmplitude + (playing.warpAmplitude - idle.warpAmplitude) * mixFactor;
-      const rotationAmount = idle.rotationAmount + (playing.rotationAmount - idle.rotationAmount) * mixFactor;
-
-      const timeFactor = deltaTime * currentTimeSpeed;
-      animationTime += timeFactor;
-      warpTime += timeFactor * warpSpeed;
-      // Волны идут от реального времени, а не от timeSpeed: тот у главной
-      // разогнан до 5, и кольца с ним мелькали бы.
-      rippleTime += deltaTime * (idle.rippleSpeed + (playing.rippleSpeed - idle.rippleSpeed) * mixFactor);
-      program.uniforms.uRippleTime.value = rippleTime;
-
-      program.uniforms.uAnimationTime.value = animationTime;
-      program.uniforms.uWarpTime.value = warpTime;
-      program.uniforms.uWarpStrength.value = warpStrength;
-      program.uniforms.uWarpAmplitude.value = warpAmplitude;
-      program.uniforms.uRotationAmount.value = rotationAmount;
-      program.uniforms.iTime.value = now;
-      renderer.render({ scene: mesh });
-    };
-
-    const onVisibilityChange = () => {
-      pageVisible = !document.hidden;
-      if (pageVisible) startLoop();
-      else stopLoop();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    // Контекст могут отобрать (смена GPU, лимит контекстов, спящий ноутбук):
-    // без обработчика rAF продолжает дёргать мёртвый gl и засоряет консоль.
-    const onContextLost = (e) => {
-      e.preventDefault();
-      stopLoop();
-    };
-    canvas.addEventListener('webglcontextlost', onContextLost);
-
-    const onScroll = () => {
-      if (!scrolling) {
-        scrolling = true;
-        stopLoop();
-      }
-      clearTimeout(scrollIdleTimer);
-      scrollIdleTimer = setTimeout(() => {
-        scrolling = false;
-        startLoop();
-      }, SCROLL_IDLE_MS);
-    };
-    // В фазе перехвата на document: прокручивается не окно, а .main-content.
-    document.addEventListener('scroll', onScroll, { passive: true, capture: true });
-
+    // Hero за пределами экрана — анимацию ставим на паузу, чтобы композитор не
+    // тикал впустую.
     const io = new IntersectionObserver((entries) => {
-      inViewport = entries[0]?.isIntersecting ?? true;
-      if (inViewport) startLoop();
-      else stopLoop();
+      if (entries[0]?.isIntersecting ?? true) anim.play();
+      else anim.pause();
     });
     io.observe(container);
 
-    if (reducedMotion || tier.frozen) {
-      // Один статичный кадр вместо бесконечного цикла.
-      renderer.render({ scene: mesh });
-    } else {
-      startLoop();
-    }
-
     return () => {
-      stopLoop();
-      applyColorsRef.current = null;
-      measureRippleRef.current = null;
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      document.removeEventListener('scroll', onScroll, { capture: true });
-      clearTimeout(scrollIdleTimer);
       io.disconnect();
-      ro.disconnect();
-      canvas.removeEventListener('webglcontextlost', onContextLost);
-      try {
-        container.removeChild(canvas);
-      } catch {
-        // Ignore
-      }
-      // Явно освобождаем WebGL-контекст. Удаления canvas из DOM для этого мало:
-      // контекст живёт до GC, а браузер держит жёсткий лимит на страницу — за
-      // несколько переходов на главную (в dev StrictMode — вдвое быстрее) лимит
-      // исчерпывался, и следующий Renderer получал null вместо контекста.
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      anim.cancel();
+      animRef.current = null;
     };
-  }, [
-    timeSpeed,
-    colorBalance,
-    warpStrength,
-    warpFrequency,
-    warpSpeed,
-    warpAmplitude,
-    blendAngle,
-    blendSoftness,
-    rotationAmount,
-    noiseScale,
-    grainAmount,
-    grainScale,
-    grainAnimated,
-    contrast,
-    gamma,
-    saturation,
-    centerX,
-    centerY,
-    zoom,
-    rippleFrom,
-    rippleStrength,
-    rippleFrequency,
-    // color1..color3 здесь сознательно НЕ в зависимостях: эффект строит
-    // WebGL-контекст и программу, а цвета пишутся в юниформы отдельным
-    // эффектом ниже — смена цвета не должна пересобирать контекст.
-    renderScale
-  ]);
+  }, []);
 
-  // Живое обновление цветов. Объявлен после основного эффекта, поэтому к
-  // моменту вызова программа уже создана (а на размонтировании ref обнулён).
   useEffect(() => {
-    applyColorsRef.current?.(color1, color2, color3);
-  }, [color1, color2, color3]);
+    animRef.current?.updatePlaybackRate(active ? ACTIVE_RATE : 1);
+  }, [active]);
 
-  // Источник волн появился/исчез — перемеряем его после коммита DOM.
+  // Размонтирование — кадры и их object URL больше не нужны.
   useEffect(() => {
-    measureRippleRef.current?.();
-  }, [rippleKey]);
+    const drift = driftRef.current;
+    return () => {
+      if (drift) Array.from(drift.children).forEach(removeFrame);
+    };
+  }, []);
 
-  return <div ref={containerRef} className={`grainient-container ${className}`.trim()} />;
+  return (
+    <div ref={containerRef} className={`grainient-container ${className}`.trim()}>
+      <div ref={driftRef} className="grainient-drift" />
+    </div>
+  );
 };
 
 export default Grainient;

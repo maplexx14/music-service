@@ -380,11 +380,9 @@ function Home() {
                 color1={heroColors[0]}
                 color2={heroColors[1]}
                 color3={heroColors[2]}
-                timeSpeed={5}
                 colorBalance={-0.32}
                 warpStrength={1.4}
                 warpFrequency={5}
-                warpSpeed={2}
                 warpAmplitude={50}
                 blendAngle={-49}
                 blendSoftness={0.05}
@@ -392,16 +390,12 @@ function Home() {
                 noiseScale={1.95}
                 grainAmount={0}
                 grainScale={0.2}
-                grainAnimated={false}
                 contrast={1.5}
                 gamma={1}
                 saturation={1}
                 centerX={0}
                 centerY={0}
                 zoom={0.9}
-                rippleFrom=".hero-disc"
-                rippleStrength={1}
-                rippleKey={currentTrack ? 1 : 0}
                 active={isWavePlaying}
               />
             </Suspense>
