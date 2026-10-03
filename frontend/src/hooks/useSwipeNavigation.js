@@ -6,6 +6,7 @@ import {
   swipeNextTransition,
 } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { startSwipeDebug } from '../utils/swipeDebug'
 
 // Навигация свайпами в PWA: вправо — «Назад» на вложенных экранах, влево/
 // вправо — соседняя вкладка на корнях вкладок. Жест начинается из любой
@@ -114,6 +115,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     const onMove = (e) => {
       if (!g) return
       if (e.touches.length !== 1) {
+        g.debug?.end()
         g = null
         reset()
         return
@@ -130,6 +132,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         g.axis = 'x'
         clearTimeout(settleTimer)
         if (!releaseHeavy) releaseHeavy = holdHeavyAnimations()
+        g.debug = startSwipeDebug()
         el.style.willChange = 'transform'
         // Горизонтальный жест забираем целиком: список под пальцем не должен
         // одновременно прокручиваться. Через overflow, а не preventDefault —
@@ -144,12 +147,15 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       g.lastT = e.timeStamp
       const action = dx > 0 ? actionsRef.current.right : actionsRef.current.left
       g.dx = action ? dx : dx * RESISTANCE
+      const handlerStart = g.debug ? performance.now() : 0
       setOffset(g.dx)
+      g.debug?.move(performance.now() - handlerStart)
     }
 
     const onEnd = (e) => {
       if (!g) return
       const { axis, dx } = g
+      g.debug?.end()
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x') return
@@ -234,6 +240,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     const onCancel = () => {
       if (!g) return
       const wasDragging = g.axis === 'x'
+      g.debug?.end()
       g = null
       if (!wasDragging) return
       settle(MAX_MS)

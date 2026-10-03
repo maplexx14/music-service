@@ -36,6 +36,11 @@
 
   .main-content {
     margin-left: 0;
+    /* Горизонталь отдаём JS (hooks/useSwipeNavigation.js): без этого iOS
+       считает косой/боковой жест кандидатом на свою прокрутку, и экран под
+       пальцем ехал рывками. Вложенные ленты-карусели — сами контейнеры
+       прокрутки и своё горизонтальное листание сохраняют. */
+    touch-action: pan-y pinch-zoom;
     --main-pad-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
     background: transparent;
   }
