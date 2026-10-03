@@ -1,0 +1,65 @@
+.hero-bolts {
+  --hb-cycle: 7s;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.hero-bolts.is-active {
+  --hb-cycle: 3.5s;
+}
+
+.hero-bolt {
+  position: absolute;
+  width: calc(clamp(44px, 6.5vw, 104px) * var(--s));
+  aspect-ratio: 76 / 116;
+  background: center / contain no-repeat;
+  opacity: 0.34;
+  transform: translate(-50%, -50%) rotate(var(--r));
+  animation: hero-bolt-strike var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite;
+}
+
+/* Облегчённый режим глушит все анимации через `.lite-mode *` с !important.
+   Этот фон и есть замена тяжёлому градиенту именно для облегчённого режима,
+   поэтому возвращаем ему анимацию селектором специфичнее. */
+.lite-mode .hero-bolt {
+  animation: hero-bolt-strike var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite !important;
+}
+
+.hero-bolt.v1 { background-image: url('../assets/loader-bolt-1.svg'); }
+.hero-bolt.v2 { background-image: url('../assets/loader-bolt-2.svg'); }
+.hero-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
+
+/* Почти весь цикл молния тлеет на месте. Удар — двойная вспышка с отскоком
+   в размере, как у настоящей молнии, и быстрое затухание обратно. */
+@keyframes hero-bolt-strike {
+  0%, 84% {
+    opacity: 0.34;
+    transform: translate(-50%, -50%) rotate(var(--r)) scale(1);
+  }
+  86% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(var(--r)) scale(1.14);
+  }
+  88% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) rotate(var(--r)) scale(1.04);
+  }
+  90% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) rotate(var(--r)) scale(1.1);
+  }
+  96%, 100% {
+    opacity: 0.34;
+    transform: translate(-50%, -50%) rotate(var(--r)) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-bolt,
+  .lite-mode .hero-bolt {
+    animation: none !important;
+  }
+}

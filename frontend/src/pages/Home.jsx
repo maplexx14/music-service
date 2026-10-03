@@ -19,6 +19,7 @@ import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
+import HeroBolts from '../components/HeroBolts'
 import { isSoftwareRendering } from '../utils/gpu'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
@@ -373,7 +374,10 @@ function Home() {
       >
         <div className="hero-grainient">
           {liteMode || noGpu ? (
-            <div className="hero-grainient-static" />
+            <>
+              <div className="hero-grainient-static" />
+              <HeroBolts active={isWavePlaying} />
+            </>
           ) : (
             <Suspense fallback={<div className="hero-grainient-static" />}>
               <Grainient
