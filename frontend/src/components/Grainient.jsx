@@ -131,15 +131,51 @@ void main(){
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
-// Кап FPS. Фон — медленно плывущий градиент: на 30 кадрах он выглядит так же,
-// как на 144, но проходов тяжёлого фрагментного шейдера в 4-5 раз меньше.
-// rAF по умолчанию идёт с частотой монитора, поэтому на 144/165 Гц без капа
-// градиент один съедал больше GPU, чем вся остальная страница.
-// В покое (ничего не играет) кадров вдвое меньше: градиент занимает весь экран
-// и стоит дороже всего остального на странице, а медленное движение в покое
+// Уровни качества. Кап FPS: фон — медленно плывущий градиент, на 30 кадрах он
+// выглядит так же, как на 144, но проходов тяжёлого фрагментного шейдера в 4-5
+// раз меньше. rAF по умолчанию идёт с частотой монитора, поэтому на 144/165 Гц
+// без капа градиент один съедал больше GPU, чем вся остальная страница.
+// В покое (ничего не играет) кадров вдвое меньше: медленное движение в покое
 // глазом не отличается.
-const ACTIVE_FPS = 30;
-const IDLE_FPS = 15;
+// Слабое устройство (rAF сам не вытягивает частоту, см. SLOW_TICK) спускается
+// по уровням: меньше кадров, ниже разрешение (scale — множитель к
+// renderScale), без колец от диска (atan + шум + exp на каждый пиксель), а на
+// последнем — один статичный кадр. FPS — делители 60, иначе на 60 Гц кап
+// округляется вниз до ближайшего делителя.
+const QUALITY_TIERS = [
+  { activeFps: 30, idleFps: 15, scale: 1, ripples: true },
+  { activeFps: 20, idleFps: 12, scale: 0.75, ripples: true },
+  { activeFps: 15, idleFps: 10, scale: 0.5, ripples: false },
+  { frozen: true, scale: 0.5, ripples: false }
+];
+// Тик rAF длиннее 40 мс (<25 Гц) — устройство не успевает. Порог выше 33 мс,
+// чтобы iOS в режиме энергосбережения (rAF ровно 30 Гц) не считался слабым.
+const SLOW_TICK = 0.04;
+// Окно замера в тиках и доля медленных, после которой уровень понижается.
+const PERF_WINDOW = 45;
+const SLOW_SHARE = 0.5;
+// Первые тики после старта цикла не считаем: там догрузка страницы, сборка
+// шейдера и разогрев GPU — они медленные на любом устройстве.
+const PERF_WARMUP = 15;
+// Уровень запоминается на сессию вкладки (как детект GPU в utils/gpu.js):
+// иначе каждый заход на главную заново проходил бы через тормозящие уровни.
+const TIER_KEY = 'grainient-tier';
+
+const initialTier = () => {
+  try {
+    const stored = Number(sessionStorage.getItem(TIER_KEY));
+    if (stored > 0 && stored < QUALITY_TIERS.length) return stored;
+  } catch {
+    // Storage недоступен — решаем по железу.
+  }
+  // Заведомо слабое железо стартует сразу со второго уровня, не дожидаясь
+  // замера. deviceMemory есть только в Chromium; Safari его не отдаёт.
+  const memory = navigator.deviceMemory;
+  const cores = navigator.hardwareConcurrency;
+  const saveData = navigator.connection?.saveData;
+  if ((memory && memory <= 2) || (cores && cores <= 2) || saveData) return 1;
+  return 0;
+};
 // Допуск ~4 мс: на 60 Гц rAF тикает каждые 16.7 мс, и без допуска кадр на
 // отметке 33.3 мс проваливает сравнение из-за плавающей точки — каждый второй
 // тик отбрасывался бы и вместо 30 fps получалось 20.
@@ -213,6 +249,9 @@ const Grainient = ({
     // кадр градиента и останавливаемся (доступность + экономия GPU).
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
 
+    let tierIndex = initialTier();
+    let tier = QUALITY_TIERS[tierIndex];
+
     // Контекста может не быть: браузер держит лимит живых WebGL-контекстов на
     // страницу (~8-16), их выбивает софтверный блеклист/экономия батареи, а ogl
     // на отказ getContext только пишет в консоль и падает дальше на gl.renderer.
@@ -229,7 +268,7 @@ const Grainient = ({
         // Абсолютное значение, а не доля devicePixelRatio: важна физическая
         // плотность пикселей у градиента, и она одинаково достаточна на любом
         // экране.
-        dpr: renderScale
+        dpr: renderScale * tier.scale
       });
     } catch {
       return;
@@ -276,7 +315,7 @@ const Grainient = ({
         uRippleCenter: { value: new Float32Array([0.5, 0.5]) },
         uRippleRadius: { value: 0 },
         uRippleTime: { value: 0 },
-        uRippleStrength: { value: rippleStrength },
+        uRippleStrength: { value: tier.ripples ? rippleStrength : 0 },
         uRippleFreq: { value: rippleFrequency }
       }
     });
@@ -366,11 +405,22 @@ const Grainient = ({
     let scrollIdleTimer = 0;
     const SCROLL_IDLE_MS = 180;
 
+    // Замер производительности: интервалы между тиками rAF, а не между
+    // отрисованными кадрами — кап FPS отбрасывает тики сам, а частота тиков
+    // показывает, успевает ли устройство вообще (главный поток + GPU).
+    let prevTick = null;
+    let perfTicks = 0;
+    let slowTicks = 0;
+
     const startLoop = () => {
-      if (running || reducedMotion) return;
+      if (running || reducedMotion || tier.frozen) return;
       if (!pageVisible || !inViewport || scrolling) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
+      // Паузу между остановкой и стартом за медленный тик не считаем.
+      prevTick = null;
+      perfTicks = -PERF_WARMUP;
+      slowTicks = 0;
       raf = requestAnimationFrame(loop);
     };
 
@@ -391,6 +441,29 @@ const Grainient = ({
       if (!running) renderer.render({ scene: mesh });
     };
 
+    // Понижение уровня на ходу: контекст и программа те же, меняются только
+    // размер буфера, юниформ колец и кап. Обратно в рамках сессии не
+    // поднимаемся — иначе на границе уровни качались бы туда-обратно.
+    const degrade = () => {
+      if (tierIndex >= QUALITY_TIERS.length - 1) return;
+      tierIndex += 1;
+      tier = QUALITY_TIERS[tierIndex];
+      try {
+        sessionStorage.setItem(TIER_KEY, String(tierIndex));
+      } catch {
+        // Ignore
+      }
+      renderer.dpr = renderScale * tier.scale;
+      setSize();
+      if (!tier.ripples) program.uniforms.uRippleStrength.value = 0;
+      perfTicks = -PERF_WARMUP;
+      slowTicks = 0;
+      if (tier.frozen) {
+        stopLoop();
+        renderer.render({ scene: mesh });
+      }
+    };
+
     const loop = (t) => {
       if (!running) return;
       // Следующий тик просим сразу: кадр может быть отброшен по капу, и выход
@@ -398,13 +471,31 @@ const Grainient = ({
       raf = requestAnimationFrame(loop);
 
       const now = t * 0.001;
-      // Кап считается от текущего состояния: играет трек — 30 fps (переход
-      // idle→playing виден глазом), покой — 15 fps. Пока идёт сам переход
+
+      if (prevTick !== null) {
+        perfTicks += 1;
+        if (perfTicks > 0) {
+          if (now - prevTick > SLOW_TICK) slowTicks += 1;
+          if (perfTicks >= PERF_WINDOW) {
+            if (slowTicks >= PERF_WINDOW * SLOW_SHARE) {
+              prevTick = now;
+              degrade();
+              if (!running) return;
+            } else {
+              perfTicks = 0;
+              slowTicks = 0;
+            }
+          }
+        }
+      }
+      prevTick = now;
+      // Кап считается от текущего состояния: играет трек — активный кап уровня (переход
+      // idle→playing виден глазом), покой — кап покоя. Пока идёт сам переход
       // (mixFactor ещё не догорел), держим активный кап: иначе затухание
       // отрисовывалось бы вдвое реже и дёргалось. Время кадра берётся из
       // дельты, поэтому смена капа на ходу анимацию не сбивает.
       const isActive = activeRef.current;
-      const frameInterval = 1 / (isActive || mixFactor > 0.01 ? ACTIVE_FPS : IDLE_FPS);
+      const frameInterval = 1 / (isActive || mixFactor > 0.01 ? tier.activeFps : tier.idleFps);
       if (lastT !== null && now - lastT < frameInterval - FRAME_TOLERANCE) return;
 
       const deltaTime = lastT !== null ? Math.min(now - lastT, 0.1) : 0;
@@ -475,7 +566,7 @@ const Grainient = ({
     });
     io.observe(container);
 
-    if (reducedMotion) {
+    if (reducedMotion || tier.frozen) {
       // Один статичный кадр вместо бесконечного цикла.
       renderer.render({ scene: mesh });
     } else {
