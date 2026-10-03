@@ -176,21 +176,6 @@
   border-radius: 8px;
 }
 
-.player-cover-buffering-spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  animation: player-buffering-rotate 0.8s linear infinite;
-}
-
-@keyframes player-buffering-rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .player-info {
   min-width: 0;
   overflow: hidden;

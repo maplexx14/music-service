@@ -5,7 +5,7 @@
 
 /* Pull-to-refresh: маленький системного вида индикатор под шапкой.
    Появляется по мере жеста (opacity/transform управляются инлайном из
-   usePullToRefresh), на освежении крутится. */
+   usePullToRefresh), на освежении из сердца вылетают молнии (BoltLoader). */
 .ptr-indicator {
   position: fixed;
   top: 0;
@@ -22,24 +22,6 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
   z-index: 60;
   pointer-events: none;
-}
-
-.ptr-spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: var(--brand-accent);
-}
-
-.ptr-spinner.spinning {
-  animation: ptr-rotate 0.7s linear infinite;
-}
-
-@keyframes ptr-rotate {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* Единый сегментированный блок: общая рамка и скругление,

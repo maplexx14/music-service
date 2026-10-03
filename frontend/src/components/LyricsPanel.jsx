@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useLyrics, getActiveLyricIndex } from '../hooks/useLyrics'
 import { AlignLeft } from 'lucide-react'
+import BoltLoader from './BoltLoader'
 import './LyricsPanel.css'
 
 function LyricsPanel({ showOnlyText = false }) {
@@ -55,7 +56,7 @@ function LyricsPanel({ showOnlyText = false }) {
     return (
       <div className="lyrics-panel">
         <div className="lyrics-empty">
-          <div className="lyrics-loading-spinner" />
+          <BoltLoader size={32} />
           <div className="lyrics-empty-text">Поиск текста...</div>
         </div>
       </div>

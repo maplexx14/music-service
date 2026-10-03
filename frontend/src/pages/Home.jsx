@@ -15,6 +15,7 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { splitArtists } from '../utils/artists'
 import { usePullToRefresh } from '../hooks/usePullToRefresh'
 import Spinner from '../components/Spinner'
+import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
@@ -337,9 +338,11 @@ function Home() {
           style={{ opacity: pullProgress, transform: `translateY(${-32 + (refreshing ? 32 : pull * 0.35)}px)` }}
           aria-hidden="true"
         >
-          <span
-            className={`ptr-spinner${refreshing ? ' spinning' : ''}`}
-            style={refreshing ? undefined : { transform: `rotate(${pullProgress * 260}deg)` }}
+          <BoltLoader
+            size={18}
+            reach={1}
+            active={refreshing}
+            style={refreshing ? undefined : { transform: `scale(${0.6 + pullProgress * 0.4})` }}
           />
         </div>
       )}

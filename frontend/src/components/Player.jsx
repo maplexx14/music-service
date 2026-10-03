@@ -17,6 +17,7 @@ import { openCensorDialog } from '../store/censorDialogStore'
 import { useAuthStore } from '../store/authStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
+import BoltLoader from './BoltLoader'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
@@ -2318,7 +2319,7 @@ function PlayerInner() {
           />
           {isExternalTrack && isBuffering && (
             <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
-              <div className="player-cover-buffering-spinner" />
+              <BoltLoader size={22} reach={0.9} />
             </div>
           )}
         </button>

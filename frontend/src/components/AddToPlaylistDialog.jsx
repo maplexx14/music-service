@@ -9,6 +9,7 @@ import { toast } from '../store/toastStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { plural } from '../utils/format'
 import { resolveCoverUrl } from '../utils/media'
+import BoltLoader from './BoltLoader'
 import './AddToPlaylistDialog.css'
 
 // Закрытие шторки свайпом вниз: дальше этого сдвига или резким броском.
@@ -416,7 +417,7 @@ function Dialog({ request, onClose }) {
                         </span>
                       </span>
                       <span className="atp-row-status" aria-hidden="true">
-                        {state === 'adding' && <span className="atp-spinner" />}
+                        {state === 'adding' && <BoltLoader size={20} reach={0.8} />}
                         {(state === 'added' || state === 'exists') && <Check size={18} />}
                       </span>
                     </button>

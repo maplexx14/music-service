@@ -216,15 +216,6 @@
   color: var(--brand-accent);
 }
 
-.atp-spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: var(--brand-accent);
-  border-radius: 50%;
-  animation: atp-spin 0.8s linear infinite;
-}
-
 .atp-status {
   padding: 20px 12px;
   text-align: center;
@@ -330,12 +321,6 @@
   }
 }
 
-@keyframes atp-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* --- Телефон: нижняя шторка --- */
 @media (max-width: 768px) {
   .atp-backdrop {
@@ -375,8 +360,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .atp-backdrop,
-  .atp-dialog,
-  .atp-spinner {
+  .atp-dialog {
     animation: none;
   }
 }
