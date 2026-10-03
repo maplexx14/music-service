@@ -56,7 +56,7 @@ function LyricsPanel({ showOnlyText = false }) {
     return (
       <div className="lyrics-panel">
         <div className="lyrics-empty">
-          <BoltLoader size={32} />
+          <BoltLoader size={32} frame={80} />
           <div className="lyrics-empty-text">Поиск текста...</div>
         </div>
       </div>

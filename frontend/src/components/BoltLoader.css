@@ -6,15 +6,17 @@
   position: relative;
   display: inline-block;
   flex: none;
-  width: var(--bl-size);
-  height: var(--bl-size);
+  width: var(--bl-frame);
+  height: var(--bl-frame);
+  overflow: hidden;
 }
 
 .bolt-loader-heart {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  margin: auto;
+  width: var(--bl-size);
+  height: var(--bl-size);
   user-select: none;
   /* Отдача: сердце чуть подпрыгивает на каждый вылет. */
   animation: bolt-loader-recoil var(--bl-step) cubic-bezier(.165, .84, .44, 1) infinite;
@@ -42,7 +44,8 @@
 .bolt-loader-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
 
 /* Полёт — 60% цикла: резкий старт и долгое торможение (ease-out-quart),
-   гаснет в конце пути. Остаток цикла молния невидима и ждёт своей очереди. */
+   гаснет у края рамки (центр молнии на 0.42 рамки — хвост уже прозрачен,
+   когда его срезает overflow). Остаток цикла молния невидима и ждёт своей очереди. */
 @keyframes bolt-loader-fly {
   0% {
     opacity: 0;
@@ -53,11 +56,11 @@
   40% { opacity: 1; }
   60% {
     opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-size) * var(--bl-reach) * -1)) rotate(calc(180deg + var(--spin))) scale(1);
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-frame) * -0.42)) rotate(calc(180deg + var(--spin))) scale(1);
   }
   100% {
     opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-size) * var(--bl-reach) * -1)) rotate(calc(180deg + var(--spin))) scale(1);
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-frame) * -0.42)) rotate(calc(180deg + var(--spin))) scale(1);
   }
 }
 

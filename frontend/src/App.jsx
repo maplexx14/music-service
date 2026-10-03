@@ -72,7 +72,7 @@ function App() {
           path="/login"
           element={
             !isAuthenticated ? (
-              <Suspense fallback={<Spinner />}>
+              <Suspense fallback={<Spinner page />}>
                 <Login />
               </Suspense>
             ) : (
@@ -84,7 +84,7 @@ function App() {
           path="/forgot-password"
           element={
             !isAuthenticated ? (
-              <Suspense fallback={<Spinner />}><ForgotPassword /></Suspense>
+              <Suspense fallback={<Spinner page />}><ForgotPassword /></Suspense>
             ) : (
               <Navigate to="/" />
             )
@@ -93,14 +93,14 @@ function App() {
         <Route
           path="/reset-password"
           element={
-            <Suspense fallback={<Spinner />}><ResetPassword /></Suspense>
+            <Suspense fallback={<Spinner page />}><ResetPassword /></Suspense>
           }
         />
         <Route
           path="/register"
           element={
             !isAuthenticated ? (
-              <Suspense fallback={<Spinner />}>
+              <Suspense fallback={<Spinner page />}>
                 <Register />
               </Suspense>
             ) : (
@@ -112,7 +112,7 @@ function App() {
         <Route
           path="/verify-email"
           element={
-            <Suspense fallback={<Spinner />}>
+            <Suspense fallback={<Spinner page />}>
               <VerifyEmail />
             </Suspense>
           }
@@ -121,7 +121,7 @@ function App() {
           path="/onboarding"
           element={
             isAuthenticated ? (
-              <Suspense fallback={<Spinner />}>
+              <Suspense fallback={<Spinner page />}>
                 <PreferencesOnboarding />
               </Suspense>
             ) : (
@@ -135,7 +135,7 @@ function App() {
             isAuthenticated ? (
               <Layout>
                 {/* Suspense внутри Layout: при подгрузке lazy-чанка оболочка (меню, плеер) остаётся на месте. */}
-                <Suspense fallback={<Spinner />}>
+                <Suspense fallback={<Spinner page />}>
                   <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/search" element={<Search />} />

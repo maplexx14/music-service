@@ -340,7 +340,7 @@ function Home() {
         >
           <BoltLoader
             size={18}
-            reach={1}
+            frame={36}
             active={refreshing}
             style={refreshing ? undefined : { transform: `scale(${0.6 + pullProgress * 0.4})` }}
           />

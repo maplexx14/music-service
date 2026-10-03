@@ -10,7 +10,12 @@
   flex: 1;
   overflow-y: auto;
   margin-left: 240px;
-  padding-bottom: 90px;
+  /* Отступы через переменные: их же снимает полноэкранный Spinner, чтобы
+     встать по центру экрана, а не области между шапкой и плеером. */
+  --main-pad-top: 0px;
+  --main-pad-bottom: 90px;
+  padding-top: var(--main-pad-top);
+  padding-bottom: var(--main-pad-bottom);
   background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
   transition: margin-left 0.3s ease;
   /* Резинка отскролла не проваливается в системный pull-to-refresh —
@@ -31,18 +36,18 @@
 
   .main-content {
     margin-left: 0;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
+    --main-pad-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
     background: transparent;
   }
 
   /* Статус-бар прозрачный (black-translucent) — без отступа под него
      заголовок экрана уезжал под часы и чёлку. */
   .main-content.has-safe-top {
-    padding-top: env(safe-area-inset-top, 0px);
+    --main-pad-top: env(safe-area-inset-top, 0px);
   }
 
   .main-content.has-mobile-topbar {
-    padding-top: calc(env(safe-area-inset-top, 0px) + 56px);
+    --main-pad-top: calc(env(safe-area-inset-top, 0px) + 56px);
   }
 
   .mobile-status-scrim {

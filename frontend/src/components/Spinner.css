@@ -3,9 +3,20 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 20px;
+  gap: 4px;
   padding: 48px 0;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* min-height: 100% — от высоты main (у него фиксированная высота в Layout),
+   flex: 1 — внутри #root (flex-колонка на весь экран) вне Layout.
+   Отрицательные поля снимают отступы main под шапку и плеер (переменные из
+   Layout.css): центр — середина экрана. Вне Layout переменных нет, там 0. */
+.spinner-wrap--page {
+  flex: 1;
+  min-height: calc(100% + var(--main-pad-top, 0px) + var(--main-pad-bottom, 0px));
+  margin: calc(-1 * var(--main-pad-top, 0px)) 0 calc(-1 * var(--main-pad-bottom, 0px));
+  padding: 0;
 }
 
 .spinner-label {

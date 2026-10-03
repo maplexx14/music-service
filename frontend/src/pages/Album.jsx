@@ -166,9 +166,7 @@ function Album() {
 
   if (loading) {
     return (
-      <div className="page-container">
-        <Spinner />
-      </div>
+      <Spinner page />
     )
   }
 

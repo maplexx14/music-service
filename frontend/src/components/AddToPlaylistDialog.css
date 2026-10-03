@@ -212,7 +212,7 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: 24px;
+  width: 32px;
   color: var(--brand-accent);
 }
 

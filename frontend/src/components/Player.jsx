@@ -2319,7 +2319,7 @@ function PlayerInner() {
           />
           {isExternalTrack && isBuffering && (
             <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
-              <BoltLoader size={22} reach={0.9} />
+              <BoltLoader size={22} frame={50} />
             </div>
           )}
         </button>

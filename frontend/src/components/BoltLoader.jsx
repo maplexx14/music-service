@@ -14,12 +14,14 @@ const BOLTS = [
 
 // Лоадер в стиле логотипа: из сердца веером вылетают молнии (как на
 // заставке в index.html). Чистый CSS — на экране их бывает несколько сразу.
+// size — сердце, frame — рамка полёта: молнии гаснут у её края и не
+// вылезают за неё на соседний текст и обложки.
 // active={false} — сердце без молний (pull-to-refresh до отпускания).
-function BoltLoader({ size = 32, reach = 1.25, active = true, className = '', style }) {
+function BoltLoader({ size = 32, frame = size * 2, active = true, className = '', style }) {
   return (
     <span
       className={`bolt-loader${active ? '' : ' is-idle'}${className ? ` ${className}` : ''}`}
-      style={{ '--bl-size': `${size}px`, '--bl-reach': reach, ...style }}
+      style={{ '--bl-size': `${size}px`, '--bl-frame': `${frame}px`, ...style }}
       aria-hidden="true"
     >
       {active && BOLTS.map((b, i) => (

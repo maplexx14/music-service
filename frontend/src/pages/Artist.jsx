@@ -315,9 +315,7 @@ function Artist() {
 
   if (loading) {
     return (
-      <div className="page-container">
-        <Spinner />
-      </div>
+      <Spinner page />
     )
   }
 

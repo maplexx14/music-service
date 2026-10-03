@@ -417,7 +417,7 @@ function Dialog({ request, onClose }) {
                         </span>
                       </span>
                       <span className="atp-row-status" aria-hidden="true">
-                        {state === 'adding' && <BoltLoader size={20} reach={0.8} />}
+                        {state === 'adding' && <BoltLoader size={16} frame={32} />}
                         {(state === 'added' || state === 'exists') && <Check size={18} />}
                       </span>
                     </button>
