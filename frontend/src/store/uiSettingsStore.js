@@ -25,7 +25,13 @@ const isMobileDevice = () => {
 // хранится и переживает перезагрузку.
 const defaultQualityMode = () => 'high'
 
-const defaultSettings = () => ({ liteMode: false, streamQuality: defaultQualityMode() })
+// rememberPlayer — запоминать очередь и позицию между запусками
+// (services/playerPersist). Включает сам юзер в настройках.
+const defaultSettings = () => ({
+  liteMode: false,
+  streamQuality: defaultQualityMode(),
+  rememberPlayer: false,
+})
 
 const loadSettings = () => {
   const fallback = defaultSettings()
@@ -41,6 +47,7 @@ const loadSettings = () => {
       streamQuality: QUALITY_MODES.includes(parsed.streamQuality)
         ? parsed.streamQuality
         : fallback.streamQuality,
+      rememberPlayer: parsed.rememberPlayer === true,
     }
   } catch {
     return fallback
@@ -63,6 +70,7 @@ const useUiSettingsStore = create((set) => ({
     if (!QUALITY_MODES.includes(streamQuality)) return
     set({ streamQuality })
   },
+  toggleRememberPlayer: () => set((state) => ({ rememberPlayer: !state.rememberPlayer })),
 }))
 
 if (typeof window !== 'undefined') {
@@ -71,7 +79,11 @@ if (typeof window !== 'undefined') {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ liteMode: state.liteMode, streamQuality: state.streamQuality })
+        JSON.stringify({
+          liteMode: state.liteMode,
+          streamQuality: state.streamQuality,
+          rememberPlayer: state.rememberPlayer,
+        })
       )
     } catch {
       // Ignore storage errors

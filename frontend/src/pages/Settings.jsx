@@ -55,7 +55,14 @@ const sameList = (a = [], b = []) =>
 
 function Settings() {
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
-  const { liteMode, toggleLiteMode, streamQuality, setStreamQuality } = useUiSettingsStore()
+  const {
+    liteMode,
+    toggleLiteMode,
+    streamQuality,
+    setStreamQuality,
+    rememberPlayer,
+    toggleRememberPlayer,
+  } = useUiSettingsStore()
   const { user, updatePreferences, logout } = useAuthStore()
   const [gifError, setGifError] = useState('')
 
@@ -373,6 +380,25 @@ function Settings() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <div className="settings-label">Запоминать плеер</div>
+                    <div className="settings-hint">
+                      При следующем открытии продолжить с того же трека и места. Очередь
+                      хранится 48 часов
+                    </div>
+                  </div>
+                  <label className="settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={rememberPlayer}
+                      onChange={toggleRememberPlayer}
+                      aria-label="Запоминать плеер"
+                    />
+                    <span className="settings-toggle-slider" />
+                  </label>
                 </div>
               </div>
             </div>

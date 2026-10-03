@@ -73,3 +73,42 @@ def test_player_state_rejects_oversized(client, db):
 
 def test_player_state_requires_auth(client):
     assert client.get("/api/users/me/player-state").status_code == 401
+
+
+def test_player_state_expires_after_48_hours(client, db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import UserPlayerState
+
+    user = create_user(db, "listener")
+    headers = auth_headers(client, "listener")
+    client.put(
+        "/api/users/me/player-state",
+        json={"state": _snapshot(), "saved_at": 1000},
+        headers=headers,
+    )
+    row = db.get(UserPlayerState, user.id)
+    row.updated_at = datetime.now(timezone.utc) - timedelta(hours=47)
+    db.commit()
+    assert client.get("/api/users/me/player-state", headers=headers).json()["saved_at"] == 1000
+
+    row.updated_at = datetime.now(timezone.utc) - timedelta(hours=49)
+    db.commit()
+    body = client.get("/api/users/me/player-state", headers=headers).json()
+    assert body == {"state": None, "saved_at": None}
+    db.expire_all()
+    assert db.get(UserPlayerState, user.id) is None
+
+
+def test_player_state_delete(client, db):
+    create_user(db, "listener")
+    headers = auth_headers(client, "listener")
+    client.put(
+        "/api/users/me/player-state",
+        json={"state": _snapshot(), "saved_at": 1000},
+        headers=headers,
+    )
+    assert client.delete("/api/users/me/player-state", headers=headers).status_code == 200
+    assert client.get("/api/users/me/player-state", headers=headers).json()["state"] is None
+    # Повторное удаление пустого — не ошибка.
+    assert client.delete("/api/users/me/player-state", headers=headers).status_code == 200

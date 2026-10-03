@@ -1,5 +1,6 @@
 import api from './api'
 import { usePlayerStore } from '../store/playerStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 
 // Сохранение очереди и позиции между запусками. iOS выгружает PWA из памяти
 // после долгой паузы или при нехватке памяти, и раньше следующее открытие
@@ -19,6 +20,11 @@ import { usePlayerStore } from '../store/playerStore'
 // Из двух записей берём свежую по savedAt; серверную подхватываем и при
 // возврате во вкладку, если здесь ничего не играет — послушал на ноутбуке,
 // открыл телефон, продолжил с того же места.
+//
+// Всё это — только если юзер включил «Запоминать плеер» в настройках
+// (uiSettingsStore.rememberPlayer). Выключение стирает обе копии. Снимок
+// старше 48 часов не восстанавливается: сервер отдаёт пустоту по своему
+// updated_at, локальный отбрасываем по savedAt.
 
 export const PLAYER_PERSIST_KEY = 'bolt-player-v1'
 
@@ -35,6 +41,9 @@ const SERVER_PUSH_MS = 15000
 // Короткий уход в фон (глянуть уведомление) не повод спрашивать сервер.
 const SERVER_PULL_AFTER_HIDDEN_MS = 60000
 const STREAMED_SOURCES = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud']
+const MAX_AGE_MS = 48 * 60 * 60 * 1000
+
+const enabled = () => useUiSettingsStore.getState().rememberPlayer
 
 let userId = null
 let position = 0
@@ -85,6 +94,7 @@ function snapshot() {
 function saveNow() {
   clearTimeout(saveTimer)
   saveTimer = null
+  if (!enabled()) return
   const data = snapshot()
   if (!data) return
   localSavedAt = data.savedAt
@@ -99,6 +109,7 @@ function saveNow() {
 function pushNow() {
   clearTimeout(pushTimer)
   pushTimer = null
+  if (!enabled()) return
   const data = snapshot()
   if (!data) return
   // Без savedAt: иначе каждый снимок «новый», даже если ничего не менялось.
@@ -133,9 +144,32 @@ export function notePosition(seconds) {
   scheduleSave()
 }
 
+function forget() {
+  clearTimeout(saveTimer)
+  clearTimeout(pushTimer)
+  saveTimer = pushTimer = null
+  lastPushedKey = null
+  try {
+    localStorage.removeItem(PLAYER_PERSIST_KEY)
+  } catch {
+    /* noop */
+  }
+}
+
 function install() {
   if (installed) return
   installed = true
+  useUiSettingsStore.subscribe((state, prev) => {
+    if (state.rememberPlayer === prev.rememberPlayer) return
+    if (state.rememberPlayer) {
+      // Включили — сразу пишем то, что сейчас в плеере.
+      saveNow()
+      pushNow()
+    } else {
+      forget()
+      if (userId != null) api.delete('/users/me/player-state', { skipErrorToast: true }).catch(() => {})
+    }
+  })
   usePlayerStore.subscribe((state, prev) => {
     if (
       state.currentTrack !== prev.currentTrack ||
@@ -166,11 +200,17 @@ function install() {
 }
 
 function readLocal() {
+  let data = null
   try {
-    return JSON.parse(localStorage.getItem(PLAYER_PERSIST_KEY) || 'null')
+    data = JSON.parse(localStorage.getItem(PLAYER_PERSIST_KEY) || 'null')
   } catch {
     return null
   }
+  if (data && !(Date.now() - (Number(data.savedAt) || 0) <= MAX_AGE_MS)) {
+    forget()
+    return null
+  }
+  return data
 }
 
 // Ставит снимок в store на паузе. Позицию Player применит сам, когда выставит
@@ -224,6 +264,7 @@ function canReplace() {
 // anyPaused: при возврате во вкладку достаточно паузы — юзер мог дослушать
 // здесь, перейти на другое устройство и вернуться.
 async function pullServer(anyPaused = false) {
+  if (!enabled()) return
   const requestedFor = userId
   let body = null
   try {
@@ -233,7 +274,7 @@ async function pullServer(anyPaused = false) {
     return
   }
   const data = body?.state
-  if (!data || userId == null || userId !== requestedFor || data.userId !== userId) return
+  if (!data || !enabled() || userId == null || userId !== requestedFor || data.userId !== userId) return
   if ((Number(body.saved_at) || 0) <= localSavedAt) return
   const state = usePlayerStore.getState()
   if (anyPaused ? state.isPlaying : !canReplace()) return
@@ -270,6 +311,11 @@ export function restorePlayer(currentUserId) {
   }
   userId = currentUserId
   install()
+  if (!enabled()) {
+    // Остаток от прежней версии, писавшей снимок всегда.
+    forget()
+    return
+  }
   if (usePlayerStore.getState().currentTrack) return
   const data = readLocal()
   if (data && data.userId === currentUserId) applySnapshot(data)

@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import json
 import logging
@@ -408,6 +408,9 @@ def clear_now_playing(current_user: User = Depends(get_current_active_user)):
 # Снимок несёт окно очереди до ~300 треков с метаданными; потолок с запасом,
 # чтобы один клиент не мог складывать в БД мегабайты.
 PLAYER_STATE_MAX_BYTES = 1_000_000
+# Снимок живёт двое суток: позже продолжать с того же места уже не ждут.
+# Срок считаем по updated_at сервера — часам клиента (saved_at) не верим.
+PLAYER_STATE_TTL = timedelta(hours=48)
 
 
 class PlayerStatePayload(BaseModel):
@@ -422,6 +425,14 @@ def get_player_state(
 ):
     row = db.get(UserPlayerState, current_user.id)
     if not row:
+        return {"state": None, "saved_at": None}
+    updated_at = row.updated_at
+    if updated_at is not None and updated_at.tzinfo is None:
+        # sqlite отдаёт func.now() без зоны, но это UTC.
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    if updated_at is not None and datetime.now(timezone.utc) - updated_at > PLAYER_STATE_TTL:
+        db.delete(row)
+        db.commit()
         return {"state": None, "saved_at": None}
     return {"state": row.state, "saved_at": row.saved_at}
 
@@ -441,6 +452,19 @@ def save_player_state(
     row.state = payload.state
     row.saved_at = payload.saved_at
     db.commit()
+    return {"ok": True}
+
+
+# Юзер выключил запоминание в настройках — забываем и серверную копию.
+@router.delete("/me/player-state")
+def delete_player_state(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    row = db.get(UserPlayerState, current_user.id)
+    if row is not None:
+        db.delete(row)
+        db.commit()
     return {"ok": True}
 
 
