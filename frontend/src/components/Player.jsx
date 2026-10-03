@@ -23,7 +23,7 @@ import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
-import { diag, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
+import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
@@ -1028,7 +1028,10 @@ function PlayerInner() {
       const netSince = loadStartedAtRef.current
       const netSrc = audio.currentSrc || audio.src
       if (netSince) {
-        setTimeout(() => diagStreamRequests(netSrc, netSince), 1500)
+        setTimeout(() => {
+          diagStreamRequests(netSrc, netSince)
+          diagPing()
+        }, 1500)
         setTimeout(() => diagStreamRequests(netSrc, netSince), 12000)
       }
       loadStartedAtRef.current = 0

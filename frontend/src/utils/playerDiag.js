@@ -159,13 +159,37 @@ export function diagStreamRequests(src, since) {
   const rows = own.slice(-8).map((entry) => {
     const ttfb = entry.responseStart > 0 ? Math.round(entry.responseStart - entry.startTime) : '?'
     const srv = (entry.serverTiming || []).find((timing) => timing.name === 'total')
+    // conn > 0 — запрос открыл НОВОЕ соединение (TCP+TLS), а не пошёл по
+    // уже открытому соединению страницы; proto — h2/h3/http/1.1.
+    const conn = entry.connectEnd > entry.connectStart
+      ? Math.round(entry.connectEnd - entry.connectStart)
+      : 0
     return [
       `+${Math.round(entry.startTime - since)}`,
       `ttfb=${ttfb}`,
+      `conn=${conn}`,
+      entry.nextHopProtocol || null,
       `dur=${Math.round(entry.duration)}`,
       `kb=${Math.round((entry.encodedBodySize || entry.transferSize || 0) / 1024)}`,
       srv ? `srv=${Math.round(srv.duration)}` : null,
     ].filter(Boolean).join('/')
   })
   diag('net', { n: own.length, req: rows.join(' ') || 'none' })
+}
+
+// Пинг до бэкенда обычным fetch страницы — точка сравнения для ttfb медиа:
+// fetch идёт по соединению страницы, медиа на iOS — нет (см. conn в net).
+// Если пинг быстрый, а ttfb медиа долгий — тормозит медиастек, не сеть.
+export async function diagPing() {
+  const times = []
+  for (let i = 0; i < 3; i += 1) {
+    const started = performance.now()
+    try {
+      await fetch(`/api/health?ping=${Date.now()}`, { cache: 'no-store' })
+      times.push(Math.round(performance.now() - started))
+    } catch {
+      times.push('x')
+    }
+  }
+  diag('ping', { ms: times.join(',') })
 }
