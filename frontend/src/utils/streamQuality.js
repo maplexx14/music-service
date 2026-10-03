@@ -223,13 +223,25 @@ export function isLowQuality() {
   return low
 }
 
-// Дописывает ?quality=low к ссылке на свой стрим. Звать только для URL,
-// которые собирает клиент; чужие ссылки отсекает QUALITY_AWARE.
+// iOS: AAC просим в ADTS, а не в MP4. Safari перед стартом MP4 выкачивает
+// ~1 МБ и больше (DASH-файлы YouTube — ещё больше), а ADTS, как и MP3, играет
+// с первых килобайт: на канале 500 КБ/с это 0.1-0.5 с вместо 2-8 с (замер
+// 2026-10-03). Звук тот же, бэкенд лишь перекладывает кадры (backend/app/adts.py).
+// Позиция в ADTS оценивается по битрейту и плывёт на 1-2% — шкала плеера
+// берёт длительность из БД (resolveTrackDuration).
+const WANTS_ADTS =
+  typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
+
+// Дописывает параметры потока (?fmt=adts на iOS, ?quality=low на медленном
+// канале) к ссылке на свой стрим. Звать только для URL, которые собирает
+// клиент; чужие ссылки отсекает QUALITY_AWARE.
 export function withQuality(url) {
-  if (!low || !url) return url
-  if (url.includes('quality=')) return url
-  if (!QUALITY_AWARE.some((re) => re.test(url))) return url
-  return `${url}${url.includes('?') ? '&' : '?'}quality=low`
+  if (!url || !QUALITY_AWARE.some((re) => re.test(url))) return url
+  const params = []
+  if (WANTS_ADTS && !url.includes('fmt=')) params.push('fmt=adts')
+  if (low && !url.includes('quality=')) params.push('quality=low')
+  if (!params.length) return url
+  return `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}`
 }
 
 // Один и тот же поток с точностью до ?quality. Вердикт меняется посреди трека

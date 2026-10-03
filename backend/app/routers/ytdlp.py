@@ -1933,7 +1933,8 @@ def _enforce_cache_limit() -> None:
         files = [
             (p, os.path.getsize(p), os.path.getmtime(p))
             for p in glob.glob(os.path.join(CACHE_DIR, "*"))
-            if not p.endswith(".part")
+            # Подкаталог adts/ — со своим потолком (см. app/adts.py).
+            if not p.endswith(".part") and os.path.isfile(p)
         ]
     except OSError:
         return
@@ -1950,12 +1951,21 @@ def _enforce_cache_limit() -> None:
             break
 
 
-async def _serve_file(path: str, media_type: str, request: Request) -> Response:
+async def _serve_file(
+    path: str, media_type: str, request: Request, cache_control: Optional[str] = None
+) -> Response:
     """Отдаёт локальный файл с поддержкой Range (перемотка/докачка).
 
     Общий путь для диск-кэша провайдеров (ytmusic/soundcloud) и для уже
-    докачанного файла Soulseek.
+    докачанного файла Soulseek. ``?fmt=adts`` — AAC из MP4 отдаётся в ADTS
+    (быстрый старт в Safari на iOS, см. app/adts.py).
     """
+    from app import adts
+
+    if adts.wants_adts(request) and adts.is_mp4_audio(path, media_type):
+        converted = await adts.adts_for_local(path)
+        if converted:
+            path, media_type = converted, adts.ADTS_MEDIA_TYPE
     size = os.path.getsize(path)
     has_range = bool(request.headers.get("range"))
 
@@ -1976,7 +1986,7 @@ async def _serve_file(path: str, media_type: str, request: Request) -> Response:
         "Accept-Ranges": "bytes",
         # Кэш-файл неизменен для данного video_id — разрешаем браузеру кэшировать
         # (повторное прослушивание не бьёт по бэку вовсе).
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": cache_control or "public, max-age=86400",
         "ETag": etag,
     }
     if storage.if_none_match_matches(request, etag):
@@ -2579,7 +2589,20 @@ async def stream_ytmusic(video_id: str, request: Request):
     except HTTPException as exc:
         timing.finish(video_id, None, str(exc.status_code))
         raise
-    return timing.finish(video_id, response)
+    return timing.finish(video_id, _keep_fmt(response, request))
+
+
+def _keep_fmt(response, request: Request):
+    """Переносит ?fmt=adts в 307 на Soulseek/SoundCloud: иначе трек, ушедший
+    туда, потерял бы быстрый для iOS формат (см. app/adts.py)."""
+    from app import adts
+
+    if not adts.wants_adts(request) or getattr(response, "status_code", None) != 307:
+        return response
+    location = response.headers.get("location")
+    if location and "fmt=" not in location:
+        response.headers["location"] = f"{location}{'&' if '?' in location else '?'}fmt=adts"
+    return response
 
 
 async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming):

@@ -898,6 +898,20 @@ async def minio_range_response_async(
         # когда этот URL переключится на вариант (см. low_variant_for_stream).
         common_headers["Cache-Control"] = f"private, max-age={max_age}"
 
+    # ?fmt=adts — PWA на iOS: тот же AAC без MP4-контейнера, с которым Safari
+    # стартует в разы быстрее (см. app/adts.py). Не вышло — отдаём оригинал.
+    from app import adts
+
+    if adts.wants_adts(request) and adts.is_mp4_audio(file_path, mime_type):
+        converted = await adts.adts_for_object(file_path, etag)
+        if converted:
+            from app.routers.ytdlp import _serve_file
+
+            return await _serve_file(
+                converted, adts.ADTS_MEDIA_TYPE, request,
+                cache_control=common_headers["Cache-Control"] if max_age is not None else None,
+            )
+
     if if_none_match_matches(request, etag):
         return Response(status_code=304, headers=common_headers)
 
