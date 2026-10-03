@@ -21,6 +21,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 )
 // Сторож в index.html: бандл исполнился, восстанавливать нечего.
 window.__boltBooted = true
+// Заставка из index.html: снимаем, когда React успел отрисовать первый кадр.
+requestAnimationFrame(() => window.__bootSplashHide?.())
 
 // Service worker: app-shell (см. public/sw.js). Он кэширует только каркас
 // (HTML, /assets, шрифты, иконки) для мгновенного старта PWA; аудио, API и

@@ -49,6 +49,18 @@
     <!-- Фон до загрузки бандла CSS: иначе после сплэша iOS на мгновение
          показывает белый WebView. Цвет — как у сплэша (make_splash.py). -->
     <style>html, body { background-color: #000; }</style>
+    <!-- Заставка загрузки: продолжает статичный сплэш iOS (тот же логотип,
+         размер и место — ICON_SHARE / ICON_Y / CORNER из make_splash.py),
+         поэтому подмена PNG на HTML не видна, а дальше из сердца бьют
+         молнии, пока не стартует бандл. -->
+    <style>
+      #boot-splash { position: fixed; inset: 0; z-index: 9999; background: #000; pointer-events: none; transition: opacity 180ms cubic-bezier(.165, .84, .44, 1); }
+      #boot-splash.is-hiding { opacity: 0; }
+      #boot-splash svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+      #boot-splash .boot-logo { position: absolute; left: 50%; top: 48.5%; width: min(24.5vw, 112px); aspect-ratio: 1; transform: translate(-50%, -50%); }
+      #boot-splash .boot-logo img { position: relative; display: block; width: 100%; height: 100%; border-radius: 22.5%; }
+      #boot-splash .boot-glow { position: absolute; inset: -60%; border-radius: 50%; background: radial-gradient(closest-side, rgba(135, 93, 244, .55), rgba(135, 93, 244, 0)); opacity: 0; }
+    </style>
     <!-- Сторож загрузки. SW на медленной сети отдаёт index.html из кэша, и
          тот может ссылаться на бандл прошлого деплоя, которого на сервере уже
          нет: модуль не исполнится, React не стартует — чёрный экран навсегда.
@@ -72,6 +84,7 @@
         }
         function showFallback() {
           if (window.__boltBooted || document.getElementById('boot-fallback')) return
+          if (window.__bootSplashHide) window.__bootSplashHide()
           if (!document.body) return void document.addEventListener('DOMContentLoaded', showFallback)
           var box = document.createElement('div')
           box.id = 'boot-fallback'
@@ -91,6 +104,98 @@
     </script>
   </head>
   <body>
+    <div id="boot-splash" aria-hidden="true">
+      <svg></svg>
+      <div class="boot-logo"><div class="boot-glow"></div><img src="/icon-192-v2.webp" alt="" /></div>
+    </div>
+    <script>
+      (function () {
+        var root = document.getElementById('boot-splash')
+        var svg = root.querySelector('svg')
+        var logo = root.querySelector('.boot-logo')
+        var glow = root.querySelector('.boot-glow')
+        var NS = 'http://www.w3.org/2000/svg'
+        var MIN_SHOW_MS = 600 // от начала навигации: хотя бы один разряд успевает сверкнуть
+        var timer = 0
+        var lastAngle = 0
+        var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches
+        var canAnimate = !reduced && typeof Element.prototype.animate === 'function'
+
+        // Ломаная от края сердца наружу: шаг вдоль луча, поперечный разброс.
+        function zigzag(x, y, angle, length, steps) {
+          var dx = Math.cos(angle), dy = Math.sin(angle)
+          var pts = [[x, y]]
+          for (var i = 1; i <= steps; i++) {
+            var t = i / steps
+            var jitter = i === steps ? 0 : (Math.random() - 0.5) * length * 0.22
+            pts.push([x + dx * length * t - dy * jitter, y + dy * length * t + dx * jitter])
+          }
+          return pts
+        }
+
+        function toPath(pts) {
+          return 'M' + pts.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1) }).join('L')
+        }
+
+        // Два штриха вместо filter: широкий полупрозрачный — свечение, узкий — ядро.
+        function drawBolt(d, width) {
+          var g = document.createElementNS(NS, 'g')
+          ;[[width * 4, '#875df4', 0.35], [width, '#e4dbff', 1]].forEach(function (s) {
+            var p = document.createElementNS(NS, 'path')
+            p.setAttribute('d', d)
+            p.setAttribute('fill', 'none')
+            p.setAttribute('stroke', s[1])
+            p.setAttribute('stroke-opacity', s[2])
+            p.setAttribute('stroke-width', s[0])
+            p.setAttribute('stroke-linecap', 'round')
+            p.setAttribute('stroke-linejoin', 'round')
+            p.setAttribute('pathLength', '1')
+            p.setAttribute('stroke-dasharray', '1')
+            g.appendChild(p)
+            // Удар: линия «вылетает» из сердца за 140ms, резкий старт — ease-out-quart.
+            p.animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], { duration: 140, easing: 'cubic-bezier(.165, .84, .44, 1)', fill: 'forwards' })
+          })
+          // Затухание с мерцанием, как у настоящего разряда.
+          g.animate([{ opacity: 1 }, { opacity: 1, offset: 0.3 }, { opacity: 0.35, offset: 0.45 }, { opacity: 0.9, offset: 0.55 }, { opacity: 0 }], { duration: 420, easing: 'ease-out' })
+            .onfinish = function () { g.remove() }
+          svg.appendChild(g)
+        }
+
+        function strike() {
+          var box = logo.getBoundingClientRect()
+          var cx = box.left + box.width / 2, cy = box.top + box.height / 2
+          var reach = Math.min(innerWidth, innerHeight) * 0.42
+          var count = Math.random() < 0.4 ? 2 : 1
+          for (var i = 0; i < count; i++) {
+            // Новый луч — не ближе 60° к прошлому, чтобы разряды не били в одно место.
+            var angle = lastAngle + Math.PI / 3 + Math.random() * Math.PI * 4 / 3
+            lastAngle = angle
+            var r0 = box.width * 0.42
+            var length = reach * (0.55 + Math.random() * 0.45)
+            var pts = zigzag(cx + Math.cos(angle) * r0, cy + Math.sin(angle) * r0, angle, length, 6 + Math.floor(Math.random() * 4))
+            drawBolt(toPath(pts), 1.6)
+            if (Math.random() < 0.55) {
+              var from = pts[2 + Math.floor(Math.random() * 2)]
+              var side = Math.random() < 0.5 ? -1 : 1
+              drawBolt(toPath(zigzag(from[0], from[1], angle + side * (0.4 + Math.random() * 0.3), length * 0.4, 4)), 1.1)
+            }
+          }
+          glow.animate([{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 0 }], { duration: 400, easing: 'ease-out' })
+          timer = setTimeout(strike, 420 + Math.random() * 280)
+        }
+
+        window.__bootSplashHide = function () {
+          window.__bootSplashHide = null
+          var wait = Math.max(0, MIN_SHOW_MS - performance.now())
+          setTimeout(function () {
+            root.classList.add('is-hiding')
+            setTimeout(function () { clearTimeout(timer); root.remove() }, 200)
+          }, wait)
+        }
+
+        if (canAnimate) timer = setTimeout(strike, 80)
+      })()
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
