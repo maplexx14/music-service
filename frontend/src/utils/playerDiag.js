@@ -121,3 +121,51 @@ export function clearDiag() {
     /* noop */
   }
 }
+
+// Сетевые запросы потока трека — чтобы по логу с телефона отличить медленную
+// сеть от медленного сервера и от самого Safari. WebKit на один трек шлёт
+// несколько Range-запросов подряд, и старт ждёт их все: в логе видно, когда
+// ушёл каждый (start, мс от назначения src), сколько ждали первый байт (ttfb),
+// сколько шло тело (dur), объём (kb) и время бэкенда из Server-Timing (srv).
+// Записи берём наблюдателем, а не из performance.getEntries: буфер Resource
+// Timing (250 записей) PWA забивает обложками, и запросы аудио туда уже не
+// попадают.
+const streamEntries = []
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (!entry.name.includes('/stream')) continue
+      streamEntries.push(entry)
+      if (streamEntries.length > 40) streamEntries.shift()
+    }
+  }).observe({ type: 'resource', buffered: true })
+} catch {
+  /* нет PerformanceObserver — диагностика сети просто не пишется */
+}
+
+export function diagStreamRequests(src, since) {
+  if (!src) return
+  let path
+  try {
+    path = new URL(src, location.href).pathname
+  } catch {
+    return
+  }
+  const own = streamEntries.filter(
+    (entry) => entry.name.includes(path) && entry.startTime >= since - 50,
+  )
+  // Запросы могут ещё не закрыться к моменту 'playing' (тело Range-ответа
+  // качается дальше) — отметим это, а не потеряем запрос.
+  const rows = own.slice(-8).map((entry) => {
+    const ttfb = entry.responseStart > 0 ? Math.round(entry.responseStart - entry.startTime) : '?'
+    const srv = (entry.serverTiming || []).find((timing) => timing.name === 'total')
+    return [
+      `+${Math.round(entry.startTime - since)}`,
+      `ttfb=${ttfb}`,
+      `dur=${Math.round(entry.duration)}`,
+      `kb=${Math.round((entry.encodedBodySize || entry.transferSize || 0) / 1024)}`,
+      srv ? `srv=${Math.round(srv.duration)}` : null,
+    ].filter(Boolean).join('/')
+  })
+  diag('net', { n: own.length, req: rows.join(' ') || 'none' })
+}
