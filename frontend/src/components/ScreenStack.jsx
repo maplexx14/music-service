@@ -3,7 +3,7 @@ import { useLocation, useNavigationType } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import Spinner from './Spinner'
 import { ScreenContext } from '../hooks/useScreen'
-import { TAB_ROOTS, isTabRoot } from '../services/navigation'
+import { TAB_ROOTS, entryAt, entryIndexOf, isTabRoot } from '../services/navigation'
 
 // Стек экранов, как в Telegram: корни вкладок не размонтируются при уходе,
 // а прячутся. Свайп между вкладками или «Назад» к вкладке показывает под
@@ -14,19 +14,29 @@ import { TAB_ROOTS, isTabRoot } from '../services/navigation'
 // - tab:<путь> — корень вкладки; после первого показа живёт до конца сессии.
 //   С warmTabs остальные вкладки монтируются заранее, по одной в простое,
 //   чтобы соседняя была готова к первому же свайпу.
-// - detail — все вложенные экраны (артист, альбом, плейлист, настройки) в
-//   одном слоте: он есть, только пока открыт вложенный экран.
+// - detail:<индекс записи истории> — вложенные экраны (артист, альбом,
+//   плейлист, настройки). Живут текущий и тот, что под ним в истории: свайп
+//   «Назад» показывает его под пальцем, а возврат на него мгновенный, с
+//   прежней прокруткой. Глубже стек не держим — память. После «Назад»
+//   следующий нижний экран досоздаётся в простое, а не в коммите возврата.
+//   Смена query на том же экране (REPLACE) индекс не меняет — экран тот же.
+//   Исключение — настройки: меню и разделы — один экран на все записи, как
+//   и один маршрут в App.jsx, иначе несохранённые предпочтения терялись бы.
 //
 // У каждого экрана свой контейнер прокрутки (.screen-scroll), поэтому скрытые
 // вкладки сохраняют позицию сами. Скрыты они через visibility: раскладка
 // остаётся готовой, и показать экран под пальцем можно без пересчёта.
 
 export const tabScreenId = (path) => `tab:${path}`
-export const DETAIL_SCREEN_ID = 'detail'
+// Слот вложенного экрана для записи истории idx с локацией location.
+export const detailScreenId = (idx, location) =>
+  location?.pathname.startsWith('/settings') ? 'detail:settings' : `detail:${idx}`
+const isDetailId = (id) => id.startsWith('detail:')
 
 // Позиции прокрутки вложенного экрана по ключу записи истории: «Назад»
-// возвращает туда, откуда ушёл, вперёд — сверху. Вкладкам не нужно: их
-// контейнер не размонтируется.
+// возвращает туда, откуда ушёл, вперёд — сверху. Живым экранам это не
+// нужно — их контейнер помнит позицию сам; нужно экрану, созданному заново
+// (глубже двух вложенных или после перезагрузки).
 const RESTORE_WINDOW_MS = 1200
 const MAX_POSITIONS = 100
 const positions = new Map()
@@ -109,7 +119,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   // Подложка под статус-бар: контент уезжает под часы не «голым», а под
   // матовую полосу. Главной не нужна — её hero заходит под статус-бар.
   const safeTop = isMobile && path !== '/' && !topbar
-  useDetailScrollRestoration(scrollerRef, location, id === DETAIL_SCREEN_ID)
+  useDetailScrollRestoration(scrollerRef, location, isDetailId(id))
 
   return (
     <div
@@ -159,12 +169,43 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
   // Последняя локация каждой вкладки: скрытый экран рендерится со своей,
   // а не с текущей, — его маршрут не должен меняться под чужой путь.
   const tabLocationsRef = useRef(new Map())
+  // Смонтированные вложенные экраны: id слота → { idx, location }.
+  const detailsRef = useRef(new Map())
 
   const currentIsTab = isTabRoot(location.pathname)
   if (currentIsTab) {
     mountedTabsRef.current.add(location.pathname)
     tabLocationsRef.current.set(location.pathname, location)
   }
+
+  const idx = entryIndexOf(location.key)
+  const currentId = currentIsTab ? null : detailScreenId(idx, location)
+  const below = entryAt(idx - 1)
+  const belowId = !currentIsTab && below && !isTabRoot(below.pathname) ? detailScreenId(idx - 1, below) : null
+  const belowSeparate = belowId && belowId !== currentId
+  {
+    const details = detailsRef.current
+    const keep = new Map()
+    if (currentId) {
+      keep.set(currentId, { idx, location })
+      // Нижний остаётся, если уже смонтирован (был текущим до перехода вперёд).
+      if (belowSeparate && details.has(belowId)) keep.set(belowId, { idx: idx - 1, location: below })
+    }
+    detailsRef.current = keep
+  }
+
+  // После «Назад» нижнего вложенного экрана ещё нет — создаём в простое,
+  // чтобы рендер страницы не лёг на сам переход.
+  const needsBelow = belowSeparate && !detailsRef.current.has(belowId)
+  useEffect(() => {
+    if (!needsBelow) return undefined
+    const handle = idle(() => {
+      if (entryIndexOf(location.key) !== idx || entryAt(idx - 1) !== below) return
+      detailsRef.current.set(belowId, { idx: idx - 1, location: below })
+      forceUpdate()
+    })
+    return () => cancelIdle(handle)
+  }, [needsBelow, idx, below, belowId, location.key])
 
   useEffect(() => {
     if (!warmTabs) return undefined
@@ -194,6 +235,8 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
     return saved
   }
 
+  const details = [...detailsRef.current.entries()].sort(([, a], [, b]) => a.idx - b.idx)
+
   return (
     <>
       {TAB_ROOTS.filter((path) => mountedTabsRef.current.has(path)).map((path) => (
@@ -207,17 +250,17 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
           onBack={onBack}
         />
       ))}
-      {!currentIsTab && (
+      {details.map(([id, entry]) => (
         <Screen
-          key={DETAIL_SCREEN_ID}
-          id={DETAIL_SCREEN_ID}
-          location={location}
-          active
+          key={id}
+          id={id}
+          location={entry.location}
+          active={id === currentId}
           isMobile={isMobile}
           renderRoutes={renderRoutes}
           onBack={onBack}
         />
-      )}
+      ))}
     </>
   )
 }

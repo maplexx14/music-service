@@ -225,21 +225,26 @@ let activeTransition = null
 
 // Записи истории этой сессии по индексу (history.state.idx): какой экран
 // лежит под текущим. Свайп «Назад» показывает его под пальцем, если он
-// смонтирован (корни вкладок — всегда). После перезагрузки страницы прошлые
-// записи неизвестны — тогда null.
+// смонтирован (ScreenStack держит вкладки и предыдущий вложенный экран).
+// После перезагрузки страницы прошлые записи неизвестны — тогда null.
+//
+// Индекс записи по ключу локации запоминается здесь, в момент навигации:
+// роутер коммитит экран позже (startTransition), и history.state к рендеру
+// может уже указывать на следующую запись.
 const entries = []
+const indexByKey = new Map()
 const currentIdx = () => window.history.state?.idx ?? 0
 
 function recordEntry(location, action) {
   const idx = currentIdx()
   if (action === 'PUSH') entries.length = idx
   if (action !== 'POP' || !entries[idx]) entries[idx] = location
+  indexByKey.set(location.key, idx)
 }
 
-export function previousEntry() {
-  const idx = currentIdx()
-  return idx > 0 ? entries[idx - 1] ?? null : null
-}
+export const entryIndexOf = (key) => indexByKey.get(key) ?? currentIdx()
+
+export const entryAt = (idx) => (idx >= 0 ? entries[idx] ?? null : null)
 
 // Новый жест поверх доигрывающего перехода: анимацию сразу доводим до конца
 // (живой экран вместо снапшотов), чтобы касание не ждало её окончания.

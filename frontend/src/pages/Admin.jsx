@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
+import { useScreen } from '../hooks/useScreen'
 import defaultCover from '../assets/default-cover.svg'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Admin.css'
@@ -162,6 +163,9 @@ function formatLastSeen(value) {
 }
 
 function Admin() {
+  const { active: screenActive } = useScreen()
+  const screenActiveRef = useRef(screenActive)
+  screenActiveRef.current = screenActive
   const [stats, setStats] = useState({ users_count: 0, online_users_count: 0, tracks_count: 0, artists_count: 0 })
   const [users, setUsers] = useState([])
   const [usersTotal, setUsersTotal] = useState(0)
@@ -260,7 +264,8 @@ function Admin() {
   useEffect(() => {
     fetchNowPlaying()
     const interval = window.setInterval(() => {
-      if (document.visibilityState === 'visible') fetchNowPlaying()
+      // Экран скрыт под другим вложенным (ScreenStack) — не опрашиваем.
+      if (document.visibilityState === 'visible' && screenActiveRef.current) fetchNowPlaying()
     }, NOW_PLAYING_POLL_MS)
     return () => window.clearInterval(interval)
   }, [])

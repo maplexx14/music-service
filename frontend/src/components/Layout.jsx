@@ -3,9 +3,9 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
-import { isTabRoot, tabOf, canGoBack, isStandalone, previousEntry } from '../services/navigation'
+import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
-import ScreenStack, { tabScreenId } from './ScreenStack'
+import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import Sidebar from './Sidebar'
 import Player from './Player'
 import ToastContainer from './Toast'
@@ -160,11 +160,18 @@ function Layout({ renderRoutes }) {
   const tabIndex = MOBILE_NAV.findIndex(({ to }) => to === location.pathname)
   const prevTab = tabIndex > 0 ? MOBILE_NAV[tabIndex - 1].to : null
   const nextTab = tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? MOBILE_NAV[tabIndex + 1].to : null
-  // Экран, который окажется под пальцем: вкладка, куда ведёт «Назад», или
-  // соседняя вкладка. Вложенный экран под вложенным не хранится — там свайп
-  // доигрывает переход без живого экрана под пальцем.
-  const backPath = canGoBack() ? previousEntry()?.pathname : tabOf(location.pathname)
-  const backTarget = backPath && isTabRoot(backPath) ? tabScreenId(backPath) : null
+  // Экран, который окажется под пальцем: тот, куда ведёт «Назад» (вкладка
+  // или нижний вложенный экран), или соседняя вкладка. Если его ещё нет в
+  // стеке (только что вернулись, нижний досоздаётся в простое), свайп
+  // доигрывает переход View Transition.
+  let backTarget = null
+  if (showMobileBack) {
+    const entryIdx = entryIndexOf(location.key)
+    const below = canGoBack() ? entryAt(entryIdx - 1) : null
+    const backPath = canGoBack() ? below?.pathname : tabOf(location.pathname)
+    if (backPath && isTabRoot(backPath)) backTarget = tabScreenId(backPath)
+    else if (below) backTarget = detailScreenId(entryIdx - 1, below)
+  }
   useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
     onBack: showMobileBack ? goBack : null,
