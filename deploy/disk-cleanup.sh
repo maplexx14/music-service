@@ -10,9 +10,12 @@
 #   - ytdlp_cache: бэкенд держит LRU-потолок (YTDLP_CACHE_MAX_MB), но
 #     применяет его только при записи нового файла, а .warm/.part-хвосты
 #     прерванных загрузок никто не убирает;
-#   - slskd_downloads: Soulseek-файлы лежат там вечно. Обычные уже унесены в
-#     MinIO (adopt), крупные FLAC (> ARCHIVE_MAX_AUDIO_BYTES) — нет, но
-#     бэкенд ищет файл по имени и при пропаже просто скачает его заново;
+#   - slskd_downloads: фоновый сборщик библиотеки (slsk_harvest) качает
+#     больше 1 ГБ в час. Файлы до ARCHIVE_MAX_AUDIO_BYTES через минуты после
+#     докачки уносятся в MinIO (adopt) — локальная копия дальше не нужна и
+#     удаляется через SLSKD_ADOPTED_MIN. Крупные FLAC в MinIO не попадают;
+#     их убирает retention самого slskd (slskd/slskd.yml) или срок ниже, а
+#     бэкенд при пропаже просто скачает файл у пира заново;
 #   - MinIO: архив треков. Его скрипт НЕ трогает — это не кэш, объекты
 #     привязаны к записям в БД. При нехватке места только пишет предупреждение.
 #
@@ -24,6 +27,11 @@
 #   MIN_FREE_GB        порог аварийного режима, ГБ (по умолчанию 6)
 #   YTDLP_KEEP_DAYS    сколько дней держать файлы кэша стрима (14; аварийно 3)
 #   SLSKD_KEEP_DAYS    сколько дней держать скачанное Soulseek (7; аварийно 1)
+#   SLSKD_ADOPTED_MIN  через сколько минут удалять файлы, уже унесённые в
+#                      MinIO (60: закачка сборщика ждёт до 45 мин, adopt —
+#                      сразу после неё)
+#   SLSKD_ADOPT_MAX_MB лимит размера архива, как ARCHIVE_MAX_AUDIO_BYTES у
+#                      бэкенда (60): файлы крупнее в MinIO не уносятся
 #   IMAGE_KEEP_HOURS   неиспользуемые образы и build cache моложе этого не
 #                      трогаем — быстрый откат и пересборка (72; аварийно 0)
 #   DRY_RUN=1          только показать, что было бы удалено
@@ -34,6 +42,8 @@ VOLUME_PREFIX="${VOLUME_PREFIX:-music-service_}"
 MIN_FREE_GB="${MIN_FREE_GB:-6}"
 YTDLP_KEEP_DAYS="${YTDLP_KEEP_DAYS:-14}"
 SLSKD_KEEP_DAYS="${SLSKD_KEEP_DAYS:-7}"
+SLSKD_ADOPTED_MIN="${SLSKD_ADOPTED_MIN:-60}"
+SLSKD_ADOPT_MAX_MB="${SLSKD_ADOPT_MAX_MB:-60}"
 IMAGE_KEEP_HOURS="${IMAGE_KEEP_HOURS:-72}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -76,6 +86,9 @@ clean_pass() {
   log "ytdlp_cache: удалено старше ${ytdlp_days} дн.: $n"
 
   slskd="$(volume_dir slskd_downloads)"
+  # -size -Nk у find — строго меньше N КиБ-блоков, отсюда +1.
+  n=$(sweep "$slskd" -type f -mmin "+$SLSKD_ADOPTED_MIN" -size "-$((SLSKD_ADOPT_MAX_MB * 1024 + 1))k")
+  log "slskd_downloads: удалено унесённых в MinIO: $n"
   n=$(sweep "$slskd" -type f -mtime "+$slskd_days")
   log "slskd_downloads: удалено старше ${slskd_days} дн.: $n"
   if [[ "$DRY_RUN" != "1" && -n "$slskd" && -d "$slskd" ]]; then
