@@ -17,8 +17,8 @@ function detect() {
     // рендер пойдёт через софтверный фолбэк (Chrome/Firefox). Сам отказ —
     // и есть ответ.
     const gl =
-      canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true }) ||
-      canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: true })
+      canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true, powerPreference: 'low-power' }) ||
+      canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: true, powerPreference: 'low-power' })
     if (!gl) return true
     const info = gl.getExtension('WEBGL_debug_renderer_info')
     const renderer = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
