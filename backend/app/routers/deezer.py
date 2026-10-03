@@ -32,10 +32,10 @@ from typing import Optional
 import httpx
 from Crypto.Cipher import Blowfish
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from app.artist_utils import same_artist, to_latin
-from app.cache import get_cache_async, set_cache_async
+from app.cache import delete_cache, get_cache_async, set_cache_async
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,6 @@ _session: dict = {}
 _session_lock = asyncio.Lock()
 _bad_arl_until = 0.0
 _match_inflight: dict[str, asyncio.Task] = {}
-_download_locks: dict[str, asyncio.Lock] = {}
 _adopt_inflight: set[str] = set()
 
 
@@ -539,8 +538,13 @@ def is_full_length(size: int, duration: int) -> bool:
     return size >= duration * _MP3_128_BYTES_PER_SEC * 0.8
 
 
-async def _download(sng_id: str, dest: str) -> None:
-    """Скачивает и расшифровывает трек в ``dest`` (через .part)."""
+async def _download(sng_id: str, dest: str, on_start=None) -> None:
+    """Скачивает и расшифровывает трек в ``dest`` (через .part).
+
+    ``on_start(part, total)`` зовётся, когда CDN ответил и размер сверен: с
+    этого момента .part растёт расшифрованными байтами (flush на каждой
+    пачке), и его можно отдавать слушателю, не дожидаясь конца закачки.
+    """
     url, real_id, expected, duration = await _media_url(sng_id)
     key = _bf_key(real_id)
     # Свой .part на каждую загрузку: блокировка в fetch_to_cache живёт внутри
@@ -555,6 +559,16 @@ async def _download(sng_id: str, dest: str) -> None:
         with open(part, "wb") as fh:
             async with _client.stream("GET", url) as r:
                 r.raise_for_status()
+                # Превью и обрезки ловим по заголовку, ДО первого байта
+                # слушателю: позже отказ уже не переключит цепочку стрима.
+                length = int(r.headers.get("content-length") or 0)
+                if expected and length and length != expected:
+                    raise DeezerError(f"{sng_id}: CDN отдаёт {length} из {expected} байт")
+                total = expected or length
+                if total and not is_full_length(total, duration):
+                    raise DeezerError(f"{sng_id}: {total} байт на {duration} с — похоже на превью")
+                if total and on_start is not None:
+                    await on_start(part, total)
                 async for data in r.aiter_bytes():
                     buf += data
                     while len(buf) >= _CHUNK:
@@ -562,6 +576,7 @@ async def _download(sng_id: str, dest: str) -> None:
                         buf = buf[_CHUNK:]
                         index += 1
                         written += _CHUNK
+                    fh.flush()
                     if written > _MAX_BYTES:
                         raise DeezerError(f"{sng_id} больше {_MAX_BYTES} байт")
             if buf:
@@ -580,20 +595,56 @@ async def _download(sng_id: str, dest: str) -> None:
                 pass
 
 
-async def fetch_to_cache(video_id: str, sng_id: str, replace: bool = False) -> Optional[str]:
-    """Путь к расшифрованному MP3 трека в дисковом кэше ytdlp или None.
+class _Fetch:
+    """Идущая в этом процессе закачка трека в дисковый кэш.
 
-    Один трек качается один раз: браузер шлёт на трек несколько Range-запросов
-    подряд, остальные ждут первый на блокировке и получают готовый файл.
-
-    ``replace`` — в кэше может лежать копия с YouTube (возможно, цензурная):
-    она не считается готовой, а после скачивания удаляется с диска и из MinIO
-    (см. replace_youtube_copy).
+    ``started`` — (путь .part, полный размер), как только байты потекли, или
+    None (отказ либо размер заранее неизвестен — тогда ждать ``task``).
+    ``task`` — путь к готовому файлу или None.
     """
+
+    def __init__(self) -> None:
+        self.started: asyncio.Future = asyncio.get_running_loop().create_future()
+        self.task: Optional[asyncio.Task] = None
+
+
+_fetches: dict[str, _Fetch] = {}
+
+
+def _progress_key(video_id: str) -> str:
+    return f"deezer:dl:{video_id}"
+
+
+# Сколько живёт отметка о закачке в Redis (её видят другие воркеры). Трек
+# качается секунды; TTL — страховка от воркера, умершего посреди закачки.
+_PROGRESS_TTL = 300
+
+
+def _start_fetch(video_id: str, sng_id: str, replace: bool = False) -> _Fetch:
+    """Закачка трека: уже идущая в процессе или новая."""
+    fetch = _fetches.get(video_id)
+    if fetch is not None:
+        return fetch
+    fetch = _Fetch()
+    _fetches[video_id] = fetch
+    fetch.task = asyncio.create_task(_fetch_job(video_id, sng_id, replace, fetch))
+    fetch.task.add_done_callback(lambda _t: _fetches.pop(video_id, None))
+    return fetch
+
+
+async def _fetch_job(video_id: str, sng_id: str, replace: bool, fetch: _Fetch) -> Optional[str]:
     from app.routers.ytdlp import CACHE_DIR, _cached_file, _enforce_cache_limit
 
-    lock = _download_locks.setdefault(video_id, asyncio.Lock())
-    async with lock:
+    async def on_start(part: str, total: int) -> None:
+        # Отметка для других воркеров: Range-запросы того же трека приходят
+        # куда попало и должны читать этот .part, а не качать трек заново.
+        await set_cache_async(
+            _progress_key(video_id), {"part": part, "total": total}, expire=_PROGRESS_TTL
+        )
+        if not fetch.started.done():
+            fetch.started.set_result((part, total))
+
+    try:
         ready = _cached_file(video_id)
         if ready and (not replace or ready.endswith(".mp3")):
             return ready
@@ -602,13 +653,11 @@ async def fetch_to_cache(video_id: str, sng_id: str, replace: bool = False) -> O
         dest = os.path.join(CACHE_DIR, f"{video_id}.mp3")
         started = time.monotonic()
         try:
-            await _download(sng_id, dest)
+            await _download(sng_id, dest, on_start)
         except Exception as exc:  # noqa: BLE001 — цепочка стрима пойдёт дальше
             logger.warning("deezer download failed for %s (deezer %s): %s", video_id, sng_id, exc)
             await set_cache_async(f"deezer:fail:{video_id}", {"error": str(exc)[:200]}, expire=_FAIL_TTL)
             return None
-        finally:
-            _download_locks.pop(video_id, None)
         logger.info(
             "deezer %s → %s: %d B за %.1f с",
             sng_id, video_id, os.path.getsize(dest), time.monotonic() - started,
@@ -618,6 +667,139 @@ async def fetch_to_cache(video_id: str, sng_id: str, replace: bool = False) -> O
         await asyncio.to_thread(_enforce_cache_limit)
         _schedule_adopt(video_id, dest, replace=replace)
         return dest
+    finally:
+        if fetch.started.done():
+            await asyncio.to_thread(delete_cache, _progress_key(video_id))
+        else:
+            fetch.started.set_result(None)
+
+
+async def fetch_to_cache(video_id: str, sng_id: str, replace: bool = False) -> Optional[str]:
+    """Путь к расшифрованному MP3 трека в дисковом кэше ytdlp или None.
+
+    Один трек качается один раз на процесс: параллельные вызовы (прогрев,
+    Range-запросы стрима) ждут ту же закачку.
+
+    ``replace`` — в кэше может лежать копия с YouTube (возможно, цензурная):
+    она не считается готовой, а после скачивания удаляется с диска и из MinIO
+    (см. replace_youtube_copy).
+    """
+    return await asyncio.shield(_start_fetch(video_id, sng_id, replace).task)
+
+
+# Сколько отдача растущего .part ждёт новых байт, прежде чем оборвать ответ.
+_GROWTH_STALL_TIMEOUT = 20.0
+_GROWTH_POLL = 0.05
+_GROWTH_READ = 64 * 1024
+
+
+async def _foreign_progress(video_id: str) -> Optional[tuple[str, int]]:
+    """Закачка этого трека, идущая в другом воркере: (путь .part, размер)."""
+    progress = await get_cache_async(_progress_key(video_id))
+    if not progress:
+        return None
+    part, total = progress.get("part"), progress.get("total")
+    try:
+        # .part, переставший расти, — от умершего воркера: на него не садимся.
+        fresh = time.time() - os.path.getmtime(part) < 10
+    except (OSError, TypeError):
+        return None
+    return (part, int(total)) if fresh and total else None
+
+
+def _serve_growing(video_id: str, part: str, total: int, request: Request) -> Response:
+    """Отдаёт трек из .part, пока тот докачивается (Range поддерживается).
+
+    Размер известен заранее (сверен с CDN), поэтому Content-Length честный, и
+    плеер видит длительность и перематывает как по готовому файлу: запрошенные
+    байты, которых ещё нет, отдаются по мере появления. Закачка оборвалась —
+    обрывается и ответ, плеер переспросит, и стрим пойдёт дальше по цепочке.
+    """
+    from app.routers.ytdlp import _parse_range
+
+    has_range = bool(request.headers.get("range"))
+    start, end = _parse_range(request.headers.get("range"), total)
+    end = total - 1 if end is None else min(end, total - 1)
+    common = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"}
+    if start >= total:
+        return Response(status_code=416, headers={**common, "Content-Range": f"bytes */{total}"})
+    if start > end:
+        has_range = False
+        start, end = 0, total - 1
+    dest = part.rsplit(".", 2)[0]  # {dest}.{pid}-{uuid}.part
+    try:
+        # Открываем сразу: дескриптор переживает os.replace в готовый файл.
+        fd = os.open(part, os.O_RDONLY)
+    except OSError:
+        fd = None
+
+    async def gen():
+        nonlocal fd
+        if fd is None:
+            # Закачка уже кончилась (.part стал файлом) или упала.
+            try:
+                fd = os.open(dest, os.O_RDONLY)
+            except OSError:
+                logger.warning("deezer %s: закачка пропала до отдачи", video_id)
+                return
+        pos = start
+        stalled_since = None
+        try:
+            while pos <= end:
+                size = os.fstat(fd).st_size
+                if size > pos:
+                    data = await asyncio.to_thread(
+                        os.pread, fd, min(_GROWTH_READ, end + 1 - pos, size - pos), pos
+                    )
+                    pos += len(data)
+                    stalled_since = None
+                    yield data
+                    continue
+                now = time.monotonic()
+                if stalled_since is None:
+                    stalled_since = now
+                elif now - stalled_since > 1.0 and not (
+                    os.path.exists(part) or os.path.exists(dest)
+                ):
+                    # Писатель удалил .part, не переименовав: закачка упала.
+                    logger.warning("deezer %s: закачка оборвалась на %d из %d", video_id, size, total)
+                    return
+                elif now - stalled_since > _GROWTH_STALL_TIMEOUT:
+                    logger.warning("deezer %s: закачка встала на %d из %d", video_id, size, total)
+                    return
+                await asyncio.sleep(_GROWTH_POLL)
+        finally:
+            os.close(fd)
+
+    headers = {**common, "Content-Length": str(end - start + 1)}
+    status_code = 200
+    if has_range:
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+    return StreamingResponse(gen(), status_code=status_code, media_type="audio/mpeg", headers=headers)
+
+
+async def _stream_download(
+    video_id: str, sng_id: str, request: Request, replace: bool = False
+) -> Optional[Response]:
+    """Ответ с треком из Deezer, не дожидаясь конца закачки, или None (отказ)."""
+    from app.routers.ytdlp import _cached_file, _serve_file
+
+    ready = _cached_file(video_id)
+    if ready and (not replace or ready.endswith(".mp3")):
+        return await _serve_file(ready, "audio/mpeg", request)
+    progress = None
+    if video_id not in _fetches:
+        progress = await _foreign_progress(video_id)
+    if progress is None:
+        fetch = _start_fetch(video_id, sng_id, replace)
+        progress = await asyncio.shield(fetch.started)
+        if progress is None:
+            # Отказ — или CDN не сказал размер, и отдавать можно лишь целиком.
+            path = await asyncio.shield(fetch.task)
+            return await _serve_file(path, "audio/mpeg", request) if path else None
+    part, total = progress
+    return _serve_growing(video_id, part, total, request)
 
 
 def _drop_other_cache_files(dest: str) -> None:
@@ -680,17 +862,11 @@ async def stream_for_ytmusic(video_id: str, request: Request) -> Optional[Respon
     sng_id = await await_deezer_match(video_id)
     if not sng_id or await _prefer_soundcloud_over_edited(video_id):
         return None
-    path = await fetch_to_cache(video_id, sng_id)
-    if not path:
-        return None
-    from app.routers.ytdlp import _serve_file
-
-    return await _serve_file(path, "audio/mpeg", request)
+    return await _stream_download(video_id, sng_id, request)
 
 
-# Сколько стрим уже скачанного трека ждёт матч Deezer. Своя копия играет
-# мгновенно — долго держать её ради проверки на цензуру нельзя; не успели —
-# поиск доедет в фоне, и копия заменится при следующем проигрывании.
+# Сколько фоновая замена копии ждёт матч Deezer: не успели — поиск доедет
+# сам, и копия заменится при следующем прогреве или проигрывании.
 _REPLACE_MATCH_WAIT = 1.5
 
 
@@ -711,6 +887,25 @@ async def replace_youtube_copy(video_id: str) -> Optional[str]:
         return None
     logger.info("replacing youtube copy of %s with explicit deezer %s", video_id, sng_id)
     return await fetch_to_cache(video_id, sng_id, replace=True)
+
+
+async def stream_replacing_youtube_copy(video_id: str, request: Request) -> Optional[Response]:
+    """Explicit-оригинал вместо копии с YouTube — только если ждать нечего.
+
+    Своя копия играет мгновенно, поэтому стрим не ждёт ни поиска матча, ни
+    конца закачки: матч уже известен и explicit — оригинал отдаётся по мере
+    закачки (и заменяет копию); иначе None — играет копия, а матч и замена
+    доезжают в фоне к следующему проигрыванию.
+    """
+    if not enabled():
+        return None
+    cached = await _cached_match(video_id)
+    if cached is None:
+        schedule_replace_youtube_copy(video_id)
+        return None
+    if not cached.get("sng_id") or not cached.get("explicit"):
+        return None
+    return await _stream_download(video_id, str(cached["sng_id"]), request, replace=True)
 
 
 def schedule_replace_youtube_copy(video_id: str) -> None:

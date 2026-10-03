@@ -340,7 +340,7 @@ def test_fetch_replace_drops_youtube_copy(monkeypatch, tmp_path):
         lambda vid, path, replace=False: adopted.append((vid, path, replace)),
     )
 
-    async def download(_sng_id, dest):
+    async def download(_sng_id, dest, on_start=None):
         with open(dest, "wb") as fh:
             fh.write(b"deezer")
 
@@ -356,7 +356,7 @@ def test_fetch_replace_drops_youtube_copy(monkeypatch, tmp_path):
     assert adopted == [("VIDEOID1", path, True)]
 
 
-def _setup_local_copy(monkeypatch, local_path, replaced):
+def _setup_local_copy(monkeypatch, local_path, replacement):
     monkeypatch.setattr(ytdlp, "_ytmusic", object())
 
     async def local_copy(_video_id):
@@ -365,43 +365,176 @@ def _setup_local_copy(monkeypatch, local_path, replaced):
     monkeypatch.setattr(ytdlp, "_local_copy_path", local_copy)
     calls = []
 
-    async def replace(video_id):
+    async def replace(video_id, request):
         calls.append(video_id)
-        return replaced
+        return replacement
 
-    monkeypatch.setattr(deezer, "replace_youtube_copy", replace)
-    served = []
-
-    async def serve(path, media_type, request):
-        served.append(path)
-        return "served"
-
-    monkeypatch.setattr(ytdlp, "_serve_file", serve)
-    return calls, served
-
-
-def test_stream_replaces_youtube_copy_with_explicit(monkeypatch):
-    calls, served = _setup_local_copy(
-        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.m4a", "/cache/VIDEOID1.mp3"
-    )
-
-    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "served"
-    assert calls == ["VIDEOID1"]
-    assert served == ["/cache/VIDEOID1.mp3"]
-
-
-def test_stream_keeps_non_youtube_copy(monkeypatch):
-    calls, _served = _setup_local_copy(
-        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.mp3", "/cache/VIDEOID1.mp3"
-    )
+    monkeypatch.setattr(deezer, "stream_replacing_youtube_copy", replace)
 
     async def cached_audio(request, cache_id, resolver, archive_key=None):
         return "local"
 
     monkeypatch.setattr(ytdlp, "stream_cached_audio", cached_audio)
+    return calls
+
+
+def test_stream_replaces_youtube_copy_with_explicit(monkeypatch):
+    calls = _setup_local_copy(
+        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.m4a", "explicit"
+    )
+
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "explicit"
+    assert calls == ["VIDEOID1"]
+
+
+def test_stream_plays_youtube_copy_while_match_is_unknown(monkeypatch):
+    calls = _setup_local_copy(monkeypatch, "minio://music/external/ytmusic/VIDEOID1.m4a", None)
+
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "local"
+    assert calls == ["VIDEOID1"]
+
+
+def test_stream_keeps_non_youtube_copy(monkeypatch):
+    calls = _setup_local_copy(
+        monkeypatch, "minio://music/external/ytmusic/VIDEOID1.mp3", "explicit"
+    )
 
     assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "local"
     assert calls == []
+
+
+def test_replacement_does_not_wait_for_unknown_match(monkeypatch):
+    _fake_cache(monkeypatch)
+    monkeypatch.setattr(deezer, "enabled", lambda: True)
+    scheduled = []
+    monkeypatch.setattr(deezer, "schedule_replace_youtube_copy", scheduled.append)
+
+    async def must_not_wait(*_a, **_kw):
+        raise AssertionError("стрим своей копии не ждёт поиска матча")
+
+    monkeypatch.setattr(deezer, "await_deezer_match", must_not_wait)
+
+    assert asyncio.run(deezer.stream_replacing_youtube_copy("VIDEOID1", _request())) is None
+    assert scheduled == ["VIDEOID1"]
+
+
+class _GatedStream:
+    """CDN Deezer: первая половина файла сразу, вторая — после gate."""
+
+    def __init__(self, first: bytes, rest: bytes, gate: asyncio.Event):
+        self.headers = {"content-length": str(len(first) + len(rest))}
+        self._parts = (first, rest)
+        self._gate = gate
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    async def aiter_bytes(self):
+        yield self._parts[0]
+        await self._gate.wait()
+        yield self._parts[1]
+
+
+def test_stream_starts_before_download_finishes(monkeypatch, tmp_path):
+    monkeypatch.setattr(ytdlp, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(ytdlp, "_enforce_cache_limit", lambda: None)
+    monkeypatch.setattr(deezer, "_schedule_adopt", lambda *_a, **_kw: None)
+    monkeypatch.setattr(deezer, "delete_cache", lambda _key: None)
+    _fake_cache(monkeypatch)
+    plain = os.urandom(deezer._CHUNK * 600)  # 1.2 МБ — 75 с MP3 128
+    encrypted = _encrypt(plain, "11")
+    half = len(encrypted) // 2
+
+    async def media_url(_sng_id):
+        return "https://cdn", "11", len(plain), 75
+
+    monkeypatch.setattr(deezer, "_media_url", media_url)
+
+    async def scenario():
+        gate = asyncio.Event()
+        monkeypatch.setattr(
+            deezer._client, "stream",
+            lambda *_a, **_kw: _GatedStream(encrypted[:half], encrypted[half:], gate),
+        )
+        response = await deezer._stream_download("VIDEOID1", "11", _request())
+        # Ответ готов, хотя вторая половина файла ещё не пришла с CDN.
+        assert response.headers["content-length"] == str(len(plain))
+        assert "VIDEOID1" in deezer._fetches
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+            if len(body) >= half:
+                gate.set()
+        await asyncio.sleep(0)
+        return body
+
+    assert asyncio.run(scenario()) == plain
+    assert (tmp_path / "VIDEOID1.mp3").read_bytes() == plain
+
+
+def test_preview_is_rejected_before_first_byte(monkeypatch, tmp_path):
+    monkeypatch.setattr(ytdlp, "CACHE_DIR", str(tmp_path))
+    store = _fake_cache(monkeypatch)
+
+    async def media_url(_sng_id):
+        return "https://cdn", "11", 0, 200  # размер в getData неизвестен
+
+    monkeypatch.setattr(deezer, "_media_url", media_url)
+
+    async def scenario():
+        gate = asyncio.Event()
+        gate.set()
+        preview = os.urandom(30 * 16000)
+        monkeypatch.setattr(
+            deezer._client, "stream",
+            lambda *_a, **_kw: _GatedStream(preview, b"", gate),
+        )
+        return await deezer._stream_download("VIDEOID1", "11", _request())
+
+    assert asyncio.run(scenario()) is None
+    assert "deezer:fail:VIDEOID1" in store
+
+
+def test_match_waits_run_in_parallel(monkeypatch):
+    import time
+
+    from app.routers import soulseek, soundcloud
+
+    monkeypatch.setattr(ytdlp, "_ytmusic", object())
+
+    async def no_local(_video_id):
+        return None
+
+    monkeypatch.setattr(ytdlp, "_local_copy_path", no_local)
+
+    async def slow_deezer(_video_id, _request):
+        await asyncio.sleep(0.3)
+        return None
+
+    async def slow_slsk(_video_id):
+        await asyncio.sleep(0.3)
+        return "TOKEN"
+
+    async def slow_sc(_video_id, full_only=False):
+        await asyncio.sleep(0.3)
+        return None
+
+    monkeypatch.setattr(deezer, "stream_for_ytmusic", slow_deezer)
+    monkeypatch.setattr(soulseek, "await_soulseek_match", slow_slsk)
+    monkeypatch.setattr(soundcloud, "await_soundcloud_match", slow_sc)
+
+    started = time.monotonic()
+    response = asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request()))
+
+    assert time.monotonic() - started < 0.5
+    assert response.headers["location"].startswith("/api/soulseek/stream/TOKEN")
+    assert "deezer;dur=" in response.headers["server-timing"]
 
 
 def test_adopt_replace_rebinds_rows_and_drops_youtube_object(monkeypatch, tmp_path, db):

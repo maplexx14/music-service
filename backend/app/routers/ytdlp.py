@@ -2520,8 +2520,14 @@ async def _soundcloud_first_redirect(video_id: str) -> Optional[RedirectResponse
     except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
         logger.exception("soundcloud-first lookup failed for %s", video_id)
         return None
+    return _soundcloud_redirect(video_id, match)
+
+
+def _soundcloud_redirect(video_id: str, match: Optional[tuple[str, str]]) -> Optional[RedirectResponse]:
     if not match:
         return None
+    from app.routers import soundcloud
+
     track_id, permalink = match
     return RedirectResponse(
         f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}?vid={video_id}",
@@ -2529,14 +2535,60 @@ async def _soundcloud_first_redirect(video_id: str) -> Optional[RedirectResponse
     )
 
 
+class _StageTiming:
+    """Время этапов /stream до ответа: заголовок Server-Timing и лог.
+
+    Старт трека плавает от долей секунды до десятка — так видно, на каком
+    этапе цепочки (матчи, Deezer, YouTube) ушло время: в DevTools у запроса
+    и в логе бэкенда для медленных стартов.
+    """
+
+    _SLOW = 1.0
+
+    def __init__(self) -> None:
+        self._started = self._last = time.monotonic()
+        self._stages: list[tuple[str, float]] = []
+
+    def mark(self, stage: str) -> None:
+        now = time.monotonic()
+        self._stages.append((stage, now - self._last))
+        self._last = now
+
+    def finish(self, video_id: str, response, outcome: Optional[str] = None):
+        outcome = outcome or (self._stages[-1][0] if self._stages else "?")
+        total = time.monotonic() - self._started
+        stages = self._stages + [("total", total)]
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            headers["Server-Timing"] = ", ".join(
+                f"{name};dur={dur * 1000:.0f}" for name, dur in stages
+            )
+        if total >= self._SLOW:
+            logger.info(
+                "stream %s → %s за %.2f с: %s", video_id, outcome, total,
+                " ".join(f"{name}={dur:.2f}" for name, dur in self._stages),
+            )
+        return response
+
+
 @router.get("/stream/{video_id}")
 async def stream_ytmusic(video_id: str, request: Request):
+    timing = _StageTiming()
+    try:
+        response = await _stream_ytmusic(video_id, request, timing)
+    except HTTPException as exc:
+        timing.finish(video_id, None, str(exc.status_code))
+        raise
+    return timing.finish(video_id, response)
+
+
+async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming):
     if _ytmusic is None:
         raise HTTPException(status_code=503, detail="YouTube Music не настроен")
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
     # ytmusic — только каталог метаданных: аудио той же записи берём по
-    # приоритету Soulseek (оригинальный релизный файл с пира) → SoundCloud,
+    # приоритету Deezer → Soulseek (оригинальный релизный файл с пира) → SoundCloud,
     # если он отдаёт трек целиком → YouTube (та же запись ytmusic) →
     # SoundCloud-превью/прочие матчи (фолбэк на отказ YouTube). SoundCloud
     # раньше YouTube — ради объёма запросов к YouTube: каждый резолв с нашего
@@ -2556,7 +2608,9 @@ async def stream_ytmusic(video_id: str, request: Request):
     # мимо своей копии и всех матчей (они той же цензурной записи). vid —
     # путь назад, если SoundCloud трек не отдаст (см. app/censorship.py).
     # scfallback=1 — это и есть возврат оттуда: второй раз не уходим.
-    if request.query_params.get("scfallback") != "1":
+    scfallback = request.query_params.get("scfallback") == "1"
+    slskfallback = request.query_params.get("slskfallback") == "1"
+    if not scfallback:
         try:
             from app import censorship
 
@@ -2568,56 +2622,36 @@ async def stream_ytmusic(video_id: str, request: Request):
             censorship.schedule_suggestion(video_id)
         except Exception:  # noqa: BLE001 — привязки не должны ломать стрим
             logger.exception("censor override lookup failed for %s", video_id)
+    timing.mark("censor")
     try:
         local_path = await _local_copy_path(video_id)
     except Exception:  # noqa: BLE001 — проверка best-effort, стрим не ломаем
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
         local_path = None
     has_local = bool(local_path)
+    timing.mark("local")
     # Своя копия с YouTube может быть цензурной: если у записи есть
     # explicit-оригинал в Deezer, копия заменяется им (см.
     # deezer.replace_youtube_copy) — это и главная, и поток рекомендаций,
-    # и библиотека: все ytmusic-треки играют через этот эндпоинт.
+    # и библиотека: все ytmusic-треки играют через этот эндпоинт. Стрим
+    # ради этого не ждёт: оригинал играет, только если матч уже известен
+    # (и тогда отдаётся по мере закачки), иначе играет копия, а замена идёт
+    # в фоне к следующему разу.
     if _is_youtube_copy(local_path):
         try:
             from app.routers import deezer
 
-            replaced = await deezer.replace_youtube_copy(video_id)
-            if replaced:
-                return await _serve_file(replaced, "audio/mpeg", request)
+            response = await deezer.stream_replacing_youtube_copy(video_id, request)
+            if response is not None:
+                timing.mark("deezer")
+                return response
         except Exception:  # noqa: BLE001 — замена не должна ломать стрим
             logger.exception("youtube copy replacement failed for %s", video_id)
-    # Deezer — первым из внешних: YouTube с адресов сервера отвечает
-    # bot-check'ом, а CDN Deezer отдаёт полный трек за доли секунды. Файл
-    # ложится в дисковый кэш под этим же video_id и отдаётся отсюда, без
-    # редиректа; отказ (нет матча/прав) — None, цепочка идёт дальше.
+        timing.mark("replace")
     if not has_local:
-        try:
-            from app.routers import deezer
-
-            response = await deezer.stream_for_ytmusic(video_id, request)
-            if response is not None:
-                return response
-        except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
-            logger.exception("deezer stream failed for %s", video_id)
-    if not has_local and request.query_params.get("scfallback") != "1" and (
-        request.query_params.get("slskfallback") != "1"
-    ):
-        try:
-            from app.routers import soulseek
-
-            slsk_token = await soulseek.await_soulseek_match(video_id)
-            if slsk_token:
-                return RedirectResponse(
-                    f"/api/soulseek/stream/{slsk_token}?vid={video_id}",
-                    status_code=307,
-                )
-        except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
-            logger.exception("soulseek redirect failed for %s", video_id)
-    if not has_local and request.query_params.get("scfallback") != "1":
-        redirect = await _soundcloud_first_redirect(video_id)
-        if redirect is not None:
-            return redirect
+        response = await _stream_from_matches(video_id, request, timing, scfallback, slskfallback)
+        if response is not None:
+            return response
     # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
     # имеют строковой id и играются напрямую через этот эндпоинт, минуя
     # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
@@ -2631,18 +2665,21 @@ async def stream_ytmusic(video_id: str, request: Request):
     except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
         logger.exception("lazy-archive-ext: не удалось запланировать архивацию %s", video_id)
     try:
-        return await stream_cached_audio(
+        response = await stream_cached_audio(
             request,
             video_id,
             lambda force: _resolve_cached(video_id, force=force),
             archive_key=f"ytmusic/{video_id}",
         )
+        timing.mark("youtube" if not has_local else "file")
+        return response
     except HTTPException as exc:
+        timing.mark("youtube")
         # YouTube отказал (404 трек недоступен / 502 резолв / 503 bot-check) —
         # последняя надежда SoundCloud, если матч известен. scfallback=1 сюда
         # уже возвращался после отказа самой SC: повторять нельзя (цикл),
         # отдаём исходную ошибку плееру.
-        if request.query_params.get("scfallback") == "1":
+        if scfallback:
             raise
         try:
             from app.routers import soundcloud
@@ -2662,6 +2699,68 @@ async def stream_ytmusic(video_id: str, request: Request):
             f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}",
             status_code=307,
         )
+
+
+async def _stream_from_matches(
+    video_id: str, request: Request, timing: _StageTiming, scfallback: bool, slskfallback: bool
+):
+    """Ответ из внешнего источника по приоритету Deezer → Soulseek →
+    полноформатный SoundCloud, или None (дальше YouTube).
+
+    Ожидания матчей (до 3 с каждое) идут параллельно, а не друг за другом:
+    пока ищется Deezer, Soulseek и SoundCloud уже ждут свои поиски, и отказ
+    Deezer не добавляет к старту ещё два полных таймаута. Приоритет при
+    этом прежний — ответ берётся у первого по порядку источника с матчем.
+    """
+    from app.routers import deezer, soulseek, soundcloud
+
+    slsk_task = sc_task = None
+    if not scfallback and not slskfallback:
+        slsk_task = asyncio.create_task(soulseek.await_soulseek_match(video_id))
+    if not scfallback:
+        sc_task = asyncio.create_task(
+            soundcloud.await_soundcloud_match(video_id, full_only=True)
+        )
+    try:
+        # Deezer — первым из внешних: YouTube с адресов сервера отвечает
+        # bot-check'ом, а CDN Deezer отдаёт трек сразу. Файл ложится в дисковый
+        # кэш под этим же video_id и отдаётся отсюда по мере закачки, без
+        # редиректа; отказ (нет матча/прав) — None, цепочка идёт дальше.
+        try:
+            response = await deezer.stream_for_ytmusic(video_id, request)
+        except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+            logger.exception("deezer stream failed for %s", video_id)
+            response = None
+        timing.mark("deezer")
+        if response is not None:
+            return response
+        if slsk_task is not None:
+            try:
+                slsk_token = await slsk_task
+            except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+                logger.exception("soulseek match failed for %s", video_id)
+                slsk_token = None
+            timing.mark("soulseek")
+            if slsk_token:
+                return RedirectResponse(
+                    f"/api/soulseek/stream/{slsk_token}?vid={video_id}",
+                    status_code=307,
+                )
+        if sc_task is not None:
+            try:
+                match = await sc_task
+            except Exception:  # noqa: BLE001 — подмена не должна ломать стрим
+                logger.exception("soundcloud-first lookup failed for %s", video_id)
+                match = None
+            timing.mark("soundcloud")
+            return _soundcloud_redirect(video_id, match)
+        return None
+    finally:
+        # Ответ уже есть — ожидания остальных матчей не нужны. Сами поиски
+        # под shield и доедут в кэш.
+        for task in (slsk_task, sc_task):
+            if task is not None and not task.done():
+                task.cancel()
 
 
 @router.post("/prefetch/{video_id}")
