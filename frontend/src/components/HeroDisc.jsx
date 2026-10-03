@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './HeroDisc.css'
@@ -129,7 +130,13 @@ function HeroDisc() {
 
       const el = coverRef.current
       if (!el) return
-      const angle = Math.round(progress * steps) / (steps / 360)
+      // Облегчённый режим: диск поворачивается раз в секунду, как секундная
+      // стрелка — шаг угла равен секунде трека. Каждый поворот — новый кадр
+      // окна, а плавное вращение давало их ~10 в секунду. Жест остаётся
+      // плавным: это прямое управление.
+      const lite = !drag && dur > 0 && useUiSettingsStore.getState().liteMode
+      const angleSteps = lite ? Math.max(1, Math.round(dur)) : steps
+      const angle = Math.round(progress * angleSteps) / (angleSteps / 360)
       if (angle === lastAngleRef.current) return
       lastAngleRef.current = angle
       el.style.transform = `rotate(${angle}deg)`

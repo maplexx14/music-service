@@ -1,5 +1,7 @@
 .hero-bolts {
-  --hb-cycle: 7s;
+  /* Цикл одной молнии. Колонок шесть, со сдвигом, так что новая молния
+     падает раз в ~4 с, при игре — раз в ~2 с. */
+  --hb-cycle: 24s;
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -11,7 +13,7 @@
 }
 
 .hero-bolts.is-active {
-  --hb-cycle: 3.5s;
+  --hb-cycle: 12s;
 }
 
 .hero-bolt {
@@ -21,42 +23,41 @@
   background: center / contain no-repeat;
   opacity: 0;
   transform: translate(-50%, -50%) rotate(var(--r));
-  animation: hero-bolt-fall var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite;
+  animation: hero-bolt-fall var(--hb-cycle) steps(1, end) calc(var(--d) * var(--hb-cycle) * -1) infinite;
 }
 
 /* Облегчённый режим глушит все анимации через `.lite-mode *` с !important.
    Этот фон и есть замена тяжёлому градиенту именно для облегчённого режима,
    поэтому возвращаем ему анимацию селектором специфичнее. */
 .lite-mode .hero-bolt {
-  animation: hero-bolt-fall var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite !important;
+  animation: hero-bolt-fall var(--hb-cycle) steps(1, end) calc(var(--d) * var(--hb-cycle) * -1) infinite !important;
 }
 
 .hero-bolt.v1 { background-image: url('../assets/loader-bolt-1.svg'); }
 .hero-bolt.v2 { background-image: url('../assets/loader-bolt-2.svg'); }
 .hero-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
 
-/* Молния стоит в своей точке (top: y%), поэтому траектория отсчитывается от
-   неё: старт чуть выше края hero, финиш на 15% ниже. Падение — 18% цикла
-   (~1.3 с в покое) с ускорением; вспышка — когда молния уже в кадре, к низу
-   гаснет. Остаток цикла молния невидима и не двигается. */
+/* Падение — покадровое, как рисованная анимация: 10 кадров за ~1.3 с (~8 в
+   секунду) по параболе, с ускорением, вспышкой на входе и затуханием внизу.
+   Плавное падение заставляло браузер перерисовывать окно на каждом кадре
+   монитора, и на маке с Firefox молнии одни съедали ~45% ядра. С
+   steps(1) значения держатся между кадрами, а остаток цикла (~95%) молния
+   невидима и не двигается. Траектория отсчитывается от точки молнии (top:
+   y%): старт на 6% высоты выше hero, финиш на 15% ниже. Кадр k — время
+   5.4%·k/10, путь 121·(k/10)² − 6 в cqh. */
 @keyframes hero-bolt-fall {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, calc(-50% - (var(--y) + 6) * 1cqh)) rotate(var(--r)) scale(0.9);
-    animation-timing-function: cubic-bezier(.45, 0, .85, .55);
-  }
-  2% { opacity: 1; }
-  3.5% { opacity: 0.5; }
-  5% { opacity: 1; }
-  14% { opacity: 0.85; }
-  18% {
-    opacity: 0;
-    transform: translate(-50%, calc(-50% + (115 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.05);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, calc(-50% + (115 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.05);
-  }
+  0.0% { opacity: 0; transform: translate(-50%, calc(-50% + (-6.0 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.9); }
+  0.54% { opacity: 1; transform: translate(-50%, calc(-50% + (-4.79 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.915); }
+  1.08% { opacity: 0.5; transform: translate(-50%, calc(-50% + (-1.16 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.93); }
+  1.62% { opacity: 1; transform: translate(-50%, calc(-50% + (4.89 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.945); }
+  2.16% { opacity: 0.9; transform: translate(-50%, calc(-50% + (13.36 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.96); }
+  2.7% { opacity: 0.9; transform: translate(-50%, calc(-50% + (24.25 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.975); }
+  3.24% { opacity: 0.9; transform: translate(-50%, calc(-50% + (37.56 - var(--y)) * 1cqh)) rotate(var(--r)) scale(0.99); }
+  3.78% { opacity: 0.9; transform: translate(-50%, calc(-50% + (53.29 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.005); }
+  4.32% { opacity: 0.85; transform: translate(-50%, calc(-50% + (71.44 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.02); }
+  4.86% { opacity: 0.5; transform: translate(-50%, calc(-50% + (92.01 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.035); }
+  5.4% { opacity: 0; transform: translate(-50%, calc(-50% + (115.0 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.05); }
+  100% { opacity: 0; transform: translate(-50%, calc(-50% + (115 - var(--y)) * 1cqh)) rotate(var(--r)) scale(1.05); }
 }
 
 /* Без движения молнии просто стоят на своих местах. */

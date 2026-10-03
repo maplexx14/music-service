@@ -15,6 +15,7 @@ import { useSwipe } from '../hooks/useSwipe'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
 import { useAuthStore } from '../store/authStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
 import BoltLoader from './BoltLoader'
@@ -224,6 +225,11 @@ function PlayerProgress({ audioRef }) {
   // isPlaying меняется только по play/pause, не на каждом тике времени, так что
   // подписка не возвращает перерисовки, от которых компонент был отделён.
   const isPlaying = usePlayerStore((s) => s.isPlaying)
+  // Облегчённый режим: полоса шагает раз в секунду, без rAF-цикла. Каждая
+  // запись переменной — новый кадр окна, а на слабом железе (и на интеловском
+  // маке с Firefox, где кадр окна дорогой) ~10 кадров в секунду от одной
+  // полосы заметно грели процессор.
+  const liteMode = useUiSettingsStore((s) => s.liteMode)
   const surfaceRef = useRef(null)
   const fillRef = useRef(null)
 
@@ -259,9 +265,10 @@ function PlayerProgress({ audioRef }) {
   // Этот единственный кадр нужен ровно затем, чтобы полоса встала на точную
   // позицию из audio, а не на округлённую store-версию (троттлинг ~1 с).
   useEffect(() => {
-    if (!isPlaying) {
+    if (!isPlaying || liteMode) {
       // force: инлайновый style из store мог перезаписать переменную
-      // округлённым значением, кэш шага тут не показатель.
+      // округлённым значением, кэш шага тут не показатель. В облегчённом
+      // режиме дальше полосу ведёт инлайновый style по целым секундам.
       writeProgress(true)
       return
     }
@@ -272,7 +279,7 @@ function PlayerProgress({ audioRef }) {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isPlaying, writeProgress])
+  }, [isPlaying, liteMode, writeProgress])
 
   // Рендер по тику store пишет инлайновый style с округлённой store-позицией,
   // а rAF-цикл из-за квантования может не перезаписать её до следующего шага —
@@ -294,7 +301,10 @@ function PlayerProgress({ audioRef }) {
     setCurrentTime(newTime)
   }
 
-  const progressPercent = duration ? Math.min(100, (currentTime / duration) * 100) : 0
+  // В облегчённом режиме — по целым секундам: store тикает ~4 раза в секунду,
+  // а значение меняется (и окно перерисовывается) только раз в секунду.
+  const shownTime = liteMode ? Math.floor(currentTime) : currentTime
+  const progressPercent = duration ? Math.min(100, (shownTime / duration) * 100) : 0
 
   return (
     <>
