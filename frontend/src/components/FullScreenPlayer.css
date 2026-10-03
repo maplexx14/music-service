@@ -165,7 +165,6 @@
 
   min-height: 0;
   overflow: hidden;
-  transition: margin 0.35s var(--ease-drawer), flex 0.35s var(--ease-drawer);
 }
 
 .fullscreen-art img {
@@ -175,7 +174,36 @@
   object-fit: cover;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   background: #181818;
-  transition: width 0.35s var(--ease-drawer), height 0.35s var(--ease-drawer);
+}
+
+/* Включение текста на десктопе (morphTransition 'lyrics'): обложка и
+   подпись переезжают на новые места, текст проявляется. Раньше здесь были
+   transition width/height/margin — раскладка всего плеера на каждом кадре,
+   и всё равно скачок: flex-direction не анимируется. Морф — это уже
+   сдвиг готовых снапшотов. Элемент на экране меняет место — ease-in-out. */
+html[data-morph='lyrics'] .fullscreen-art img {
+  view-transition-name: fs-art;
+}
+html[data-morph='lyrics'] .fullscreen-info {
+  view-transition-name: fs-info;
+}
+html[data-morph='lyrics'] .fullscreen-lyrics-desktop {
+  view-transition-name: fs-lyrics;
+}
+html[data-morph='lyrics']::view-transition-group(fs-art),
+html[data-morph='lyrics']::view-transition-group(fs-info),
+html[data-morph='lyrics']::view-transition-group(fs-lyrics),
+html[data-morph='lyrics']::view-transition-old(*),
+html[data-morph='lyrics']::view-transition-new(*) {
+  animation-duration: 320ms;
+  animation-timing-function: var(--ease-morph);
+}
+/* Подпись меняет ширину: без этого снапшоты тянулись бы по высоте строки. */
+html[data-morph='lyrics']::view-transition-old(fs-info),
+html[data-morph='lyrics']::view-transition-new(fs-info) {
+  height: 100%;
+  object-fit: none;
+  object-position: left center;
 }
 
 .fullscreen-info {
@@ -343,6 +371,14 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    /* Обложка уходит мгновенно (морфа на телефоне нет, см. morphTransition),
+       текст не выпрыгивает, а проявляется из-под подписи. */
+    animation: fs-lyrics-in 240ms var(--ease-out) both;
+  }
+
+  /* Обложка возвращается так же — проявлением, а не скачком. */
+  .fullscreen-player:not(.has-lyrics):not(.karaoke-mode) .fullscreen-art.was-compact {
+    animation: fs-art-back 240ms var(--ease-out) both;
   }
 
   /* Karaoke on mobile: same as lyrics mode — cover hidden, only text */
@@ -836,3 +872,23 @@
   }
 }
 
+@keyframes fs-lyrics-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes fs-art-back {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile,
+  .fullscreen-player .fullscreen-art.was-compact {
+    animation: none;
+  }
+}

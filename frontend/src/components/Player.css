@@ -4,7 +4,7 @@
   left: calc(var(--sidebar-width, 240px) + 16px);
   right: 16px;
   height: 76px;
-  transition: left 0.3s ease;
+  transition: left 0.3s var(--ease-morph);
   background: #1e1e1e;
   border: none;
   /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */

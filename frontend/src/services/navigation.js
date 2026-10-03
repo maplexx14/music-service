@@ -51,6 +51,24 @@ const viewTransitionsEnabled = () =>
   !prefersReducedMotion() &&
   !document.documentElement.classList.contains('lite-mode')
 
+// Морф внутри экрана, а не навигация: update синхронно меняет DOM, а
+// элементы, которым CSS дал view-transition-name под html[data-morph=name],
+// переезжают из старого положения и размера в новые (FLIP силами браузера).
+// Только десктоп: на iOS PWA снапшоты View Transitions поверх оверлеев
+// затемняли экран (см. FullScreenPlayer, startClose).
+export function morphTransition(name, update) {
+  if (!viewTransitionsEnabled() || isMobileViewport() || document.hidden) {
+    update()
+    return
+  }
+  const root = document.documentElement
+  root.dataset.morph = name
+  const transition = document.startViewTransition(update)
+  transition.finished.finally(() => {
+    if (root.dataset.morph === name) delete root.dataset.morph
+  })
+}
+
 // Свайп уже увёз экран пальцем — штатная анимация перехода была бы лишней.
 // undefined — выбрать по навигации, null — без анимации, 'swipe' — доиграть
 // жест (useSwipeNavigation).

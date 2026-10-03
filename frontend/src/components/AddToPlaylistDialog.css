@@ -321,6 +321,41 @@
   }
 }
 
+/* Уход (класс ставит usePresence на ATP_EXIT_MS): зеркало появления, но
+   короче — закрытое окно должно убраться быстро. Конечный кадр держим
+   (both), иначе за кадр до размонтирования окно мигнуло бы обратно.
+   Уходящее окно не ловит тапы — они уже относятся к странице под ним. */
+.atp-backdrop.is-leaving {
+  pointer-events: none;
+  animation: atp-fade-out 180ms var(--ease-out) both;
+}
+
+.atp-backdrop.is-leaving .atp-dialog {
+  animation: atp-pop-out 160ms var(--ease-out) both;
+}
+
+@keyframes atp-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes atp-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* Шторка уезжает вниз той же кривой, что и въезжала. После свайпа вниз она
+   уже за краем (инлайн-transform), и анимация от этого значения до того же
+   ничего не двигает. */
+@keyframes atp-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
 /* --- Телефон: нижняя шторка --- */
 @media (max-width: 768px) {
   .atp-backdrop {
@@ -338,6 +373,10 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
     animation: atp-sheet-in 240ms var(--ease-drawer) backwards;
     will-change: transform;
+  }
+
+  .atp-backdrop.is-leaving .atp-dialog {
+    animation: atp-sheet-out 180ms var(--ease-drawer) both;
   }
 
   .atp-grabber {
@@ -360,7 +399,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .atp-backdrop,
-  .atp-dialog {
+  .atp-dialog,
+  .atp-backdrop.is-leaving,
+  .atp-backdrop.is-leaving .atp-dialog {
     animation: none;
   }
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
 import {
   invalidateFlowPreload,
@@ -14,6 +15,7 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { getActive } from '../services/audioEngine'
+import { morphTransition } from '../services/navigation'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -117,6 +119,18 @@ function FullScreenPlayer() {
   const [coverHidden, setCoverHidden] = useState(isCoverMorphActive)
   const [lyricsMode, setLyricsMode] = useState(false)
   const gestureRef = useRef(null)
+  // Обложка переезжает влево и уменьшается, текст проявляется справа —
+  // одним морфом, а не скачком раскладки (см. morphTransition).
+  // artReturn — обложка вернулась после текста: на телефоне она проявляется
+  // (класс was-compact), но не при открытии плеера, где летит морф обложки.
+  const [artReturn, setArtReturn] = useState(false)
+  const toggleLyrics = () =>
+    morphTransition('lyrics', () =>
+      flushSync(() => {
+        setArtReturn(lyricsMode)
+        setLyricsMode(!lyricsMode)
+      }),
+    )
 
   // Keep the initial layout in sync with the way fullscreen was opened.
   // Karaoke mode always starts with lyrics; a plain cover click always resets them.
@@ -326,7 +340,7 @@ function FullScreenPlayer() {
         {(
           <button
             className={`fullscreen-icon fullscreen-lyrics-toggle${hasLyrics ? ' active' : ''}`}
-            onClick={() => setLyricsMode((prev) => !prev)}
+            onClick={toggleLyrics}
             disabled={!hasLyrics && !lyricsLoading}
             aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
             title={hasLyrics ? (lyricsMode ? 'Скрыть текст' : 'Показать текст') : 'Текст не найден'}
@@ -338,7 +352,7 @@ function FullScreenPlayer() {
 
       <div className="fullscreen-body">
         <div className="fullscreen-content">
-          <div className={`fullscreen-art${lyricsMode ? ' compact' : ''}`}>
+          <div className={`fullscreen-art${lyricsMode ? ' compact' : ''}${artReturn ? ' was-compact' : ''}`}>
             <img
               src={coverUrl}
               alt={currentTrack.title}
@@ -450,7 +464,7 @@ function FullScreenPlayer() {
         <button
           type="button"
           className={`fullscreen-mobile-lyrics${lyricsMode ? ' active' : ''}`}
-          onClick={() => setLyricsMode((prev) => !prev)}
+          onClick={toggleLyrics}
           disabled={!hasLyrics && !lyricsLoading}
           aria-label={lyricsMode ? 'Hide lyrics' : 'Show lyrics'}
           title={hasLyrics ? (lyricsMode ? 'Hide lyrics' : 'Show lyrics') : 'Lyrics not found'}

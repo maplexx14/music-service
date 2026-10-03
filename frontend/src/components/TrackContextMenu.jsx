@@ -6,6 +6,8 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
 import { useAuthStore } from '../store/authStore'
+import { usePresence } from '../hooks/usePresence'
+import { useSheetDrag } from '../hooks/useSheetDrag'
 import './TrackContextMenu.css'
 
 const LONG_PRESS_MS = 450
@@ -112,11 +114,21 @@ const MENU_W = 230
 const MENU_H = 150
 const MENU_ITEM_H = 48
 
-export function TrackContextMenu({ menu, menuRef, onClose }) {
+// Уход — как track-ctx-*-out в CSS.
+const MENU_EXIT_MS = 160
+
+export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
+  const [menu, leaving] = usePresence(openMenu, MENU_EXIT_MS)
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
   const isAdmin = useAuthStore((s) => Boolean(s.user?.is_admin))
+  const backdropRef = useRef(null)
+  // На телефоне — нижняя шторка вместо меню у пальца: у пальца оно
+  // перекрывалось им же и на нижних строках уходило под мини-плеер.
+  const isSheet = window.matchMedia?.('(max-width: 768px)').matches ?? false
+  // Шторку можно смахнуть вниз, как системную. Затемнение — как в CSS.
+  useSheetDrag(menuRef, backdropRef, onClose, { backdropAlpha: 0.55, enabled: Boolean(menu) && isSheet })
 
   if (!menu) return null
   const { track } = menu
@@ -129,14 +141,13 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
   const isLiked =
     (dbId ? likedTrackIds.includes(dbId) : false) || pendingLikeKeys.includes(trackLikeKey(track))
 
-  // На телефоне — нижняя шторка вместо меню у пальца: у пальца оно
-  // перекрывалось им же и на нижних строках уходило под мини-плеер.
-  const isSheet = window.matchMedia?.('(max-width: 768px)').matches ?? false
   const vw = window.innerWidth
   const vh = window.innerHeight
   const left = Math.min(Math.max(menu.x - MENU_W / 2, 12), vw - MENU_W - 12)
   const menuH = MENU_H + (canLinkOriginal ? MENU_ITEM_H : 0)
   const top = Math.min(Math.max(menu.y - 16, 12), vh - menuH - 12)
+  // Меню раскрывается из точки касания/курсора, а не из своего центра.
+  const origin = `${menu.x - left}px ${menu.y - top}px`
 
   // Закрываем только по тапу в саму подложку. События от пунктов меню
   // всплывают сюда же (меню — её потомок), и без этой проверки touchstart на
@@ -163,14 +174,15 @@ export function TrackContextMenu({ menu, menuRef, onClose }) {
 
   return createPortal(
     <div
-      className={`track-ctx-backdrop${isSheet ? ' sheet' : ''}`}
+      ref={backdropRef}
+      className={`track-ctx-backdrop${isSheet ? ' sheet' : ''}${leaving ? ' is-leaving' : ''}`}
       onTouchStart={closeOnBackdrop}
       onMouseDown={closeOnBackdrop}
     >
       <div
         ref={menuRef}
         className={`track-ctx-menu${isSheet ? ' sheet' : ''}`}
-        style={isSheet ? undefined : { left, top }}
+        style={isSheet ? undefined : { left, top, transformOrigin: origin }}
         role="menu"
         aria-label={`Действия с треком ${track.title}`}
       >

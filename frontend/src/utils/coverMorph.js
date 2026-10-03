@@ -85,6 +85,8 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
   // уменьшенную, растянутая до размеров фуллскрина она мылилась бы в полёте.
   clone.src = srcOverride || fromImg.currentSrc || fromImg.src
   clone.alt = ''
+  // Клон летит уже видимым — проявление новых картинок (services/imageFade) не для него.
+  clone.dataset.noFade = ''
   clone.style.cssText = [
     'position:fixed',
     `left:${base.left}px`,

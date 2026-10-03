@@ -17,7 +17,7 @@
   padding-top: var(--main-pad-top);
   padding-bottom: var(--main-pad-bottom);
   background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
-  transition: margin-left 0.3s ease;
+  transition: margin-left 0.3s var(--ease-morph);
   /* Резинка отскролла не проваливается в системный pull-to-refresh —
      на главной им управляет наш индикатор (usePullToRefresh). На остальных
      страницах жест просто «гасится» контейнером, как в нативных списках. */

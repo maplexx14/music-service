@@ -112,7 +112,9 @@
   border: none;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 20px 20px 0 0;
-  animation: track-ctx-sheet-in 220ms var(--ease-drawer) both;
+  /* backwards, не both: удержанный конечный кадр перебивал бы инлайн-
+     transform перетаскивания (hooks/useSheetDrag). */
+  animation: track-ctx-sheet-in 220ms var(--ease-drawer) backwards;
 }
 
 /* Ручка шторки. */
@@ -159,10 +161,50 @@
   }
 }
 
+/* Уход (класс ставит usePresence на MENU_EXIT_MS): зеркало появления,
+   короче. Уходящее меню не ловит тапы — они уже для страницы под ним. */
+.track-ctx-backdrop.is-leaving {
+  pointer-events: none;
+}
+
+.track-ctx-backdrop.is-leaving .track-ctx-menu {
+  animation: track-ctx-out 120ms var(--ease-out) both;
+}
+
+.track-ctx-backdrop.sheet.is-leaving {
+  animation: track-ctx-fade-out 160ms var(--ease-out) both;
+}
+
+.track-ctx-backdrop.is-leaving .track-ctx-menu.sheet {
+  animation: track-ctx-sheet-out 160ms var(--ease-drawer) both;
+}
+
+@keyframes track-ctx-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes track-ctx-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes track-ctx-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .track-ctx-menu,
   .track-ctx-menu.sheet,
-  .track-ctx-backdrop.sheet {
+  .track-ctx-backdrop.sheet,
+  .track-ctx-backdrop.is-leaving .track-ctx-menu,
+  .track-ctx-backdrop.sheet.is-leaving,
+  .track-ctx-backdrop.is-leaving .track-ctx-menu.sheet {
     animation: none;
   }
 }

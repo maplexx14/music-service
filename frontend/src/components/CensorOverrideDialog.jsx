@@ -5,6 +5,8 @@ import api from '../services/api'
 import { useCensorDialogStore } from '../store/censorDialogStore'
 import { toast } from '../store/toastStore'
 import { formatDuration } from '../utils/format'
+import { usePresence } from '../hooks/usePresence'
+import { ATP_EXIT_MS } from './AddToPlaylistDialog'
 import './AddToPlaylistDialog.css'
 import './CensorOverrideDialog.css'
 
@@ -14,7 +16,9 @@ import './CensorOverrideDialog.css'
 // вставляет ссылку сам. Дальше оригинал играет везде: поиск, поток,
 // рекомендации, библиотека (см. backend app/censorship.py).
 export default function CensorOverrideDialog() {
-  const track = useCensorDialogStore((s) => s.track)
+  const openTrack = useCensorDialogStore((s) => s.track)
+  // Закрытое окно ещё доигрывает уход с последним треком (см. usePresence).
+  const [track, leaving] = usePresence(openTrack, ATP_EXIT_MS)
   const close = useCensorDialogStore((s) => s.close)
   const [candidates, setCandidates] = useState([])
   const [loading, setLoading] = useState(false)
@@ -102,7 +106,7 @@ export default function CensorOverrideDialog() {
 
   return createPortal(
     <div
-      className="atp-backdrop"
+      className={`atp-backdrop${leaving ? ' is-leaving' : ''}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close()
       }}
