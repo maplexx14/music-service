@@ -188,6 +188,32 @@ const FRAME_TOLERANCE = 0.004;
 // капа FPS: 1.5 = 0.025 × 60 сохраняет прежнюю длительность перехода.
 const MIX_RATE = 1.5;
 
+// Один WebGL-контекст на всё приложение, переживающий размонтирование.
+// Раньше каждый заход на главную создавал контекст, а уход — уничтожал его
+// (loseContext). Частая смена вкладок давала десятки таких циклов подряд, и
+// iOS убивал процесс страницы — PWA перезапускалось целиком, с остановкой
+// музыки. Теперь контекст создаётся один раз: при размонтировании canvas
+// просто вынимается из DOM, следующий Grainient забирает его себе.
+let cachedRenderer = null;
+
+function takeCachedRenderer() {
+  const renderer = cachedRenderer;
+  cachedRenderer = null;
+  if (!renderer || renderer.gl.isContextLost()) return null;
+  return renderer;
+}
+
+function cacheRenderer(renderer, contextLost) {
+  if (contextLost || renderer.gl.isContextLost()) return;
+  // Два Grainient одновременно (не бывает, но на всякий случай): лишний
+  // контекст освобождаем, как раньше.
+  if (cachedRenderer && cachedRenderer !== renderer) {
+    renderer.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return;
+  }
+  cachedRenderer = renderer;
+}
+
 const Grainient = ({
   timeSpeed = 0.25,
   colorBalance = 0.0,
@@ -235,9 +261,8 @@ const Grainient = ({
 
   // Цвета читаются из ref, а не из пропсов напрямую: они меняются на лету
   // (фон главной окрашивается под обложку текущего трека), а пересобирать
-  // ради смены цвета весь контекст нельзя — браузер держит жёсткий лимит
-  // живых WebGL-контекстов, и эффект ниже сознательно освобождает свой при
-  // размонтировании. Живое обновление цветов — отдельным эффектом в конце.
+  // ради смены цвета всю программу незачем — шейдер компилируется заново.
+  // Живое обновление цветов — отдельным эффектом в конце.
   const colorsRef = useRef({ color1, color2, color3 });
   colorsRef.current = { color1, color2, color3 };
   const applyColorsRef = useRef(null);
@@ -258,8 +283,10 @@ const Grainient = ({
     // страницу (~8-16), их выбивает софтверный блеклист/экономия батареи, а ogl
     // на отказ getContext только пишет в консоль и падает дальше на gl.renderer.
     // Фон — украшение: молча остаёмся на CSS-заглушке вместо краша страницы.
-    let renderer;
-    try {
+    let renderer = takeCachedRenderer();
+    if (renderer) {
+      renderer.dpr = renderScale * tier.scale;
+    } else try {
       renderer = new Renderer({
         webgl: 2,
         // Непрозрачный буфер: шейдер и так пишет alpha = 1, а с alpha: true
@@ -294,6 +321,7 @@ const Grainient = ({
     const container = containerRef.current;
     container.appendChild(canvas);
 
+    let contextLost = false;
     const geometry = new Triangle(gl);
     const program = new Program(gl, {
       vertex,
@@ -553,6 +581,7 @@ const Grainient = ({
     const onContextLost = (e) => {
       e.preventDefault();
       stopLoop();
+      contextLost = true;
     };
     canvas.addEventListener('webglcontextlost', onContextLost);
 
@@ -608,11 +637,11 @@ const Grainient = ({
       } catch {
         // Ignore
       }
-      // Явно освобождаем WebGL-контекст. Удаления canvas из DOM для этого мало:
-      // контекст живёт до GC, а браузер держит жёсткий лимит на страницу — за
-      // несколько переходов на главную (в dev StrictMode — вдвое быстрее) лимит
-      // исчерпывался, и следующий Renderer получал null вместо контекста.
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      // Контекст не уничтожаем, а откладываем для следующего монтирования
+      // (см. takeCachedRenderer): освобождаются только программа и геометрия.
+      program.remove();
+      geometry.remove();
+      cacheRenderer(renderer, contextLost);
     };
   }, [
     timeSpeed,

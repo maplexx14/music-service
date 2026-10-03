@@ -45,6 +45,25 @@ const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 const EASE_START_SLOPE = 2.25
 const IGNORE = 'input, textarea, select, [contenteditable="true"], [role="slider"], [data-swipe-ignore]'
 
+// Энергосбережение на iOS режет обновление страницы до 30 кадров/с (касания
+// приходят чаще, но рисуется каждое второе), и экран под пальцем шёл
+// ступеньками. При таком темпе каждый сдвиг отдаём CSS-переходу длиной в
+// кадр: промежуточные положения дорисовывает системный композитор, который
+// не урезан, — визуально снова плавно, ценой отставания от пальца на кадр.
+// Темп меряется по rAF во время жеста и помнится до следующего.
+const SLOW_FRAME_MS = 25
+let frameMs = 16.7
+
+function trackFrameRate() {
+  let last = 0
+  let raf = requestAnimationFrame(function tick(now) {
+    if (last) frameMs = 0.8 * frameMs + 0.2 * Math.min(100, now - last)
+    last = now
+    raf = requestAnimationFrame(tick)
+  })
+  return () => cancelAnimationFrame(raf)
+}
+
 // Есть ли между целью касания и контейнером горизонтально прокручиваемый
 // элемент — такой жест принадлежит ему.
 function insideHorizontalScroller(target, root) {
@@ -78,8 +97,12 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       return Math.round(Math.min(MAX_MS, Math.max(MIN_MS, ms)))
     }
 
+    let stopFrameTrack = null
+
     const setOffset = (x, ms = 0) => {
-      el.style.transition = ms ? `transform ${ms}ms ${EASE}` : 'none'
+      if (ms) el.style.transition = `transform ${ms}ms ${EASE}`
+      else if (frameMs > SLOW_FRAME_MS) el.style.transition = `transform ${Math.round(frameMs)}ms linear`
+      else el.style.transition = 'none'
       el.style.transform = x ? `translate3d(${x}px, 0, 0)` : ''
     }
 
@@ -90,6 +113,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       el.style.overflowY = ''
       releaseHeavy?.()
       releaseHeavy = null
+      stopFrameTrack?.()
+      stopFrameTrack = null
     }
 
     // Возврат экрана на место. Таймер сброса снимается новым жестом: иначе
@@ -132,6 +157,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         g.axis = 'x'
         clearTimeout(settleTimer)
         if (!releaseHeavy) releaseHeavy = holdHeavyAnimations()
+        if (!stopFrameTrack) stopFrameTrack = trackFrameRate()
         g.debug = startSwipeDebug()
         el.style.willChange = 'transform'
         // Горизонтальный жест забираем целиком: список под пальцем не должен
@@ -159,6 +185,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x') return
+      stopFrameTrack?.()
+      stopFrameTrack = null
       const dir = dx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       const width = el.clientWidth || window.innerWidth
