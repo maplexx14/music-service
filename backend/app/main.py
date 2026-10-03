@@ -39,6 +39,41 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+
+
+class AudioBufferingMiddleware:
+    """Включает nginx-буферизацию для аудио-ответов (X-Accel-Buffering: yes).
+
+    В nginx для /api/ стоит proxy_buffering off, а limit_rate на
+    небуферизованном проксировании не действует — потолок скорости отдачи
+    аудио (map $audio_limit_rate в nginx/conf.d/00-upstreams.conf) без этого
+    заголовка молча не работает. Зачем потолок — см. комментарий у map.
+    Буфер у nginx только в памяти (proxy_max_temp_file_size 0): бэкенд
+    придерживается обратным давлением, на диск ничего не пишется.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = message.get("headers") or []
+                if any(
+                    name.lower() == b"content-type" and value.startswith(b"audio/")
+                    for name, value in headers
+                ):
+                    message["headers"] = [*headers, (b"x-accel-buffering", b"yes")]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+app.add_middleware(AudioBufferingMiddleware)
+
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
