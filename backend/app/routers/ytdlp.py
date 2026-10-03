@@ -2126,6 +2126,12 @@ async def stream_cached_audio(
     — безопасное для файловой системы имя
     (используется как имя кэш-файла и должно быть уникальным между источниками).
     """
+    from app import adts
+
+    # Этот URL уже играл оригиналом (живой прокси ниже) — не подменяем его
+    # ADTS посреди игры, см. adts.pin_original.
+    await adts.keep_original_if_pinned(request, cache_id)
+
     # Уже качали этот трек — отдаём с диска, минуя yt-dlp и CDN источника.
     cached = _cached_file(cache_id)
     if cached:
@@ -2266,6 +2272,8 @@ async def stream_cached_audio(
             raise HTTPException(status_code=502, detail="Источник аудио недоступен")
     if probed is not None:
         total = probed
+    if adts.is_mp4_audio(f"x{ext}", media_type):
+        await adts.pin_original(request, cache_id)
 
     req_start, req_end = _parse_range(request.headers.get("range"), total)
     if total is not None and req_end is None:

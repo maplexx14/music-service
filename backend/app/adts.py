@@ -46,7 +46,43 @@ _failed: set[str] = set()
 
 
 def wants_adts(request: Optional[Request]) -> bool:
-    return request is not None and request.query_params.get("fmt") == "adts"
+    return (
+        request is not None
+        and request.query_params.get("fmt") == "adts"
+        and not getattr(request.state, "adts_off", False)
+    )
+
+
+# Один URL — одно представление на всё время игры. Холодный трек первый раз
+# идёт живым прокси с YouTube в MP4 (переложить на лету нечего), а докачавшись
+# в кэш, тот же URL с ?fmt=adts начинал отдавать ADTS. Safari добирает трек
+# Range-запросами по ходу игры и клеил ADTS-байты по смещениям MP4: часы шли
+# по таблицам MP4, а звука не было («играет, время идёт, тишина»). Поэтому
+# отданный оригиналом URL остаётся оригиналом, пока его может держать браузер
+# (Cache-Control кэш-файла — сутки).
+_ORIGINAL_PIN_TTL = 86400
+
+
+def _pin_key(cache_id: str) -> str:
+    return f"adts:original:{cache_id}"
+
+
+async def pin_original(request: Request, cache_id: str) -> None:
+    """Этот URL отдан оригиналом — дальше и Range-запросы получают оригинал."""
+    if not wants_adts(request):
+        return
+    from app.cache import set_cache_async
+
+    await set_cache_async(_pin_key(cache_id), 1, expire=_ORIGINAL_PIN_TTL)
+
+
+async def keep_original_if_pinned(request: Request, cache_id: str) -> None:
+    if not wants_adts(request):
+        return
+    from app.cache import get_cache_async
+
+    if await get_cache_async(_pin_key(cache_id)):
+        request.state.adts_off = True
 
 
 def is_mp4_audio(path: str, media_type: Optional[str] = None) -> bool:

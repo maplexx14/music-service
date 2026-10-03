@@ -97,3 +97,32 @@ def test_redirect_keeps_adts_format():
     assert ytdlp._keep_fmt(redirect, _request()).headers["location"] == (
         "/api/soulseek/stream/T?vid=X&fmt=adts"
     )
+
+
+def test_url_served_as_original_stays_original(cache, monkeypatch):
+    # Холодный трек сыграл живым прокси в MP4 — Range-запросы того же URL после
+    # докачки в кэш должны получить те же MP4-байты, а не ADTS.
+    store = {}
+
+    async def fake_set(key, value, expire=3600):
+        store[key] = value
+
+    async def fake_get(key):
+        return store.get(key)
+
+    monkeypatch.setattr("app.cache.set_cache_async", fake_set)
+    monkeypatch.setattr("app.cache.get_cache_async", fake_get)
+    src = cache / "VIDEOID1.m4a"
+    _make(src, ["-c:a", "aac", "-b:a", "128k"])
+
+    asyncio.run(adts.pin_original(_request(), "VIDEOID1"))
+    later = _request(headers=[(b"range", b"bytes=100-199")])
+    asyncio.run(adts.keep_original_if_pinned(later, "VIDEOID1"))
+    response = asyncio.run(ytdlp._serve_file(str(src), "audio/mp4", later))
+
+    assert response.media_type == "audio/mp4"
+    assert asyncio.run(_body(response)) == src.read_bytes()[100:200]
+
+    other = _request()
+    asyncio.run(adts.keep_original_if_pinned(other, "VIDEOID2"))
+    assert adts.wants_adts(other)
