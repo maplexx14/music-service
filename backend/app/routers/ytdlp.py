@@ -2648,10 +2648,11 @@ async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming)
         except Exception:  # noqa: BLE001 — замена не должна ломать стрим
             logger.exception("youtube copy replacement failed for %s", video_id)
         timing.mark("replace")
-    if not has_local:
+    if not has_local and not await get_cache_async(_youtube_route_key(video_id)):
         response = await _stream_from_matches(video_id, request, timing, scfallback, slskfallback)
         if response is not None:
             return response
+        await set_cache_async(_youtube_route_key(video_id), 1, expire=_YOUTUBE_ROUTE_TTL)
     # Ленивая архивация в MinIO прямо отсюда: внешние треки из поиска/потока
     # имеют строковой id и играются напрямую через этот эндпоинт, минуя
     # /tracks/{id}/stream (где раньше был единственный хук). fire-and-forget:
@@ -2701,22 +2702,44 @@ async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming)
         )
 
 
+# Трек ушёл на YouTube: ни у одного внешнего источника матча не нашлось.
+# Safari шлёт на трек несколько Range-запросов подряд (пробный bytes=0-1,
+# основной, повторы вотчдога плеера), и без этой отметки каждый заново ждал
+# матчи — холодный старт на iOS платил цепочку дважды-трижды (лог устройства
+# 2026-10-03: 10 с до loadedmetadata и ещё 8 с до canplay). Матч, найденный
+# позже, заиграет после TTL — к тому времени трек обычно уже в архиве.
+_YOUTUBE_ROUTE_TTL = 600
+
+
+def _youtube_route_key(video_id: str) -> str:
+    return f"ytdlp:route:youtube:{video_id}"
+
+
+# Сколько стрим ждёт идущий поиск Soulseek. Ноль — только кэш матча: поиск в
+# slskd идёт 6-8 с и на русском каталоге чаще пуст, а ожидание стоило каждому
+# холодному треку полных 3 с (Server-Timing на проде 2026-10-03). Найденный
+# позже матч используют прогрев и следующие проигрывания.
+_SLSK_STREAM_WAIT = 0.0
+
+
 async def _stream_from_matches(
     video_id: str, request: Request, timing: _StageTiming, scfallback: bool, slskfallback: bool
 ):
     """Ответ из внешнего источника по приоритету Deezer → Soulseek →
     полноформатный SoundCloud, или None (дальше YouTube).
 
-    Ожидания матчей (до 3 с каждое) идут параллельно, а не друг за другом:
-    пока ищется Deezer, Soulseek и SoundCloud уже ждут свои поиски, и отказ
-    Deezer не добавляет к старту ещё два полных таймаута. Приоритет при
-    этом прежний — ответ берётся у первого по порядку источника с матчем.
+    Ожидания матчей идут параллельно, а не друг за другом: пока ищется
+    Deezer, SoundCloud уже ждёт свой поиск (Soulseek — только кэш, см.
+    _SLSK_STREAM_WAIT). Приоритет прежний — ответ берётся у первого по
+    порядку источника с матчем.
     """
     from app.routers import deezer, soulseek, soundcloud
 
     slsk_task = sc_task = None
     if not scfallback and not slskfallback:
-        slsk_task = asyncio.create_task(soulseek.await_soulseek_match(video_id))
+        slsk_task = asyncio.create_task(
+            soulseek.await_soulseek_match(video_id, timeout=_SLSK_STREAM_WAIT)
+        )
     if not scfallback:
         sc_task = asyncio.create_task(
             soundcloud.await_soundcloud_match(video_id, full_only=True)

@@ -148,6 +148,18 @@ def _reset_yandex_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_stream_route_marks():
+    """Отметка «трек ушёл на YouTube» живёт 10 мин в общем Redis, а тесты
+    гоняют стрим одних и тех же video_id — без очистки следующий тест
+    пропустил бы матчи, которые сам и подменяет."""
+    from app.cache import clear_pattern
+
+    clear_pattern("ytdlp:route:*")
+    yield
+    clear_pattern("ytdlp:route:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_external_search_cache():
     """Выдача поиска YouTube Music / SoundCloud кэшируется на 10 мин, а тесты
     подменяют провайдеров под одни и те же строки — без очистки следующий тест

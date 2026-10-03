@@ -151,7 +151,7 @@ def test_stream_falls_through_when_deezer_has_nothing(monkeypatch):
 
     from app.routers import soulseek
 
-    async def slsk_match(_video_id):
+    async def slsk_match(_video_id, timeout=3.0):
         return "TOKEN"
 
     monkeypatch.setattr(soulseek, "await_soulseek_match", slsk_match)
@@ -517,7 +517,7 @@ def test_match_waits_run_in_parallel(monkeypatch):
         await asyncio.sleep(0.3)
         return None
 
-    async def slow_slsk(_video_id):
+    async def slow_slsk(_video_id, timeout=3.0):
         await asyncio.sleep(0.3)
         return "TOKEN"
 
@@ -574,3 +574,72 @@ def test_adopt_replace_rebinds_rows_and_drops_youtube_object(monkeypatch, tmp_pa
     assert removed == [old]
     db.expire_all()
     assert [t.file_path for t in db.query(Track)] == [new, new]
+
+
+def test_youtube_route_skips_match_waits_on_repeat_requests(monkeypatch):
+    from app.routers import soulseek, soundcloud
+
+    monkeypatch.setattr(ytdlp, "_ytmusic", object())
+    store = {}
+
+    async def get_cache(key):
+        return store.get(key)
+
+    async def set_cache(key, value, expire=None):
+        store[key] = value
+
+    monkeypatch.setattr(ytdlp, "get_cache_async", get_cache)
+    monkeypatch.setattr(ytdlp, "set_cache_async", set_cache)
+
+    async def no_local(_video_id):
+        return None
+
+    monkeypatch.setattr(ytdlp, "_local_copy_path", no_local)
+    lookups = []
+
+    async def no_deezer(video_id, _request):
+        lookups.append(video_id)
+        return None
+
+    async def no_match(_video_id, **_kw):
+        return None
+
+    monkeypatch.setattr(deezer, "stream_for_ytmusic", no_deezer)
+    monkeypatch.setattr(soulseek, "await_soulseek_match", no_match)
+    monkeypatch.setattr(soundcloud, "await_soundcloud_match", no_match)
+
+    async def youtube(request, cache_id, resolver, archive_key=None):
+        return "youtube"
+
+    monkeypatch.setattr(ytdlp, "stream_cached_audio", youtube)
+
+    # Safari: пробный bytes=0-1, потом основной запрос — матчи ждём один раз.
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "youtube"
+    assert asyncio.run(ytdlp.stream_ytmusic("VIDEOID1", _request())) == "youtube"
+    assert lookups == ["VIDEOID1"]
+
+
+def test_stream_does_not_wait_for_soulseek_search(monkeypatch):
+    from app.routers import soulseek
+
+    async def search():
+        await asyncio.sleep(5)
+        return "LATE"
+
+    async def no_cached(_video_id):
+        return None
+
+    monkeypatch.setattr(soulseek, "soulseek_match_for", no_cached)
+
+    async def scenario():
+        monkeypatch.setitem(soulseek._match_inflight, "VIDEOID1", asyncio.create_task(search()))
+        try:
+            return await soulseek.await_soulseek_match("VIDEOID1", timeout=ytdlp._SLSK_STREAM_WAIT)
+        finally:
+            soulseek._match_inflight["VIDEOID1"].cancel()
+
+    import time
+
+    started = time.monotonic()
+    assert asyncio.run(scenario()) is None
+    assert time.monotonic() - started < 0.5
