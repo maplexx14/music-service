@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
+import { useScreen } from '../hooks/useScreen'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './HeroDisc.css'
@@ -61,6 +62,8 @@ function HeroDisc() {
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => s.duration)
   const rootRef = useRef(null)
+  // Главная скрыта (открыта другая вкладка) — вращение не крутим.
+  const { active: screenActive } = useScreen()
   const coverRef = useRef(null)
   const dragRef = useRef(null)
   const lastAngleRef = useRef(null)
@@ -76,7 +79,7 @@ function HeroDisc() {
   // в DOM не происходит (сравнение с последним углом) — цикл в это время почти
   // бесплатный. rAF сам замирает в скрытой вкладке.
   useEffect(() => {
-    if (!currentTrack) return undefined
+    if (!currentTrack || !screenActive) return undefined
     const reduced =
       window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
     let raf
@@ -140,7 +143,7 @@ function HeroDisc() {
       cancelAnimationFrame(raf)
       ro?.disconnect()
     }
-  }, [currentTrack])
+  }, [currentTrack, screenActive])
 
   // Угол указателя относительно центра диска. Центр берём у корня, а не у
   // картинки: картинка вращается, и её rect описывал бы повёрнутый квадрат.

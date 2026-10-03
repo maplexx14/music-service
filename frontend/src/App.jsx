@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useLayoutEffect } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
 import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
@@ -76,6 +76,31 @@ function App() {
     return () => window.clearInterval(interval)
   }, [isAuthenticated])
   useNowPlayingReporter(isAuthenticated)
+
+  // Маршруты одного экрана стека (components/ScreenStack.jsx): каждый экран
+  // рендерит свою локацию — скрытая вкладка остаётся на своём пути. Suspense
+  // внутри экрана: при подгрузке чанка оболочка (меню, плеер) стоит на месте.
+  const isAdmin = !!user?.is_admin
+  const renderScreenRoutes = useCallback(
+    (location) => (
+      <Routes location={location}>
+        <Route path="/" element={<Home />} />
+        <Route path="/search" element={<Search />} />
+        <Route path="/playlists" element={<Playlists />} />
+        <Route path="/playlists/:id" element={<PlaylistDetail />} />
+        <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
+        <Route path="/albums/:source/:id" element={<Album />} />
+        <Route path="/artists/:name" element={<Artist />} />
+        <Route path="/liked" element={<LikedSongs />} />
+        <Route path="/upload" element={<UploadTrack />} />
+        {/* Один маршрут на меню и разделы: страница не размонтируется при
+            переходах, и несохранённые предпочтения не теряются. */}
+        <Route path="/settings/:section?" element={<Settings />} />
+        <Route path="/admin" element={isAdmin ? <Admin /> : <Navigate to="/" />} />
+      </Routes>
+    ),
+    [isAdmin],
+  )
   useEffect(() => (isAuthenticated ? preloadScreensWhenIdle() : undefined), [isAuthenticated])
 
   return (
@@ -148,26 +173,7 @@ function App() {
           path="/*"
           element={
             isAuthenticated ? (
-              <Layout>
-                {/* Suspense внутри Layout: при подгрузке lazy-чанка оболочка (меню, плеер) остаётся на месте. */}
-                <Suspense fallback={<Spinner page />}>
-                  <Routes>
-                    <Route path="/" element={<Home />} />
-                    <Route path="/search" element={<Search />} />
-                    <Route path="/playlists" element={<Playlists />} />
-                    <Route path="/playlists/:id" element={<PlaylistDetail />} />
-                    <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
-                    <Route path="/albums/:source/:id" element={<Album />} />
-                    <Route path="/artists/:name" element={<Artist />} />
-                    <Route path="/liked" element={<LikedSongs />} />
-                    <Route path="/upload" element={<UploadTrack />} />
-                    {/* Один маршрут на меню и разделы: страница не размонтируется при
-                        переходах, и несохранённые предпочтения не теряются. */}
-                    <Route path="/settings/:section?" element={<Settings />} />
-                    <Route path="/admin" element={user?.is_admin ? <Admin /> : <Navigate to="/" />} />
-                  </Routes>
-                </Suspense>
-              </Layout>
+              <Layout renderRoutes={renderScreenRoutes} />
             ) : (
               <Navigate to="/login" />
             )

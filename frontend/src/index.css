@@ -149,7 +149,7 @@ body {
 
 /* Весь документ не «пружинит»: резинка iOS утаскивала вместе с контентом
    таб-бар и мини-плеер. Скроллится и пружинит только сам экран
-   (.main-content), как нативный список. */
+   (.screen-scroll), как нативный список. */
 html,
 body {
   overscroll-behavior: none;
@@ -207,12 +207,6 @@ html[data-nav] .player {
 }
 html[data-nav] .mobile-nav-global {
   view-transition-name: tabbar;
-}
-html[data-nav] .mobile-topbar {
-  view-transition-name: topbar;
-}
-html[data-nav] .mobile-status-scrim {
-  view-transition-name: status-scrim;
 }
 html[data-nav] .sidebar {
   view-transition-name: sidebar;
@@ -326,11 +320,6 @@ html[data-nav='fade']::view-transition-new(page) {
   animation: 200ms var(--ease-out) both vt-fade-in;
 }
 
-/* Панель «Назад» появляется/исчезает вместе с экраном — коротким фейдом. */
-::view-transition-old(topbar),
-::view-transition-new(topbar) {
-  animation-duration: 200ms;
-}
 
 @keyframes vt-page-in-right {
   from {

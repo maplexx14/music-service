@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Program, Mesh, Triangle } from 'ogl';
 import './Grainient.css';
 import { heavyAnimationsHeld, onHeavyAnimationsHold } from '../services/navigation';
+import { useScreen } from '../hooks/useScreen';
 
 const hexToRgb = hex => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -267,6 +268,13 @@ const Grainient = ({
   colorsRef.current = { color1, color2, color3 };
   const applyColorsRef = useRef(null);
   const measureRippleRef = useRef(null);
+  // Главная скрыта (открыта другая вкладка, ScreenStack): шейдер стоит.
+  // IntersectionObserver ниже этого не видит — visibility: hidden для него
+  // всё ещё «во вьюпорте».
+  const { active: screenActive } = useScreen();
+  const screenActiveRef = useRef(screenActive);
+  screenActiveRef.current = screenActive;
+  const setScreenActiveRef = useRef(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -441,6 +449,7 @@ const Grainient = ({
     // SCROLL_IDLE_MS после последнего события прокрутки.
     let scrolling = false;
     let held = heavyAnimationsHeld();
+    let onScreen = screenActiveRef.current;
     let scrollIdleTimer = 0;
     const SCROLL_IDLE_MS = 180;
 
@@ -453,7 +462,7 @@ const Grainient = ({
 
     const startLoop = () => {
       if (running || reducedMotion || tier.frozen) return;
-      if (!pageVisible || !inViewport || scrolling || held) return;
+      if (!pageVisible || !inViewport || scrolling || held || !onScreen) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
       // Паузу между остановкой и стартом за медленный тик не считаем.
@@ -614,7 +623,15 @@ const Grainient = ({
     });
     io.observe(container);
 
-    if (reducedMotion || tier.frozen) {
+    setScreenActiveRef.current = (value) => {
+      onScreen = value;
+      if (onScreen) startLoop();
+      else stopLoop();
+    };
+
+    // Статичный кадр и на скрытой при монтировании главной: иначе под пальцем
+    // при свайпе на неё был бы пустой canvas.
+    if (reducedMotion || tier.frozen || !onScreen) {
       // Один статичный кадр вместо бесконечного цикла.
       renderer.render({ scene: mesh });
     } else {
@@ -625,6 +642,7 @@ const Grainient = ({
       stopLoop();
       applyColorsRef.current = null;
       measureRippleRef.current = null;
+      setScreenActiveRef.current = null;
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('scroll', onScroll, { capture: true });
       offHold();
@@ -671,6 +689,11 @@ const Grainient = ({
     // эффектом ниже — смена цвета не должна пересобирать контекст.
     renderScale
   ]);
+
+  // Показ/скрытие экрана главной — пуск/остановка цикла рендера.
+  useEffect(() => {
+    setScreenActiveRef.current?.(screenActive);
+  }, [screenActive]);
 
   // Живое обновление цветов. Объявлен после основного эффекта, поэтому к
   // моменту вызова программа уже создана (а на размонтировании ref обнулён).

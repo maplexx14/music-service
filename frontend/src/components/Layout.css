@@ -6,27 +6,45 @@
   background-color: #121212;
 }
 
+/* Контейнер стека экранов (ScreenStack.jsx). Сам не прокручивается: у
+   каждого экрана свой .screen-scroll, и скрытые вкладки помнят позицию. */
 .main-content {
   flex: 1;
-  overflow-y: auto;
+  position: relative;
+  overflow: hidden;
   margin-left: 240px;
+  background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
+  transition: margin-left 0.3s var(--ease-morph);
+}
+
+/* Без z-index: экран не должен становиться stacking context — модалки и
+   меню страниц (position: fixed с большим z-index) поднимаются над плеером
+   и таб-баром. Порядок на время свайпа задаёт useSwipeNavigation инлайном. */
+.screen {
+  position: absolute;
+  inset: 0;
+}
+
+.screen:not([data-active]) {
+  visibility: hidden;
+}
+
+.screen-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  /* Нативные экраны не скроллятся «вбок» от случайного диагонального жеста. */
+  overflow-x: hidden;
   /* Отступы через переменные: их же снимает полноэкранный Spinner, чтобы
      встать по центру экрана, а не области между шапкой и плеером. */
   --main-pad-top: 0px;
   --main-pad-bottom: 90px;
   padding-top: var(--main-pad-top);
   padding-bottom: var(--main-pad-bottom);
-  background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
-  transition: margin-left 0.3s var(--ease-morph);
   /* Резинка отскролла не проваливается в системный pull-to-refresh —
      на главной им управляет наш индикатор (usePullToRefresh). На остальных
      страницах жест просто «гасится» контейнером, как в нативных списках. */
   overscroll-behavior-y: contain;
-}
-
-/* Нативные экраны не скроллятся «вбок» от случайного диагонального жеста. */
-.main-content {
-  overflow-x: hidden;
 }
 
 @media (max-width: 768px) {
@@ -36,27 +54,37 @@
 
   .main-content {
     margin-left: 0;
+    background: transparent;
+  }
+
+  /* Непрозрачный фон: при свайпе под экраном виден соседний. */
+  .screen {
+    background: #050505;
+  }
+
+  .screen-scroll {
     /* Горизонталь отдаём JS (hooks/useSwipeNavigation.js): без этого iOS
        считает косой/боковой жест кандидатом на свою прокрутку, и экран под
        пальцем ехал рывками. Вложенные ленты-карусели — сами контейнеры
        прокрутки и своё горизонтальное листание сохраняют. */
     touch-action: pan-y pinch-zoom;
     --main-pad-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
-    background: transparent;
   }
 
   /* Статус-бар прозрачный (black-translucent) — без отступа под него
      заголовок экрана уезжал под часы и чёлку. */
-  .main-content.has-safe-top {
+  .screen-scroll.has-safe-top {
     --main-pad-top: env(safe-area-inset-top, 0px);
   }
 
-  .main-content.has-mobile-topbar {
+  .screen-scroll.has-mobile-topbar {
     --main-pad-top: calc(env(safe-area-inset-top, 0px) + 56px);
   }
 
+  /* Шапка и подложка статус-бара — часть экрана (ScreenStack.jsx): едут
+     вместе с ним при свайпе, поэтому absolute внутри .screen, а не fixed. */
   .mobile-status-scrim {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -70,7 +98,7 @@
   }
 
   .mobile-topbar {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -87,14 +115,6 @@
     background: rgba(0, 0, 0, 0.92);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     z-index: 1003;
-    /* Только fade, без движения: панель не должна ощущаться анимацией. */
-    transition: opacity var(--duration-fast) var(--ease-out);
-  }
-
-  @starting-style {
-    .mobile-topbar {
-      opacity: 0;
-    }
   }
 
   .mobile-back-btn {

@@ -7,7 +7,6 @@ import {
   swipeNextTransition,
 } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { startSwipeDebug } from '../utils/swipeDebug'
 
 // Навигация свайпами в PWA: вправо — «Назад» на вложенных экранах, влево/
 // вправо — соседняя вкладка на корнях вкладок. Жест начинается из любой
@@ -15,10 +14,16 @@ import { startSwipeDebug } from '../utils/swipeDebug'
 // на устройстве почти не срабатывал — у самого края касание забирает
 // система или чехол.
 //
-// Экран едет за пальцем; отпустили дальше трети ширины или быстрым броском —
-// уезжает, и происходит переход, иначе возвращается на место. Новый экран
-// доезжает с той стороны, откуда пришёл, без смены прозрачности: прежний
-// доезд с opacity 0.4 выглядел как мигание страницы.
+// Экран едет за пальцем, а под ним, как в Telegram, с параллаксом выезжает
+// живой экран, куда ведёт жест: соседняя вкладка или вкладка, куда ведёт
+// «Назад» (ScreenStack держит их смонтированными, targets — их id).
+// Отпустили дальше трети ширины или быстрым броском — экраны доезжают, и
+// только потом меняется маршрут: оба уже на своих местах, анимации перехода
+// не нужно. Иначе экран возвращается на место.
+//
+// Если живого экрана под пальцем нет (вложенный под вложенным, холодный
+// старт), под экраном пусто, а после отпускания переход доигрывает View
+// Transition: новый экран въезжает из-под уходящего снапшота.
 //
 // Жест не начинается там, где горизонтальное движение уже занято: поля
 // ввода, ползунки, горизонтально прокручиваемые ленты (карусели) и всё,
@@ -77,23 +82,35 @@ function insideHorizontalScroller(target, root) {
   return false
 }
 
-export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNext }) {
+export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, targets }) {
   const actionsRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
-  actionsRef.current = { right: onBack || onPrev || null, left: onNext || null }
+  actionsRef.current = { right: onBack || onPrev || null, left: onNext || null, targets: targets || {} }
 
   useEffect(() => {
-    const el = scrollerRef.current
-    if (!el || !enabled) return undefined
+    const container = containerRef.current
+    if (!container || !enabled) return undefined
 
     let g = null
+    // Экраны текущего жеста: тот, что под пальцем, его контейнер прокрутки и
+    // экран под ним (under, сторона underDir). Живут до конца доезда.
+    let pan = null
+    // Переход через View Transition: новый жест ждёт его конца.
     let busy = false
     // Свайп-переход уже снял сдвиг (onCapture) и доигрывает анимацию — экран
     // живой и новый жест можно начинать, оборвав анимацию.
     let interruptible = false
+    // Живой доезд экранов идёт — новое касание доводит его сразу (finishLive).
+    let finishLive = null
+    // Маршрут сменён, но роутер ещё не закоммитил экран — новый жест ждёт.
+    let committing = false
     let settleTimer = 0
     // Пауза WebGL-фона, пока экран под пальцем или доезжает (см. navigation.js).
     let releaseHeavy = null
+    let stopFrameTrack = null
+
+    const activeScreen = () => container.querySelector(':scope > .screen[data-active]')
+    const screenById = (id) => (id ? container.querySelector(`:scope > .screen[data-screen="${id}"]`) : null)
 
     // Сколько ехать distance px, чтобы стартовать со скоростью пальца v (px/мс).
     const settleMs = (distance, v) => {
@@ -101,24 +118,65 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       return Math.round(Math.min(MAX_MS, Math.max(MIN_MS, ms)))
     }
 
-    let stopFrameTrack = null
+    const transitionFor = (ms) => {
+      if (ms) return `transform ${ms}ms ${EASE}`
+      if (frameMs > SLOW_FRAME_MS) return `transform ${Math.round(frameMs)}ms linear`
+      return 'none'
+    }
 
-    const setOffset = (x, ms = 0) => {
-      if (ms) el.style.transition = `transform ${ms}ms ${EASE}`
-      else if (frameMs > SLOW_FRAME_MS) el.style.transition = `transform ${Math.round(frameMs)}ms linear`
-      else el.style.transition = 'none'
-      el.style.transform = x ? `translate3d(${x}px, 0, 0)` : ''
+    const clearScreen = (el) => {
+      const st = el.style
+      st.transition = ''
+      st.transform = ''
+      st.willChange = ''
+      st.zIndex = ''
+      st.visibility = ''
+      st.boxShadow = ''
     }
 
     const reset = () => {
-      el.style.transition = ''
-      el.style.transform = ''
-      el.style.willChange = ''
-      el.style.overflowY = ''
+      if (pan) {
+        clearScreen(pan.screen)
+        if (pan.under) clearScreen(pan.under)
+        if (pan.scroller) pan.scroller.style.overflowY = ''
+        pan = null
+      }
       releaseHeavy?.()
       releaseHeavy = null
       stopFrameTrack?.()
       stopFrameTrack = null
+    }
+
+    // Экран под пальцем со стороны dir (0 — никакого). Порядок слоёв — инлайн
+    // на время жеста: без z-index в покое экраны не запирают модалки страниц.
+    const showUnder = (dir) => {
+      if (pan.underDir === dir) return
+      if (pan.under) clearScreen(pan.under)
+      pan.underDir = dir
+      const id = dir > 0 ? actionsRef.current.targets.right : dir < 0 ? actionsRef.current.targets.left : null
+      const under = screenById(id)
+      pan.under = under && under !== pan.screen ? under : null
+      if (pan.under) {
+        const st = pan.under.style
+        st.visibility = 'visible'
+        st.zIndex = '1'
+        st.willChange = 'transform'
+      }
+      const shadow = pan.under && !document.documentElement.classList.contains('no-gpu')
+      pan.screen.style.boxShadow = shadow ? `${-dir * 12}px 0 32px rgba(0, 0, 0, 0.55)` : ''
+    }
+
+    const setOffset = (x, ms = 0) => {
+      const transition = transitionFor(ms)
+      const st = pan.screen.style
+      st.transition = transition
+      st.transform = x ? `translate3d(${x}px, 0, 0)` : ''
+      if (pan.under) {
+        // Нижний экран едет с параллаксом: от сдвига на четверть ширины к нулю.
+        const ux = -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
+        pan.under.style.transition = transition
+        pan.under.style.transform = `translate3d(${ux}px, 0, 0)`
+      }
     }
 
     // Возврат экрана на место. Таймер сброса снимается новым жестом: иначе
@@ -130,18 +188,55 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       settleTimer = setTimeout(reset, ms + 40)
     }
 
+    // Живой переход: экраны доезжают, потом меняется маршрут. Новый экран к
+    // этому моменту уже на месте, поэтому коммит роутера ничего не двигает, а
+    // инлайн-стили снимаются в его layout-эффекте — до отрисовки кадра.
+    const commitLive = (dir, ms, action) => {
+      const finished = pan
+      setOffset(dir * pan.width, ms)
+      let timer = 0
+      const navigateNow = () => {
+        clearTimeout(timer)
+        finishLive = null
+        committing = true
+        // Новое касание оборвало доезд — ставим экраны в конечные точки сразу.
+        finished.screen.style.transition = 'none'
+        finished.under.style.transition = 'none'
+        finished.under.style.transform = ''
+        const done = () => {
+          clearTimeout(fallback)
+          committing = false
+          if (pan === finished) reset()
+        }
+        const cancel = afterNextRouteCommit(done)
+        const fallback = setTimeout(() => {
+          cancel()
+          done()
+        }, 1000)
+        skipNextTransitionAnimation()
+        action()
+      }
+      timer = setTimeout(navigateNow, ms + 20)
+      finishLive = navigateNow
+    }
+
     const onStart = (e) => {
-      if (busy && interruptible && e.touches.length === 1) {
+      if (e.touches.length !== 1) {
+        g = null
+        return
+      }
+      finishLive?.()
+      if (busy && interruptible) {
         finishActiveTransition()
         busy = false
         interruptible = false
       }
-      if (busy || e.touches.length !== 1) {
+      if (busy) {
         g = null
         return
       }
       const target = e.target instanceof Element ? e.target : null
-      if (!target || target.closest(IGNORE) || insideHorizontalScroller(target, el)) return
+      if (!target || target.closest(IGNORE) || insideHorizontalScroller(target, container)) return
       const t = e.touches[0]
       g = { x: t.clientX, y: t.clientY, dx: 0, axis: null, lastX: t.clientX, lastT: e.timeStamp, v: 0 }
     }
@@ -149,7 +244,6 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     const onMove = (e) => {
       if (!g) return
       if (e.touches.length !== 1) {
-        g.debug?.end()
         g = null
         reset()
         return
@@ -159,21 +253,33 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const dy = t.clientY - g.y
       if (!g.axis) {
         if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
-        if (Math.abs(dx) < Math.abs(dy) * AXIS_RATIO) {
+        // Прошлый свайп ещё коммитится (активный экран вот-вот сменится) —
+        // жест не теряем, а ждём следующего движения пальца.
+        if (committing) return
+        const screen = activeScreen()
+        if (!screen || Math.abs(dx) < Math.abs(dy) * AXIS_RATIO) {
           g = null
           return
         }
         g.axis = 'x'
         clearTimeout(settleTimer)
-        if (!releaseHeavy) releaseHeavy = holdHeavyAnimations()
-        if (!stopFrameTrack) stopFrameTrack = trackFrameRate()
-        g.debug = startSwipeDebug()
-        el.style.willChange = 'transform'
+        reset()
+        releaseHeavy = holdHeavyAnimations()
+        stopFrameTrack = trackFrameRate()
+        pan = {
+          screen,
+          scroller: screen.querySelector(':scope > .screen-scroll'),
+          under: null,
+          underDir: 0,
+          width: container.clientWidth || window.innerWidth,
+        }
+        screen.style.willChange = 'transform'
+        screen.style.zIndex = '2'
         // Горизонтальный жест забираем целиком: список под пальцем не должен
         // одновременно прокручиваться. Через overflow, а не preventDefault —
         // тот требует непассивного touchmove, и тогда КАЖДОЕ движение пальца
         // при обычной прокрутке ждало бы главный поток.
-        el.style.overflowY = 'hidden'
+        if (pan.scroller) pan.scroller.style.overflowY = 'hidden'
       }
       const dt = Math.max(1, e.timeStamp - g.lastT)
       // Сглаживание: скорость по одному событию шумит от кадра к кадру.
@@ -182,38 +288,39 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       g.lastT = e.timeStamp
       const action = dx > 0 ? actionsRef.current.right : actionsRef.current.left
       g.dx = action ? dx : dx * RESISTANCE
-      const handlerStart = g.debug ? performance.now() : 0
+      showUnder(action && dx !== 0 ? Math.sign(dx) : 0)
       setOffset(g.dx)
-      g.debug?.move(performance.now() - handlerStart)
     }
 
     const onEnd = (e) => {
       if (!g) return
       const { axis, dx } = g
-      g.debug?.end()
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
-      if (axis !== 'x') return
+      if (axis !== 'x' || !pan) return
       stopFrameTrack?.()
       stopFrameTrack = null
       const dir = dx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
-      const width = el.clientWidth || window.innerWidth
+      const width = pan.width
       const commit =
         action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > 30))
       if (!commit) {
         settle(settleMs(Math.abs(dx), -v * dir))
         return
       }
-      busy = true
       haptic(HAPTIC.selection)
       const ms = settleMs(width - Math.abs(dx), v * dir)
 
-      // Основной путь — View Transition: старый экран (снапшот) уезжает от
-      // того места, где его отпустил палец, новый одновременно въезжает
-      // из-под него. Раньше всё делал один элемент: коммит нового экрана
-      // обрывал уезд старого на полпути, и экран прыгал на стартовую точку
-      // въезда (или, при долгом рендере, висел чёрный фон).
+      if (pan.under) {
+        commitLive(dir, ms, action)
+        return
+      }
+
+      busy = true
+      // Под пальцем пусто — переход доигрывает View Transition: старый экран
+      // (снапшот) уезжает от того места, где его отпустил палец, новый
+      // одновременно въезжает из-под него.
       const root = document.documentElement.style
       root.setProperty('--swipe-from', `${dx}px`)
       root.setProperty('--swipe-to', `${dir * width}px`)
@@ -237,9 +344,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         // Навигации не случилось — вернуть экран на место.
         fallback = setTimeout(() => {
           cancelSwipe()
-          setOffset(0, MAX_MS)
+          settle(MAX_MS)
           setTimeout(() => {
-            reset()
             busy = false
           }, MAX_MS + 40)
         }, 1000)
@@ -247,13 +353,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         return
       }
 
-      // Без View Transitions (старый WebKit, lite-mode, reduced motion).
-      // Переход запускаем СРАЗУ, параллельно с уездом старого экрана. Раньше
-      // он стартовал только после того, как экран уехал целиком, и всё время
-      // рендера нового экрана на месте ленты был пустой чёрный фон (видна
-      // одна нижняя панель). Теперь, пока роутер готовит новый экран, старый
-      // ещё виден и доезжает; на коммите нового сдвиг снимается до первого
-      // кадра. Экран уже увезён пальцем — штатная анимация перехода не нужна.
+      // Без View Transitions (старый WebKit, lite-mode, reduced motion):
+      // старый экран доезжает, новый на коммите въезжает коротким сдвигом.
       setOffset(dir * width, ms)
       skipNextTransitionAnimation()
       const cancel = afterNextRouteCommit(() => {
@@ -261,7 +362,7 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         reset()
         busy = false
         if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
-        el.animate(
+        activeScreen()?.animate(
           [{ transform: `translate3d(${-dir * ENTER_SHIFT * 100}%, 0, 0)` }, { transform: 'none' }],
           { duration: ENTER_MS, easing: EASE },
         )
@@ -279,23 +380,23 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     const onCancel = () => {
       if (!g) return
       const wasDragging = g.axis === 'x'
-      g.debug?.end()
       g = null
-      if (!wasDragging) return
+      if (!wasDragging || !pan) return
       settle(MAX_MS)
     }
 
-    el.addEventListener('touchstart', onStart, { passive: true })
-    el.addEventListener('touchmove', onMove, { passive: true })
-    el.addEventListener('touchend', onEnd, { passive: true })
-    el.addEventListener('touchcancel', onCancel, { passive: true })
+    container.addEventListener('touchstart', onStart, { passive: true })
+    container.addEventListener('touchmove', onMove, { passive: true })
+    container.addEventListener('touchend', onEnd, { passive: true })
+    container.addEventListener('touchcancel', onCancel, { passive: true })
     return () => {
-      el.removeEventListener('touchstart', onStart)
-      el.removeEventListener('touchmove', onMove)
-      el.removeEventListener('touchend', onEnd)
-      el.removeEventListener('touchcancel', onCancel)
+      container.removeEventListener('touchstart', onStart)
+      container.removeEventListener('touchmove', onMove)
+      container.removeEventListener('touchend', onEnd)
+      container.removeEventListener('touchcancel', onCancel)
       clearTimeout(settleTimer)
+      finishLive = null
       reset()
     }
-  }, [scrollerRef, enabled])
+  }, [containerRef, enabled])
 }

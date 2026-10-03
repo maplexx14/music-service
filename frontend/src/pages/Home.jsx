@@ -14,6 +14,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { splitArtists } from '../utils/artists'
 import { usePullToRefresh } from '../hooks/usePullToRefresh'
+import { useScreen } from '../hooks/useScreen'
 import Spinner from '../components/Spinner'
 import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
@@ -63,7 +64,12 @@ function handlePlayTrack(track, queue) {
 // на бэке до клика — старт воспроизведения почти мгновенный.
 const TrackCard = memo(function TrackCard({ track, queue }) {
   const cardRef = useRef(null)
+  // Главная живёт смонтированной и скрытой, пока открыта другая вкладка, а
+  // IntersectionObserver видимость (visibility: hidden) не учитывает — без
+  // этой проверки скрытые карточки засчитывались бы как показанные.
+  const { active } = useScreen()
   useEffect(() => {
+    if (!active) return undefined
     if (!track?.recommendation_id || typeof IntersectionObserver === 'undefined') return undefined
     const key = `${track.recommendation_id}:${track.recommendation_position}:${track.id}`
     if (homeRecommendationImpressions.has(key)) return undefined
@@ -81,7 +87,7 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [track])
+  }, [track, active])
 
   return (
     <div
@@ -281,13 +287,13 @@ function Home() {
   // Pull-to-refresh: шапка/hero не зависят от рекомендаций, поэтому тянем
   // обновление вручную по жесту — как в нативных приложениях. Индикатор
   // рисуется отдельным fixed-элементом, список не дёргается.
-  // reachTop важен: скролл живёт в .main-content, window.scrollY всегда 0.
+  // reachTop важен: скролл живёт в контейнере экрана, window.scrollY всегда 0.
+  // Слушатели жеста висят на window — на скрытой главной (открыта другая
+  // вкладка) жест не начинается вовсе.
+  const { active: screenActive, scrollerRef } = useScreen()
   const { pull, refreshing } = usePullToRefresh({
     onRefresh: () => fetchData(),
-    reachTop: () => {
-      const el = document.querySelector('.main-content')
-      return (el ? el.scrollTop : window.scrollY) <= 0
-    },
+    reachTop: () => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0,
   })
   const pullProgress = refreshing ? 1 : Math.min(pull / 64, 1)
   // Страховка на случай долгого пребывания на странице (TTL предзагрузки

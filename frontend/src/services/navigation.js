@@ -223,6 +223,24 @@ function waitForCommit(key, waitReady = true) {
 
 let activeTransition = null
 
+// Записи истории этой сессии по индексу (history.state.idx): какой экран
+// лежит под текущим. Свайп «Назад» показывает его под пальцем, если он
+// смонтирован (корни вкладок — всегда). После перезагрузки страницы прошлые
+// записи неизвестны — тогда null.
+const entries = []
+const currentIdx = () => window.history.state?.idx ?? 0
+
+function recordEntry(location, action) {
+  const idx = currentIdx()
+  if (action === 'PUSH') entries.length = idx
+  if (action !== 'POP' || !entries[idx]) entries[idx] = location
+}
+
+export function previousEntry() {
+  const idx = currentIdx()
+  return idx > 0 ? entries[idx - 1] ?? null : null
+}
+
 // Новый жест поверх доигрывающего перехода: анимацию сразу доводим до конца
 // (живой экран вместо снапшотов), чтобы касание не ждало её окончания.
 export function finishActiveTransition() {
@@ -233,11 +251,13 @@ export function createAppHistory() {
   const history = createBrowserHistory({ v5Compat: true })
   let current = history.location
   let active = null
+  recordEntry(history.location, 'REPLACE')
 
   const listen = (fn) =>
     history.listen((update) => {
       const from = current
       current = update.location
+      recordEntry(update.location, update.action)
       const kind = transitionKind(from, update.location, update.action)
       if (!kind) {
         fn(update)

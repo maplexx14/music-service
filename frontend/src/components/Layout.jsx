@@ -1,11 +1,11 @@
-import { lazy, Suspense, useState, useEffect, useRef } from 'react'
+import { lazy, Suspense, useCallback, useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Home, Search, Library, Heart, ArrowLeft } from 'lucide-react'
+import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
-import { isTabRoot, tabOf, canGoBack, isStandalone } from '../services/navigation'
+import { isTabRoot, tabOf, canGoBack, isStandalone, previousEntry } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
+import ScreenStack, { tabScreenId } from './ScreenStack'
 import Sidebar from './Sidebar'
 import Player from './Player'
 import ToastContainer from './Toast'
@@ -72,7 +72,7 @@ const MOBILE_NAV = [
   { to: '/playlists', icon: Library, label: 'Моя музыка' },
 ]
 
-function Layout({ children }) {
+function Layout({ renderRoutes }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
     return saved && JSON.parse(saved) ? 72 : 240
@@ -140,28 +140,40 @@ function Layout({ children }) {
   }, [])
 
   // «Назад» — только у вложенных экранов, как в нативном стеке: у корней
-  // вкладок его нет. Раньше панель с кнопкой появлялась на любой вкладке,
-  // кроме главной, и переключение вкладок сдвигало контент на её высоту.
+  // вкладок его нет. Сама панель рисуется в экране (ScreenStack).
   const showMobileBack = isMobile && !isTabRoot(location.pathname)
-  const isHome = location.pathname === '/'
 
   // Открыли вложенный экран по ссылке (холодный старт PWA): в истории
   // вернуться некуда, и navigate(-1) ничего бы не сделал — идём в корень
   // его вкладки.
-  const goBack = () => {
+  // Стабильная ссылка: кнопка «Назад» живёт в мемоизированном экране.
+  const pathnameRef = useRef(location.pathname)
+  pathnameRef.current = location.pathname
+  const goBack = useCallback(() => {
     if (canGoBack()) navigate(-1)
-    else navigate(tabOf(location.pathname), { replace: true })
-  }
+    else navigate(tabOf(pathnameRef.current), { replace: true })
+  }, [navigate])
 
-  useScrollRestoration(mainRef)
   // Свайпы — только в установленном PWA: во вкладке браузера горизонтальный
   // жест у края уже занят его собственным «Назад».
+  const swipeEnabled = isStandalone && isMobile
   const tabIndex = MOBILE_NAV.findIndex(({ to }) => to === location.pathname)
+  const prevTab = tabIndex > 0 ? MOBILE_NAV[tabIndex - 1].to : null
+  const nextTab = tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? MOBILE_NAV[tabIndex + 1].to : null
+  // Экран, который окажется под пальцем: вкладка, куда ведёт «Назад», или
+  // соседняя вкладка. Вложенный экран под вложенным не хранится — там свайп
+  // доигрывает переход без живого экрана под пальцем.
+  const backPath = canGoBack() ? previousEntry()?.pathname : tabOf(location.pathname)
+  const backTarget = backPath && isTabRoot(backPath) ? tabScreenId(backPath) : null
   useSwipeNavigation(mainRef, {
-    enabled: isStandalone && isMobile && !isFullScreen,
+    enabled: swipeEnabled && !isFullScreen,
     onBack: showMobileBack ? goBack : null,
-    onPrev: tabIndex > 0 ? () => navigate(MOBILE_NAV[tabIndex - 1].to) : null,
-    onNext: tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? () => navigate(MOBILE_NAV[tabIndex + 1].to) : null,
+    onPrev: prevTab ? () => navigate(prevTab) : null,
+    onNext: nextTab ? () => navigate(nextTab) : null,
+    targets: {
+      right: showMobileBack ? backTarget : prevTab && tabScreenId(prevTab),
+      left: nextTab && tabScreenId(nextTab),
+    },
   })
 
   // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
@@ -173,7 +185,9 @@ function Layout({ children }) {
     }
     if (isActive && location.pathname === to) {
       event.preventDefault()
-      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+      mainRef.current
+        ?.querySelector(':scope > .screen[data-active] > .screen-scroll')
+        ?.scrollTo({ top: 0, behavior: 'smooth' })
     }
     haptic(HAPTIC.selection)
   }
@@ -278,32 +292,8 @@ function Layout({ children }) {
   return (
     <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
       <Sidebar />
-      {showMobileBack && (
-        <div className="mobile-topbar">
-          <button
-            type="button"
-            className="mobile-back-btn"
-            onClick={goBack}
-            aria-label="Назад"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div className="mobile-topbar-title" aria-hidden="true">
-        
-          </div>
-          <div className="mobile-topbar-spacer" />
-        </div>
-      )}
-      {/* Подложка под статус-бар: контент уезжает под часы не «голым», а
-          под матовую полосу, как под системный бар. Главной не нужна — её
-          hero специально заходит под статус-бар. */}
-      {isMobile && !isHome && !showMobileBack && <div className="mobile-status-scrim" aria-hidden="true" />}
-      <main
-        ref={mainRef}
-        className={`main-content ${showMobileBack ? 'has-mobile-topbar' : ''} ${isMobile && !isHome && !showMobileBack ? 'has-safe-top' : ''}`}
-        style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}
-      >
-        {children}
+      <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
+        <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />
       </main>
       <Player />
       <ToastContainer />
