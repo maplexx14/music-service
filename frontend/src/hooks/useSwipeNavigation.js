@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { afterNextRouteCommit, skipNextTransitionAnimation } from '../services/navigation'
+import { afterNextRouteCommit, skipNextTransitionAnimation, swipeNextTransition } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 
 // Навигация свайпами в PWA: вправо — «Назад» на вложенных экранах, влево/
@@ -25,10 +25,18 @@ const COMMIT_FRACTION = 0.33
 const FLING_VELOCITY = 0.5 // px/мс
 // Сопротивление, когда в эту сторону идти некуда (первая/последняя вкладка).
 const RESISTANCE = 0.2
-const EXIT_MS = 240
+// Длительность доезда считается от скорости пальца, чтобы экран продолжил
+// движение с той же скоростью, а не дёрнулся быстрее или медленнее неё.
+const MIN_MS = 200
+const MAX_MS = 380
+// Палец остановился перед отпусканием — броска нет.
+const STALE_VELOCITY_MS = 80
 const ENTER_MS = 260
 const ENTER_SHIFT = 0.25
+// = --ease-drawer. Начальный наклон кривой ≈ 0.72 / 0.32: на старте экран
+// идёт в 2.25 раза быстрее средней скорости доезда.
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
+const EASE_START_SLOPE = 2.25
 const IGNORE = 'input, textarea, select, [contenteditable="true"], [role="slider"], [data-swipe-ignore]'
 
 // Есть ли между целью касания и контейнером горизонтально прокручиваемый
@@ -55,8 +63,14 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
     let g = null
     let busy = false
 
-    const setOffset = (x, animate) => {
-      el.style.transition = animate ? `transform ${EXIT_MS}ms ${EASE}` : 'none'
+    // Сколько ехать distance px, чтобы стартовать со скоростью пальца v (px/мс).
+    const settleMs = (distance, v) => {
+      const ms = v > 0 ? (EASE_START_SLOPE * distance) / v : MAX_MS
+      return Math.round(Math.min(MAX_MS, Math.max(MIN_MS, ms)))
+    }
+
+    const setOffset = (x, ms = 0) => {
+      el.style.transition = ms ? `transform ${ms}ms ${EASE}` : 'none'
       el.style.transform = x ? `translate3d(${x}px, 0, 0)` : ''
     }
 
@@ -103,17 +117,19 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
         el.style.overflowY = 'hidden'
       }
       const dt = Math.max(1, e.timeStamp - g.lastT)
-      g.v = (t.clientX - g.lastX) / dt
+      // Сглаживание: скорость по одному событию шумит от кадра к кадру.
+      g.v = 0.6 * ((t.clientX - g.lastX) / dt) + 0.4 * g.v
       g.lastX = t.clientX
       g.lastT = e.timeStamp
       const action = dx > 0 ? actionsRef.current.right : actionsRef.current.left
       g.dx = action ? dx : dx * RESISTANCE
-      setOffset(g.dx, false)
+      setOffset(g.dx)
     }
 
-    const onEnd = () => {
+    const onEnd = (e) => {
       if (!g) return
-      const { axis, dx, v } = g
+      const { axis, dx } = g
+      const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x') return
       const dir = dx > 0 ? 1 : -1
@@ -122,21 +138,55 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const commit =
         action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > 30))
       if (!commit) {
-        setOffset(0, true)
-        setTimeout(reset, EXIT_MS + 40)
+        const ms = settleMs(Math.abs(dx), -v * dir)
+        setOffset(0, ms)
+        setTimeout(reset, ms + 40)
         return
       }
       busy = true
       haptic(HAPTIC.selection)
+      const ms = settleMs(width - Math.abs(dx), v * dir)
+
+      // Основной путь — View Transition: старый экран (снапшот) уезжает от
+      // того места, где его отпустил палец, новый одновременно въезжает
+      // из-под него. Раньше всё делал один элемент: коммит нового экрана
+      // обрывал уезд старого на полпути, и экран прыгал на стартовую точку
+      // въезда (или, при долгом рендере, висел чёрный фон).
+      const root = document.documentElement.style
+      root.setProperty('--swipe-from', `${dx}px`)
+      root.setProperty('--swipe-to', `${dir * width}px`)
+      root.setProperty('--swipe-under', `${-dir * ENTER_SHIFT * width}px`)
+      root.setProperty('--swipe-shadow', `${-dir * 12}px`)
+      root.setProperty('--swipe-ms', `${ms}ms`)
+      let fallback = 0
+      const cancelSwipe = swipeNextTransition(() => {
+        clearTimeout(fallback)
+        reset()
+        busy = false
+      })
+      if (cancelSwipe) {
+        // Навигации не случилось — вернуть экран на место.
+        fallback = setTimeout(() => {
+          cancelSwipe()
+          setOffset(0, MAX_MS)
+          setTimeout(() => {
+            reset()
+            busy = false
+          }, MAX_MS + 40)
+        }, 1000)
+        action()
+        return
+      }
+
+      // Без View Transitions (старый WebKit, lite-mode, reduced motion).
       // Переход запускаем СРАЗУ, параллельно с уездом старого экрана. Раньше
       // он стартовал только после того, как экран уехал целиком, и всё время
       // рендера нового экрана на месте ленты был пустой чёрный фон (видна
       // одна нижняя панель). Теперь, пока роутер готовит новый экран, старый
       // ещё виден и доезжает; на коммите нового сдвиг снимается до первого
       // кадра. Экран уже увезён пальцем — штатная анимация перехода не нужна.
-      setOffset(dir * width, true)
+      setOffset(dir * width, ms)
       skipNextTransitionAnimation()
-      let fallback = 0
       const cancel = afterNextRouteCommit(() => {
         clearTimeout(fallback)
         reset()
@@ -161,8 +211,8 @@ export function useSwipeNavigation(scrollerRef, { enabled, onBack, onPrev, onNex
       const wasDragging = g.axis === 'x'
       g = null
       if (!wasDragging) return
-      setOffset(0, true)
-      setTimeout(reset, EXIT_MS + 40)
+      setOffset(0, MAX_MS)
+      setTimeout(reset, MAX_MS + 40)
     }
 
     el.addEventListener('touchstart', onStart, { passive: true })

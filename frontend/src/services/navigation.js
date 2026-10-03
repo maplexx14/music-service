@@ -45,20 +45,45 @@ const isMobileViewport = () => window.innerWidth <= 768
 // порядковый номер записи в history.state.idx.
 export const canGoBack = () => (window.history.state?.idx ?? 0) > 0
 
-// Свайп назад уже увёз экран пальцем — повторная анимация была бы лишней.
-let skipNextAnimation = false
+const viewTransitionsEnabled = () =>
+  typeof document !== 'undefined' &&
+  typeof document.startViewTransition === 'function' &&
+  !prefersReducedMotion() &&
+  !document.documentElement.classList.contains('lite-mode')
+
+// Свайп уже увёз экран пальцем — штатная анимация перехода была бы лишней.
+// undefined — выбрать по навигации, null — без анимации, 'swipe' — доиграть
+// жест (useSwipeNavigation).
+let nextKind
+let onSwipeCapture = null
 export function skipNextTransitionAnimation() {
-  skipNextAnimation = true
+  nextKind = null
+}
+
+// Доигрывание свайпа через View Transition: старый экран снимается снапшотом
+// там, где его оставил палец, и уезжает, а новый в это же время въезжает
+// из-под него. onCapture зовётся, когда старый кадр уже снят, а новый ещё не
+// рендерился, — в нём снимают сдвиг пальца, чтобы новый кадр был без него.
+// Возвращает отмену на случай, если навигации так и не случилось.
+export function swipeNextTransition(onCapture) {
+  if (!viewTransitionsEnabled()) return null
+  nextKind = 'swipe'
+  onSwipeCapture = onCapture
+  return () => {
+    if (nextKind === 'swipe') nextKind = undefined
+    if (onSwipeCapture === onCapture) onSwipeCapture = null
+  }
 }
 
 function transitionKind(from, to, action) {
-  if (skipNextAnimation) {
-    skipNextAnimation = false
-    return null
+  if (nextKind !== undefined) {
+    const kind = nextKind
+    nextKind = undefined
+    if (!kind || !from || from.pathname === to.pathname || document.hidden) return null
+    return kind
   }
   if (!from || from.pathname === to.pathname) return null
-  if (typeof document === 'undefined' || typeof document.startViewTransition !== 'function') return null
-  if (prefersReducedMotion() || document.documentElement.classList.contains('lite-mode')) return null
+  if (!viewTransitionsEnabled()) return null
   // Переключение вкладок в нативных таб-барах мгновенное.
   if (isTabRoot(from.pathname) && isTabRoot(to.pathname)) return null
   if (document.hidden) return null
@@ -137,7 +162,10 @@ export function createAppHistory() {
       active?.skipTransition()
       const root = document.documentElement
       root.dataset.nav = kind
+      const capture = kind === 'swipe' ? onSwipeCapture : null
+      onSwipeCapture = null
       const transition = document.startViewTransition(() => {
+        capture?.()
         const committed = waitForCommit(update.location.key)
         fn(update)
         return committed

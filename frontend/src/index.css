@@ -285,6 +285,36 @@ html[data-nav='back']::view-transition-new(page) {
   animation-name: vt-page-under-in;
 }
 
+/* Свайп (hooks/useSwipeNavigation.js): старый экран продолжает движение от
+   точки, где его отпустил палец, новый въезжает из-под него с другой
+   стороны. Точки и длительность (от скорости пальца) — в --swipe-*. */
+html[data-nav='swipe']::view-transition-old(page),
+html[data-nav='swipe']::view-transition-new(page) {
+  animation-duration: var(--swipe-ms, 380ms);
+}
+html[data-nav='swipe']::view-transition-old(page) {
+  z-index: 1;
+  animation-name: vt-swipe-out;
+  box-shadow: var(--swipe-shadow, -12px) 0 32px rgba(0, 0, 0, 0.55);
+}
+html[data-nav='swipe']::view-transition-new(page) {
+  animation-name: vt-swipe-under-in;
+}
+
+@keyframes vt-swipe-out {
+  from {
+    transform: translateX(var(--swipe-from, 0px));
+  }
+  to {
+    transform: translateX(var(--swipe-to, 100%));
+  }
+}
+@keyframes vt-swipe-under-in {
+  from {
+    transform: translateX(var(--swipe-under, -25%));
+  }
+}
+
 /* Десктоп: мягкий кроссфейд, старый слой держит подложку. */
 html[data-nav='fade']::view-transition-old(page) {
   animation: none;
