@@ -61,8 +61,11 @@ export function isChunkLoadError(error) {
 
 // React.lazy с перезагрузкой при пропавшем чанке. Пока перезагрузка идёт,
 // промис не резолвится — Suspense держит спиннер вместо вспышки ошибки.
+// preload() — заранее скачать чанк: первый переход на экран тогда не ждёт
+// сеть и анимация стартует сразу. Ошибку глотаем — lazy повторит загрузку
+// сам и обработает её как обычно.
 export function lazyWithReload(factory) {
-  return lazy(() =>
+  const component = lazy(() =>
     factory().catch(async (error) => {
       if (isChunkLoadError(error) && (await reloadForStaleBuild())) {
         return new Promise(() => {})
@@ -70,4 +73,6 @@ export function lazyWithReload(factory) {
       throw error
     }),
   )
+  component.preload = () => factory().catch(() => {})
+  return component
 }

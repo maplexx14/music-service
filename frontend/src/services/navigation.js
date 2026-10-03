@@ -145,19 +145,47 @@ export function notifyRouteCommitted(key) {
   }
 }
 
-// Дольше не держим экран замороженным: если чанк страницы ещё грузится,
-// переход доиграет по старому кадру, а новый экран появится сам.
-const COMMIT_TIMEOUT_MS = 350
+// Экран, который ещё грузит данные (рисует <Spinner page />), — как в
+// Telegram: переход не стартует, пока новый экран не готов, иначе он въезжал
+// пустым со спиннером, а контент выпрыгивал посреди анимации. Ждём недолго:
+// на медленной сети лучше въехать со спиннером, чем держать тап без ответа.
+let loadingScreens = 0
+const readyWaiters = new Set()
+
+export function markScreenLoading() {
+  loadingScreens += 1
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    loadingScreens -= 1
+    if (loadingScreens === 0 && readyWaiters.size) {
+      const waiters = [...readyWaiters]
+      readyWaiters.clear()
+      waiters.forEach((resolve) => resolve())
+    }
+  }
+}
+
+// Дольше не держим экран замороженным (кадр стоит, пока ждём): если чанк
+// или данные ещё грузятся, переход доиграет как есть, а контент появится сам.
+const READY_TIMEOUT_MS = 500
 
 function waitForCommit(key) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      commitWaiters.delete(key)
-      resolve()
-    }, COMMIT_TIMEOUT_MS)
-    commitWaiters.set(key, () => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
       clearTimeout(timer)
+      commitWaiters.delete(key)
+      readyWaiters.delete(finish)
       resolve()
+    }
+    const timer = setTimeout(finish, READY_TIMEOUT_MS)
+    commitWaiters.set(key, () => {
+      if (loadingScreens === 0) finish()
+      else readyWaiters.add(finish)
     })
   })
 }

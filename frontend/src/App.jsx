@@ -41,6 +41,20 @@ const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
 const Settings = lazyWithReload(() => import('./pages/Settings'))
 const Admin = lazyWithReload(() => import('./pages/Admin'))
 
+// Экраны основной навигации качаем в простое после входа: переход на экран,
+// чей чанк ещё в сети, стоял бы до таймаута и въезжал спиннером.
+const PRELOADED_SCREENS = [Home, Search, Playlists, PlaylistDetail, ExternalPlaylist, Album, Artist, LikedSongs, Settings]
+
+function preloadScreensWhenIdle() {
+  const run = () => PRELOADED_SCREENS.forEach((screen) => screen.preload())
+  if (typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(run, { timeout: 4000 })
+    return () => window.cancelIdleCallback(id)
+  }
+  const timer = window.setTimeout(run, 1500)
+  return () => window.clearTimeout(timer)
+}
+
 // Стоит после <Routes>: layout-эффекты соседей идут по порядку, так что
 // сигнал уходит, когда новый экран уже закоммичен и прокручен на место.
 function RouteCommitSignal() {
@@ -62,6 +76,7 @@ function App() {
     return () => window.clearInterval(interval)
   }, [isAuthenticated])
   useNowPlayingReporter(isAuthenticated)
+  useEffect(() => (isAuthenticated ? preloadScreensWhenIdle() : undefined), [isAuthenticated])
 
   return (
     // v7_startTransition: переход на вкладку, чей чанк ещё грузится, держит
