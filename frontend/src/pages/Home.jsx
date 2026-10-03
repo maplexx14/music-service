@@ -146,12 +146,15 @@ function Home() {
   // подписка добавляет перерисовку на смену трека (событие редкое), тиков
   // времени в ней нет.
   const currentTrack = usePlayerStore((s) => s.currentTrack)
-  const coverColors = useCoverColors(currentTrack?.cover_url)
+  const liteMode = useUiSettingsStore((s) => s.liteMode)
+  // В облегчённом режиме фон всегда стандартный: обложку не разбираем вовсе
+  // (сеть, декод картинки и canvas на каждый трек) — молнии на фиолетовом
+  // фоне логотипа и так смотрятся цельно.
+  const coverColors = useCoverColors(liteMode ? null : currentTrack?.cover_url)
   // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
   // дефолтная фиолетовая пара, как было зашито в hero раньше.
-  const heroColors = coverColors ?? DEFAULT_HERO_COLORS
+  const heroColors = (!liteMode && coverColors) || DEFAULT_HERO_COLORS
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
-  const liteMode = useUiSettingsStore((s) => s.liteMode)
   // Без аппаратного ускорения WebGL-шейдер на весь hero считается на CPU —
   // вместо него статичный CSS-градиент тех же цветов.
   const noGpu = isSoftwareRendering()
@@ -179,9 +182,10 @@ function Home() {
   // из очереди, а кэш разбора общий с useCoverColors — так что в момент смены
   // трека палитра уже готова и берётся синхронно.
   useEffect(() => {
+    if (liteMode) return
     const next = usePlayerStore.getState().getNextTrack(1)
     prefetchCoverColors(next?.cover_url)
-  }, [currentTrack])
+  }, [currentTrack, liteMode])
 
   // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
   // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
