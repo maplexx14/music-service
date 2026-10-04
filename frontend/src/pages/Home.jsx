@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Pause, Home as HomeIcon, History } from 'lucide-react'
+import { Play, Pause, Loader2, Home as HomeIcon, History } from 'lucide-react'
 import {
   recordRecommendationImpression,
   usePlayerStore,
@@ -170,16 +170,6 @@ function Home() {
 
   useEffect(() => {
     fetchData()
-    // Предзагружаем поток рекомендаций при открытии главной: к клику по
-    // «потоку» список уже получен, а резолв первых треков прогрет на бэке —
-    // старт воспроизведения почти мгновенный.
-    // Через idle, а не сразу: этот запрос ничего не рисует, и в момент
-    // монтирования он отбирал полосу у /recommendations и /tracks, от которых
-    // зависит первый экран.
-    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
-    const cancel = window.cancelIdleCallback ?? clearTimeout
-    const handle = idle(() => usePlayerStore.getState().preloadFlow())
-    return () => cancel(handle)
   }, [])
 
   // Разбор обложки следующего трека — заранее. Разбор идёт через сеть и декод
@@ -284,6 +274,10 @@ function Home() {
   // проигрывания карточки кнопка вместо запуска потока просто ставила ту
   // очередь на паузу, и пользователь бесконечно слушал одну цепочку.
   const isWavePlaying = isPlaying && source === 'flow'
+  // Поток запускается (список ещё не пришёл) — кнопка сразу показывает, что
+  // нажатие принято. Подгрузка следующей порции идёт при flowActive — её не
+  // показываем.
+  const flowStarting = usePlayerStore((s) => s.flowLoading && !s.flowActive)
   // Pull-to-refresh: шапка/hero не зависят от рекомендаций, поэтому тянем
   // обновление вручную по жесту — как в нативных приложениях. Индикатор
   // рисуется отдельным fixed-элементом, список не дёргается.
@@ -291,6 +285,34 @@ function Home() {
   // Слушатели жеста висят на window — на скрытой главной (открыта другая
   // вкладка) жест не начинается вовсе.
   const { active: screenActive, scrollerRef } = useScreen()
+
+  // Предзагружаем поток рекомендаций: к клику по «потоку» список уже получен,
+  // а резолв первых треков прогрет на бэке — старт почти мгновенный.
+  // Через idle, а не сразу: этот запрос ничего не рисует, и при открытии он
+  // отбирал полосу у /recommendations и /tracks, от которых зависит экран.
+  // Главная живёт смонтированной всю сессию (ScreenStack), поэтому одной
+  // предзагрузки на монтировании мало: через 5 минут (TTL) список устаревал,
+  // и нажатие ждало расчёта рекомендаций на бэке — секунды без отклика.
+  // Пока главная на экране, освежаем предзагрузку раз в минуту и при
+  // возврате в приложение; preloadFlow сам пропускает свежий список, летящий
+  // запрос и уже играющий поток, так что лишних запросов нет.
+  useEffect(() => {
+    if (!screenActive) return undefined
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const preload = () => usePlayerStore.getState().preloadFlow()
+    const handle = idle(preload)
+    const timer = setInterval(preload, 60 * 1000)
+    const onVisible = () => {
+      if (!document.hidden) preload()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancel(handle)
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [screenActive])
   const { pull, refreshing } = usePullToRefresh({
     onRefresh: () => fetchData(),
     reachTop: () => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0,
@@ -444,7 +466,13 @@ function Home() {
                   alt="поток рекомендаций"
                 />
                 <span className="wave-gif-icon">
-                  {isWavePlaying ? <Pause size={20} /> : <Play size={20} />}
+                  {flowStarting ? (
+                    <Loader2 size={20} className="wave-loading-icon" />
+                  ) : isWavePlaying ? (
+                    <Pause size={20} />
+                  ) : (
+                    <Play size={20} />
+                  )}
                 </span>
               </button>
             ) : (
@@ -453,9 +481,12 @@ function Home() {
                 onClick={handleWaveClick}
                 className="wave-title"
                 aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
+                aria-busy={flowStarting || undefined}
                 {...waveIntentHandlers}
               >
-                {isWavePlaying ? (
+                {flowStarting ? (
+                  <Loader2 size={40} strokeWidth={2.5} className="wave-loading-icon" />
+                ) : isWavePlaying ? (
                   <Pause size={38} fill="currentColor" strokeWidth={0} />
                 ) : (
                   // Треугольник визуально тяжелее слева — сдвиг вправо
