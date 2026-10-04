@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState, useEffect, useRef } from 'react'
+import { lazy, memo, Suspense, useCallback, useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
@@ -6,12 +6,22 @@ import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
-import Sidebar from './Sidebar'
-import Player from './Player'
-import ToastContainer from './Toast'
-import AddToPlaylistDialog from './AddToPlaylistDialog'
-import CensorOverrideDialog from './CensorOverrideDialog'
+import SidebarView from './Sidebar'
+import PlayerView from './Player'
+import ToastView from './Toast'
+import AddToPlaylistDialogView from './AddToPlaylistDialog'
+import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
+
+// Layout перерисовывается на каждом переходе и на каждом шаге капсулы меню.
+// Плеер, сайдбар и диалоги пропсов не принимают и живут на своих подписках —
+// без memo они перерисовывались бы вместе с ним, а плеер — тяжёлый
+// компонент, и тап по вкладке ждал этих рендеров.
+const Sidebar = memo(SidebarView)
+const Player = memo(PlayerView)
+const ToastContainer = memo(ToastView)
+const AddToPlaylistDialog = memo(AddToPlaylistDialogView)
+const CensorOverrideDialog = memo(CensorOverrideDialogView)
 
 // Полноэкранный плеер вместе с панелью текстов — отдельный чанк. Он и так
 // рисуется только по isFullScreen, но статический импорт тянул его (плюс

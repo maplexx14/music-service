@@ -13,6 +13,10 @@
 
 const PRESSABLE = 'button, a[href], [role="button"], .track-card, [data-press]'
 const TOUCH_DELAY_MS = 70
+// Задержка нужна только там, где касание может оказаться началом прокрутки.
+// Нижнее меню, плеер, панель «Назад» лежат вне прокручиваемого контента —
+// там кнопка вдавливается сразу, как нативный контрол.
+const SCROLLABLE = '.screen-scroll, .lyrics-panel, .atp-body, [data-scrollable]'
 const MOVE_CANCEL_PX = 8
 
 let installed = false
@@ -95,7 +99,7 @@ export function installPressFeedback() {
       if (!el || el.closest('[data-no-press], input[type="range"]')) return
       const c = { el, x: e.clientX, y: e.clientY, timer: 0, animation: null }
       current = c
-      if (e.pointerType === 'mouse') press(c)
+      if (e.pointerType === 'mouse' || !el.closest(SCROLLABLE)) press(c)
       else c.timer = setTimeout(() => press(c), TOUCH_DELAY_MS)
     },
     { passive: true, capture: true },

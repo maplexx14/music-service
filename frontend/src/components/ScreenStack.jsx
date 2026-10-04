@@ -1,5 +1,10 @@
 import { memo, Suspense, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react'
-import { useLocation, useNavigationType } from 'react-router-dom'
+import {
+  UNSAFE_LocationContext as LocationContext,
+  UNSAFE_RouteContext as RouteContext,
+  useLocation,
+  useNavigationType,
+} from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import Spinner from './Spinner'
 import { ScreenContext } from '../hooks/useScreen'
@@ -109,9 +114,20 @@ function useDetailScrollRestoration(scrollerRef, location, enabled) {
   useEffect(() => () => cancelRestoreRef.current?.(), [])
 }
 
+// Контексты роутера, которые экран отдаёт своему поддереву. Вложенный
+// <Routes location> сам подписан на глобальную локацию и родительский
+// RouteContext и на каждый переход раздаёт новые объекты контекста — так
+// любая навигация перерисовывала все смонтированные экраны, где есть
+// useNavigate/useParams (а это почти все страницы), и тап по вкладке ждал
+// этого рендера. Экран подменяет оба контекста своими, стабильными: скрытые
+// экраны перерисовываются, только когда меняется их собственная локация.
+// Родитель — маршрут "/*" с базой "/", пустой список матчей даёт ту же базу.
+const ROOT_ROUTE_CONTEXT = { outlet: null, matches: [], isDataRoute: false }
+
 const Screen = memo(function Screen({ id, location, active, isMobile, renderRoutes, onBack }) {
   const scrollerRef = useRef(null)
   const context = useMemo(() => ({ active, scrollerRef }), [active])
+  const locationContext = useMemo(() => ({ location, navigationType: 'POP' }), [location])
   const path = location.pathname
   // «Назад» — только у вложенных экранов, как в нативном стеке. Панель —
   // часть экрана: при свайпе и переходе едет вместе с ним.
@@ -143,9 +159,13 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
         ref={scrollerRef}
         className={`screen-scroll${topbar ? ' has-mobile-topbar' : ''}${safeTop ? ' has-safe-top' : ''}`}
       >
-        <ScreenContext.Provider value={context}>
-          <Suspense fallback={<Spinner page />}>{renderRoutes(location)}</Suspense>
-        </ScreenContext.Provider>
+        <RouteContext.Provider value={ROOT_ROUTE_CONTEXT}>
+          <LocationContext.Provider value={locationContext}>
+            <ScreenContext.Provider value={context}>
+              <Suspense fallback={<Spinner page />}>{renderRoutes(location)}</Suspense>
+            </ScreenContext.Provider>
+          </LocationContext.Provider>
+        </RouteContext.Provider>
       </div>
     </div>
   )
