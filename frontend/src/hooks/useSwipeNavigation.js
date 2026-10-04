@@ -82,10 +82,17 @@ function insideHorizontalScroller(target, root) {
   return false
 }
 
-export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, targets }) {
+export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, onCommit, targets }) {
   const actionsRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
-  actionsRef.current = { right: onBack || onPrev || null, left: onNext || null, targets: targets || {} }
+  // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
+  // сразу, не дожидаясь доезда экранов и коммита роутера.
+  actionsRef.current = {
+    right: onBack || onPrev || null,
+    left: onNext || null,
+    onCommit: onCommit || null,
+    targets: targets || {},
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -310,6 +317,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         return
       }
       haptic(HAPTIC.selection)
+      actionsRef.current.onCommit?.(dir)
       const ms = settleMs(width - Math.abs(dx), v * dir)
 
       if (pan.under) {

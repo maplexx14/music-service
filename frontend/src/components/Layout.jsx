@@ -72,6 +72,14 @@ const MOBILE_NAV = [
   { to: '/playlists', icon: Library, label: 'Моя музыка' },
 ]
 
+// Ячейка нижнего меню для маршрута: вложенные экраны без своей вкладки —
+// под «Главной».
+const navIndexOf = (pathname) =>
+  Math.max(
+    0,
+    MOBILE_NAV.findIndex(({ to }) => (to === '/' ? pathname === '/' : pathname.startsWith(to)))
+  )
+
 function Layout({ renderRoutes }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
@@ -85,6 +93,10 @@ function Layout({ renderRoutes }) {
   const location = useLocation()
   const navigate = useNavigate()
   const mainRef = useRef(null)
+  // Ячейка, куда уже едет подсветка меню, пока роутер не закоммитил экран:
+  // переход идёт в startTransition и под стеком смонтированных экранов
+  // коммитится заметно позже тапа или свайпа.
+  const [pendingNavIndex, setPendingNavIndex] = useState(null)
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -165,15 +177,23 @@ function Layout({ renderRoutes }) {
   // стеке (только что вернулись, нижний досоздаётся в простое), свайп
   // доигрывает переход View Transition.
   let backTarget = null
+  let backPath = null
   if (showMobileBack) {
     const entryIdx = entryIndexOf(location.key)
     const below = canGoBack() ? entryAt(entryIdx - 1) : null
-    const backPath = canGoBack() ? below?.pathname : tabOf(location.pathname)
+    backPath = canGoBack() ? below?.pathname : tabOf(location.pathname)
     if (backPath && isTabRoot(backPath)) backTarget = tabScreenId(backPath)
     else if (below) backTarget = detailScreenId(entryIdx - 1, below)
   }
+  // Подсветка меню переезжает в момент отпускания пальца: иначе она ждала бы
+  // доезда экранов и коммита роутера и отставала от свайпа.
+  const handleSwipeCommit = (dir) => {
+    const to = showMobileBack ? backPath : dir > 0 ? prevTab : nextTab
+    if (to) setPendingNavIndex(navIndexOf(to))
+  }
   useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
+    onCommit: handleSwipeCommit,
     onBack: showMobileBack ? goBack : null,
     onPrev: prevTab ? () => navigate(prevTab) : null,
     onNext: nextTab ? () => navigate(nextTab) : null,
@@ -195,6 +215,8 @@ function Layout({ renderRoutes }) {
       mainRef.current
         ?.querySelector(':scope > .screen[data-active] > .screen-scroll')
         ?.scrollTo({ top: 0, behavior: 'smooth' })
+    } else {
+      setPendingNavIndex(navIndexOf(to))
     }
     haptic(HAPTIC.selection)
   }
@@ -202,25 +224,35 @@ function Layout({ renderRoutes }) {
   // Подсветка активного пункта — одна плавающая капсула на всю навигацию, как
   // в iOS-приложении: она едет между ячейками и на ходу растягивается. Индекс
   // активной ячейки считается один раз на рендер, положение — в CSS.
-  const activeNavIndex = Math.max(
-    0,
-    MOBILE_NAV.findIndex(({ to }) =>
-      to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
-    )
-  )
+  const activeNavIndex = navIndexOf(location.pathname)
   // Деформация включается только на смене вкладки: на первом рендере капсула
   // должна стоять на месте, а не пульсировать.
   const [navDeform, setNavDeform] = useState(false)
-  const lastNavIndex = useRef(activeNavIndex)
+  // Капсула едет сразу на выбранную ячейку, поэтому и растягивается вместе с
+  // этим, а не на коммите маршрута.
+  const targetNavIndex = pendingNavIndex ?? activeNavIndex
+  const lastNavIndex = useRef(targetNavIndex)
 
   useEffect(() => {
-    if (lastNavIndex.current === activeNavIndex) return
-    lastNavIndex.current = activeNavIndex
-    setPendingNavIndex(null)
+    if (lastNavIndex.current === targetNavIndex) return
+    lastNavIndex.current = targetNavIndex
     setNavDeform(true)
     const timer = setTimeout(() => setNavDeform(false), 400)
     return () => clearTimeout(timer)
-  }, [activeNavIndex])
+  }, [targetNavIndex])
+
+  // Роутер закоммитил экран — подсветку дальше ведёт маршрут.
+  useEffect(() => {
+    setPendingNavIndex(null)
+  }, [location.key])
+
+  // Перехода так и не случилось (свайп отменён) — капсула возвращается к
+  // текущей вкладке, а не зависает на чужой.
+  useEffect(() => {
+    if (pendingNavIndex === null) return undefined
+    const timer = setTimeout(() => setPendingNavIndex(null), 2000)
+    return () => clearTimeout(timer)
+  }, [pendingNavIndex])
 
   // Протяжка пальцем по панели, как в Telegram: капсула едет за пальцем,
   // подсвечивается вкладка под ним, отпустили — открылась она. Короткий тап
@@ -235,7 +267,6 @@ function Layout({ renderRoutes }) {
   const navDragRef = useRef(null)
   const navSuppressClickUntil = useRef(0)
   const [navHoverIndex, setNavHoverIndex] = useState(null)
-  const [pendingNavIndex, setPendingNavIndex] = useState(null)
   const displayNavIndex = navHoverIndex ?? pendingNavIndex ?? activeNavIndex
 
   const navGeometry = () => {
