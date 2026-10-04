@@ -145,12 +145,24 @@ const lerp = (a, b, t) => a + (b - a) * t;
 // renderScale), без колец от диска (atan + шум + exp на каждый пиксель), а на
 // последнем — один статичный кадр. FPS — делители 60, иначе на 60 Гц кап
 // округляется вниз до ближайшего делителя.
-const QUALITY_TIERS = [
-  { activeFps: 20, idleFps: 10, scale: 1, ripples: true },
-  { activeFps: 15, idleFps: 10, scale: 0.75, ripples: true },
-  { activeFps: 12, idleFps: 6, scale: 0.5, ripples: false },
-  { frozen: true, scale: 0.5, ripples: false }
-];
+// Телефон (сенсорный экран) — свои капы выше: GPU там отдельный от CPU-
+// нагрева мака, а на 20 кадрах волны от диска, когда трек играет, шли заметными
+// ступеньками рядом с плавно крутящимся диском и прокруткой на 60 Гц.
+const TOUCH_DEVICE =
+  typeof window !== 'undefined' && (window.matchMedia?.('(pointer: coarse)')?.matches ?? false);
+const QUALITY_TIERS = TOUCH_DEVICE
+  ? [
+      { activeFps: 30, idleFps: 20, scale: 1, ripples: true },
+      { activeFps: 20, idleFps: 12, scale: 0.75, ripples: true },
+      { activeFps: 12, idleFps: 6, scale: 0.5, ripples: false },
+      { frozen: true, scale: 0.5, ripples: false }
+    ]
+  : [
+      { activeFps: 20, idleFps: 10, scale: 1, ripples: true },
+      { activeFps: 15, idleFps: 10, scale: 0.75, ripples: true },
+      { activeFps: 12, idleFps: 6, scale: 0.5, ripples: false },
+      { frozen: true, scale: 0.5, ripples: false }
+    ];
 // Тик rAF длиннее 40 мс (<25 Гц) — устройство не успевает. Порог выше 33 мс,
 // чтобы iOS в режиме энергосбережения (rAF ровно 30 Гц) не считался слабым.
 const SLOW_TICK = 0.04;

@@ -7,12 +7,6 @@ import './HeroDisc.css'
 
 const DEG = 180 / Math.PI
 
-// Позиция в сторе приходит раз в секунду (в Player это сознательный троттлинг
-// timeupdate), поэтому между обновлениями угол доводится по часам. Потолок
-// доводки чуть больше секунды: он ограничивает уход вперёд, когда на самом
-// деле звук встал на буферизации.
-const MAX_EXTRAPOLATION_SEC = 1.2
-
 // Перемотка во время вращения диска шлёт audio.currentTime, а это сетевой
 // range-запрос: на каждый градус поворота потоковый источник перезапрашивал бы
 // диапазон десятки раз за жест. 120мс — примерно 8 перемоток в секунду: звук
@@ -20,18 +14,13 @@ const MAX_EXTRAPOLATION_SEC = 1.2
 // доезжает отдельным seek на отпускании, так что точность не теряется.
 const SEEK_THROTTLE_MS = 120
 
-// Прогресс 0..1 в градусы: ровно один оборот за трек. Угол квантуем так,
-// чтобы край диска за шаг сдвигался примерно на пиксель (шагов за оборот ≈
-// длина окружности): глазом неотличимо от плавного, а каждая запись в
-// style.transform — это перерастеризация повёрнутой обложки, без аппаратного
-// ускорения на CPU. Потолок — 0.1°.
-const MAX_ANGLE_STEPS = 3600
-
-function angleStepsFor(el) {
-  const size = el?.offsetWidth || 0
-  if (!(size > 0)) return MAX_ANGLE_STEPS
-  return Math.min(MAX_ANGLE_STEPS, Math.max(360, Math.round(Math.PI * size)))
-}
+// Анимация вращения разошлась с позицией звука больше чем на столько —
+// переставляем её. Меньше не трогаем: позиция в сторе приходит раз в секунду
+// и сама по себе шумит на доли секунды.
+const DRIFT_SEC = 0.5
+// Позиция в сторе не менялась дольше этого при isPlaying — звук встал на
+// буферизации, диск тоже останавливаем.
+const STALL_SEC = 1.5
 
 // Длительность: store-версию выставляет Player (для внешних источников он
 // считает её точнее, чем audio.duration, — см. resolveTrackDuration). Метка
@@ -66,82 +55,118 @@ function HeroDisc() {
   const { active: screenActive } = useScreen()
   const coverRef = useRef(null)
   const dragRef = useRef(null)
-  const lastAngleRef = useRef(null)
+  // Управление вращением для жеста: hold() останавливает анимацию и отдаёт
+  // позицию, на которой диск стоит на экране; resume(сек) запускает её
+  // с позиции, куда диск отпустили.
+  const spinRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
 
   const total = readDuration({ duration }, currentTrack)
 
-  // Вращение. currentTime в сторе тикает раз в секунду (timeupdate через
-  // троттлинг в Player). Вести угол от него через setState — значит и рывки
-  // раз в секунду, и перерисовку главной на каждом тике. Поэтому угол считает
-  // rAF-цикл: между тиками позиция доводится по часам, а результат пишется
-  // прямо в style.transform. Пока трек на паузе, значение не меняется и записи
-  // в DOM не происходит (сравнение с последним углом) — цикл в это время почти
-  // бесплатный. rAF сам замирает в скрытой вкладке.
+  // Вращение — Web Animation от текущего угла до полного оборота за остаток
+  // трека. Её крутит композитор, а не главный поток: раньше угол писал
+  // rAF-цикл в style.transform, и диск шёл ступеньками (шаг квантования,
+  // перезапуск transition на каждом шаге) и замирал, когда главный поток
+  // занят — свайпом, рендером экрана, разбором ответа. Главный поток только
+  // сверяет анимацию с позицией звука, когда та приходит из стора (раз в
+  // секунду), и переставляет её, если разошлись.
   useEffect(() => {
     if (!currentTrack || !screenActive) return undefined
+    const el = coverRef.current
+    if (!el || typeof el.animate !== 'function') return undefined
+    // prefers-reduced-motion: постоянное вращение — декор, его убираем.
+    // Ручной поворот (жест) остаётся: это прямое управление, а не анимация.
     const reduced =
       window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
-    let raf
-    // Последняя пара «позиция из стора — момент, когда мы её увидели». По ней
-    // оценивается позиция между тиками: без этого диск делал бы один шаг в
-    // секунду, а на коротком треке шаг доходит до десятков градусов.
-    let sample = { time: -1, at: 0 }
-    // Шаг угла зависит от размера диска, а он меняется вместе с окном.
-    // Размер отслеживаем наблюдателем, а не читаем в кадре: чтение
-    // offsetWidth при грязной раскладке форсировало бы её на каждом тике.
-    let steps = angleStepsFor(rootRef.current)
-    const ro =
-      typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => {
-            steps = angleStepsFor(rootRef.current)
-          })
-        : null
-    if (rootRef.current) ro?.observe(rootRef.current)
+    let anim = null
+    // Позиция (сек), с которой стартовала анимация, и длительность трека.
+    let anchor = { time: 0, dur: 0 }
+    // Когда позиция в сторе менялась в последний раз — для детекта буферизации.
+    let lastTime = -1
+    let lastTimeAt = performance.now()
+    let stalled = false
 
-    const tick = (now) => {
-      raf = requestAnimationFrame(tick)
-      const st = usePlayerStore.getState()
-      const dur = readDuration(st, st.currentTrack)
-      const drag = dragRef.current
-
-      let progress
-      if (drag) {
-        // Во время жеста позицию ведёт палец, а не audio: перемотка
-        // применяется с задержкой, и диск отставал бы от руки.
-        progress = drag.progress
-      } else if (dur > 0) {
-        if (st.currentTime !== sample.time) sample = { time: st.currentTime, at: now }
-        // Между обновлениями позицию доводим по часам. Потолок в 1.2с — на
-        // буферизации звук стоит, а часы идут: без него диск уезжал бы вперёд
-        // и после возобновления прыгал назад.
-        const ahead = Math.min((now - sample.at) / 1000, MAX_EXTRAPOLATION_SEC)
-        const estimate = st.currentTime + (st.isPlaying ? ahead : 0)
-        progress = clamp(estimate / dur, 0, 1)
-      } else {
-        return
-      }
-
-      const root = rootRef.current
-      if (root && dur > 0) {
-        root.setAttribute('aria-valuenow', String(Math.floor(progress * dur)))
-      }
-      // prefers-reduced-motion: постоянное вращение — декор, его убираем.
-      // Ручной поворот (жест) остаётся: это прямое управление, а не анимация.
-      if (reduced && !drag) return
-
-      const el = coverRef.current
-      if (!el) return
-      const angle = Math.round(progress * steps) / (steps / 360)
-      if (angle === lastAngleRef.current) return
-      lastAngleRef.current = angle
-      el.style.transform = `rotate(${angle}deg)`
+    const start = (time, dur, playing) => {
+      anim?.cancel()
+      anim = null
+      el.style.transform = `rotate(${clamp(time / dur, 0, 1) * 360}deg)`
+      anchor = { time, dur }
+      if (reduced) return
+      const remaining = Math.max(0, dur - time)
+      if (!(remaining > 0)) return
+      anim = el.animate(
+        [{ transform: el.style.transform }, { transform: 'rotate(360deg)' }],
+        { duration: remaining * 1000, easing: 'linear', fill: 'forwards' },
+      )
+      if (!playing) anim.pause()
     }
 
-    raf = requestAnimationFrame(tick)
+    const sync = (state, force = false) => {
+      if (dragRef.current) return
+      const dur = readDuration(state, state.currentTrack)
+      if (!(dur > 0)) return
+      const now = performance.now()
+      if (state.currentTime !== lastTime) {
+        lastTime = state.currentTime
+        lastTimeAt = now
+      }
+      const root = rootRef.current
+      root?.setAttribute('aria-valuenow', String(Math.floor(state.currentTime)))
+      const nowStalled = state.isPlaying && (now - lastTimeAt) / 1000 > STALL_SEC
+      const playing = state.isPlaying && !nowStalled
+      const implied = anchor.time + (Number(anim?.currentTime) || 0) / 1000
+      if (
+        force ||
+        (!anim && !reduced) ||
+        dur !== anchor.dur ||
+        nowStalled !== stalled ||
+        Math.abs(implied - state.currentTime) > DRIFT_SEC
+      ) {
+        stalled = nowStalled
+        start(state.currentTime, dur, playing)
+        return
+      }
+      if (!anim) return
+      if (playing && anim.playState === 'paused') anim.play()
+      else if (!playing && anim.playState === 'running') anim.pause()
+    }
+
+    spinRef.current = {
+      hold: () => {
+        const time = anchor.time + (Number(anim?.currentTime) || 0) / 1000
+        anim?.cancel()
+        anim = null
+        if (anchor.dur > 0) el.style.transform = `rotate(${clamp(time / anchor.dur, 0, 1) * 360}deg)`
+        return time
+      },
+      resume: (time) => {
+        const state = usePlayerStore.getState()
+        const dur = readDuration(state, state.currentTrack)
+        if (!(dur > 0)) return
+        lastTime = state.currentTime
+        lastTimeAt = performance.now()
+        stalled = false
+        start(time, dur, state.isPlaying)
+      },
+    }
+
+    sync(usePlayerStore.getState(), true)
+    const unsubscribe = usePlayerStore.subscribe((state, prev) => {
+      if (
+        state.currentTime !== prev.currentTime ||
+        state.isPlaying !== prev.isPlaying ||
+        state.duration !== prev.duration
+      ) {
+        sync(state)
+      }
+    })
+    // Буферизация: позиция в сторе стоит, событий нет — проверяем по таймеру.
+    const stallTimer = setInterval(() => sync(usePlayerStore.getState()), 500)
     return () => {
-      cancelAnimationFrame(raf)
-      ro?.disconnect()
+      unsubscribe()
+      clearInterval(stallTimer)
+      spinRef.current = null
+      anim?.cancel()
     }
   }, [currentTrack, screenActive])
 
@@ -166,7 +191,10 @@ function HeroDisc() {
     if (!(dur > 0)) return
     e.currentTarget.setPointerCapture?.(e.pointerId)
     const angle = angleAt(e.clientX, e.clientY)
-    const base = clamp(st.currentTime / dur, 0, 1)
+    // Палец подхватывает диск там, где он стоит на экране, а не по позиции
+    // из стора: та приходит раз в секунду, и диск дёрнулся бы назад.
+    const shown = spinRef.current?.hold() ?? st.currentTime
+    const base = clamp(shown / dur, 0, 1)
     dragRef.current = {
       pointerId: e.pointerId,
       lastAngle: angle,
@@ -198,6 +226,9 @@ function HeroDisc() {
     // отыграет накопленный перекрут.
     drag.accum = clamp(drag.accum + delta, -drag.base * 360, (1 - drag.base) * 360)
     drag.progress = drag.base + drag.accum / 360
+    // Во время жеста угол ведёт палец, а не анимация: перемотка применяется
+    // с задержкой, и диск отставал бы от руки.
+    if (coverRef.current) coverRef.current.style.transform = `rotate(${drag.progress * 360}deg)`
 
     const now = performance.now()
     if (now - drag.lastSeekAt >= SEEK_THROTTLE_MS) {
@@ -215,7 +246,10 @@ function HeroDisc() {
     // последние ~120мс жеста (самая точная его часть) терялись бы.
     const st = usePlayerStore.getState()
     const dur = readDuration(st, st.currentTrack)
-    if (dur > 0) st.seekTo(drag.progress * dur)
+    if (dur > 0) {
+      st.seekTo(drag.progress * dur)
+      spinRef.current?.resume(drag.progress * dur)
+    }
   }
 
   // Клавиатура: диск — это слайдер перемотки, стрелки двигают позицию.

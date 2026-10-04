@@ -65,20 +65,13 @@
   display: block;
   border-radius: 50%;
   object-fit: cover;
-  /* Угол пишет rAF-цикл прямо в transform (см. HeroDisc.jsx) — промотируем
-     слой заранее, чтобы поворот не пересобирал раскладку. */
+  /* Вращение — Web Animation на композиторе (см. HeroDisc.jsx): слой
+     промотирован заранее, поворот не трогает ни раскладку, ни главный поток. */
   will-change: transform;
-  transition: transform 0.25s ease-out;
   -webkit-user-drag: none;
   /* События указателя слушает корень: на картинке они не нужны, а её
      собственный drag-and-drop в браузере перебивал бы поворот. */
   pointer-events: none;
-}
-
-/* Пока палец/мышь ведут диск, угол должен идти за рукой без сглаживания —
-   transition здесь читался бы как люфт. */
-.hero-disc.is-dragging .hero-disc-cover {
-  transition: none;
 }
 
 @media (max-width: 768px) {
@@ -87,8 +80,3 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .hero-disc-cover {
-    transition: none;
-  }
-}
