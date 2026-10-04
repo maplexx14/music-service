@@ -62,6 +62,10 @@ function HeroDisc() {
   const [isDragging, setIsDragging] = useState(false)
 
   const total = readDuration({ duration }, currentTrack)
+  // Вращение перезапускается только на смене трека: стор заменяет объект
+  // трека и посреди игры (уточнённые данные), а перезапуск берёт позицию из
+  // стора, отстающую до секунды, — диск дёргался бы назад.
+  const trackKey = currentTrack?.id ?? currentTrack
 
   // Вращение — Web Animation от текущего угла до полного оборота за остаток
   // трека. Её крутит композитор, а не главный поток: раньше угол писал
@@ -71,7 +75,7 @@ function HeroDisc() {
   // сверяет анимацию с позицией звука, когда та приходит из стора (раз в
   // секунду), и переставляет её, если разошлись.
   useEffect(() => {
-    if (!currentTrack || !screenActive) return undefined
+    if (!trackKey || !screenActive) return undefined
     const el = coverRef.current
     if (!el || typeof el.animate !== 'function') return undefined
     // prefers-reduced-motion: постоянное вращение — декор, его убираем.
@@ -101,28 +105,41 @@ function HeroDisc() {
       if (!playing) anim.pause()
     }
 
+    let wasPlaying = false
+
     const sync = (state, force = false) => {
       if (dragRef.current) return
       const dur = readDuration(state, state.currentTrack)
       if (!(dur > 0)) return
       const now = performance.now()
-      if (state.currentTime !== lastTime) {
+      // Свежая позиция — только когда она изменилась: стор обновляется раз в
+      // секунду, и между обновлениями значение в нём отстаёт от звука до
+      // секунды. Сверять с ним по таймеру нельзя — анимация откатывалась бы
+      // назад на каждой проверке, и диск трясся на месте.
+      const fresh = state.currentTime !== lastTime
+      if (fresh) {
         lastTime = state.currentTime
         lastTimeAt = now
       }
-      const root = rootRef.current
-      root?.setAttribute('aria-valuenow', String(Math.floor(state.currentTime)))
-      const nowStalled = state.isPlaying && (now - lastTimeAt) / 1000 > STALL_SEC
-      const playing = state.isPlaying && !nowStalled
+      // Пуск после паузы: позиция придёт только через секунду — отсчёт
+      // буферизации начинаем с пуска, а не с последнего обновления.
+      if (state.isPlaying && !wasPlaying) lastTimeAt = now
+      wasPlaying = state.isPlaying
+      rootRef.current?.setAttribute('aria-valuenow', String(Math.floor(state.currentTime)))
+      stalled = state.isPlaying && (now - lastTimeAt) / 1000 > STALL_SEC
+      const playing = state.isPlaying && !stalled
       const implied = anchor.time + (Number(anim?.currentTime) || 0) / 1000
-      if (
-        force ||
-        (!anim && !reduced) ||
-        dur !== anchor.dur ||
-        nowStalled !== stalled ||
-        Math.abs(implied - state.currentTime) > DRIFT_SEC
-      ) {
-        stalled = nowStalled
+      if (force || (!anim && !reduced)) {
+        start(state.currentTime, dur, playing)
+        return
+      }
+      // Длительность уточнилась (поток догрузился) — тот же угол на экране,
+      // новая скорость.
+      if (Math.abs(dur - anchor.dur) > DRIFT_SEC) {
+        start(Math.min(implied, dur), dur, playing)
+        return
+      }
+      if (fresh && Math.abs(implied - state.currentTime) > DRIFT_SEC) {
         start(state.currentTime, dur, playing)
         return
       }
@@ -145,6 +162,7 @@ function HeroDisc() {
         if (!(dur > 0)) return
         lastTime = state.currentTime
         lastTimeAt = performance.now()
+        wasPlaying = state.isPlaying
         stalled = false
         start(time, dur, state.isPlaying)
       },
@@ -168,7 +186,7 @@ function HeroDisc() {
       spinRef.current = null
       anim?.cancel()
     }
-  }, [currentTrack, screenActive])
+  }, [trackKey, screenActive])
 
   // Угол указателя относительно центра диска. Центр берём у корня, а не у
   // картинки: картинка вращается, и её rect описывал бы повёрнутый квадрат.
