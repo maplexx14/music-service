@@ -32,9 +32,16 @@ import { haptic, HAPTIC } from '../utils/haptics'
 const AXIS_LOCK_PX = 10
 // Горизонталь должна явно преобладать: косой жест при прокрутке списка не
 // должен уводить экран вбок.
-const AXIS_RATIO = 1.5
-const COMMIT_FRACTION = 0.33
-const FLING_VELOCITY = 0.5 // px/мс
+const AXIS_RATIO = 1.2
+// Порог перелистывания: на треть ширины приходилось тянуть экран долго,
+// как в Telegram хватает четверти или короткого броска.
+const COMMIT_FRACTION = 0.25
+const FLING_VELOCITY = 0.3 // px/мс
+const FLING_MIN_PX = 20
+// Скорость — по смещению за последние VELOCITY_WINDOW_MS, а не по одному
+// событию: перед отпусканием палец притормаживает, и последнее событие
+// занижало скорость броска.
+const VELOCITY_WINDOW_MS = 100
 // Сопротивление, когда в эту сторону идти некуда (первая/последняя вкладка).
 const RESISTANCE = 0.2
 // Длительность доезда считается от скорости пальца, чтобы экран продолжил
@@ -245,7 +252,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const target = e.target instanceof Element ? e.target : null
       if (!target || target.closest(IGNORE) || insideHorizontalScroller(target, container)) return
       const t = e.touches[0]
-      g = { x: t.clientX, y: t.clientY, dx: 0, axis: null, lastX: t.clientX, lastT: e.timeStamp, v: 0 }
+      g = { x: t.clientX, y: t.clientY, dx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
     }
 
     const onMove = (e) => {
@@ -288,11 +295,11 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         // при обычной прокрутке ждало бы главный поток.
         if (pan.scroller) pan.scroller.style.overflowY = 'hidden'
       }
-      const dt = Math.max(1, e.timeStamp - g.lastT)
-      // Сглаживание: скорость по одному событию шумит от кадра к кадру.
-      g.v = 0.6 * ((t.clientX - g.lastX) / dt) + 0.4 * g.v
-      g.lastX = t.clientX
       g.lastT = e.timeStamp
+      g.samples.push({ x: t.clientX, t: e.timeStamp })
+      while (g.samples.length > 2 && e.timeStamp - g.samples[0].t > VELOCITY_WINDOW_MS) g.samples.shift()
+      const first = g.samples[0]
+      g.v = (t.clientX - first.x) / Math.max(1, e.timeStamp - first.t)
       const action = dx > 0 ? actionsRef.current.right : actionsRef.current.left
       g.dx = action ? dx : dx * RESISTANCE
       showUnder(action && dx !== 0 ? Math.sign(dx) : 0)
@@ -311,7 +318,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       const width = pan.width
       const commit =
-        action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > 30))
+        action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > FLING_MIN_PX))
       if (!commit) {
         settle(settleMs(Math.abs(dx), -v * dir))
         return
