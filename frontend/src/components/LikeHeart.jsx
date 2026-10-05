@@ -173,31 +173,33 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
           <mask id={`${id}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
             <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
           </mask>
-          <filter id={`${id}-accent`} colorInterpolationFilters="sRGB">
-            <feFlood style={{ floodColor: 'var(--brand-accent)' }} />
-            <feComposite in2="SourceAlpha" operator="in" />
-          </filter>
-          <filter id={`${id}-accent-dark`} colorInterpolationFilters="sRGB">
-            <feFlood style={{ floodColor: 'color-mix(in oklab, var(--brand-accent) 60%, black)' }} />
-            <feComposite in2="SourceAlpha" operator="in" />
-          </filter>
-          <clipPath id={`${id}-level`}>
-            <rect ref={fillRef} x="0" y="0" width="128" height="128" />
-          </clipPath>
-          <image
-            href={heartFill}
-            width="128"
-            height="128"
-            filter={`url(#${id}-accent)`}
-            clipPath={`url(#${id}-level)`}
-          />
-          <image href={heartLine} width="128" height="128" filter={`url(#${id}-accent)`} />
-          <image
+          {/* Слои крашены прямоугольниками с fill по маскам из белых
+              силуэтов картинок. Не feFlood с var(): переменные внутри
+              фильтров iOS Safari не подставлял. И уровень заливки двигает
+              сам прямоугольник, а не rect внутри clipPath: правку clipPath
+              WebKit не перерисовывает, и сердце оставалось пустым. Атрибут
+              fill — запасной цвет, если style не понят (color-mix до iOS
+              16.2). */}
+          <mask id={`${id}-in`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+            <image href={heartFill} width="128" height="128" />
+          </mask>
+          <mask id={`${id}-line`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+            <image href={heartLine} width="128" height="128" filter={`url(#${id}-fill)`} />
+          </mask>
+          <mask id={`${id}-bolt`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+            <image href={heartBolt} width="128" height="128" filter={`url(#${id}-fill)`} />
+          </mask>
+          <g mask={`url(#${id}-in)`}>
+            <rect ref={fillRef} x="0" y="0" width="128" height="128" fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+          </g>
+          <rect width="128" height="128" mask={`url(#${id}-line)`} fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+          <rect
             ref={boltRef}
-            href={heartBolt}
             width="128"
             height="128"
-            filter={`url(#${id}-accent-dark)`}
+            mask={`url(#${id}-bolt)`}
+            fill="#61359a"
+            style={{ fill: 'color-mix(in oklab, var(--brand-accent) 60%, black)' }}
           />
           <path
             ref={dashRef}
