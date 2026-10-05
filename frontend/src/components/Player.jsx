@@ -2437,6 +2437,24 @@ function PlayerInner() {
           <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
             <SkipBack size={20} />
           </button>
+          {canInteract && (
+            // Мобильный дубль лайка: блок .player-track-actions на узком
+            // экране скрыт, а лайк — самое частое действие, без полноэкранного
+            // плеера до него не дотянуться. На десктопе скрыт CSS.
+            <button
+              type="button"
+              className={`like-btn player-mobile-like ${isLiked ? 'liked' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleLike()
+              }}
+              disabled={loadingLike}
+              aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+              aria-pressed={isLiked}
+            >
+              <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+            </button>
+          )}
           <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
             {isPlaying ? (
               <Pause size={24} fill="currentColor" />

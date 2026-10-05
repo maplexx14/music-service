@@ -424,6 +424,11 @@
   filter: brightness(1.08);
 }
 
+/* Лайк рядом с плей/паузой — только для мобильной капсулы (см. @media ниже). */
+.player-mobile-like {
+  display: none;
+}
+
 .player-right {
   flex: 1;
   display: flex;
@@ -481,6 +486,10 @@
 
   .player-controls {
     gap: 10px;
+  }
+
+  .player-controls .player-mobile-like {
+    display: flex;
   }
 }
 
