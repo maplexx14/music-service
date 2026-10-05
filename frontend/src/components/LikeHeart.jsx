@@ -2,18 +2,24 @@ import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 import heart from '../assets/loader-heart.webp'
 import heartLine from '../assets/like-heart-line.webp'
 import heartBolt from '../assets/like-heart-bolt.webp'
+import heartFill from '../assets/like-heart-fill.webp'
 
 // Сердце из логотипа — та же картинка, что у BoltLoader, с мазками кисти.
-// Лайкнуто — белое сердце и фиолетовая молния. Не лайкнуто — силуэт той же
-// картинки цветом кнопки (currentColor), как остальные иконки.
+// Лайкнуто — сердце целиком акцентного цвета (--brand-accent): и мазок, и
+// заливка; молния — тёмный оттенок акцента, чтобы читалась на заливке
+// (белые крапинки по её краю тоже перекрашиваются). Не лайкнуто — силуэт той же картинки цветом кнопки
+// (currentColor), как остальные иконки.
 // Обёртка — <svg>, чтобы работали правила размеров вида `.like-btn svg`.
 //
-// При лайке, как дуга в спиннере, по линии сердца пробегает фиолетовая
+// При лайке, как дуга в спиннере, по линии сердца пробегает белая
 // полоса: от нижнего кончика вверх по левой доле, через верх и правую долю,
 // и с инерцией встаёт на место молнии, после чего переходит в неё. Полоса —
-// толстый штрих, обрезанный маской по самой картинке, поэтому перекрашивает
+// толстый штрих, обрезанный маской по самой картинке, поэтому подсвечивает
 // мазок кисти, а не рисует поверх ровную линию. Для перехода картинка
 // разрезана на слои: like-heart-line (без заливки молнии) и like-heart-bolt.
+// Заодно сердце наливается акцентом снизу вверх. Маска заливки
+// like-heart-fill — внутренность мазка, вырезанная по пикселям картинки:
+// средняя линия LOOP для неё грубовата и у молнии вылезает за мазок.
 
 // Замкнутый контур по средней линии мазка, кубические Безье в координатах
 // картинки 128×128. Начало и конец — нижний кончик; последние два сегмента
@@ -77,6 +83,8 @@ function easeOutBack(t) {
 }
 
 const DURATION = 800
+// Заливка доходит до верха чуть раньше, чем полоса встаёт на молнию.
+const FILL_UNTIL = 0.75
 // Доля анимации, с которой полоса уже у молнии и перетекает в неё.
 const SETTLE_FROM = 0.7
 // Сколько после нажатия ждём, что лайк станет true: ответ API может прийти
@@ -89,6 +97,7 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
   const svgRef = useRef(null)
   const boltRef = useRef(null)
   const dashRef = useRef(null)
+  const fillRef = useRef(null)
   const clickedAtRef = useRef(0)
   const prevLikedRef = useRef(liked)
 
@@ -109,7 +118,8 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
     prevLikedRef.current = liked
     const bolt = boltRef.current
     const dash = dashRef.current
-    if (!liked || wasLiked || !bolt || !dash) return undefined
+    const fill = fillRef.current
+    if (!liked || wasLiked || !bolt || !dash || !fill) return undefined
     if (performance.now() - clickedAtRef.current > CLICK_WINDOW) return undefined
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
 
@@ -125,6 +135,10 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
       const settle = Math.max(0, (t - SETTLE_FROM) / (1 - SETTLE_FROM))
       bolt.setAttribute('opacity', String(settle))
       dash.setAttribute('opacity', String(1 - settle))
+      // Уровень заливки: верх обрезающего прямоугольника идёт от низа
+      // картинки к верху, с торможением в конце.
+      const level = 1 - (1 - Math.min(1, t / FILL_UNTIL)) ** 3
+      fill.setAttribute('y', String(128 * (1 - level)))
       if (t < 1) {
         frame = requestAnimationFrame(step)
       } else {
@@ -136,6 +150,7 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
       cancelAnimationFrame(frame)
       bolt.setAttribute('opacity', '1')
       dash.setAttribute('visibility', 'hidden')
+      fill.setAttribute('y', '0')
     }
   }, [liked])
 
@@ -158,13 +173,37 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
           <mask id={`${id}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
             <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
           </mask>
-          <image href={heartLine} width="128" height="128" />
-          <image ref={boltRef} href={heartBolt} width="128" height="128" />
+          <filter id={`${id}-accent`} colorInterpolationFilters="sRGB">
+            <feFlood style={{ floodColor: 'var(--brand-accent)' }} />
+            <feComposite in2="SourceAlpha" operator="in" />
+          </filter>
+          <filter id={`${id}-accent-dark`} colorInterpolationFilters="sRGB">
+            <feFlood style={{ floodColor: 'color-mix(in oklab, var(--brand-accent) 60%, black)' }} />
+            <feComposite in2="SourceAlpha" operator="in" />
+          </filter>
+          <clipPath id={`${id}-level`}>
+            <rect ref={fillRef} x="0" y="0" width="128" height="128" />
+          </clipPath>
+          <image
+            href={heartFill}
+            width="128"
+            height="128"
+            filter={`url(#${id}-accent)`}
+            clipPath={`url(#${id}-level)`}
+          />
+          <image href={heartLine} width="128" height="128" filter={`url(#${id}-accent)`} />
+          <image
+            ref={boltRef}
+            href={heartBolt}
+            width="128"
+            height="128"
+            filter={`url(#${id}-accent-dark)`}
+          />
           <path
             ref={dashRef}
             d={LOOP_D}
             fill="none"
-            stroke="#875df4"
+            stroke="#ffffff"
             strokeWidth="24"
             strokeLinecap="round"
             strokeLinejoin="round"
