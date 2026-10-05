@@ -165,6 +165,30 @@
   width: 100%;
   height: 100%;
   background: linear-gradient(135deg, var(--hero-c1), var(--hero-c2), var(--hero-c3));
+  /* Статичный слепок Grainient: светлые пятна c1, две диагональные полосы c2
+     под углом blendAngle шейдера, почти чёрные углы и мягкий свет под диском.
+     Плоский трёхцветный градиент выглядел блекло. Рисуется один раз — годится
+     и для lite mode, и для рендера без GPU. Строка выше — фолбэк без
+     color-mix. */
+  background:
+    radial-gradient(30% 26% at 50% 50%, color-mix(in oklab, var(--hero-c1) 70%, white) 0%, transparent 100%),
+    radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
+    radial-gradient(38% 50% at 80% 70%, var(--hero-c1) 0%, transparent 70%),
+    linear-gradient(131deg, transparent 18%, var(--hero-c2) 38%, transparent 52%, transparent 58%, var(--hero-c2) 74%, transparent 92%),
+    radial-gradient(45% 50% at 95% 5%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
+    radial-gradient(45% 50% at 5% 98%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
+    var(--hero-c3);
+}
+
+/* Зерно поверх слепка — гасит полосы на плавных переходах и добавляет
+   фактуру. Шум — крошечная SVG-плитка, растеризуется один раз. */
+.hero-grainient-static::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 .hero-grainient .grainient-container {

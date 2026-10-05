@@ -1,5 +1,5 @@
 .hero-bolts {
-  /* Цикл одной молнии. Молний шесть со сдвигом в 1/6 цикла, так что удар
+  /* Цикл одной точки. Точек шесть со сдвигом в 1/6 цикла, так что вспышка
      раз в 4 с, при игре — раз в 2 с. */
   --hb-cycle: 24s;
   position: absolute;
@@ -24,24 +24,12 @@
   animation: hero-sky-flash calc(var(--hb-cycle) / 6) infinite;
 }
 
-/* Сам элемент — только позиция и анимация; спрайт в ::after, свечение под
-   ним в ::before (у элемента в собственном контексте наложения фон рисуется
-   раньше детей с отрицательным z-index, поэтому раскладка через два
-   псевдоэлемента, а не фон + ::before). */
+/* Сам элемент — только позиция, ореол в ::before. */
 .hero-bolt {
   position: absolute;
   width: calc(clamp(44px, 6.5vw, 104px) * var(--s));
   aspect-ratio: 76 / 116;
-  opacity: 0.22;
-  transform: translate(-50%, -50%) rotate(var(--r));
-  animation: hero-bolt-strike var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite;
-}
-
-.hero-bolt::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: center / contain no-repeat;
+  transform: translate(-50%, -50%);
 }
 
 .hero-bolt::before {
@@ -60,47 +48,13 @@
   animation: hero-sky-flash calc(var(--hb-cycle) / 6) infinite !important;
 }
 
-.lite-mode .hero-bolt {
-  animation: hero-bolt-strike var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite !important;
-}
-
 .lite-mode .hero-bolt::before {
   animation: hero-bolt-glow var(--hb-cycle) calc(var(--d) * var(--hb-cycle) * -1) infinite !important;
 }
 
-.hero-bolt.v1::after { background-image: url('../assets/loader-bolt-1.svg'); }
-.hero-bolt.v2::after { background-image: url('../assets/loader-bolt-2.svg'); }
-.hero-bolt.v3::after { background-image: url('../assets/loader-bolt-3.svg'); }
-
-/* Удар ~0.9 с (3.75% от 24 с): резкая вспышка, короткое мерцание и долгое
-   мягкое затухание. Плавная анимация только на время удара — остальные ~96%
-   цикла значения стоят и браузеру нечего перерисовывать. Тайминги в
-   процентах цикла: 0.4% ≈ 100 мс. */
-@keyframes hero-bolt-strike {
-  0% {
-    opacity: 0.22;
-    transform: translate(-50%, -50%) rotate(var(--r)) scale(1);
-    animation-timing-function: cubic-bezier(.2, .9, .3, 1);
-  }
-  0.4% {
-    opacity: 1;
-    transform: translate(-50%, -50%) rotate(var(--r)) scale(1.14);
-    animation-timing-function: ease-in-out;
-  }
-  0.8% { opacity: 0.55; animation-timing-function: ease-in-out; }
-  1.2% {
-    opacity: 1;
-    transform: translate(-50%, -50%) rotate(var(--r)) scale(1.1);
-    animation-timing-function: cubic-bezier(.4, 0, .2, 1);
-  }
-  3.75%, 100% {
-    opacity: 0.22;
-    transform: translate(-50%, -50%) rotate(var(--r)) scale(1);
-  }
-}
-
-/* Свечение вокруг молнии: вспыхивает вместе с ней и гаснет чуть дольше —
-   ореол «остывает» после разряда. */
+/* Ореол вспышки ~1 с: резкий всплеск, короткое мерцание и долгое мягкое
+   затухание. Остальные ~95% цикла значения стоят и браузеру нечего
+   перерисовывать. Тайминги в процентах цикла: 0.4% ≈ 100 мс. */
 @keyframes hero-bolt-glow {
   0% { opacity: 0; animation-timing-function: cubic-bezier(.2, .9, .3, 1); }
   0.4% { opacity: 1; animation-timing-function: ease-in-out; }
@@ -118,10 +72,8 @@
   24%, 100% { opacity: 0; }
 }
 
-/* Без движения молнии просто тлеют на своих местах. */
+/* Без движения вспышек нет. */
 @media (prefers-reduced-motion: reduce) {
-  .hero-bolt,
-  .lite-mode .hero-bolt,
   .hero-bolt::before,
   .lite-mode .hero-bolt::before,
   .hero-bolts::before,

@@ -154,7 +154,7 @@ function Home() {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   // В облегчённом режиме фон всегда стандартный: обложку не разбираем вовсе
-  // (сеть, декод картинки и canvas на каждый трек) — молнии на фиолетовом
+  // (сеть, декод картинки и canvas на каждый трек) — вспышки на фиолетовом
   // фоне логотипа и так смотрятся цельно.
   const coverColors = useCoverColors(liteMode ? null : currentTrack?.cover_url)
   // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
