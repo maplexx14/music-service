@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Heart, ListPlus, ShieldCheck, X } from 'lucide-react'
+import { ListPlus, ShieldCheck, X } from 'lucide-react'
+import LikeHeart from './LikeHeart'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
@@ -193,7 +194,7 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
           </button>
         </div>
         <button type="button" className="track-ctx-item" role="menuitem" onClick={like}>
-          <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+          <LikeHeart size={18} liked={!!isLiked} />
           <span>{isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}</span>
         </button>
         <button type="button" className="track-ctx-item" role="menuitem" onClick={addToPlaylist}>

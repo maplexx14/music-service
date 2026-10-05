@@ -6,7 +6,8 @@ import {
   trackLikeKey,
   usePlayerStore,
 } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, Heart, ThumbsDown, ListPlus, Download, AlignLeft, ShieldCheck } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, ThumbsDown, ListPlus, Download, AlignLeft, ShieldCheck } from 'lucide-react'
+import LikeHeart from './LikeHeart'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
@@ -2368,7 +2369,7 @@ function PlayerInner() {
                   disabled={loadingLike}
                   title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
                 >
-                  <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+                  <LikeHeart size={18} liked={!!isLiked} />
                 </button>
                 <button
                   className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
@@ -2452,7 +2453,7 @@ function PlayerInner() {
               aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
               aria-pressed={isLiked}
             >
-              <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+              <LikeHeart size={18} liked={!!isLiked} />
             </button>
           )}
           <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>

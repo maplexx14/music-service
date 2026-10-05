@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Play, Pause, Heart, ListPlus, ListChecks } from 'lucide-react'
+import { Play, Pause, ListPlus, ListChecks } from 'lucide-react'
+import LikeHeart from '../components/LikeHeart'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge, artistCacheKey } from '../services/pageCache'
@@ -448,7 +449,7 @@ function Artist() {
             }
             aria-pressed={!!artist.is_liked}
           >
-            <Heart size={20} fill={artist.is_liked ? 'currentColor' : 'none'} />
+            <LikeHeart size={20} liked={!!artist.is_liked} />
           </button>
         </div>
       </div>

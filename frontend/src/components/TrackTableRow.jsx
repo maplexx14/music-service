@@ -1,5 +1,6 @@
 import { memo } from 'react'
-import { Heart, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
+import LikeHeart from './LikeHeart'
 import { trackIntentHandlers } from '../store/playerStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import ArtistLink from './ArtistLink'
@@ -104,7 +105,7 @@ function TrackTableRow({
           title={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
           aria-label={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
         >
-          <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+          <LikeHeart size={18} liked={!!isLiked} />
         </button>
         <button
           type="button"

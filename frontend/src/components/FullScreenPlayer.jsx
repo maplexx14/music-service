@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, Heart, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
+import { ChevronDown, Download, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
+import LikeHeart from './LikeHeart'
 import {
   invalidateFlowPreload,
   postRecommendationEvent,
@@ -380,7 +381,7 @@ function FullScreenPlayer() {
                   disabled={loadingLike}
                   aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
                 >
-                  <Heart size={20} fill={isLiked ? 'currentColor' : 'none'} />
+                  <LikeHeart size={20} liked={!!isLiked} />
                 </button>
               )}
               {canInteract && (
