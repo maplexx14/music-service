@@ -62,6 +62,8 @@ function Settings() {
     setStreamQuality,
     rememberPlayer,
     toggleRememberPlayer,
+    brushIcons,
+    toggleBrushIcons,
   } = useUiSettingsStore()
   const { user, updatePreferences, logout } = useAuthStore()
   const [gifError, setGifError] = useState('')
@@ -420,6 +422,24 @@ function Settings() {
                       checked={liteMode}
                       onChange={toggleLiteMode}
                       aria-label="Облегчённый режим"
+                    />
+                    <span className="settings-toggle-slider" />
+                  </label>
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <div className="settings-label">Иконки кистью</div>
+                    <div className="settings-hint">
+                      Иконки нарисованы мазками, как сердце на логотипе
+                    </div>
+                  </div>
+                  <label className="settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={brushIcons}
+                      onChange={toggleBrushIcons}
+                      aria-label="Иконки кистью"
                     />
                     <span className="settings-toggle-slider" />
                   </label>

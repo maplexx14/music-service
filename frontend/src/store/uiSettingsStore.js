@@ -27,10 +27,12 @@ const defaultQualityMode = () => 'high'
 
 // rememberPlayer — запоминать очередь и позицию между запусками
 // (services/playerPersist). Включает сам юзер в настройках.
+// brushIcons — иконки кистью логотипа (фильтр #brush-icon в index.html).
 const defaultSettings = () => ({
   liteMode: false,
   streamQuality: defaultQualityMode(),
   rememberPlayer: false,
+  brushIcons: true,
 })
 
 const loadSettings = () => {
@@ -48,6 +50,7 @@ const loadSettings = () => {
         ? parsed.streamQuality
         : fallback.streamQuality,
       rememberPlayer: parsed.rememberPlayer === true,
+      brushIcons: typeof parsed.brushIcons === 'boolean' ? parsed.brushIcons : fallback.brushIcons,
     }
   } catch {
     return fallback
@@ -59,8 +62,14 @@ const applyLiteModeClass = (liteMode) => {
   document.documentElement.classList.toggle('lite-mode', liteMode)
 }
 
+const applyBrushIconsClass = (brushIcons) => {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('brush-icons', brushIcons)
+}
+
 const initialState = loadSettings()
 applyLiteModeClass(initialState.liteMode)
+applyBrushIconsClass(initialState.brushIcons)
 
 const useUiSettingsStore = create((set) => ({
   ...initialState,
@@ -71,11 +80,13 @@ const useUiSettingsStore = create((set) => ({
     set({ streamQuality })
   },
   toggleRememberPlayer: () => set((state) => ({ rememberPlayer: !state.rememberPlayer })),
+  toggleBrushIcons: () => set((state) => ({ brushIcons: !state.brushIcons })),
 }))
 
 if (typeof window !== 'undefined') {
   useUiSettingsStore.subscribe((state) => {
     applyLiteModeClass(state.liteMode)
+    applyBrushIconsClass(state.brushIcons)
     try {
       localStorage.setItem(
         STORAGE_KEY,
@@ -83,6 +94,7 @@ if (typeof window !== 'undefined') {
           liteMode: state.liteMode,
           streamQuality: state.streamQuality,
           rememberPlayer: state.rememberPlayer,
+          brushIcons: state.brushIcons,
         })
       )
     } catch {
