@@ -8,7 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.database import engine, Base
 from app.rate_limit import limiter
-from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow, yandex_music, spotify, artists, albums, deezer, censorship
+from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow, yandex_music, spotify, artists, albums, deezer, censorship, share
 
 # Schema is managed by Alembic migrations (alembic upgrade head).
 # For quick local dev without migrations set DEBUG=true.
@@ -94,6 +94,7 @@ app.include_router(artists.router, prefix="/api/artists", tags=["artists"])
 app.include_router(albums.router, prefix="/api/albums", tags=["albums"])
 app.include_router(flow.router, prefix="/api/recommendations", tags=["recommendations"])
 app.include_router(censorship.router, prefix="/api/censorship", tags=["censorship"])
+app.include_router(share.router, prefix="/api/share", tags=["share"])
 
 # Mount static files for music
 music_dir = os.path.join(os.path.dirname(__file__), "..", "music_files")
