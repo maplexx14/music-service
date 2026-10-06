@@ -144,6 +144,8 @@ function Search() {
         // 50, а не 20: при поиске по имени артиста выдача — это его треки,
         // и на двадцати позициях дискография обрывается на середине.
         params: { q: searchQuery, limit: 50 },
+        // Ошибку показывает сама страница (searchError) — тост её дублировал.
+        skipErrorToast: true,
         signal,
       })
       if (signal.aborted) return
