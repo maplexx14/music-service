@@ -570,21 +570,33 @@ function FullScreenPlayer() {
             onClick={handleArtTap}
           >
             <div className="fullscreen-art-strip" ref={stripRef}>
-              {slides.map(({ track, slot, key }) => (
-                <img
-                  key={key}
-                  className={slot ? 'fullscreen-art-side' : 'is-current'}
-                  style={{
-                    '--slot': slot,
-                    visibility: coverHidden && !slot ? 'hidden' : undefined,
-                  }}
-                  src={slot ? resolveCoverUrl(track.cover_url, true) || defaultCover : coverUrl}
-                  alt={slot ? '' : currentTrack.title}
-                  aria-hidden={slot ? 'true' : undefined}
-                  draggable={false}
-                  onError={handleCoverError}
-                />
-              ))}
+              {slides.map(({ track, slot, key }) => {
+                const thumb = resolveCoverUrl(track.cover_url, 'thumb')
+                return (
+                  <img
+                    key={key}
+                    className={slot ? 'fullscreen-art-side' : 'is-current'}
+                    style={{
+                      '--slot': slot,
+                      visibility: coverHidden && !slot ? 'hidden' : undefined,
+                      // Подложка — маленькая обложка из мини-плеера и списков,
+                      // она уже в кэше. Полноразмерная идёт через прокси бэкенда
+                      // и бывает в сотни КБ: пока она качается, вместо серого
+                      // квадрата видна та же обложка, только мягче.
+                      backgroundImage: thumb ? `url("${thumb}")` : undefined,
+                    }}
+                    // Соседям хватает маленькой: они едва видны по краям, а
+                    // полноразмерные качались бы при каждой смене трека вместе
+                    // со стартом звука. Полную обложка получает, став текущей,
+                    // — до её загрузки браузер показывает прежнюю картинку.
+                    src={slot ? thumb || defaultCover : coverUrl}
+                    alt={slot ? '' : currentTrack.title}
+                    aria-hidden={slot ? 'true' : undefined}
+                    draggable={false}
+                    onError={handleCoverError}
+                  />
+                )
+              })}
             </div>
             {burst > 0 && <LikeBurst key={burst} onDone={() => setBurst(0)} />}
           </div>
