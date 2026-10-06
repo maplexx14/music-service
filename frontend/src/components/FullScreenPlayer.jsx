@@ -175,8 +175,9 @@ function FullScreenPlayer() {
   const upNext = usePlayerStore((s) => s.getNextTrack(1))
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
-  const [dragY, setDragY] = useState(0)
-  const [isDragging, setIsDragging] = useState(false)
+  // Свайп вниз двигает плеер напрямую через style, без стейта: setState на
+  // каждый touchmove перерисовывал весь плеер каждый кадр жеста.
+  const playerRef = useRef(null)
   const [isClosing, setIsClosing] = useState(false)
   // Обложка скрыта, пока летит её морф-клон (мини-плеер ⇄ фуллскрин) —
   // иначе под клоном была бы вторая картинка.
@@ -306,9 +307,12 @@ function FullScreenPlayer() {
     const dy = t.clientY - g.y
     if (!g.axis && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
       g.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
-      if (g.axis === 'y') setIsDragging(true)
     }
-    if (g.axis === 'y' && dy > 0) setDragY(dy)
+    if (g.axis === 'y' && playerRef.current) {
+      const st = playerRef.current.style
+      st.transition = 'none'
+      st.transform = dy > 0 ? `translateY(${dy}px)` : ''
+    }
     // Горизонтальный свайп тащит карусель за пальцем; если соседа в эту
     // сторону нет — с сопротивлением.
     if (g.axis === 'x' && stripRef.current) {
@@ -328,9 +332,7 @@ function FullScreenPlayer() {
     const dy = t.clientY - g.y
     const elapsed = performance.now() - g.t0
     gestureRef.current = null
-    setIsDragging(false)
     if (g.axis === 'x') {
-      setDragY(0)
       const strip = stripRef.current
       const fast = Math.abs(dx) > 30 && Math.abs(dx) / elapsed > 0.5
       const hasNeighbor = dx < 0 ? upNext : prevTrack
@@ -351,10 +353,30 @@ function FullScreenPlayer() {
       }
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
+      // Морф обложки меряет её на текущей, оттянутой позиции — поэтому сначала
+      // startClose, потом снимаем инлайновый сдвиг. Класс .is-closing приходит
+      // в том же кадре, и переход едет вниз от точки, где отпустил палец.
       startClose()
-    } else {
-      setDragY(0)
+      releaseDrag()
+    } else if (g.axis === 'y') {
+      releaseDrag()
     }
+  }
+
+  // Инлайн-стили жеста снимаются — CSS-переход плеера возвращает его на место
+  // (или увозит вниз под .is-closing).
+  const releaseDrag = () => {
+    const st = playerRef.current?.style
+    if (!st) return
+    st.transition = ''
+    st.transform = ''
+  }
+
+  const handleTouchCancel = () => {
+    const g = gestureRef.current
+    gestureRef.current = null
+    if (g?.axis === 'y') releaseDrag()
+    if (g?.axis === 'x' && stripRef.current) settleStrip(stripRef.current, g.dx || 0)
   }
 
   const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
@@ -522,9 +544,9 @@ function FullScreenPlayer() {
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
+      ref={playerRef}
       style={{
-        transform: dragY && !isClosing ? `translateY(${dragY}px)` : undefined,
-        transition: isDragging ? 'none' : undefined,
         '--fs-tint': tint || undefined,
         '--art-gap': `${ART_GAP}px`,
       }}
