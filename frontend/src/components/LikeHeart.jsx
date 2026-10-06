@@ -6,9 +6,8 @@ import heartFill from '../assets/like-heart-fill.webp'
 
 // Сердце из логотипа — та же картинка, что у BoltLoader, с мазками кисти.
 // Лайкнуто — сердце целиком акцентного цвета (--brand-accent): и мазок, и
-// заливка; молния — тёмный оттенок акцента, чтобы читалась на заливке
-// (белые крапинки по её краю тоже перекрашиваются). Не лайкнуто — силуэт той же картинки цветом кнопки
-// (currentColor), как остальные иконки.
+// заливка; молния белая. Не лайкнуто — силуэт той же картинки цветом
+// кнопки (currentColor), как остальные иконки.
 // Обёртка — <svg>, чтобы работали правила размеров вида `.like-btn svg`.
 //
 // При лайке, как дуга в спиннере, по линии сердца пробегает белая
@@ -163,23 +162,26 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
       viewBox="0 0 128 128"
       aria-hidden="true"
     >
-      {/* Силуэт картинки: непрозрачные пиксели — цветом flood. */}
+      {/* Белый силуэт картинки для масок. Цвет всегда белый: currentColor
+          во feFlood WebKit вычисляет один раз и не обновляет — после снятия
+          лайка цвет кнопки ещё плавно уходил с акцентного (transition), и
+          контур навсегда оставался фиолетовым. Цвет даёт fill прямоугольника
+          под маской, он следует за color кнопки как обычно. */}
       <filter id={`${id}-fill`} colorInterpolationFilters="sRGB">
-        <feFlood floodColor={liked ? '#ffffff' : 'currentColor'} />
+        <feFlood floodColor="#ffffff" />
         <feComposite in2="SourceAlpha" operator="in" />
       </filter>
+      <mask id={`${id}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+        <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
+      </mask>
       {liked ? (
         <>
-          <mask id={`${id}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
-            <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
-          </mask>
           {/* Слои крашены прямоугольниками с fill по маскам из белых
               силуэтов картинок. Не feFlood с var(): переменные внутри
               фильтров iOS Safari не подставлял. И уровень заливки двигает
               сам прямоугольник, а не rect внутри clipPath: правку clipPath
               WebKit не перерисовывает, и сердце оставалось пустым. Атрибут
-              fill — запасной цвет, если style не понят (color-mix до iOS
-              16.2). */}
+              fill — запасной цвет, если style с var() не понят. */}
           <mask id={`${id}-in`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
             <image href={heartFill} width="128" height="128" />
           </mask>
@@ -198,8 +200,7 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
             width="128"
             height="128"
             mask={`url(#${id}-bolt)`}
-            fill="#61359a"
-            style={{ fill: 'color-mix(in oklab, var(--brand-accent) 60%, black)' }}
+            fill="#ffffff"
           />
           <path
             ref={dashRef}
@@ -215,7 +216,7 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
           />
         </>
       ) : (
-        <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
+        <rect width="128" height="128" mask={`url(#${id}-mask)`} fill="currentColor" />
       )}
     </svg>
   )
