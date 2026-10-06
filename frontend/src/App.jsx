@@ -1,11 +1,11 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
-import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import Spinner from './components/Spinner'
 import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
-import { createAppHistory, notifyRouteCommitted } from './services/navigation'
+import { createAppHistory, notifyRouteCommitted, safeNextPath } from './services/navigation'
 import { lazyWithReload } from './services/staleBuild'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
@@ -36,6 +36,7 @@ const PlaylistDetail = lazyWithReload(() => import('./pages/PlaylistDetail'))
 const ExternalPlaylist = lazyWithReload(() => import('./pages/ExternalPlaylist'))
 const Album = lazyWithReload(() => import('./pages/Album'))
 const Artist = lazyWithReload(() => import('./pages/Artist'))
+const Track = lazyWithReload(() => import('./pages/Track'))
 const LikedSongs = lazyWithReload(() => import('./pages/LikedSongs'))
 const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
 const Settings = lazyWithReload(() => import('./pages/Settings'))
@@ -53,6 +54,20 @@ function preloadScreensWhenIdle() {
   }
   const timer = window.setTimeout(run, 1500)
   return () => window.clearTimeout(timer)
+}
+
+// Залогиненного со страницы входа — туда, откуда его на неё отправили.
+function AfterLoginRedirect() {
+  const [searchParams] = useSearchParams()
+  return <Navigate to={safeNextPath(searchParams)} replace />
+}
+
+// Незалогиненного — на вход, запомнив адрес: ссылка на трек из «Поделиться»
+// после входа должна открыть трек, а не главную.
+function LoginRedirect() {
+  const location = useLocation()
+  const target = location.pathname + location.search
+  return <Navigate to={target === '/' ? '/login' : `/login?next=${encodeURIComponent(target)}`} replace />
 }
 
 // Стоит после <Routes>: layout-эффекты соседей идут по порядку, так что
@@ -91,6 +106,7 @@ function App() {
         <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
         <Route path="/albums/:source/:id" element={<Album />} />
         <Route path="/artists/:name" element={<Artist />} />
+        <Route path="/track/:id" element={<Track />} />
         <Route path="/liked" element={<LikedSongs />} />
         <Route path="/upload" element={<UploadTrack />} />
         {/* Один маршрут на меню и разделы: страница не размонтируется при
@@ -116,7 +132,7 @@ function App() {
                 <Login />
               </Suspense>
             ) : (
-              <Navigate to="/" />
+              <AfterLoginRedirect />
             )
           }
         />
@@ -175,7 +191,7 @@ function App() {
             isAuthenticated ? (
               <Layout renderRoutes={renderScreenRoutes} />
             ) : (
-              <Navigate to="/login" />
+              <LoginRedirect />
             )
           }
         />

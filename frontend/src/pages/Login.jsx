@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { useNavigate } from 'react-router-dom'
+import { safeNextPath } from '../services/navigation'
 import './Auth.css'
 
 function Login() {
@@ -30,7 +31,8 @@ function Login() {
   // который до этого жил сразу за регистрацией.
   const justVerified = searchParams.get('verified') === '1'
 
-  const afterLogin = () => navigate(justVerified ? '/onboarding' : '/')
+  // Иначе — туда, откуда отправили на вход (ссылка на трек и т.п.).
+  const afterLogin = () => navigate(justVerified ? '/onboarding' : safeNextPath(searchParams))
 
   const handleSubmit = async (e) => {
     e.preventDefault()

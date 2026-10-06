@@ -13,6 +13,13 @@ export const TAB_ROOTS = ['/', '/search', '/liked', '/playlists']
 
 export const isTabRoot = (pathname) => TAB_ROOTS.includes(pathname)
 
+// Куда вернуться после входа: ?next= с внутренним путём. Только «/…», не
+// «//host» — иначе это открытый редирект на чужой сайт.
+export function safeNextPath(searchParams) {
+  const next = searchParams.get('next')
+  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/'
+}
+
 // Вкладка, которой принадлежит экран: для подсветки и «Назад» с холодного
 // старта (deep link), когда в истории вернуться некуда.
 export function tabOf(pathname) {
