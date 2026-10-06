@@ -114,8 +114,16 @@ api.get = (url, config = {}) => {
     return rawGet(url, axiosConfig)
   }
 
+  // params бывает и URLSearchParams — ради повторяющегося ключа
+  // (?names=a&names=b, см. ArtistSelect). Object.entries у него пуст, и все
+  // такие запросы получали один ключ: шесть пачек карточек склеивались в
+  // ответ первой, и фото появлялись только у её восьми артистов.
+  const entries =
+    config.params instanceof URLSearchParams
+      ? [...config.params.entries()]
+      : Object.entries(config.params || {})
   const params = new URLSearchParams()
-  Object.entries(config.params || {})
+  entries
     .sort(([a], [b]) => a.localeCompare(b))
     .forEach(([key, value]) => params.append(key, String(value)))
   const key = `${authToken || 'anonymous'}:${url}?${params.toString()}`
