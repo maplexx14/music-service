@@ -2152,8 +2152,12 @@ async def stream_cached_audio(
                 archived, request, quality=request.query_params.get("quality"),
                 db_size=None, db_content_type=None
             )
-        except Exception:  # noqa: BLE001 — объект мог быть удалён; играем по обычному пути
+        except Exception as exc:  # noqa: BLE001 — объект мог быть удалён; играем по обычному пути
             logger.warning("archived object unusable for %s", cache_id, exc_info=True)
+            if isinstance(exc, storage.ObjectMissing):
+                # Иначе сутки каждый Range ходил бы за пропавшим объектом, а
+                # ленивая архивация не клала бы его заново.
+                await set_cache_async(f"archive:path:{archive_key}", "", expire=_ARCHIVE_MISS_TTL)
 
     try:
         direct_url, ext, total, fresh = await resolver(False)

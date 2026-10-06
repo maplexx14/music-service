@@ -215,7 +215,7 @@ async def adts_for_object(file_path: str, etag: str) -> Optional[str]:
         bucket, key = storage.parse_object_path(file_path)
         fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(key)[1] or ".m4a")
         os.close(fd)
-        await asyncio.to_thread(storage._get_internal_client().fget_object, bucket, key, tmp)
+        await asyncio.to_thread(storage.download_object, bucket, key, tmp)
         return tmp, True
 
     try:

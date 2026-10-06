@@ -389,12 +389,26 @@ async def stream_track(
     # localhost с другого устройства указывает на сам клиент. Внутренний клиент
     # (minio:9000) доступен из контейнера всегда. Range поддерживаем вручную.
     if storage.is_minio_path(track.file_path):
-        return await storage.minio_range_response_async(
-            track.file_path,
-            request,
-            quality=request.query_params.get("quality"),
-            db_size=track.file_size,
-        )
+        external = bool(track.source and track.source != "local" and track.external_id)
+        try:
+            return await storage.minio_range_response_async(
+                track.file_path,
+                request,
+                quality=request.query_params.get("quality"),
+                db_size=track.file_size,
+            )
+        except storage.ObjectMissing:
+            # Объект пропал из хранилища (провайдер потерял/удалил данные).
+            # Внешний трек отвязываем и играем с провайдера — ленивая
+            # архивация положит его заново; загруженный пользователем — 404.
+            logger.warning("track %s: object %s missing in storage", track_id, track.file_path)
+            if not external:
+                raise HTTPException(status_code=404, detail="Audio file not found")
+            await asyncio.to_thread(_unlink_missing_object, db, track)
+        except Exception:  # noqa: BLE001 — хранилище недоступно; внешний трек есть где взять
+            if not external:
+                raise
+            logger.warning("track %s: storage unavailable, falling back to provider", track_id, exc_info=True)
 
     # Внешний трек — проксируем на эндпоинт провайдера (yt-dlp / slskd).
     if track.source and track.source != "local":
@@ -543,6 +557,19 @@ def create_track(
     db.commit()
     db.refresh(db_track)
     return db_track
+
+
+def _unlink_missing_object(db: Session, track: Track) -> None:
+    """Отвязывает внешний трек от пропавшего объекта хранилища.
+
+    Иначе ленивая архивация считала бы трек заархивированным (file_path
+    minio://…) и не клала бы его заново, а каждый старт ходил бы в хранилище
+    за несуществующим объектом. Кэш пути архива сбрасываем по той же причине.
+    """
+    set_cache(f"archive:path:{track.source}/{track.external_id}", "", expire=300)
+    track.file_path = None
+    track.file_size = None
+    db.commit()
 
 
 def _link_archived_object(db: Session, track: Track) -> None:

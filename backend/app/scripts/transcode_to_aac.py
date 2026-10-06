@@ -92,13 +92,12 @@ async def _transcode_one(
             return
 
         bucket, key = storage.parse_object_path(track.file_path)
-        client = storage._get_internal_client()
 
         # Скачиваем файл из MinIO во временный файл
         fd, tmp_path = tempfile.mkstemp(suffix=ext)
         os.close(fd)
         try:
-            client.fget_object(bucket, key, tmp_path)
+            storage.download_object(bucket, key, tmp_path)
         except Exception:
             logger.exception("[%d/%d] %s — ошибка скачивания из MinIO", counter["done"] + 1, total, title)
             stats["error:download"] += 1
@@ -117,7 +116,7 @@ async def _transcode_one(
             old_size = 0
             if key:
                 try:
-                    old_size = client.stat_object(bucket, key).size
+                    old_size = storage.stat_object_size(bucket, key)
                 except Exception:
                     pass
 
@@ -130,12 +129,12 @@ async def _transcode_one(
 
             # Заливаем обратно в MinIO (с новым расширением)
             new_key = os.path.splitext(key)[0] + AAC_EXT
-            client.fput_object(bucket, new_key, aac_path, content_type=AAC_CONTENT_TYPE)
+            storage.upload_object(bucket, new_key, aac_path, AAC_CONTENT_TYPE)
 
             # Удаляем старый объект если расширение изменилось
             if new_key != key:
                 try:
-                    client.remove_object(bucket, key)
+                    storage.remove_object(bucket, key)
                 except Exception:
                     pass
 

@@ -152,6 +152,14 @@ services:
       MINIO_SECURE: "false"
       MINIO_BUCKET_MUSIC: ${MINIO_BUCKET_MUSIC:-music}
       MINIO_BUCKET_COVERS: ${MINIO_BUCKET_COVERS:-covers}
+      # Внешнее S3 (bucket.ru): заданный S3_ENDPOINT перекрывает MINIO_* выше
+      # (см. storage.py). Пусто — локальный MinIO; он остаётся поднятым для отката.
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_SSE_C_KEY: ${S3_SSE_C_KEY:-}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.prod (openssl rand -hex 32)}
       # Конкретный origin вместо "*": включает allow_credentials=True
       # (main.py:31) и ограничивает, кто может обращаться к API из браузера.

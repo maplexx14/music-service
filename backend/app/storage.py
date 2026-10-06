@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -49,8 +50,31 @@ MINIO_SECURE = os.getenv("MINIO_SECURE", "false").strip().lower() in ("1", "true
 # контейнера бэкенда, и подпись падала бы с Connection refused.
 MINIO_REGION = os.getenv("MINIO_REGION", "us-east-1").strip()
 
+# Внешнее S3 (bucket.ru) задаётся отдельными S3_*, а не перезаписью MINIO_*:
+# локальный MinIO живёт рядом (откат), его ключи остаются в MINIO_*. Заданный
+# S3_ENDPOINT переключает бэкенд целиком.
+S3_ENDPOINT = os.getenv("S3_ENDPOINT", "").strip()
+if S3_ENDPOINT:
+    MINIO_ENDPOINT = S3_ENDPOINT
+    MINIO_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+    MINIO_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
+    MINIO_REGION = os.getenv("S3_REGION", "").strip() or MINIO_REGION
+
 MUSIC_BUCKET = os.getenv("MINIO_BUCKET_MUSIC", "music")
 COVERS_BUCKET = os.getenv("MINIO_BUCKET_COVERS", "covers")
+
+# Внешнее S3 (bucket.ru): один физический бакет на всё, логические бакеты
+# music/covers становятся префиксами ключей. file_path в БД не меняется —
+# minio://music/<key> переводится в <S3_BUCKET>/music/<key> на каждом вызове.
+# Пусто — логический бакет и есть физический (локальный MinIO).
+S3_BUCKET = os.getenv("S3_BUCKET", "").strip() if S3_ENDPOINT else ""
+
+# SSE-C: провайдер шифрует объекты нашим ключом и сам его не хранит — без
+# ключа байты на его дисках не прочитать. Ключ уходит с каждым запросом
+# (только по HTTPS — minio-клиент без TLS откажется). Потеря ключа = потеря
+# всех объектов: для кэша треков это холодный старт, не авария.
+# Формат: base64 от 32 байт (openssl rand -base64 32).
+_SSE_C_KEY_B64 = os.getenv("S3_SSE_C_KEY", "").strip() if S3_ENDPOINT else ""
 
 # Аудио и обложки из MinIO отдаются НЕ напрямую, а через бэкенд-прокси
 # под тем же origin, что и приложение. Иначе при доступе через https-туннель
@@ -84,6 +108,89 @@ def parse_object_path(file_path: str) -> tuple[str, str]:
     rest = file_path[len(_PATH_PREFIX):]
     bucket, _, key = rest.partition("/")
     return bucket, key
+
+
+def locate(bucket: str, key: str) -> tuple[str, str]:
+    """Логические (bucket, key) → физические, см. S3_BUCKET."""
+    if S3_BUCKET:
+        return S3_BUCKET, f"{bucket}/{key}"
+    return bucket, key
+
+
+class ObjectMissing(Exception):
+    """Объекта нет в хранилище (NoSuchKey / 404), а не сетевой сбой."""
+
+
+def _is_missing_error(exc: BaseException) -> bool:
+    code = getattr(exc, "code", None)  # minio.error.S3Error
+    if code is None:
+        response = getattr(exc, "response", None)  # botocore ClientError
+        if isinstance(response, dict):
+            code = response.get("Error", {}).get("Code")
+    return code in ("NoSuchKey", "NoSuchObject", "404", "NotFound")
+
+
+def _load_sse_c_key() -> Optional[bytes]:
+    if not _SSE_C_KEY_B64:
+        return None
+    key = base64.b64decode(_SSE_C_KEY_B64)
+    if len(key) != 32:
+        raise RuntimeError("S3_SSE_C_KEY должен быть base64 от 32 байт")
+    return key
+
+
+_SSE_C_KEY = _load_sse_c_key()
+
+
+def _read_sse() -> dict:
+    """kwargs SSE-C для чтения sync-клиентом (get/stat/fget)."""
+    if _SSE_C_KEY is None:
+        return {}
+    from minio.sse import SseCustomerKey
+
+    return {"ssec": SseCustomerKey(_SSE_C_KEY)}
+
+
+def _write_sse() -> dict:
+    """kwargs SSE-C для записи sync-клиентом (put/fput)."""
+    if _SSE_C_KEY is None:
+        return {}
+    from minio.sse import SseCustomerKey
+
+    return {"sse": SseCustomerKey(_SSE_C_KEY)}
+
+
+def _async_sse() -> dict:
+    """Параметры SSE-C для aiobotocore (head/get); base64 и MD5 botocore считает сам."""
+    if _SSE_C_KEY is None:
+        return {}
+    return {"SSECustomerAlgorithm": "AES256", "SSECustomerKey": _SSE_C_KEY}
+
+
+def download_object(bucket: str, key: str, local_path: str) -> None:
+    """Скачивает объект по логическим (bucket, key) в локальный файл."""
+    phys_bucket, phys_key = locate(bucket, key)
+    _get_internal_client().fget_object(phys_bucket, phys_key, local_path, **_read_sse())
+
+
+def upload_object(bucket: str, key: str, local_path: str, content_type: str) -> None:
+    """Заливает локальный файл по логическим (bucket, key)."""
+    phys_bucket, phys_key = locate(bucket, key)
+    _get_internal_client().fput_object(
+        phys_bucket, phys_key, local_path, content_type=content_type, **_write_sse()
+    )
+    _stat_cache_invalidate(bucket, key)
+
+
+def stat_object_size(bucket: str, key: str) -> int:
+    phys_bucket, phys_key = locate(bucket, key)
+    return _get_internal_client().stat_object(phys_bucket, phys_key, **_read_sse()).size
+
+
+def remove_object(bucket: str, key: str) -> None:
+    phys_bucket, phys_key = locate(bucket, key)
+    _stat_cache_invalidate(bucket, key)
+    _get_internal_client().remove_object(phys_bucket, phys_key)
 
 
 # ─────────────────────────── клиенты MinIO ───────────────────────────
@@ -239,6 +346,11 @@ def ensure_buckets() -> None:
     global _buckets_ready
     if _buckets_ready or not is_minio_backend():
         return
+    if S3_BUCKET:
+        # Внешний бакет создан в панели провайдера, ключ без прав на бакеты.
+        # Публичная политика тут недопустима: она открыла бы и музыку.
+        _buckets_ready = True
+        return
 
     client = _get_internal_client()
     for bucket in (MUSIC_BUCKET, COVERS_BUCKET):
@@ -262,28 +374,22 @@ def upload_music_file(local_path: str, key: str, content_type: str) -> tuple[str
     """Заливает аудиофайл в приватный бакет. Возвращает (file_path, size) для БД."""
     ensure_buckets()
     size = os.path.getsize(local_path)
-    _get_internal_client().fput_object(
-        MUSIC_BUCKET, key, local_path, content_type=content_type
-    )
-    # Ключ мог существовать (re-archive внешнего трека) — stat-кэш больше
-    # не валиден, ETag перезалитого объекта другой.
-    _stat_cache_invalidate(MUSIC_BUCKET, key)
+    # Ключ мог существовать (re-archive внешнего трека) — upload_object
+    # сбрасывает stat-кэш, ETag перезалитого объекта другой.
+    upload_object(MUSIC_BUCKET, key, local_path, content_type)
     return make_object_path(MUSIC_BUCKET, key), size
 
 
 def download_music_file(file_path: str, local_path: str) -> None:
     """Download one ``minio://`` audio object to a local analysis path."""
     bucket, key = parse_object_path(file_path)
-    _get_internal_client().fget_object(bucket, key, local_path)
+    download_object(bucket, key, local_path)
 
 
 def upload_cover_file(local_path: str, key: str, content_type: str) -> str:
     """Заливает обложку в бакет обложек. Возвращает относительный прокси-URL."""
     ensure_buckets()
-    _get_internal_client().fput_object(
-        COVERS_BUCKET, key, local_path, content_type=content_type
-    )
-    _stat_cache_invalidate(COVERS_BUCKET, key)
+    upload_object(COVERS_BUCKET, key, local_path, content_type)
     return public_cover_url(key)
 
 
@@ -342,8 +448,10 @@ def find_music_object(prefix: str) -> Optional[str]:
         return None
     try:
         client = _get_internal_client()
-        for obj in client.list_objects(MUSIC_BUCKET, prefix=prefix, recursive=True):
-            return make_object_path(MUSIC_BUCKET, obj.object_name)
+        phys_bucket, phys_prefix = locate(MUSIC_BUCKET, prefix)
+        strip = len(phys_prefix) - len(prefix)
+        for obj in client.list_objects(phys_bucket, prefix=phys_prefix, recursive=True):
+            return make_object_path(MUSIC_BUCKET, obj.object_name[strip:])
     except Exception:  # noqa: BLE001 — отсутствие объекта не должно ломать стрим
         logger.exception("MinIO: list_objects по префиксу %s не удался", prefix)
     return None
@@ -407,7 +515,13 @@ def stat_music_object(file_path: str) -> tuple[int, str, str]:
     cached = _stat_cache_get(bucket, key)
     if cached is not None:
         return cached
-    st = _get_internal_client().stat_object(bucket, key)
+    phys_bucket, phys_key = locate(bucket, key)
+    try:
+        st = _get_internal_client().stat_object(phys_bucket, phys_key, **_read_sse())
+    except Exception as exc:
+        if _is_missing_error(exc):
+            raise ObjectMissing(file_path) from exc
+        raise
     value = (st.size, (st.content_type or "audio/mpeg"), music_etag(key, st.size))
     _stat_cache_put(bucket, key, value)
     return value
@@ -434,7 +548,15 @@ async def stat_music_object_async(file_path: str, db_size: int = None, db_conten
         _stat_cache_put(bucket, key, value)
         return value
 
-    resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
+    phys_bucket, phys_key = locate(bucket, key)
+    try:
+        resp = await _get_async_client().head_object(
+            Bucket=phys_bucket, Key=phys_key, **_async_sse()
+        )
+    except Exception as exc:
+        if _is_missing_error(exc):
+            raise ObjectMissing(file_path) from exc
+        raise
     value = (
         resp["ContentLength"],
         (resp.get("ContentType") or "audio/mpeg"),
@@ -453,7 +575,10 @@ def iter_music_object(
     проксирование работает и за https-туннелем, и с любых устройств.
     """
     bucket, key = parse_object_path(file_path)
-    resp = _get_internal_client().get_object(bucket, key, offset=offset, length=length)
+    phys_bucket, phys_key = locate(bucket, key)
+    resp = _get_internal_client().get_object(
+        phys_bucket, phys_key, offset=offset, length=length, **_read_sse()
+    )
     try:
         for chunk in resp.stream(chunk_size):
             yield chunk
@@ -476,18 +601,47 @@ async def iter_music_object_async(
     молча уйдёт полный GET вместо Range-запроса.
     """
     bucket, key = parse_object_path(file_path)
+    phys_bucket, phys_key = locate(bucket, key)
     client = _get_async_client()
-    kwargs = {"Bucket": bucket, "Key": key}
+    kwargs = {"Bucket": phys_bucket, "Key": phys_key, **_async_sse()}
     if offset is not None:
         end = offset + length - 1
         kwargs["Range"] = f"bytes={offset}-{end}"
-    resp = await client.get_object(**kwargs)
+    try:
+        resp = await client.get_object(**kwargs)
+    except Exception as exc:
+        if _is_missing_error(exc):
+            raise ObjectMissing(file_path) from exc
+        raise
     stream = resp["Body"]
     try:
         async for chunk in stream.iter_chunks(chunk_size):
             yield chunk
     finally:
         stream.close()
+
+
+async def _opened(gen: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    """Запускает GET до отправки заголовков ответа.
+
+    Генератор iter_music_object_async идёт в хранилище лишь на первом чанке, а
+    StreamingResponse берёт его уже после 200/206 — пропавший объект (быстрый
+    путь stat по размеру из БД HEAD не делает) обрывал бы ответ на середине.
+    Первый чанк читаем здесь: ObjectMissing долетает до вызывающего, и тот
+    успевает уйти на провайдера.
+    """
+    try:
+        first = await gen.__anext__()
+    except StopAsyncIteration:
+        first = None
+
+    async def _rest() -> AsyncIterator[bytes]:
+        if first is not None:
+            yield first
+        async for chunk in gen:
+            yield chunk
+
+    return _rest()
 
 
 # ─────────────── условные запросы и Range-парсинг ───────────────
@@ -765,8 +919,11 @@ def _remember_low_ready(low_path: str, ready_at: float) -> None:
 async def _low_variant_built_at(low_path: str) -> Optional[float]:
     """Unix-время сборки варианта (LastModified) или None, если его нет."""
     bucket, key = parse_object_path(low_path)
+    phys_bucket, phys_key = locate(bucket, key)
     try:
-        resp = await _get_async_client().head_object(Bucket=bucket, Key=key)
+        resp = await _get_async_client().head_object(
+            Bucket=phys_bucket, Key=phys_key, **_async_sse()
+        )
     except Exception:  # noqa: BLE001 — объекта ещё нет, это нормальный путь
         return None
     modified = resp.get("LastModified")
@@ -842,7 +999,7 @@ def _build_low_variant(file_path: str, low_key: str) -> bool:
     fd_out, out_path = tempfile.mkstemp(suffix=".m4a")
     os.close(fd_out)
     try:
-        _get_internal_client().fget_object(bucket_src, key_src, src_path)
+        download_object(bucket_src, key_src, src_path)
         if transcode_to_low_aac(src_path, out_path) is None:
             return False
         # upload_music_file сам инвалидирует stat-кэш ключа.
@@ -921,7 +1078,7 @@ async def minio_range_response_async(
 
     if not range_header:
         return StreamingResponse(
-            iter_music_object_async(file_path),
+            await _opened(iter_music_object_async(file_path)),
             media_type=mime_type,
             headers={**common_headers, "Content-Length": str(file_size)},
         )
@@ -936,7 +1093,7 @@ async def minio_range_response_async(
     start, end = parsed
     content_length = end - start + 1
     return StreamingResponse(
-        iter_music_object_async(file_path, offset=start, length=content_length),
+        await _opened(iter_music_object_async(file_path, offset=start, length=content_length)),
         status_code=206,
         media_type=mime_type,
         headers={
@@ -950,16 +1107,17 @@ async def minio_range_response_async(
 def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int, str]:
     """(генератор байтов, content_type, size, etag) обложки из covers-бакета."""
     client = _get_internal_client()
+    phys_bucket, phys_key = locate(COVERS_BUCKET, key)
     cached = _stat_cache_get(COVERS_BUCKET, key)
     if cached is not None:
         size, content_type, etag = cached
     else:
-        st = client.stat_object(COVERS_BUCKET, key)
+        st = client.stat_object(phys_bucket, phys_key, **_read_sse())
         size, content_type, etag = st.size, (st.content_type or "image/jpeg"), (st.etag or "")
         _stat_cache_put(COVERS_BUCKET, key, (size, content_type, etag))
 
     def _gen() -> Iterator[bytes]:
-        resp = client.get_object(COVERS_BUCKET, key)
+        resp = client.get_object(phys_bucket, phys_key, **_read_sse())
         try:
             for chunk in resp.stream(128 * 1024):
                 yield chunk
@@ -973,18 +1131,19 @@ def open_cover_object(key: str) -> tuple[Iterator[bytes], str, int, str]:
 async def open_cover_object_async(key: str) -> tuple[AsyncIterator[bytes], str, int, str]:
     """Async-двойник open_cover_object (hot-path)."""
     client = _get_async_client()
+    phys_bucket, phys_key = locate(COVERS_BUCKET, key)
     cached = _stat_cache_get(COVERS_BUCKET, key)
     if cached is not None:
         size, content_type, etag = cached
     else:
-        st = await client.head_object(Bucket=COVERS_BUCKET, Key=key)
+        st = await client.head_object(Bucket=phys_bucket, Key=phys_key, **_async_sse())
         size = st["ContentLength"]
         content_type = st.get("ContentType") or "image/jpeg"
         etag = st.get("ETag") or ""
         _stat_cache_put(COVERS_BUCKET, key, (size, content_type, etag))
 
     async def _gen() -> AsyncIterator[bytes]:
-        resp = await client.get_object(Bucket=COVERS_BUCKET, Key=key)
+        resp = await client.get_object(Bucket=phys_bucket, Key=phys_key, **_async_sse())
         stream = resp["Body"]
         try:
             async for chunk in stream.iter_chunks(128 * 1024):
@@ -1000,9 +1159,8 @@ def remove_object_path(file_path: str) -> None:
     if not is_minio_path(file_path):
         return
     bucket, key = parse_object_path(file_path)
-    _stat_cache_invalidate(bucket, key)
     try:
-        _get_internal_client().remove_object(bucket, key)
+        remove_object(bucket, key)
     except Exception:  # noqa: BLE001 — best-effort, как и удаление с диска
         logger.exception("MinIO: не удалось удалить %s/%s", bucket, key)
 
@@ -1012,8 +1170,7 @@ def remove_cover_url(cover_url: Optional[str]) -> None:
     key = cover_key_from_url(cover_url)
     if not key:
         return
-    _stat_cache_invalidate(COVERS_BUCKET, key)
     try:
-        _get_internal_client().remove_object(COVERS_BUCKET, key)
+        remove_object(COVERS_BUCKET, key)
     except Exception:  # noqa: BLE001
         logger.exception("MinIO: не удалось удалить обложку %s", key)
