@@ -570,6 +570,31 @@ html.brush-icons:not(.no-gpu) .lucide {
   filter: url(#brush-icon);
 }
 
+/* Кисть — дорогой фильтр (смещения пикселей на процессоре), и он
+   пересчитывается на каждой перерисовке иконки. В прокручиваемом контенте
+   (строки треков, карусели, карточки) это десятки иконок на каждый кадр
+   прокрутки: в замере WebKit список с кистью терял 21–37 кадров за 3 с,
+   без неё — 0–1. Поэтому внутри экранов иконки обычные, а кисть остаётся
+   там, где иконок мало и они на виду: плееры, навигация (вне .screen-scroll)
+   и шапки страниц. */
+html.brush-icons:not(.no-gpu) .screen-scroll .lucide {
+  filter: none;
+}
+
+html.brush-icons:not(.no-gpu) .screen-scroll :is(
+  .mobile-header,
+  .hero-section,
+  .home-tabs,
+  .artist-hero,
+  .artist-toolbar,
+  .search-header,
+  .playlist-header,
+  .playlists-header,
+  .settings-header
+) .lucide {
+  filter: url(#brush-icon);
+}
+
 /* Без аппаратного ускорения (класс ставит utils/gpu.js): браузер растеризует
    и композитит на CPU. Анимации оставляем — transform/opacity сдвигают уже
    нарисованные слои и остаются дешёвыми, — а убираем то, что без GPU стоит
