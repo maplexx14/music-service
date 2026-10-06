@@ -58,21 +58,25 @@ function settleStrip(strip, from) {
   strip.style.transform = ''
 }
 
-// Сердце поверх обложки при лайке: белый контур, полупрозрачная заливка.
-// Простой path с литеральными цветами — без масок и фильтров, которые
-// WebKit перерисовывает ненадёжно; анимируется только обёртка.
+// Сердце логотипа поверх обложки при лайке — тот же LikeHeart, что в
+// кнопке лайка, с той же анимацией (полоса по мазку, заливка, молния), только
+// крупно. Обёртка всплывает и гаснет (CSS), сердце внутри анимирует себя само.
+//
+// Убирается по таймеру длиной в CSS-анимацию, а не по animationend: в
+// облегчённом режиме и при «Уменьшении движения» анимации выключены,
+// события нет — и сердце оставалось на обложке навсегда.
+const BURST_MS = 1300
+
 function LikeBurst({ onDone }) {
+  const onDoneRef = useRef(onDone)
+  onDoneRef.current = onDone
+  useEffect(() => {
+    const timer = setTimeout(() => onDoneRef.current(), BURST_MS)
+    return () => clearTimeout(timer)
+  }, [])
   return (
-    <div className="fullscreen-like-burst" onAnimationEnd={onDone} aria-hidden="true">
-      <svg viewBox="0 0 24 24">
-        <path
-          d="M12 20.5 4.6 13.3C2.9 11.6 2 10.1 2 8.3 2 5.4 4.3 3.2 7.1 3.2c1.9 0 3.6 1 4.9 2.7 1.3-1.7 3-2.7 4.9-2.7 2.8 0 5.1 2.2 5.1 5.1 0 1.8-.9 3.3-2.6 5Z"
-          fill="rgba(255, 255, 255, 0.42)"
-          stroke="#fff"
-          strokeWidth="2.2"
-          strokeLinejoin="round"
-        />
-      </svg>
+    <div className="fullscreen-like-burst" aria-hidden="true">
+      <LikeHeart liked burst size={190} />
     </div>
   )
 }

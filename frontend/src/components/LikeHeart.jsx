@@ -91,14 +91,16 @@ const SETTLE_FROM = 0.7
 // бежит — анимация только как отклик на действие.
 const CLICK_WINDOW = 3000
 
-function LikeHeart({ liked = false, size = 24, className = '' }) {
+// burst — проиграть анимацию лайка сразу при появлении, без кнопки: так
+// большое сердце вылетает поверх обложки в полноэкранном плеере.
+function LikeHeart({ liked = false, size = 24, className = '', burst = false }) {
   const id = useId().replace(/:/g, '')
   const svgRef = useRef(null)
   const boltRef = useRef(null)
   const dashRef = useRef(null)
   const fillRef = useRef(null)
   const clickedAtRef = useRef(0)
-  const prevLikedRef = useRef(liked)
+  const prevLikedRef = useRef(burst ? false : liked)
 
   useEffect(() => {
     const button = svgRef.current?.closest('button')
@@ -119,7 +121,7 @@ function LikeHeart({ liked = false, size = 24, className = '' }) {
     const dash = dashRef.current
     const fill = fillRef.current
     if (!liked || wasLiked || !bolt || !dash || !fill) return undefined
-    if (performance.now() - clickedAtRef.current > CLICK_WINDOW) return undefined
+    if (!burst && performance.now() - clickedAtRef.current > CLICK_WINDOW) return undefined
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
 
     let frame = 0

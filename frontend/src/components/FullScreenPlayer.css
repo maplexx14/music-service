@@ -217,22 +217,22 @@
   display: grid;
   place-items: center;
   pointer-events: none;
-  animation: fs-like-burst 1s var(--ease-out) both;
+  animation: fs-like-burst 1.3s var(--ease-out) both;
 }
 
 .fullscreen-like-burst svg {
   width: min(190px, 41vw, 23vh);
   height: auto;
-  overflow: visible;
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.25));
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.3));
 }
 
 @keyframes fs-like-burst {
   0% { opacity: 0; transform: scale(0.3); }
-  16% { opacity: 1; transform: scale(1.12); }
-  28% { transform: scale(0.96); }
-  38% { transform: scale(1); }
-  72% { opacity: 1; transform: scale(1); }
+  12% { opacity: 1; transform: scale(1.1); }
+  22% { transform: scale(0.97); }
+  30% { transform: scale(1); }
+  /* Держим, пока внутри доигрывает анимация лайка (~0,8 с). */
+  78% { opacity: 1; transform: scale(1); }
   100% { opacity: 0; transform: scale(1.06); }
 }
 
