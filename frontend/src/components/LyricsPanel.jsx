@@ -3,11 +3,13 @@ import { usePlayerStore } from '../store/playerStore'
 import { useLyrics, getActiveLyricIndex } from '../hooks/useLyrics'
 import { AlignLeft } from 'lucide-react'
 import BoltLoader from './BoltLoader'
+import { getActive } from '../services/audioEngine'
 import './LyricsPanel.css'
 
 function LyricsPanel({ showOnlyText = false }) {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const currentTime = usePlayerStore((s) => s.currentTime)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
   const { syncedLines, plainText, loading } = useLyrics(currentTrack)
   const containerRef = useRef(null)
@@ -15,7 +17,26 @@ function LyricsPanel({ showOnlyText = false }) {
   const [isUserScrolling, setIsUserScrolling] = useState(false)
   const userScrollTimeoutRef = useRef(null)
 
-  const activeIndex = getActiveLyricIndex(syncedLines, currentTime)
+  // Store тикает раз в секунду (троттлинг timeupdate в Player), и строка,
+  // выбранная по нему, переключалась с опозданием до ~1,2 с. Пока играет,
+  // берём время прямо из <audio> каждый кадр, как прогресс-бар
+  // полноэкранного плеера. setState с тем же индексом React пропускает, так
+  // что перерисовка — только на смене строки. На паузе и после перемотки
+  // точен и store: он обновляется на seek.
+  const [liveIndex, setLiveIndex] = useState(-1)
+  useEffect(() => {
+    if (!isPlaying || !syncedLines.length) return undefined
+    let raf
+    const tick = () => {
+      const audio = getActive()
+      if (audio) setLiveIndex(getActiveLyricIndex(syncedLines, audio.currentTime))
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isPlaying, syncedLines])
+  const storeIndex = getActiveLyricIndex(syncedLines, currentTime)
+  const activeIndex = isPlaying && liveIndex >= 0 ? liveIndex : storeIndex
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const isSynced = syncedLines.length > 0
 

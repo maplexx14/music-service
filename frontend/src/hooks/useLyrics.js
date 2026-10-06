@@ -24,6 +24,17 @@ function parseLrc(lrc) {
   return result.sort((a, b) => a.time - b.time)
 }
 
+// Расхождение длительности (сек), при котором синхронный текст из поиска ещё
+// считается той же записью. /api/get сверяет длительность сам, ±2 с.
+const SYNC_DURATION_TOLERANCE = 3
+
+function stripLrcTimestamps(lrc) {
+  return lrc
+    .split('\n')
+    .map((line) => line.replace(/^(\[\d{2}:\d{2}\.\d{2,3}\])+/, '').trim())
+    .join('\n')
+}
+
 // Cache keyed by artist+title
 const lyricsCache = new Map()
 
@@ -95,10 +106,17 @@ export function useLyrics(track) {
       const res = await fetch(`https://lrclib.net/api/search?${params}`, { signal: controller.signal })
       if (!res.ok) return null
       const results = await res.json()
-      // Pick first result with synced or plain lyrics
+      // Синхронный текст — только той же записи: поиск отдаёт и live, и
+      // радио-версии, и их тайминги расходятся с нашим треком на секунды
+      // (строки «отставали» весь трек). Длительность не совпала — показываем
+      // текст без подсветки: лучше честно без синхронизации, чем со сдвигом.
+      const sameRecording = (r) =>
+        durSec > 0 && Math.abs((Number(r.duration) || 0) - durSec) <= SYNC_DURATION_TOLERANCE
+      const synced = results.find((r) => r.syncedLyrics && sameRecording(r))
+      if (synced) return { synced: synced.syncedLyrics }
       for (const r of results) {
-        if (r.syncedLyrics) return { synced: r.syncedLyrics }
         if (r.plainLyrics) return { plain: r.plainLyrics }
+        if (r.syncedLyrics) return { plain: stripLrcTimestamps(r.syncedLyrics) }
       }
       return null
     }
