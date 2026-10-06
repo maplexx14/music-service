@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 from app.acoustic_features import acoustic_similarity
+from app.genre_keywords import internal_genre_key
 
-ALGORITHM_VERSION = "hybrid-v14"
+ALGORITHM_VERSION = "hybrid-v15"
 
 # Popularity must never overpower a user's explicit signal or a content match,
 # but it does have to separate a genuine hit from a no-name upload.  The weight
@@ -216,7 +217,15 @@ def content_match(track: Any, genres: Iterable[str] = ()) -> float:
     if genre in wanted:
         return 1.0
     # Beets and provider metadata often use hierarchical labels.
-    return 0.45 if any(value in genre or genre in value for value in wanted) else 0.0
+    if any(value in genre or genre in value for value in wanted):
+        return 0.45
+    # Same branch of our vocabulary: the user picked a Last.fm subgenre
+    # ("russian rap", "grunge") while providers label the track broadly
+    # ("Hip-Hop", "Rock"). Weaker than a substring hit: the branch is wide.
+    key = internal_genre_key(genre)
+    if key and any(internal_genre_key(value) == key for value in wanted):
+        return 0.3
+    return 0.0
 
 
 def score_track(track: Any, **kwargs: Any) -> float:

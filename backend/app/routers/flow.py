@@ -74,6 +74,7 @@ from app.genre_keywords import (
     build_keyword_filters,
     infer_genre_from_text,
     top_genre_keywords,
+    weighted_explicit_genres,
 )
 from app.lang import dominant_is_cyrillic
 from app.taste import make_relevance_check, track_check
@@ -996,10 +997,10 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             playlist_artist_keys.append(key)
             seen_pl_artist.add(key)
 
-    # Явные жанры — добавляем с частотой (даёт вес в genre_counts и
-    # приоритет ключевых слов при подборе локальных кандидатов).
-    for g in pref_genres:
-        genres.extend([g, g])
+    # Явные жанры — с частотой под долю EXPLICIT_GENRE_SHARE от набранной
+    # истории (вес в genre_counts), плюс отдельно в профиль: ключевые слова
+    # подбора берут их сверх тройки частых (см. top_genre_keywords).
+    genres.extend(weighted_explicit_genres(pref_genres, len(genres)))
 
     # Сиды-радио от треков любимых артистов, уже присутствующих в
     # каталоге как ytmusic (усиливает «холодный старт»: радио строится
@@ -1258,6 +1259,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
+        "explicit_genres": pref_genres,
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
         "banned_artists": banned_artists,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
@@ -1352,7 +1354,11 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         filters.append(Track.genre.in_(profile["genres"]))
         # Ключевые слова из фиксированного жанрового словаря — ловит внешние
         # треки без genre в метаданных, но с явным жанром прямо в заголовке.
-        kw_conditions = build_keyword_filters(Track.title, profile.get("genre_counts", {}))
+        kw_conditions = build_keyword_filters(
+            Track.title,
+            profile.get("genre_counts", {}),
+            explicit=profile.get("explicit_genres") or (),
+        )
         if kw_conditions:
             filters.append(or_(*kw_conditions))
     if profile.get("title_tags"):
@@ -1376,7 +1382,10 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     # словом у постороннего артиста тянет весь его чужой каталог.
     genreartist_keys = artists_matching_keywords(
         db,
-        top_genre_keywords(profile.get("genre_counts", {})),
+        top_genre_keywords(
+            profile.get("genre_counts", {}),
+            explicit=profile.get("explicit_genres") or (),
+        ),
         restrict_artists=scope or None,
     )
     genreartist_keys |= artists_matching_keywords(
@@ -2890,7 +2899,10 @@ async def get_flow(
     taste_keywords = [
         kw.lower()
         for kw in (
-            top_genre_keywords(profile.get("genre_counts", {}))
+            top_genre_keywords(
+                profile.get("genre_counts", {}),
+                explicit=profile.get("explicit_genres") or (),
+            )
             + list(profile.get("title_tags") or [])
         )
     ]

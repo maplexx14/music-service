@@ -40,7 +40,12 @@ from app.schemas import (
     RecommendationEventPayload,
 )
 from app.dependencies import get_current_active_user
-from app.genre_keywords import infer_genre_from_text, build_keyword_filters, top_genre_keywords
+from app.genre_keywords import (
+    build_keyword_filters,
+    infer_genre_from_text,
+    top_genre_keywords,
+    weighted_explicit_genres,
+)
 from app.lang import dominant_is_cyrillic, is_foreign_script
 from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
@@ -111,7 +116,10 @@ _EXTERNAL_HITS_SEEDS = 2
 # Ожидание Last.fm в фильтре ленты короче, чем в волне: главная чувствительна
 # к задержке, а недождавшиеся артисты догреются фоном к следующему заходу.
 _MAINSTREAM_WAIT = 1.0
-_EXTERNAL_GENRES = 1
+# Внешний поиск новых треков по явно выбранным жанрам: по одному первому
+# выбор остальных в ленту не попадал вовсе. Пулы тегов кэшируются, так что
+# лишние жанры стоят запросов только на холодную.
+_EXTERNAL_GENRES = 3
 _EXTERNAL_POOL_FACTOR = 4
 
 # Внешние источники — это сеть, и её отказ не должен стоить главной минуту.
@@ -1435,9 +1443,10 @@ def _compute_recommendations(
         # Сколько треков артиста юзер КУРИРОВАЛ (лайк/плейлист) — для
         # доверия по факту курирования, независимо от затухающих весов.
         artist_curated_count: dict = {}
-        # Повторяем явные жанры, чтобы они оставались заметным сигналом и
-        # после появления небольшой истории прослушиваний.
-        genres = preferred_genres * 2
+        # Явные жанры добавляются ПОСЛЕ истории — с весом под её объём
+        # (weighted_explicit_genres), иначе при длинной истории выбор в
+        # настройках растворялся.
+        genres = []
         weighted_titles = []  # (title, decay_weight) — для build_title_tag_profile
         # Курируемые артисты (собственные плейлисты и явный выбор) — strongest
         # signal. Их треки получают приоритет, даже если play_count низкий.
@@ -1543,6 +1552,8 @@ def _compute_recommendations(
             )
             artist_skip_penalty[key] = artist_skip_penalty.get(key, 0) + penalty
 
+        genres.extend(weighted_explicit_genres(preferred_genres, len(genres)))
+
         # Доверенный артист: положительный сигнал сам по себе уверенный
         # (>= порога), ЛИБО юзер курировал 2+ его трека (лайк/плейлист —
         # осознанные добавления в коллекцию, давность не важна) — тогда скипы
@@ -1639,7 +1650,9 @@ def _compute_recommendations(
             # называет жанр ("... Phonk Remix", "... Trap"). Берём top-3 самых
             # частых жанров вкуса (явных + угаданных), чтобы не раздувать
             # запрос десятками OR-условий.
-            kw_conditions = build_keyword_filters(Track.title, Counter(genres))
+            kw_conditions = build_keyword_filters(
+                Track.title, Counter(genres), explicit=preferred_genres
+            )
             if kw_conditions:
                 taste_filters.append(or_(*kw_conditions))
         title_tags = list(build_title_tag_profile(weighted_titles).keys())
@@ -1666,7 +1679,7 @@ def _compute_recommendations(
         # постороннего артиста тянет весь его чужой каталог.
         genreartist_keys = artists_matching_keywords(
             db,
-            top_genre_keywords(Counter(genres)),
+            top_genre_keywords(Counter(genres), explicit=preferred_genres),
             restrict_artists=scope_artist_keys or None,
         )
         genreartist_keys |= artists_matching_keywords(

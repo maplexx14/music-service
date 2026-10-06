@@ -29,9 +29,11 @@ expand_user_genres. Поэтому в User.preferred_genres лежат и наш
 алфавитам сразу.
 """
 
+import math
 import re
 from collections import Counter
-from typing import Optional
+from functools import lru_cache
+from typing import Iterable, Optional
 
 from app import beets_genre
 
@@ -122,28 +124,43 @@ def infer_genre_from_text(title: str, artist: str = "") -> Optional[str]:
     return beets_genre.internal_from_text(text)
 
 
-def top_genre_keywords(genre_counts: dict, top_n: int = 3) -> list:
+def top_genre_keywords(genre_counts: dict, top_n: int = 3, explicit: Iterable[str] = ()) -> list:
     """Плоский список ключевых слов top_n самых частых жанров вкуса
     пользователя (genre_counts: жанр -> сколько раз встретился, явно через
     Track.genre или по ключевым словам). Ограничение top_n — чтобы не
     раздувать дальнейшие запросы десятками слов на разношёрстной истории.
+
+    Жанры сводятся к нашим ключам ДО подсчёта: выбранный «russian rap» или
+    «grunge» сам по себе ключевых слов не имеет (словарь знает 12 веток), и
+    раньше такой выбор этот путь просто пропускал. Явно выбранные жанры
+    (explicit) берутся СВЕРХ top_n: при длинной истории их доля мала, и в
+    тройку частых они не попадали бы никогда.
 
     Слова-модификаторы (remix и т.п., см. MODIFIER_KEYWORDS) сюда намеренно
     НЕ подмешиваются — это блуждающее слово, которое совпадает с заголовками
     совершенно несвязанных треков (было заведено и тут же откачено — см.
     историю бага, когда вьетнамский трек с "Remix" в названии попадал в
     рекомендации гей-ремикс-слушателю именно через этот путь)."""
-    if not genre_counts:
-        return []
-    top_genres = [g for g, _ in Counter(genre_counts).most_common(top_n)]
+    collapsed: Counter = Counter()
+    for genre, count in (genre_counts or {}).items():
+        key = internal_genre_key(genre)
+        if key:
+            collapsed[key] += count
+    keys = [g for g, _ in collapsed.most_common(top_n)]
+    for genre in explicit or ():
+        key = internal_genre_key(genre)
+        if key and key not in keys and len(keys) < top_n + _EXPLICIT_KEYWORD_GENRES:
+            keys.append(key)
     keywords = []
-    for genre in top_genres:
-        keywords.extend(GENRE_KEYWORDS.get(genre, []))
+    for key in keys:
+        keywords.extend(GENRE_KEYWORDS.get(key, []))
     return keywords
 
 
-def build_keyword_filters(title_col, genre_counts: dict, top_n: int = 3) -> list:
-    """SQL-условия для top_n самых частых жанров вкуса.
+def build_keyword_filters(
+    title_col, genre_counts: dict, top_n: int = 3, explicit: Iterable[str] = ()
+) -> list:
+    """SQL-условия для top_n самых частых жанров вкуса (и явно выбранных).
 
     Матчим по ГРАНИЦЕ СЛОВА (Postgres regex ~* с \\y), а не подстрокой LIKE
     %kw%: иначе "house" совпадал с "warehouse", "techno" с "technology" и т.п.,
@@ -151,7 +168,43 @@ def build_keyword_filters(title_col, genre_counts: dict, top_n: int = 3) -> list
     # LIKE is supported by both PostgreSQL and SQLite (the latter is used by
     # the unit-test suite). The vocabulary is already curated, so substring
     # matching is preferable to emitting a PostgreSQL-only regex operator.
-    return [title_col.ilike(f"%{kw}%") for kw in top_genre_keywords(genre_counts, top_n)]
+    return [
+        title_col.ilike(f"%{kw}%")
+        for kw in top_genre_keywords(genre_counts, top_n, explicit=explicit)
+    ]
+
+
+# Сколько явно выбранных веток добавляется к top_n частых в ключевые слова.
+_EXPLICIT_KEYWORD_GENRES = 3
+
+# Доля явно выбранных жанров в профиле вкуса. Раньше каждый выбранный жанр
+# весил как два трека истории, и у слушателя с сотнями прослушиваний выбор в
+# настройках не значил ничего. Теперь все выбранные вместе — 15% профиля,
+# но не меньше прежних двух на жанр (холодный старт и короткая история).
+EXPLICIT_GENRE_SHARE = 0.15
+_EXPLICIT_GENRE_MIN = 2
+
+
+def weighted_explicit_genres(explicit: Iterable[str], history_count: int) -> list:
+    """Явные жанры с повторами под долю EXPLICIT_GENRE_SHARE в профиле.
+
+    history_count — сколько жанров уже набрано из истории (лайки, плейлисты,
+    прослушивания). Возвращаемый список добавляется к ним как есть: Counter
+    поверх итогового списка даёт явным выбранным нужную долю.
+    """
+    chosen = list(dict.fromkeys(str(g).strip().lower() for g in explicit or () if g))
+    if not chosen:
+        return []
+    total = EXPLICIT_GENRE_SHARE / (1 - EXPLICIT_GENRE_SHARE) * max(0, history_count)
+    per_genre = max(_EXPLICIT_GENRE_MIN, math.ceil(total / len(chosen)))
+    return [genre for genre in chosen for _ in range(per_genre)]
+
+
+@lru_cache(maxsize=4096)
+def internal_genre_key(genre) -> Optional[str]:
+    """resolve_internal_key с кэшем: зовётся на каждого кандидата при оценке и
+    на каждый жанр профиля, а имён жанров — считанные сотни."""
+    return resolve_internal_key(genre)
 
 
 def resolve_internal_key(genre) -> Optional[str]:
