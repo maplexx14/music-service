@@ -246,7 +246,9 @@ def _schedule_audio_matches(tracks: List[ExternalTrackResponse]) -> None:
 
 
 # TTL кэша поисковой выдачи YouTube Music (треки и карточки артистов).
-_SEARCH_CACHE_TTL = 600
+# Холодный поиск с прода — 2–5 с на запрос, а выдача по строке за часы почти
+# не меняется: популярные запросы разных юзеров должны попадать в кэш.
+_SEARCH_CACHE_TTL = 6 * 3600
 
 
 async def search_ytmusic(

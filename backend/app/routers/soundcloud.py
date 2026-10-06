@@ -358,7 +358,7 @@ def _search_blocking(q: str, limit: int) -> list:
 
 # Кэш выдачи поиска. Страница артиста и поиск ходят сюда на каждый заход, а
 # это ~1с через прокси (платный трафик); выдача по строке меняется медленно.
-_SEARCH_CACHE_TTL = 600
+_SEARCH_CACHE_TTL = 6 * 3600
 
 
 async def search_soundcloud(
