@@ -3,16 +3,22 @@
   inset: 0;
   /* Динамическая высота вьюпорта: учитывает адресную строку/панели на мобильных. */
   height: 100dvh;
-  background:
-    radial-gradient(circle at top, rgba(162, 89, 255, 0.18), transparent 34%),
-    linear-gradient(180deg, #1a1a1a 0%, #050505 62%, #000000 100%);
+  --fs-pad-x: 24px;
+  /* Фон — приглушённый цвет обложки (--fs-tint ставит FullScreenPlayer из
+     useThemeColor), книзу чуть темнее под кнопками. Пока цвет не посчитан —
+     нейтральный тёмный. */
+  background-color: var(--fs-tint, #1c1b20);
+  background-image: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.28) 100%);
   color: #ffffff;
   display: flex;
   flex-direction: column;
-  padding: calc(env(safe-area-inset-top, 0px) + 22px) 24px calc(env(safe-area-inset-bottom, 0px) + 24px);
+  padding: calc(env(safe-area-inset-top, 0px) + 22px) var(--fs-pad-x) calc(env(safe-area-inset-bottom, 0px) + 24px);
   z-index: 1200;
   overflow: hidden;
-  transition: transform 0.4s var(--ease-drawer), opacity 0.3s var(--ease-drawer);
+  transition:
+    transform 0.4s var(--ease-drawer),
+    opacity 0.3s var(--ease-drawer),
+    background-color 0.6s ease;
 }
 
 @starting-style {
@@ -45,6 +51,31 @@
   min-width: 0;
   height: 46px;
   object-fit: contain;
+}
+
+/* Откуда играет очередь («Альбом «…»», «Поток»). */
+.fullscreen-queue-label {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.86);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Противовес кнопке закрытия — подпись остаётся по центру экрана. */
+.fullscreen-header-spacer {
+  width: 44px;
+  flex: 0 0 auto;
+}
+
+.fullscreen-header > .fullscreen-icon {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.86);
 }
 
 .fullscreen-icon {
@@ -80,60 +111,37 @@
   color: #a259ff;
 }
 
-.fullscreen-like.active {
-  background: rgba(162, 89, 255, 0.14);
-  animation: fullscreenLikePop 0.3s var(--ease-out);
-}
-
 /* Дизлайк — негативное действие, поэтому красный, а не акцентный фиолетовый
    (.fullscreen-icon.active), который читается как «включено/нравится». */
 .fullscreen-dislike.active {
-  background: rgba(255, 107, 107, 0.14);
-  border-color: rgba(255, 107, 107, 0.45);
   color: #ff6b6b;
 }
 
-.fullscreen-actions .fullscreen-icon,
-.fullscreen-header .fullscreen-lyrics-toggle {
-  width: 52px;
-  height: 52px;
+.fullscreen-like.active svg {
+  animation: fullscreenLikePop 0.3s var(--ease-out);
+}
+
+.fullscreen-actions .fullscreen-icon {
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
 }
 
-.fullscreen-actions .fullscreen-icon:hover,
-.fullscreen-header .fullscreen-lyrics-toggle:hover {
+.fullscreen-actions .fullscreen-icon:hover {
   background: transparent;
   color: #ffffff;
 }
 
-.fullscreen-actions .fullscreen-icon svg,
-.fullscreen-header .fullscreen-lyrics-toggle svg {
-  width: 26px;
-  height: 26px;
+.fullscreen-actions .fullscreen-icon svg {
+  width: 24px;
+  height: 24px;
 }
 
-.fullscreen-actions .fullscreen-like.active,
-.fullscreen-actions .fullscreen-dislike.active,
-.fullscreen-header .fullscreen-lyrics-toggle.active {
-  background: transparent;
-  border-color: transparent;
-}
-
-.fullscreen-actions .fullscreen-like.active,
-.fullscreen-header .fullscreen-lyrics-toggle.active {
-  color: #a259ff;
-}
-
-.fullscreen-actions .fullscreen-dislike.active {
-  color: #ff6b6b;
-}
-
-.fullscreen-actions .fullscreen-icon:focus-visible,
-.fullscreen-header .fullscreen-lyrics-toggle:focus-visible,
-.fullscreen-mobile-lyrics:focus-visible {
-  outline: 2px solid #a259ff;
+.fullscreen-player button:focus-visible,
+.fullscreen-player a:focus-visible {
+  outline: 2px solid #ffffff;
   outline-offset: 2px;
 }
 
@@ -159,17 +167,78 @@
 }
 
 .fullscreen-art {
+  position: relative;
   display: grid;
   place-items: center;
   align-self: center;
-
   min-height: 0;
-  overflow: hidden;
+  /* Соседние обложки карусели выглядывают за край — обрезает их сам плеер. */
+  overflow: visible;
+  /* Двойной тап — лайк, а не зум страницы. */
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Карусель: текущая обложка в потоке задаёт размер, соседи стоят слева и
+   справа на шаг «ширина + зазор». Полосу двигает FullScreenPlayer
+   (свайп и доезд после переключения). */
+.fullscreen-art-strip {
+  position: relative;
+}
+
+.fullscreen-art img.fullscreen-art-side {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateX(calc(var(--slot) * (100% + var(--art-gap))));
+}
+
+.fullscreen-player.has-lyrics .fullscreen-art-side,
+.fullscreen-player.karaoke-mode .fullscreen-art-side {
+  display: none;
 }
 
 .fullscreen-art img {
-  width: min(440px, 78vw, 48vh);
-  height: min(440px, 78vw, 48vh);
+  -webkit-user-drag: none;
+}
+
+/* На десктопе свайпа нет — карусель не нужна, только текущая обложка. */
+@media (min-width: 769px) {
+  .fullscreen-art img.fullscreen-art-side {
+    display: none;
+  }
+}
+
+/* Сердце поверх обложки при лайке. */
+.fullscreen-like-burst {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  animation: fs-like-burst 1s var(--ease-out) both;
+}
+
+.fullscreen-like-burst svg {
+  width: min(190px, 41vw, 23vh);
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.25));
+}
+
+@keyframes fs-like-burst {
+  0% { opacity: 0; transform: scale(0.3); }
+  16% { opacity: 1; transform: scale(1.12); }
+  28% { transform: scale(0.96); }
+  38% { transform: scale(1); }
+  72% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.06); }
+}
+
+.fullscreen-art img {
+  width: min(440px, 78vw, 44vh);
+  height: min(440px, 78vw, 44vh);
   border-radius: 12px;
   object-fit: cover;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
@@ -181,7 +250,7 @@
    transition width/height/margin — раскладка всего плеера на каждом кадре,
    и всё равно скачок: flex-direction не анимируется. Морф — это уже
    сдвиг готовых снапшотов. Элемент на экране меняет место — ease-in-out. */
-html[data-morph='lyrics'] .fullscreen-art img {
+html[data-morph='lyrics'] .fullscreen-art img.is-current {
   view-transition-name: fs-art;
 }
 html[data-morph='lyrics'] .fullscreen-info {
@@ -404,9 +473,9 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress-bar {
   position: relative;
-  height: 6px;
+  height: 3px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.24);
   cursor: pointer;
 }
 
@@ -416,8 +485,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   position: absolute;
   left: 0;
   right: 0;
-  top: -10px;
-  bottom: -10px;
+  top: -14px;
+  bottom: -14px;
 }
 
 .fullscreen-progress-bar .fullscreen-progress-fill {
@@ -437,18 +506,40 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress-fill {
   height: 100%;
-  background: #a259ff;
+  background: #ffffff;
   /* Длина — через scaleX (FullScreenProgress двигает её каждый кадр):
      композитинг вместо раскладки. */
   transform-origin: left center;
   will-change: transform;
 }
 
+/* Ползунок на конце заливки: обёртка во всю ширину полосы, точка на её
+   правом краю; FullScreenProgress сдвигает обёртку (см. thumbTransform). */
+.fullscreen-progress-thumb {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.fullscreen-progress-thumb::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -5px;
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
 .fullscreen-progress-time {
   display: flex;
   justify-content: space-between;
-  font-size: var(--text-sm);
-  color: rgba(255, 255, 255, 0.68);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
   margin-top: 10px;
 }
 
@@ -456,8 +547,79 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: clamp(14px, 5vw, 28px);
+  gap: clamp(14px, 5vw, 36px);
   margin-top: 30px;
+}
+
+.fullscreen-controls .fullscreen-icon {
+  width: 52px;
+  height: 52px;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+}
+
+.fullscreen-controls .fullscreen-icon:hover {
+  background: transparent;
+}
+
+.fullscreen-controls .fullscreen-dislike:not(.active),
+.fullscreen-controls .fullscreen-like:not(.active) {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* Нижний ряд: повтор, текст песни, скачивание, перемешивание. */
+.fullscreen-tools {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(24px, 8vw, 56px);
+  margin-top: 22px;
+}
+
+.fullscreen-tool {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.fullscreen-tool:hover {
+  color: #ffffff;
+}
+
+/* Включённый режим — акцент и точка под иконкой. */
+.fullscreen-tool.active {
+  color: #a259ff;
+}
+
+.fullscreen-tool::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.fullscreen-tool.active::after {
+  opacity: 1;
+}
+
+.fullscreen-tool:disabled {
+  color: rgba(255, 255, 255, 0.25);
+  cursor: not-allowed;
 }
 
 .fullscreen-play {
@@ -488,7 +650,19 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 /* --- Mobile: compact padding, controls spread --- */
 @media (max-width: 768px) {
   .fullscreen-player {
-    padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px calc(env(safe-area-inset-bottom, 0px) + 18px);
+    --fs-pad-x: 18px;
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) var(--fs-pad-x) calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+
+  /* Тело — во всю ширину экрана, чтобы соседние обложки доходили до края,
+     а не обрезались по отступу плеера. */
+  .fullscreen-player:not(.has-lyrics):not(.karaoke-mode) .fullscreen-body {
+    margin-inline: calc(-1 * var(--fs-pad-x));
+    padding-inline: var(--fs-pad-x);
+  }
+
+  .fullscreen-player:not(.has-lyrics):not(.karaoke-mode) .fullscreen-content {
+    overflow: visible;
   }
 
   .fullscreen-progress {
@@ -513,8 +687,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-art img {
-    width: min(340px, 82vw, 42vh);
-    height: min(340px, 82vw, 42vh);
+    width: min(340px, 72vw, 42vh);
+    height: min(340px, 72vw, 42vh);
   }
 
   .fullscreen-track-name {
@@ -525,9 +699,15 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     font-size: var(--text-sm);
   }
 
-  .fullscreen-controls {
+  .fullscreen-controls,
+  .fullscreen-tools {
     justify-content: space-between;
     gap: 8px;
+  }
+
+  .fullscreen-tools {
+    margin-top: auto;
+    padding-top: 18px;
   }
 
   .fullscreen-play {
@@ -546,8 +726,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-art img {
-    width: min(300px, 78vw, 36vh);
-    height: min(300px, 78vw, 36vh);
+    width: min(300px, 68vw, 36vh);
+    height: min(300px, 68vw, 36vh);
   }
 
   .fullscreen-track-name {
@@ -725,82 +905,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 }
 
 
-/* Mobile: lyrics are controlled from the lower utility row. */
-.fullscreen-mobile-tools {
-  display: none;
-}
-
-@media (max-width: 768px) {
-  .fullscreen-header .fullscreen-lyrics-toggle {
-    visibility: hidden;
-  }
-
-  .fullscreen-mobile-tools {
-    display: flex;
-    justify-content: center;
-    min-height: 44px;
-    margin-top: 14px;
-  }
-
-  .fullscreen-mobile-lyrics {
-    position: relative;
-    width: 52px;
-    height: 52px;
-    border: 0;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.65);
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-  }
-
-  .fullscreen-mobile-lyrics svg {
-    width: 28px;
-    height: 28px;
-  }
-
-  .fullscreen-header .fullscreen-lyrics-toggle {
-    width: 48px;
-    height: 48px;
-  }
-
-  .fullscreen-mobile-lyrics::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    width: 4px;
-    height: 4px;
-    border-radius: 999px;
-    background: transparent;
-    transition: width 0.2s ease, background 0.2s ease;
-  }
-
-  .fullscreen-mobile-lyrics.active {
-    color: #a259ff;
-  }
-
-  .fullscreen-mobile-lyrics.active::after {
-    width: 22px;
-    background: #a259ff;
-  }
-
-  .fullscreen-mobile-lyrics:disabled {
-    color: rgba(255, 255, 255, 0.25);
-    cursor: not-allowed;
-  }
-}
-
-
 /* Mobile karaoke: lyrics stay central; track details remain immediately above the timeline. */
 @media (max-width: 768px) {
-  .fullscreen-header .fullscreen-lyrics-toggle {
-    visibility: visible;
-  }
-
-  .fullscreen-mobile-tools {
-    display: none;
-  }
-
   .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile {
     order: 1;
     display: block;

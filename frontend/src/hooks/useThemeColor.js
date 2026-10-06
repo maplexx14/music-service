@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 
 const DEFAULT_THEME_COLOR = '#252933'
 
@@ -28,6 +28,18 @@ function isCrossOriginUrl(src) {
   }
 }
 
+// Цвет обложки идёт фоном полноэкранного плеера под белым текстом, поэтому
+// приглушаем его: светлую обложку затемняем так, чтобы яркость не превышала
+// TINT_MAX_LUMA, тёмную не трогаем.
+const TINT_MAX_LUMA = 0.32
+
+function tint(r, g, b) {
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  const k = luma > TINT_MAX_LUMA ? TINT_MAX_LUMA / luma : 1
+  const c = (v) => Math.round(v * k)
+  return `rgb(${c(r)}, ${c(g)}, ${c(b)})`
+}
+
 async function extractDominantColor(src) {
   return new Promise((resolve) => {
     const img = new Image()
@@ -43,7 +55,7 @@ async function extractDominantColor(src) {
         ctx.imageSmoothingEnabled = true
         ctx.drawImage(img, 0, 0, 1, 1)
         const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
-        resolve(`rgb(${r}, ${g}, ${b})`)
+        resolve(tint(r, g, b))
       } catch {
         // tainted canvas / пустые данные — молча остаёмся на дефолте
         resolve(null)
@@ -55,21 +67,21 @@ async function extractDominantColor(src) {
 }
 
 // Пока полноэкранный плеер открыт, статус-бар Android (и заголовок окна
-// на десктопе) окрашивается в доминирующий цвет обложки — как это делают
+// на десктопе) окрашивается в приглушённый цвет обложки — как это делают
 // нативные музыкальные приложения. При размонтировании цвет возвращается.
-// Тексты на статус-баре рисует ОС по яркости фона — специально затемнять
-// цвет не пытаемся: у тёмной темы приложения он почти всегда тёмный.
+// Тот же цвет хук возвращает (null — пока не посчитан): плеер красит им
+// свой фон, и статус-бар сливается с ним.
 export function useThemeColor(active, coverUrl) {
-  const currentRef = useRef(DEFAULT_THEME_COLOR)
+  const [color, setColor] = useState(null)
 
   useEffect(() => {
     if (!active) return undefined
     let cancelled = false
 
-    extractDominantColor(coverUrl).then((color) => {
-      if (cancelled || !color) return
-      currentRef.current = color
-      getThemeMeta()?.setAttribute('content', color)
+    extractDominantColor(coverUrl).then((next) => {
+      if (cancelled || !next) return
+      setColor(next)
+      getThemeMeta()?.setAttribute('content', next)
     })
 
     return () => {
@@ -77,4 +89,6 @@ export function useThemeColor(active, coverUrl) {
       getThemeMeta()?.setAttribute('content', DEFAULT_THEME_COLOR)
     }
   }, [active, coverUrl])
+
+  return color
 }

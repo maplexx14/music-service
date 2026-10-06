@@ -470,6 +470,16 @@ const usePlayerStore = create((set, get) => ({
     return queue[nextIndex] || null
   },
 
+  // Трек, с которого уйдёт previousTrack() (с учётом шаффла), без побочных
+  // эффектов. Нужен карусели обложек в полноэкранном плеере.
+  getPrevTrack: () => {
+    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
+    if (isShuffle && shuffledOrder.length > 0) {
+      return currentShuffleIndex > 0 ? queue[shuffledOrder[currentShuffleIndex - 1]] || null : null
+    }
+    return currentIndex > 0 ? queue[currentIndex - 1] || null : null
+  },
+
   // Заранее прогревает резолв на бэке для первых `count` треков списка (не
   // дожидаясь ответа) — чтобы к моменту, когда <audio> реально попросит
   // поток, yt-dlp/Redis-кэш уже был тёплым. Бэк дедуплицирует параллельные

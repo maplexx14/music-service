@@ -133,7 +133,7 @@ export function beginOpenMorph(miniImg, hiResSrc) {
   return new Promise((resolve) => {
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        const fullImg = document.querySelector('.fullscreen-art img')
+        const fullImg = document.querySelector('.fullscreen-art img.is-current')
         const to = fullImg ? usable(settledRect(fullImg)) : null
         if (!fullImg || !to) {
           setActive(-1)
@@ -152,7 +152,7 @@ export function beginOpenMorph(miniImg, hiResSrc) {
 // Закрытие: обложка фуллскрина ещё видна, мини-плеер отрендерен под ней —
 // меряем оба и летим вниз к мини-плееру. 300ms — в такт .is-closing.
 export function beginCloseMorph() {
-  const fullImg = document.querySelector('.fullscreen-art img')
+  const fullImg = document.querySelector('.fullscreen-art img.is-current')
   const miniImg = document.querySelector('.player-cover')
   const from = fullImg ? usableRect(fullImg) : null
   const to = usableRect(miniImg)

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, ListMusic, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, X } from 'lucide-react'
+import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share } from 'lucide-react'
 import LikeHeart from './LikeHeart'
 import {
   invalidateFlowPreload,
@@ -10,6 +10,7 @@ import {
 } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
 import { useThemeColor } from '../hooks/useThemeColor'
+import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
@@ -28,6 +29,60 @@ function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+// Зазор между обложками в карусели, px. Тот же шаг задаёт CSS через
+// --art-gap (ставится инлайном), чтобы JS и вёрстка не разъехались.
+const ART_GAP = 24
+// Второй тап по обложке в пределах этого окна — лайк.
+const DOUBLE_TAP_MS = 300
+const SETTLE_MS = 340
+
+// Подпись в шапке — откуда играет очередь. Плейлисты передают source=null,
+// их имени в store нет — тогда в шапке остаётся логотип.
+function queueLabel(source, track) {
+  if (source === 'album') return track.album ? `Альбом «${track.album}»` : 'Альбом'
+  if (source === 'artist') return track.artist || null
+  if (source === 'flow') return 'Поток'
+  return null
+}
+
+// Карусель доезжает из `from` (px) в ноль. Сначала без перехода ставим
+// стартовую позицию и форсируем раскладку — иначе браузер склеит два
+// присваивания transform и анимации не будет.
+function settleStrip(strip, from) {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  strip.style.transition = 'none'
+  strip.style.transform = from && !reduced ? `translateX(${from}px)` : ''
+  if (!from || reduced) return
+  strip.getBoundingClientRect()
+  strip.style.transition = `transform ${SETTLE_MS}ms var(--ease-out)`
+  strip.style.transform = ''
+}
+
+// Сердце поверх обложки при лайке: белый контур, полупрозрачная заливка.
+// Простой path с литеральными цветами — без масок и фильтров, которые
+// WebKit перерисовывает ненадёжно; анимируется только обёртка.
+function LikeBurst({ onDone }) {
+  return (
+    <div className="fullscreen-like-burst" onAnimationEnd={onDone} aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path
+          d="M12 20.5 4.6 13.3C2.9 11.6 2 10.1 2 8.3 2 5.4 4.3 3.2 7.1 3.2c1.9 0 3.6 1 4.9 2.7 1.3-1.7 3-2.7 4.9-2.7 2.8 0 5.1 2.2 5.1 5.1 0 1.8-.9 3.3-2.6 5Z"
+          fill="rgba(255, 255, 255, 0.42)"
+          stroke="#fff"
+          strokeWidth="2.2"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  )
+}
+
+// Ползунок — правый край обёртки во всю ширину полосы, сдвинутой на
+// (ratio − 1) своей ширины: тот же композитинг, что у scaleX заливки.
+function thumbTransform(ratio) {
+  return `translateX(${(ratio - 1) * 100}%)`
+}
+
 // Прогресс-блок вынесен в отдельный компонент: только он подписан на
 // currentTime. Остальной полноэкранный плеер (обложка, кнопки, жесты) не
 // перерисовывается на каждом тике воспроизведения.
@@ -42,6 +97,7 @@ function FullScreenProgress() {
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
   const fillRef = useRef(null)
+  const thumbRef = useRef(null)
 
   const ratio = duration ? Math.min(1, currentTime / duration) : 0
 
@@ -51,7 +107,9 @@ function FullScreenProgress() {
     const tick = () => {
       const audio = getActive()
       if (audio && fillRef.current) {
-        fillRef.current.style.transform = `scaleX(${Math.min(1, audio.currentTime / duration)})`
+        const r = Math.min(1, audio.currentTime / duration)
+        fillRef.current.style.transform = `scaleX(${r})`
+        if (thumbRef.current) thumbRef.current.style.transform = thumbTransform(r)
       }
       raf = requestAnimationFrame(tick)
     }
@@ -80,6 +138,7 @@ function FullScreenProgress() {
         <div className="fullscreen-progress-track">
           <div ref={fillRef} className="fullscreen-progress-fill" style={{ transform: `scaleX(${ratio})` }} />
         </div>
+        <div ref={thumbRef} className="fullscreen-progress-thumb" style={{ transform: thumbTransform(ratio) }} />
       </div>
       <div className="fullscreen-progress-time">
         <span>{formatTime(currentTime)}</span>
@@ -109,7 +168,11 @@ function FullScreenPlayer() {
   const fetchDislikedTracks = usePlayerStore((s) => s.fetchDislikedTracks)
   const toggleTrackDislike = usePlayerStore((s) => s.toggleTrackDislike)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
+  const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const karaokeMode = usePlayerStore((s) => s.karaokeMode)
+  const queueSource = usePlayerStore((s) => s.source)
+  const prevTrack = usePlayerStore((s) => s.getPrevTrack())
+  const upNext = usePlayerStore((s) => s.getNextTrack(1))
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
   const [dragY, setDragY] = useState(0)
@@ -120,6 +183,13 @@ function FullScreenPlayer() {
   const [coverHidden, setCoverHidden] = useState(isCoverMorphActive)
   const [lyricsMode, setLyricsMode] = useState(false)
   const gestureRef = useRef(null)
+  const stripRef = useRef(null)
+  // Смещение карусели в момент, когда свайп переключил трек: с него новая
+  // обложка доезжает на место (см. эффект на смену трека).
+  const swipeDxRef = useRef(0)
+  const lastSlidesRef = useRef(null)
+  const lastTapRef = useRef(0)
+  const [burst, setBurst] = useState(0)
   // Обложка переезжает влево и уменьшается, текст проявляется справа —
   // одним морфом, а не скачком раскладки (см. morphTransition).
   // artReturn — обложка вернулась после текста: на телефоне она проявляется
@@ -147,8 +217,29 @@ function FullScreenPlayer() {
     [currentTrack?.cover_url],
   )
 
-  // Статус-бар Android в цвет обложки, пока плеер открыт (см. useThemeColor).
-  useThemeColor(true, coverUrl)
+  // Фон плеера и статус-бар Android — в приглушённый цвет обложки.
+  const tint = useThemeColor(true, coverUrl)
+
+  // Смена трека — карусель доезжает: обложка, что была соседом справа
+  // (вперёд) или слева (назад), уже стоит в центре, а полосу сдвигаем туда,
+  // где эта обложка была на экране, и отпускаем в ноль. Переключение
+  // кнопками — тот же сдвиг на шаг, свайпом — от точки, где отпустил палец.
+  useLayoutEffect(() => {
+    const strip = stripRef.current
+    const last = lastSlidesRef.current
+    const dx = swipeDxRef.current
+    swipeDxRef.current = 0
+    if (!strip || !last || last.id === currentTrack?.id) return
+    const id = currentTrack?.id
+    const dir = id === last.nextId ? 1 : id === last.prevId ? -1 : 0
+    settleStrip(strip, dir ? dx + dir * (strip.offsetWidth + ART_GAP) : 0)
+  }, [currentTrack?.id])
+
+  // Соседи на момент последнего рендера — по ним эффект выше узнаёт
+  // направление. Идёт после него: тот читает ещё прошлые значения.
+  useLayoutEffect(() => {
+    lastSlidesRef.current = { id: currentTrack?.id, prevId: prevTrack?.id, nextId: upNext?.id }
+  })
 
   // Закрытие — чистый CSS-drawer (.is-closing уезжает вниз, страница под
   // ним живая), обложка морфится обратно в мини-плеер клоном поверх слайда
@@ -218,6 +309,15 @@ function FullScreenPlayer() {
       if (g.axis === 'y') setIsDragging(true)
     }
     if (g.axis === 'y' && dy > 0) setDragY(dy)
+    // Горизонтальный свайп тащит карусель за пальцем; если соседа в эту
+    // сторону нет — с сопротивлением.
+    if (g.axis === 'x' && stripRef.current) {
+      const hasNeighbor = dx < 0 ? upNext : prevTrack
+      const x = hasNeighbor ? dx : dx * 0.3
+      stripRef.current.style.transition = 'none'
+      stripRef.current.style.transform = `translateX(${x}px)`
+      g.dx = x
+    }
   }
 
   const handleTouchEnd = (e) => {
@@ -229,11 +329,26 @@ function FullScreenPlayer() {
     const elapsed = performance.now() - g.t0
     gestureRef.current = null
     setIsDragging(false)
-    if (g.axis === 'x' && Math.abs(dx) >= 60) {
+    if (g.axis === 'x') {
       setDragY(0)
+      const strip = stripRef.current
+      const fast = Math.abs(dx) > 30 && Math.abs(dx) / elapsed > 0.5
+      const hasNeighbor = dx < 0 ? upNext : prevTrack
+      if (!hasNeighbor || (Math.abs(dx) < 60 && !fast)) {
+        if (strip) settleStrip(strip, g.dx || 0)
+        return
+      }
       haptic(HAPTIC.selection)
+      const fromId = currentTrack.id
+      swipeDxRef.current = g.dx || 0
       if (dx < 0) handleSkipForward()
       else previousTrack()
+      // Переход могли отложить (следующий трек ещё грузится) — тогда
+      // обложка возвращается на место.
+      if (usePlayerStore.getState().currentTrack?.id === fromId) {
+        swipeDxRef.current = 0
+        if (strip) settleStrip(strip, g.dx || 0)
+      }
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
       startClose()
@@ -271,6 +386,7 @@ function FullScreenPlayer() {
   const handleLike = async () => {
     if (!canInteract || loadingLike) return
 
+    if (!isLiked) setBurst((n) => n + 1)
     setLoadingLike(true)
     haptic(HAPTIC.success)
     postRecommendationEvent(currentTrack, isLiked ? 'unlike' : 'like')
@@ -322,6 +438,84 @@ function FullScreenPlayer() {
     pendingLikeKeys.includes(trackLikeKey(currentTrack))
   const isDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
 
+  // Двойной тап по обложке — лайк, как в Instagram: только ставит, не
+  // снимает. По уже лайкнутому треку сердце просто вспыхивает ещё раз.
+  const handleArtTap = () => {
+    const now = performance.now()
+    if (now - lastTapRef.current > DOUBLE_TAP_MS) {
+      lastTapRef.current = now
+      return
+    }
+    lastTapRef.current = 0
+    if (!canInteract) return
+    if (isLiked) {
+      haptic(HAPTIC.light)
+      setBurst((n) => n + 1)
+    } else {
+      handleLike()
+    }
+  }
+
+  // Ссылка на страницу трека (/track/:id). Системный «Поделиться», где он
+  // есть (телефоны), иначе — ссылка в буфер.
+  //
+  // У внешнего трека id в БД ещё нет — материализуем. Это сеть, а Safari
+  // пускает share()/clipboard только сразу после тапа: после ожидания он
+  // откажет (NotAllowedError). Тогда просим нажать ещё раз — db_id уже
+  // вшит в currentTrack, и второй тап пройдёт без сети.
+  const handleShare = async () => {
+    const track = currentTrack
+    let id = dbTrackId
+    const waited = !id
+    if (!id) {
+      try {
+        id = await materializeCurrentTrack()
+      } catch (error) {
+        console.error('Error materializing track for share:', error)
+      }
+    }
+    if (!id) {
+      toast.error('Не удалось получить ссылку')
+      return
+    }
+    const url = `${window.location.origin}/track/${id}`
+    const text = [track.artist, track.title].filter(Boolean).join(' — ')
+    const retry = () => toast.info('Ссылка готова — нажмите «Поделиться» ещё раз')
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: track.title, text, url })
+      } catch (error) {
+        // AbortError — пользователь закрыл шторку, это не ошибка.
+        if (error?.name === 'NotAllowedError') retry()
+      }
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Ссылка скопирована')
+    } catch {
+      if (waited) retry()
+      else toast.error('Не удалось скопировать')
+    }
+  }
+
+  const label = queueLabel(queueSource, currentTrack)
+  // Соседние обложки карусели. Ключ — id трека: при переключении <img>
+  // переезжает между слотами, а не перезагружается.
+  const slides = [
+    prevTrack && { track: prevTrack, slot: -1 },
+    { track: currentTrack, slot: 0 },
+    upNext && { track: upNext, slot: 1 },
+  ]
+    .filter(Boolean)
+    .map((slide, i, all) => ({
+      ...slide,
+      // Один трек может стоять в очереди дважды — тогда ключ со слотом.
+      key: all.some((other, j) => j !== i && other.track.id === slide.track.id)
+        ? `${slide.track.id}:${slide.slot}`
+        : String(slide.track.id),
+    }))
+
   return (
     <div
       className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}`}
@@ -331,38 +525,48 @@ function FullScreenPlayer() {
       style={{
         transform: dragY && !isClosing ? `translateY(${dragY}px)` : undefined,
         transition: isDragging ? 'none' : undefined,
+        '--fs-tint': tint || undefined,
+        '--art-gap': `${ART_GAP}px`,
       }}
     >
       <div className="fullscreen-header">
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
-         <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
-        {(
-          <button
-            className={`fullscreen-icon fullscreen-lyrics-toggle${hasLyrics ? ' active' : ''}`}
-            onClick={toggleLyrics}
-            disabled={!hasLyrics && !lyricsLoading}
-            aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
-            title={hasLyrics ? (lyricsMode ? 'Скрыть текст' : 'Показать текст') : 'Текст не найден'}
-          >
-            {lyricsMode ? <X size={20} /> : <AlignLeft size={20} />}
-          </button>
+        {label ? (
+          <div className="fullscreen-queue-label">{label}</div>
+        ) : (
+          <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
         )}
+        <span className="fullscreen-header-spacer" aria-hidden="true" />
       </div>
 
       <div className="fullscreen-body">
         <div className="fullscreen-content">
-          <div className={`fullscreen-art${lyricsMode ? ' compact' : ''}${artReturn ? ' was-compact' : ''}`}>
-            <img
-              src={coverUrl}
-              alt={currentTrack.title}
-              onError={handleCoverError}
-              style={{ visibility: coverHidden ? 'hidden' : undefined }}
-            />
+          <div
+            className={`fullscreen-art${lyricsMode ? ' compact' : ''}${artReturn ? ' was-compact' : ''}`}
+            onClick={handleArtTap}
+          >
+            <div className="fullscreen-art-strip" ref={stripRef}>
+              {slides.map(({ track, slot, key }) => (
+                <img
+                  key={key}
+                  className={slot ? 'fullscreen-art-side' : 'is-current'}
+                  style={{
+                    '--slot': slot,
+                    visibility: coverHidden && !slot ? 'hidden' : undefined,
+                  }}
+                  src={slot ? resolveCoverUrl(track.cover_url, true) || defaultCover : coverUrl}
+                  alt={slot ? '' : currentTrack.title}
+                  aria-hidden={slot ? 'true' : undefined}
+                  draggable={false}
+                  onError={handleCoverError}
+                />
+              ))}
+            </div>
+            {burst > 0 && <LikeBurst key={burst} onDone={() => setBurst(0)} />}
           </div>
 
-       
           <div className="fullscreen-info">
             <div>
               <div className="fullscreen-track-name">{currentTrack.title}</div>
@@ -373,40 +577,9 @@ function FullScreenPlayer() {
               />
             </div>
             <div className="fullscreen-actions">
-              {canInteract && (
-                <button
-                  type="button"
-                  className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
-                  onClick={handleLike}
-                  disabled={loadingLike}
-                  aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-                >
-                  <LikeHeart size={20} liked={!!isLiked} />
-                </button>
-              )}
-              {canInteract && (
-                <button
-                  type="button"
-                  className={`fullscreen-icon fullscreen-dislike ${isDisliked ? 'active' : ''}`}
-                  onClick={handleDislike}
-                  disabled={loadingDislike}
-                  aria-pressed={isDisliked}
-                  aria-label={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
-                >
-                  <ThumbsDown size={20} fill={isDisliked ? 'currentColor' : 'none'} />
-                </button>
-              )}
-              {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-                <a
-                  className="fullscreen-icon"
-                  href={currentTrack.download_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Скачать"
-                >
-                  <Download size={20} />
-                </a>
-              )}
+              <button type="button" className="fullscreen-icon" onClick={handleShare} aria-label="Поделиться">
+                <Share size={20} />
+              </button>
             </div>
           </div>
 
@@ -431,48 +604,78 @@ function FullScreenPlayer() {
       <div className="fullscreen-controls">
         <button
           type="button"
-          className={`fullscreen-icon ${isShuffle ? 'active' : ''}`}
-          onClick={toggleShuffle}
-          aria-label={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+          className={`fullscreen-icon fullscreen-dislike ${isDisliked ? 'active' : ''}`}
+          onClick={handleDislike}
+          disabled={!canInteract || loadingDislike}
+          aria-pressed={isDisliked}
+          aria-label={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
         >
-          <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
+          <ThumbsDown size={22} fill={isDisliked ? 'currentColor' : 'none'} />
         </button>
         <button className="fullscreen-icon" onClick={previousTrack} aria-label="Назад">
-          <SkipBack size={20} />
+          <SkipBack size={26} fill="currentColor" />
         </button>
-        <button className="fullscreen-play" onClick={togglePlayPause} aria-label="Play/Pause">
-          {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
+        <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+          {isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
         </button>
-        <button
-          className="fullscreen-icon"
-          onClick={handleSkipForward}
-          aria-label="Вперёд"
-          title="Вперёд"
-        >
-          <SkipForward size={20} />
+        <button className="fullscreen-icon" onClick={handleSkipForward} aria-label="Вперёд" title="Вперёд">
+          <SkipForward size={26} fill="currentColor" />
         </button>
         <button
           type="button"
-          className={`fullscreen-icon ${isRepeatOne ? 'active' : ''}`}
-          onClick={toggleRepeatOne}
-          aria-label={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
+          className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
+          onClick={handleLike}
+          disabled={!canInteract || loadingLike}
+          aria-pressed={isLiked}
+          aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
         >
-          <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
+          <LikeHeart size={24} liked={!!isLiked} />
         </button>
       </div>
 
-      <div className="fullscreen-mobile-tools">
+      <div className="fullscreen-tools">
         <button
           type="button"
-          className={`fullscreen-mobile-lyrics${lyricsMode ? ' active' : ''}`}
+          className={`fullscreen-tool ${isRepeatOne ? 'active' : ''}`}
+          onClick={toggleRepeatOne}
+          aria-pressed={isRepeatOne}
+          aria-label={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
+        >
+          <Repeat1 size={22} />
+        </button>
+        <button
+          type="button"
+          className={`fullscreen-tool${lyricsMode ? ' active' : ''}`}
           onClick={toggleLyrics}
           disabled={!hasLyrics && !lyricsLoading}
-          aria-label={lyricsMode ? 'Hide lyrics' : 'Show lyrics'}
-          title={hasLyrics ? (lyricsMode ? 'Hide lyrics' : 'Show lyrics') : 'Lyrics not found'}
+          aria-pressed={lyricsMode}
+          aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
+          title={hasLyrics ? undefined : 'Текст не найден'}
         >
-          <AlignLeft size={24} />
+          <AlignLeft size={22} />
+        </button>
+        {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+          <a
+            className="fullscreen-tool"
+            href={currentTrack.download_url}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Скачать"
+          >
+            <Download size={22} />
+          </a>
+        )}
+        <button
+          type="button"
+          className={`fullscreen-tool ${isShuffle ? 'active' : ''}`}
+          onClick={toggleShuffle}
+          aria-pressed={isShuffle}
+          aria-label={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+        >
+          <Shuffle size={22} />
         </button>
       </div>
+
     </div>
   )
 }
