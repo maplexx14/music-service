@@ -128,6 +128,29 @@ function writeHomeSnapshot(userId, patch) {
   homeSnapshot = { ...(readHomeSnapshot(userId) || { userId }), ...patch }
 }
 
+// Индикатор pull-to-refresh: выезжает из-под шапки по мере жеста. Состояние
+// жеста живёт здесь, а не в Home: жест тикает каждый кадр, и перерисовывать
+// на каждом тике всю главную (полки, карусели, hero) незачем.
+function PullToRefreshIndicator({ onRefresh, reachTop, root }) {
+  const { pull, refreshing } = usePullToRefresh({ onRefresh, reachTop, root })
+  if (pull <= 0 && !refreshing) return null
+  const pullProgress = refreshing ? 1 : Math.min(pull / 64, 1)
+  return (
+    <div
+      className="ptr-indicator"
+      style={{ opacity: pullProgress, transform: `translateY(${-32 + (refreshing ? 32 : pull * 0.35)}px)` }}
+      aria-hidden="true"
+    >
+      <BoltLoader
+        size={18}
+        frame={36}
+        active={refreshing}
+        style={refreshing ? undefined : { transform: `scale(${0.6 + pullProgress * 0.4})` }}
+      />
+    </div>
+  )
+}
+
 function Home() {
   const userId = useAuthStore((s) => s.user?.id)
   const [snapshot] = useState(() => readHomeSnapshot(userId))
@@ -313,11 +336,6 @@ function Home() {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [screenActive])
-  const { pull, refreshing } = usePullToRefresh({
-    onRefresh: () => fetchData(),
-    reachTop: () => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0,
-  })
-  const pullProgress = refreshing ? 1 : Math.min(pull / 64, 1)
   // Страховка на случай долгого пребывания на странице (TTL предзагрузки
   // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
   // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
@@ -364,21 +382,11 @@ function Home() {
   // локализовано в той единственной полке, которой нужны данные.
   return (
     <div className="page-container">
-      {/* Индикатор pull-to-refresh: выезжает из-под шапки по мере жеста. */}
-      {(pull > 0 || refreshing) && (
-        <div
-          className="ptr-indicator"
-          style={{ opacity: pullProgress, transform: `translateY(${-32 + (refreshing ? 32 : pull * 0.35)}px)` }}
-          aria-hidden="true"
-        >
-          <BoltLoader
-            size={18}
-            frame={36}
-            active={refreshing}
-            style={refreshing ? undefined : { transform: `scale(${0.6 + pullProgress * 0.4})` }}
-          />
-        </div>
-      )}
+      <PullToRefreshIndicator
+        onRefresh={fetchData}
+        reachTop={() => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0}
+        root={() => scrollerRef?.current ?? null}
+      />
       <div className="mobile-header">
         
         <span href = "">

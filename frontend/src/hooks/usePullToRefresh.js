@@ -11,7 +11,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 //
 // reachTop: () => boolean — «проскроллено в самый верх?». По умолчанию —
 // документ-скролл; для вложенных скролл-контейнеров передайте свою проверку.
-export function usePullToRefresh({ onRefresh, reachTop, maxPull = 90, threshold = 64 } = {}) {
+// root: () => Element | null — где жест считается потягиванием. Слушатели
+// висят на window, а страница живёт под оверлеями: без этой проверки свайп
+// вниз, закрывающий полноэкранный плеер над главной, тянул и её — каждый
+// кадр перерисовывал страницу, а на отпускании запускал обновление.
+export function usePullToRefresh({ onRefresh, reachTop, root, maxPull = 90, threshold = 64 } = {}) {
   const [pull, setPull] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const gesture = useRef(null)
@@ -22,8 +26,10 @@ export function usePullToRefresh({ onRefresh, reachTop, maxPull = 90, threshold 
   const refreshingRef = useRef(false)
   const onRefreshRef = useRef(onRefresh)
   const reachTopRef = useRef(reachTop)
+  const rootRef = useRef(root)
   onRefreshRef.current = onRefresh
   reachTopRef.current = reachTop
+  rootRef.current = root
 
   const isAtTop = useCallback(
     () =>
@@ -52,7 +58,8 @@ export function usePullToRefresh({ onRefresh, reachTop, maxPull = 90, threshold 
       // начатый на них, — это поворот, а не потягивание списка. Без этой
       // проверки вращение диска вниз на самом верху страницы одновременно
       // дёргало бы обновление рекомендаций.
-      if (e.target?.closest?.('[data-no-pull]')) {
+      const rootEl = rootRef.current?.()
+      if (e.target?.closest?.('[data-no-pull]') || (rootEl && !rootEl.contains(e.target))) {
         gesture.current = null
         return
       }
