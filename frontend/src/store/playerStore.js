@@ -171,6 +171,22 @@ function postListenEvent(dbId, completion) {
     .catch(() => {})
 }
 
+// Громкость — настройка устройства, а не аккаунта: на ноутбуке и телефоне
+// она разная, поэтому localStorage, а не профиль на сервере. Хранится всегда,
+// независимо от «Запоминать плеер» — тот про очередь и позицию.
+const VOLUME_KEY = 'player-volume'
+
+const clampVolume = (value) => Math.max(0, Math.min(1, value))
+
+const loadVolume = () => {
+  try {
+    const stored = parseFloat(localStorage.getItem(VOLUME_KEY))
+    return Number.isFinite(stored) ? clampVolume(stored) : 1
+  } catch {
+    return 1
+  }
+}
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -179,7 +195,7 @@ const usePlayerStore = create((set, get) => ({
   currentShuffleIndex: -1,
   isPlaying: false,
   source: null,
-  volume: 1,
+  volume: loadVolume(),
   currentTime: 0,
   duration: 0,
   // id трека, для которого уже можно грузить hi-res обложку. Ставит Player
@@ -1045,7 +1061,13 @@ const usePlayerStore = create((set, get) => ({
   },
   
   setVolume: (volume) => {
-    set({ volume: Math.max(0, Math.min(1, volume)) })
+    const next = clampVolume(volume)
+    set({ volume: next })
+    try {
+      localStorage.setItem(VOLUME_KEY, String(next))
+    } catch {
+      // Приватный режим/квота: громкость просто не переживёт перезагрузку.
+    }
   },
   
   setCurrentTime: (time) => {
