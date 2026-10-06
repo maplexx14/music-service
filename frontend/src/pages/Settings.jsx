@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { Sparkles, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut } from 'lucide-react'
+import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut } from 'lucide-react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
-import PreferencePicker from '../components/PreferencePicker'
+import GenreSelect from '../components/GenreSelect'
+import ArtistSelect from '../components/ArtistSelect'
+import api from '../services/api'
 import TwoFactorSettings from '../components/TwoFactorSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
@@ -24,7 +26,11 @@ const QUALITY_OPTIONS = [
 // раздел можно дать прямую ссылку, а на телефоне раздел — отдельный экран со
 // своим «Назад» в верхней панели.
 const SECTIONS = [
-  { id: 'recs', label: 'Рекомендации', hint: 'Жанры, артисты, новые открытия', icon: Sparkles },
+  // Жанры и артисты — отдельными разделами: сетка фото артистов и плитки
+  // жанров каждая занимает экран, вместе они превращались в простыню.
+  { id: 'genres', label: 'Любимые жанры', hint: 'Что вы любите слушать', icon: Disc3 },
+  { id: 'artists', label: 'Любимые артисты', hint: 'И похожие на них', icon: Mic2 },
+  { id: 'recs', label: 'Рекомендации', hint: 'Новые открытия', icon: Sparkles },
   { id: 'playback', label: 'Воспроизведение', hint: 'Качество звука', icon: Headphones },
   { id: 'appearance', label: 'Оформление', hint: 'Облегчённый режим, GIF', icon: Palette },
   { id: 'security', label: 'Безопасность', hint: 'Двухфакторка, устройства', icon: Shield },
@@ -75,18 +81,18 @@ function Settings() {
     excludedArtists: user?.excluded_artists || [],
   })
   // Баланс открытия новых артистов. На бэкенде это 0..1, в интерфейсе —
-  // проценты приоритета; высокое значение становится целью потока. Отдельным
-  // состоянием, а не внутри prefs: PreferencePicker пересобирает свой объект из
-  // трёх известных ему полей и лишний ключ потерялся бы на первом же клике.
+  // проценты приоритета; высокое значение становится целью потока.
   const [discovery, setDiscovery] = useState(
     Math.round((user?.discovery_ratio ?? 0.2) * 100)
   )
-  const [savingPrefs, setSavingPrefs] = useState(false)
-
   // Профиль приходит асинхронно (checkAuth), и на первом рендере user ещё
   // null — без этого окно оставалось пустым независимо от предпочтений.
+  // Только ОДИН раз: дальше user обновляет автосохранение, и ответ на
+  // сохранение A, пришедший после клика по B, затёр бы B.
+  const prefsLoaded = useRef(false)
   useEffect(() => {
-    if (user) {
+    if (user && !prefsLoaded.current) {
+      prefsLoaded.current = true
       setPrefs({
         genres: user.preferred_genres || [],
         artists: user.preferred_artists || [],
@@ -105,8 +111,7 @@ function Settings() {
   const active = requested ?? (isMobile ? null : sections[0])
 
   // Предпочтения живут здесь, а не в разделе: маршрут один (/settings/:section?),
-  // компонент при переходах между меню и разделами не размонтируется, и
-  // несохранённое не теряется. Точка в меню напоминает, что осталось сохранить.
+  // компонент при переходах между меню и разделами не размонтируется.
   const prefsDirty =
     !!user &&
     (!sameList(prefs.genres, user.preferred_genres || []) ||
@@ -114,21 +119,60 @@ function Settings() {
       !sameList(prefs.excludedArtists, user.excluded_artists || []) ||
       discovery !== Math.round((user.discovery_ratio ?? 0.2) * 100))
 
-  const handleSavePrefs = async () => {
-    setSavingPrefs(true)
-    const result = await updatePreferences(
-      prefs.genres,
-      prefs.artists,
-      prefs.excludedArtists,
-      discovery / 100,
-    )
-    setSavingPrefs(false)
-    if (result.success) {
-      toast.success('Предпочтения сохранены')
-    } else {
-      toast.error(result.error)
+  // Вкус, выведенный из прослушиваний — тот же профиль, что строит волну:
+  // юзер видит, что сервис о нём понял, и может перенести это в свой выбор.
+  const [detected, setDetected] = useState({ genres: [], artists: [] })
+  useEffect(() => {
+    let active = true
+    api
+      .get('/users/me/taste')
+      .then((res) => {
+        if (active) {
+          setDetected({ genres: res.data?.genres || [], artists: res.data?.artists || [] })
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
     }
-  }
+  }, [])
+
+  // Автосохранение вместо кнопки: сетка артистов подгружается при прокрутке
+  // бесконечно, и кнопка под ней была недостижима. Сохраняем через паузу
+  // после последней правки — серия кликов по артистам уходит одним PUT.
+  //
+  // lastSaved — то, что уже отправили. Бэкенд нормализует выбор (дубли,
+  // неизвестные жанры, потолок в 50), и user может навсегда отличаться от
+  // prefs: без этой проверки такой выбор сохранялся бы по кругу. Ошибка
+  // тоже не повторяется сама — только на следующей правке.
+  const lastSaved = useRef(null)
+  const pendingSave = useRef(null)
+  const prefsPayload = JSON.stringify([
+    prefs.genres,
+    prefs.artists,
+    prefs.excludedArtists,
+    discovery,
+  ])
+
+  useEffect(() => {
+    if (!prefsDirty || lastSaved.current === prefsPayload) {
+      pendingSave.current = null
+      return undefined
+    }
+    const save = async () => {
+      pendingSave.current = null
+      lastSaved.current = prefsPayload
+      const [genres, artists, excludedArtists, ratio] = JSON.parse(prefsPayload)
+      const result = await updatePreferences(genres, artists, excludedArtists, ratio / 100)
+      if (!result.success) toast.error(result.error)
+    }
+    pendingSave.current = save
+    const timer = setTimeout(save, 800)
+    return () => clearTimeout(timer)
+  }, [prefsPayload, prefsDirty, updatePreferences])
+
+  // Ушли со страницы раньше паузы — досохраняем, правка не должна теряться.
+  useEffect(() => () => pendingSave.current?.(), [])
 
   const handleGifChange = (event) => {
     const file = event.target.files?.[0]
@@ -225,11 +269,6 @@ function Settings() {
                 <span className="settings-menu-text">
                   <span className="settings-menu-label">
                     {label}
-                    {id === 'recs' && prefsDirty && (
-                      <span className="settings-menu-dot" title="Есть несохранённые изменения">
-                        <span className="settings-sr-only">(есть несохранённые изменения)</span>
-                      </span>
-                    )}
                   </span>
                   <span className="settings-menu-hint">{hint}</span>
                 </span>
@@ -297,17 +336,58 @@ function Settings() {
         <h1>{isMobile ? active.label : 'Настройки'}</h1>
       </div>
 
-      <div className="settings-layout">
+      {/* Жанры и артисты — плитки и сетка фото: им нужна вся ширина, а не
+          колонка в 600px, как у разделов с формами. */}
+      <div className={`settings-layout${['genres', 'artists'].includes(activeTab) ? ' wide' : ''}`}>
         {!isMobile && menu}
         <div className="settings-content">
+          {activeTab === 'genres' && (
+            <div {...panelProps('genres')}>
+              <div className="settings-card">
+                <div className="settings-section-title">Любимые жанры</div>
+                <p className="settings-hint settings-section-hint">
+                  Выберите то, что вам ближе — это настроит ваш поток. Сохраняется
+                  автоматически.
+                </p>
+                <GenreSelect
+                  selected={prefs.genres}
+                  detected={detected.genres}
+                  onChange={(genres) => setPrefs((prev) => ({ ...prev, genres }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'artists' && (
+            <div {...panelProps('artists')}>
+              <div className="settings-card">
+                <div className="settings-section-title">Любимые артисты</div>
+                <p className="settings-hint settings-section-hint">
+                  Отметьте артиста — рядом появятся похожие. Нужного нет — найдите
+                  поиском. Сохраняется автоматически.
+                </p>
+                <ArtistSelect
+                  selected={prefs.artists}
+                  excluded={prefs.excludedArtists}
+                  detected={detected.artists}
+                  genres={prefs.genres}
+                  suggestionLimit={48}
+                  onChange={({ artists, excludedArtists }) =>
+                    setPrefs((prev) => ({ ...prev, artists, excludedArtists }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+
           {activeTab === 'recs' && (
             <div {...panelProps('recs')}>
               <div className="settings-card">
-                <div className="settings-section-title">Музыкальные предпочтения</div>
+                <div className="settings-section-title">Новые открытия</div>
                 <p className="settings-hint settings-section-hint">
-                  Влияют на рекомендации и ваш персональный поток
+                  Влияют на рекомендации и ваш персональный поток. Сохраняется
+                  автоматически.
                 </p>
-                <PreferencePicker value={prefs} onChange={setPrefs} />
 
                 <div className="settings-balance">
                   <div className="settings-balance-head">
@@ -344,16 +424,6 @@ function Settings() {
                   </div>
                 </div>
 
-                <div className="settings-prefs-actions">
-                  <button
-                    type="button"
-                    className="settings-save-btn"
-                    onClick={handleSavePrefs}
-                    disabled={savingPrefs || !prefsDirty}
-                  >
-                    {savingPrefs ? 'Сохранение...' : 'Сохранить предпочтения'}
-                  </button>
-                </div>
               </div>
             </div>
           )}

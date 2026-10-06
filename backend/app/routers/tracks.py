@@ -159,6 +159,9 @@ _COVER_CDN_HOSTS = (
     "thisis-images.scdn.co",
     "avatars.yandex.net",
     "avatars.mds.yandex.net",
+    # Фото артистов в выборе любимых (artist_cards.py) — CDN Deezer.
+    "cdn-images.dzcdn.net",
+    "e-cdns-images.dzcdn.net",
 )
 _COVER_PROXY_MAX_BYTES = 10 * 1024 * 1024  # 10 MB — потолок на одну обложку
 _COVER_CACHE_TTL = 24 * 3600

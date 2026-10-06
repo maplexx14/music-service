@@ -1,7 +1,7 @@
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
 from app.models import User, Track, UserPlayerState
-from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption
+from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption, ArtistCard
+from app import artist_cards
 from app import lastfm_genres
-from app.genre_keywords import GENRE_KEYWORDS
+from app.genre_keywords import GENRE_KEYWORDS, resolve_internal_key
 from app.dependencies import get_current_active_user, get_current_admin_user
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
@@ -43,18 +44,38 @@ async def list_genres():
     return [GenreOption(**option) for option in await lastfm_genres.genre_catalog_async()]
 
 
+def _genre_filter(wanted: List[str]):
+    """Условие «трек одного из жанров»: по Track.genre и по ключевым словам
+    нашей ветки («hip-hop» ловит и «Rap», и «Хип-хоп»)."""
+    patterns = set()
+    for tag in wanted:
+        patterns.add(tag.lower())
+        key = resolve_internal_key(tag)
+        if key:
+            patterns.update(word.lower() for word in GENRE_KEYWORDS.get(key, []))
+    return or_(*(Track.genre.ilike(f"%{p}%") for p in sorted(patterns)))
+
+
+# Глубже подгрузка не ходит: дальше хвосты тегов Last.fm уже мимо жанра.
+_ARTISTS_BY_GENRES_MAX = 300
+
+
 @router.get("/artists/by-genres", response_model=List[str])
 async def artists_by_genres(
     genres: List[str] = Query(default=[]),
     limit: int = 24,
+    offset: int = 0,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """Артисты под выбранные жанры — второй шаг онбординга.
 
     Источник — топ артистов тега в Last.fm (`tag.getTopArtists`), по кругу из
-    каждого выбранного жанра. Если Last.fm недоступен или жанры не переданы,
-    добираем самыми слушаемыми артистами локального каталога: подсказки должны
+    каждого выбранного жанра. Не хватает — добираем самыми слушаемыми
+    артистами локального каталога, но при выбранных жанрах только теми, чьи
+    треки этих жанров: общий топ каталога делал подсказки одинаковыми для
+    любых жанров (а с подгрузкой при прокрутке — заполнял ими всю сетку).
+    Без жанров — весь каталог: подсказки должны
     быть непустыми даже без сети.
     """
     wanted: List[str] = []
@@ -66,20 +87,26 @@ async def artists_by_genres(
                 wanted.append(name)
 
     limit = min(max(limit, 1), 60)
+    # offset — подгрузка сетки при прокрутке. Список строится детерминированно
+    # (кэш Last.fm, стабильная сортировка), так что страница — срез одного и
+    # того же списка длины offset + limit.
+    offset = min(max(offset, 0), _ARTISTS_BY_GENRES_MAX - limit)
+    total = offset + limit
     names: List[str] = []
     if wanted:
-        names = await lastfm_genres.artists_for_genres_async(wanted, limit=limit)
+        names = await lastfm_genres.artists_for_genres_async(wanted, limit=total)
 
-    if len(names) < limit:
+    if len(names) < total:
         existing = {artist_key(n) for n in names}
         # GROUP BY по всей таблице треков — в тредпул: хендлер async, и
         # синхронный SQLAlchemy в event loop останавливал весь воркер.
+        query = db.query(Track.artist).filter(Track.artist.isnot(None))
+        if wanted:
+            query = query.filter(_genre_filter(wanted))
         rows = await asyncio.to_thread(
-            db.query(Track.artist)
-            .filter(Track.artist.isnot(None))
-            .group_by(Track.artist)
+            query.group_by(Track.artist)
             .order_by(func.coalesce(func.sum(Track.play_count), 0).desc())
-            .limit(limit * 2)
+            .limit(total * 2)
             .all
         )
         for (artist,) in rows:
@@ -87,10 +114,10 @@ async def artists_by_genres(
                 continue
             existing.add(artist_key(artist))
             names.append(artist)
-            if len(names) >= limit:
+            if len(names) >= total:
                 break
 
-    return names[:limit]
+    return names[offset:total]
 
 
 @router.get("/artists/suggest", response_model=List[str])
@@ -133,6 +160,39 @@ async def suggest_artists(
             merged.append(name)
 
     return merged[:limit]
+
+
+def _clean_names(raw: List[str], cap: int) -> List[str]:
+    # Имена списком повторяющегося параметра (?names=a&names=b), не через
+    # запятую: запятая бывает в самом имени («Tyler, The Creator»).
+    return [name.strip() for name in raw if name and name.strip()][:cap]
+
+
+@router.get("/artists/cards", response_model=List[ArtistCard])
+async def artist_cards_for_names(
+    names: List[str] = Query(default=[]),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Фото и число фанатов для имён из подсказок.
+
+    Отдельно от /by-genres и /suggest: имена там приходят мгновенно из
+    Last.fm/каталога, а карточки дозагружаются, не задерживая сетку.
+    """
+    return await artist_cards.artist_cards(_clean_names(names, 60))
+
+
+@router.get("/artists/similar", response_model=List[ArtistCard])
+async def similar_artist_cards(
+    artist: str,
+    limit: int = 3,
+    exclude: List[str] = Query(default=[]),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Похожие на выбранного артиста — сетка онбординга вставляет их рядом
+    с ним. exclude — имена, уже показанные в сетке."""
+    return await artist_cards.similar_cards(
+        artist, limit=min(max(limit, 1), 12), exclude=_clean_names(exclude, 200)
+    )
 
 
 @router.get("/me/taste")

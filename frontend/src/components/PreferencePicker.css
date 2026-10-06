@@ -24,20 +24,15 @@
   margin: 0 0 8px;
 }
 
-/* --- Жанры: чипы --- */
-.pref-genres {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
+/* --- Жанры: цветные плитки --- */
 /* Жанров теперь десятки (каталог Last.fm), поэтому они разложены по группам,
    а сам список скроллится внутри карточки: иначе онбординг превращается в
    простыню на три экрана. */
 .pref-genre-list {
   max-height: 46vh;
   overflow-y: auto;
-  padding-right: 4px;
+  /* Отступ под фокус-кольцо и поп плитки: край скролла иначе их срезает. */
+  padding: 4px;
 }
 
 .pref-group {
@@ -59,53 +54,115 @@
   margin: 6px 0 0;
 }
 
-.pref-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  border: 1px solid #333;
-  background: #1a1a1a;
-  color: #e6e6e6;
-  font-size: 14px;
-  font-weight: 500;
+.pref-genre-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+/* Цвет плитки — из оттенка ветки (--tile-hue, см. GenreSelect): яркий
+   угол сверху слева уходит в глубокий тон, белый текст читается на обоих. */
+.pref-genre-tile {
+  --tile-hue: 300;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 76px;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 0% 0%, oklch(0.68 0.16 var(--tile-hue) / 0.9), transparent 60%),
+    linear-gradient(135deg, oklch(0.5 0.15 var(--tile-hue)), oklch(0.3 0.09 calc(var(--tile-hue) + 35)));
+  color: #ffffff;
+  text-align: left;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
-              transform var(--duration-fast) var(--ease-out);
+  /* Невыбранные приглушены: выбор читается по яркости, а не только по галке. */
+  filter: saturate(0.75) brightness(0.82);
+  transition: filter 0.2s ease, transform var(--duration-fast) var(--ease-out),
+              box-shadow 0.2s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
-.pref-chip:hover {
-  border-color: #a259ff;
+.pref-genre-tile:hover {
+  filter: saturate(0.95) brightness(0.95);
 }
 
-.pref-chip:active {
-  transform: scale(0.96);
+.pref-genre-tile:active {
+  transform: scale(0.97);
 }
 
-.pref-chip.active {
-  background: #a259ff;
-  border-color: #a259ff;
-  color: #ffffff;
+.pref-genre-tile:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #181818, 0 0 0 4px rgba(255, 255, 255, 0.7);
+}
+
+.pref-genre-tile.active {
+  filter: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.9);
   animation: prefChipPop 0.25s var(--ease-out);
 }
 
-/* Поп выбранного жанра: онбординг видят один раз — здесь уместна щедрость. */
-@keyframes prefChipPop {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.06); }
-  100% { transform: scale(1); }
+.pref-genre-label {
+  position: relative;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
 }
 
-/* Жанр, который сервис определил по прослушиваниям, но юзер не выбрал сам. */
-.pref-chip.detected:not(.active) {
-  border-color: rgba(162, 89, 255, 0.55);
+.pref-genre-check,
+.pref-genre-detected {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.pref-genre-check {
+  background: #ffffff;
+  color: oklch(0.4 0.15 var(--tile-hue));
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.15s ease, transform 0.25s var(--ease-out);
+}
+
+.pref-genre-tile.active .pref-genre-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.pref-genre-detected {
+  background: rgba(0, 0, 0, 0.3);
   color: #ffffff;
 }
 
-.pref-chip.detected:not(.active) svg {
-  color: #a259ff;
+/* Поп выбора: онбординг видят один раз — здесь уместна щедрость. */
+@keyframes prefChipPop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+@media (max-width: 600px) {
+  .pref-genre-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .pref-genre-tile {
+    min-height: 68px;
+  }
+
+  .pref-genre-label {
+    font-size: 14px;
+  }
 }
 
 .pref-apply-detected {
@@ -130,44 +187,7 @@
   color: #ffffff;
 }
 
-/* --- Артисты: теги + ввод + подсказки --- */
-.pref-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.pref-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 14px;
-  border-radius: 999px;
-  background: rgba(162, 89, 255, 0.18);
-  border: 1px solid rgba(162, 89, 255, 0.5);
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.pref-tag button {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.pref-tag button:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
+/* --- Артисты: ввод + сетка фото --- */
 .pref-artist-input {
   position: relative;
   display: flex;
@@ -309,4 +329,217 @@
 .pref-suggestion.detected {
   border-color: rgba(162, 89, 255, 0.45);
   color: #ffffff;
+}
+
+/* --- Сетка артистов: круглые фото, имя, фанаты --- */
+.pref-artist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 20px 12px;
+  margin-top: 14px;
+  /* Подсказок с похожими набирается на несколько экранов — как и жанры,
+     сетка скроллится внутри карточки. */
+  max-height: 56vh;
+  overflow-y: auto;
+  /* Отступ под кольцо выбора (6px) и поп-анимацию — иначе край скролла
+     срезает их у верхнего ряда. */
+  padding: 10px 8px;
+}
+
+.pref-artist-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pref-artist-tile.similar {
+  animation: prefTileIn 0.4s var(--ease-out) both;
+  animation-delay: var(--tile-delay, 0ms);
+}
+
+@keyframes prefTileIn {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.pref-artist-photo {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  background: #262626;
+  transition: transform var(--duration-fast) var(--ease-out),
+              box-shadow 0.2s ease;
+}
+
+.pref-artist-photo img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  /* Тонкий контур: тёмное фото иначе сливается с фоном карточки. */
+  outline: 1px solid rgba(255, 255, 255, 0.08);
+  outline-offset: -1px;
+}
+
+.pref-artist-initial {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3a2a5c, #1f1f1f);
+  color: #e6d6ff;
+  font-size: 34px;
+  font-weight: 700;
+}
+
+.pref-artist-initial.pending {
+  color: transparent;
+  animation: prefTilePulse 1.4s ease-in-out infinite;
+}
+
+@keyframes prefTilePulse {
+  50% { opacity: 0.55; }
+}
+
+.pref-artist-tile:hover .pref-artist-photo {
+  transform: scale(1.04);
+}
+
+.pref-artist-tile:active .pref-artist-photo {
+  transform: scale(0.96);
+}
+
+.pref-artist-tile:focus-visible {
+  outline: none;
+}
+
+.pref-artist-tile:focus-visible .pref-artist-photo {
+  box-shadow: 0 0 0 3px #181818, 0 0 0 5px rgba(255, 255, 255, 0.7);
+}
+
+.pref-artist-tile.active .pref-artist-photo {
+  box-shadow: 0 0 0 3px #181818, 0 0 0 6px var(--brand-accent);
+  animation: prefChipPop 0.3s var(--ease-out);
+}
+
+.pref-artist-check {
+  position: absolute;
+  right: 2%;
+  bottom: 2%;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brand-accent);
+  color: #ffffff;
+  border: 3px solid #181818;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.15s ease, transform 0.25s var(--ease-out);
+}
+
+.pref-artist-tile.active .pref-artist-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.pref-artist-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.pref-artist-fans {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #8b8b8b;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Маркер конца сетки для подгрузки: строка во всю ширину, пока грузится —
+   три пульсирующие точки. */
+.pref-artist-more {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  min-height: 24px;
+}
+
+.pref-artist-more-dot,
+.pref-artist-more-dot::before,
+.pref-artist-more-dot::after {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b8b8b;
+  animation: prefTilePulse 1s ease-in-out infinite;
+}
+
+.pref-artist-more-dot {
+  position: relative;
+  margin-top: 9px;
+  animation-delay: 0.15s;
+}
+
+.pref-artist-more-dot::before,
+.pref-artist-more-dot::after {
+  content: '';
+  position: absolute;
+  top: 0;
+}
+
+.pref-artist-more-dot::before {
+  left: -12px;
+  animation-delay: 0s;
+}
+
+.pref-artist-more-dot::after {
+  left: 12px;
+  animation-delay: 0.3s;
+}
+
+@media (max-width: 600px) {
+  .pref-artist-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 10px;
+  }
+
+  .pref-artist-name {
+    font-size: 13px;
+  }
+
+  .pref-artist-fans {
+    font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pref-artist-tile.similar,
+  .pref-artist-tile.active .pref-artist-photo,
+  .pref-artist-initial.pending,
+  .pref-artist-more-dot,
+  .pref-artist-more-dot::before,
+  .pref-artist-more-dot::after {
+    animation: none;
+  }
 }

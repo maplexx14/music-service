@@ -544,7 +544,7 @@ body{
   .playlists-grid > *,
   .like-btn.liked,
   .fullscreen-like.active,
-  .pref-chip.active {
+  .pref-genre-tile.active {
     animation: none !important;
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Sparkles } from 'lucide-react'
+import { Check, Search, Sparkles } from 'lucide-react'
 import api from '../services/api'
 import './PreferencePicker.css'
 
@@ -10,10 +10,45 @@ import './PreferencePicker.css'
  *
  * Контролируемый: selected = string[] ключей, onChange(next) получает новый
  * массив. detected — жанры, выведенные из прослушиваний (подсвечиваем).
+ *
+ * Жанр — цветная плитка: у ветки (Рок, Электроника...) свой оттенок, теги
+ * внутри ветки чуть расходятся по тону, чтобы соседние плитки не сливались.
  */
+
+// Оттенок OKLCH на ветку — наши ключи genre_keywords. Ветка вне списка
+// получает оттенок из хэша ключа: цвет стабилен между заходами.
+const GROUP_HUES = {
+  phonk: 300,
+  trap: 340,
+  'hip-hop': 45,
+  rock: 20,
+  electronic: 215,
+  lofi: 170,
+  pop: 330,
+  jazz: 75,
+  classical: 255,
+  reggae: 140,
+  folk: 100,
+  chill: 190,
+  // Группы курированных жанров (lastfm_genres._CURATED_GENRES).
+  'r&b': 275,
+  world: 120,
+}
+
+function hueFor(group, index) {
+  let hue = GROUP_HUES[group]
+  if (hue === undefined) {
+    hue = [...(group || '')].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) % 360, 7)
+  }
+  return (hue + (index % 6) * 9) % 360
+}
+
 function GenreSelect({ selected = [], detected = [], onChange }) {
   const [options, setOptions] = useState([])
   const [loading, setLoading] = useState(true)
+  // Жанров под сотню — без поиска нужный приходится выискивать по группам.
+  const [query, setQuery] = useState('')
+  const term = query.trim().toLowerCase()
 
   useEffect(() => {
     let active = true
@@ -38,7 +73,15 @@ function GenreSelect({ selected = [], detected = [], onChange }) {
   // Внутри всё в порядке, который прислал бэкенд: популярность Last.fm.
   const groups = useMemo(() => {
     const byGroup = new Map()
-    options.forEach((option) => {
+    const visible = term
+      ? options.filter(
+          (option) =>
+            option.label.toLowerCase().includes(term) ||
+            option.key.includes(term) ||
+            (option.group_label || '').toLowerCase().includes(term)
+        )
+      : options
+    visible.forEach((option) => {
       const key = option.group || 'other'
       if (!byGroup.has(key)) {
         byGroup.set(key, { key, label: option.group_label || option.label, items: [] })
@@ -54,7 +97,7 @@ function GenreSelect({ selected = [], detected = [], onChange }) {
     return loose.length
       ? [{ key: 'loose', label: null, items: loose }, ...families]
       : families
-  }, [options])
+  }, [options, term])
 
   const unusedDetected = useMemo(
     () => detected.filter((g) => !selected.includes(g)),
@@ -75,28 +118,48 @@ function GenreSelect({ selected = [], detected = [], onChange }) {
 
   return (
     <div className="pref-section">
+      <div className="pref-artist-input">
+        <Search size={18} className="pref-artist-icon" />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Найти жанр"
+          aria-label="Найти жанр"
+        />
+      </div>
+
+      {term && !groups.length && (
+        <p className="pref-subtitle pref-hint">Такого жанра нет в списке.</p>
+      )}
+
       <div className="pref-genre-list">
         {groups.map((group) => (
           <div className="pref-group" key={group.key}>
             {group.label && <div className="pref-group-label">{group.label}</div>}
-            <div className="pref-genres">
-              {group.items.map((option) => {
+            <div className="pref-genre-tiles">
+              {group.items.map((option, index) => {
                 const active = selected.includes(option.key)
                 const fromHistory = detected.includes(option.key)
                 return (
                   <button
                     type="button"
                     key={option.key}
-                    className={`pref-chip ${active ? 'active' : ''} ${
-                      fromHistory ? 'detected' : ''
-                    }`}
+                    className={`pref-genre-tile ${active ? 'active' : ''}`}
+                    style={{ '--tile-hue': hueFor(option.group, group.key === 'loose' ? 0 : index) }}
                     onClick={() => toggle(option.key)}
                     aria-pressed={active}
                     title={fromHistory ? 'Определено по вашим прослушиваниям' : undefined}
                   >
-                    {active && <Check size={16} />}
-                    {option.label}
-                    {fromHistory && !active && <Sparkles size={14} />}
+                    <span className="pref-genre-label">{option.label}</span>
+                    {fromHistory && !active && (
+                      <span className="pref-genre-detected" aria-label="Определено по прослушиваниям">
+                        <Sparkles size={14} />
+                      </span>
+                    )}
+                    <span className="pref-genre-check" aria-hidden="true">
+                      <Check size={14} strokeWidth={3} />
+                    </span>
                   </button>
                 )
               })}

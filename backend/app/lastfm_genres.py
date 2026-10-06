@@ -45,13 +45,17 @@ logger = logging.getLogger(__name__)
 # возвращает те же 50), поэтому просим ровно столько и дополняем своими.
 _TOP_TAGS_LIMIT = 50
 
-_CATALOG_CACHE_KEY = "prefs:genre_catalog:v2"
+_CATALOG_CACHE_KEY = "prefs:genre_catalog:v3"
 _CATALOG_TTL = 24 * 60 * 60
 # Пустой ответ (Last.fm лежит) кэшируем коротко — иначе один сбой держит
 # онбординг на фолбэке сутки.
 _CATALOG_TTL_EMPTY = 10 * 60
 
 _TAG_ARTISTS_TTL = 7 * 24 * 60 * 60
+# Сколько артистов тега берём у Last.fm одним запросом. С запасом под
+# подгрузку сетки при прокрутке (offset в /users/artists/by-genres): глубже
+# первой страницы ходить к Last.fm заново не нужно.
+_TAG_ARTISTS_FETCH = 150
 _TAG_ARTISTS_TTL_EMPTY = 10 * 60
 
 # Жанры артиста по его тегам: кэш на месяц (они не меняются), пустой ответ —
@@ -86,6 +90,83 @@ _EXTRA_GENRE_TAGS = {
     "shoegaze",
     "grime",
     "drill",
+}
+
+# Жанры сверх топ-50 Last.fm: тот отдаёт 50 тегов, после отсева мета-меток
+# остаётся пара десятков — для выбора вкуса мало (нет ни гранжа, ни русского
+# рэпа, ни синтвейва). Это реальные теги Last.fm (tag.getTopArtists по ним
+# отдаёт артистов), порядок — как в UI внутри группы.
+#
+# Группа задана явно, а не выводится _group_for: наш словарь сводит «funk» к
+# фонку, а «soul»/«disco» без beets вообще никуда — в UI это были бы плитки
+# не в своих ветках. Ключи групп — наши внутренние, где они есть, иначе корень
+# ветки beets («r&b»): тогда и тег из топа, сгруппированный по beets, ляжет в
+# ту же группу.
+_CURATED_GENRES = (
+    # (тег Last.fm, подпись, группа)
+    ("russian pop", "Русский поп", "pop"),
+    ("k-pop", "K-pop", "pop"),
+    ("j-pop", "J-pop", "pop"),
+    ("synthpop", "Синти-поп", "pop"),
+    ("indie pop", "Инди-поп", "pop"),
+    ("dream pop", "Дрим-поп", "pop"),
+    ("bedroom pop", "Бедрум-поп", "pop"),
+    ("hyperpop", "Гиперпоп", "pop"),
+    ("city pop", "Сити-поп", "pop"),
+    ("russian rap", "Русский рэп", "hip-hop"),
+    ("cloud rap", "Клауд-рэп", "hip-hop"),
+    ("emo rap", "Эмо-рэп", "hip-hop"),
+    ("memphis rap", "Мемфис-рэп", "hip-hop"),
+    ("boom bap", "Бум-бэп", "hip-hop"),
+    ("jazz rap", "Джаз-рэп", "hip-hop"),
+    ("drill", "Дрилл", "hip-hop"),
+    ("grime", "Грайм", "hip-hop"),
+    ("russian rock", "Русский рок", "rock"),
+    ("russian post-punk", "Русский пост-панк", "rock"),
+    ("russian indie", "Русское инди", "rock"),
+    ("grunge", "Гранж", "rock"),
+    ("post-punk", "Пост-панк", "rock"),
+    ("emo", "Эмо", "rock"),
+    ("pop punk", "Поп-панк", "rock"),
+    ("post-hardcore", "Пост-хардкор", "rock"),
+    ("nu metal", "Ню-метал", "rock"),
+    ("doom metal", "Дум-метал", "rock"),
+    ("math rock", "Мат-рок", "rock"),
+    ("shoegaze", "Шугейз", "rock"),
+    ("new wave", "Нью-вейв", "rock"),
+    ("darkwave", "Дарквейв", "rock"),
+    ("deep house", "Дип-хаус", "electronic"),
+    ("dubstep", "Дабстеп", "electronic"),
+    ("synthwave", "Синтвейв", "electronic"),
+    ("vaporwave", "Вейпорвейв", "electronic"),
+    ("future bass", "Фьюче-бейс", "electronic"),
+    ("breakcore", "Брейккор", "electronic"),
+    ("hardstyle", "Хардстайл", "electronic"),
+    ("uk garage", "UK garage", "electronic"),
+    ("idm", "IDM", "electronic"),
+    ("trip-hop", "Трип-хоп", "electronic"),
+    ("downtempo", "Даунтемпо", "electronic"),
+    ("witch house", "Витч-хаус", "electronic"),
+    ("eurodance", "Евродэнс", "electronic"),
+    ("rnb", "R&B", "r&b"),
+    ("soul", "Соул", "r&b"),
+    ("neo-soul", "Неосоул", "r&b"),
+    ("funk", "Фанк", "r&b"),
+    ("disco", "Диско", "r&b"),
+    ("latin", "Латина", "world"),
+    ("reggaeton", "Реггетон", "world"),
+    ("afrobeats", "Афробитс", "world"),
+    ("bossa nova", "Босса-нова", "world"),
+    ("ska", "Ска", "world"),
+    ("country", "Кантри", "world"),
+    ("chanson", "Шансон", "world"),
+)
+_CURATED_BY_TAG = {tag: (label, group) for tag, label, group in _CURATED_GENRES}
+
+# Подписи групп, которых нет среди наших ключей.
+_GROUP_LABELS = {
+    "r&b": "R&B и соул",
+    "world": "Мировая музыка",
 }
 
 # Русские подписи для тегов, которые реально приходят в топе Last.fm.
@@ -140,6 +221,8 @@ _RU_LABELS = {
 def _label_for(tag: str) -> str:
     """Русская подпись тега, иначе он же с заглавной буквы."""
     low = tag.strip().lower()
+    if low in _CURATED_BY_TAG:
+        return _CURATED_BY_TAG[low][0]
     if low in _RU_LABELS:
         return _RU_LABELS[low]
     if low in GENRE_LABELS:
@@ -159,7 +242,7 @@ def _is_genre_tag(name: str) -> bool:
     if not name or not name.strip():
         return False
     low = name.strip().lower()
-    if low in GENRE_KEYWORDS or low in _EXTRA_GENRE_TAGS:
+    if low in GENRE_KEYWORDS or low in _EXTRA_GENRE_TAGS or low in _CURATED_BY_TAG:
         return True
     if beets_genre.canonical(name):
         return True
@@ -218,20 +301,24 @@ def _group_for(tag: str) -> tuple:
     сам себе группа.
     """
     low = tag.strip().lower()
+    if low in _CURATED_BY_TAG:
+        group = _CURATED_BY_TAG[low][1]
+        return group, _GROUP_LABELS.get(group) or GENRE_LABELS.get(group, _label_for(group))
     internal = resolve_internal_key(low)
     if internal:
         return internal, GENRE_LABELS.get(internal, _label_for(internal))
     chain = beets_genre.lineage(beets_genre.canonical(low) or low)
     root = chain[-1] if chain else low
-    return root, _label_for(root)
+    return root, _GROUP_LABELS.get(root) or _label_for(root)
 
 
 def build_catalog(limit: int = 0) -> List[dict]:
     """Каталог жанров: теги Last.fm (жанровые) + наши ключи. БЛОКИРУЮЩАЯ.
 
-    Порядок: сначала популярность Last.fm, затем наши ключи, которых в топе не
-    было (фонк, трэп, lo-fi и т.п.) — они нужны всегда, вкус сервиса стоит
-    на них. limit=0 — весь каталог.
+    Порядок: сначала популярность Last.fm, затем курированные жанры сверх
+    топа (`_CURATED_GENRES`), затем наши ключи, которых не было (фонк, трэп,
+    lo-fi и т.п.) — они нужны всегда, вкус сервиса стоит на них. limit=0 —
+    весь каталог.
     """
     seen = set()
     catalog: List[dict] = []
@@ -249,6 +336,21 @@ def build_catalog(limit: int = 0) -> List[dict]:
                 "group": group,
                 "group_label": group_label,
                 "popularity": weight,
+            }
+        )
+
+    for tag, label, _ in _CURATED_GENRES:
+        if tag in seen:
+            continue
+        seen.add(tag)
+        group, group_label = _group_for(tag)
+        catalog.append(
+            {
+                "key": tag,
+                "label": label,
+                "group": group,
+                "group_label": group_label,
+                "popularity": 0,
             }
         )
 
@@ -272,15 +374,17 @@ def build_catalog(limit: int = 0) -> List[dict]:
 def genre_catalog(limit: int = 0) -> List[dict]:
     """Каталог жанров с кэшем в Redis. БЛОКИРУЮЩАЯ.
 
-    Промах Last.fm не роняет онбординг: отдаём фолбэк из наших ключей и
-    кэшируем его коротко, чтобы следующий заход попробовал сеть снова.
+    Промах Last.fm не роняет онбординг: отдаём курированные жанры и наши ключи
+    и кэшируем их коротко, чтобы следующий заход попробовал сеть снова.
     """
     cached = get_cache(_CATALOG_CACHE_KEY)
     if cached:
         return cached[:limit] if limit else cached
 
     catalog = build_catalog()
-    from_lastfm = len(catalog) > len(GENRE_KEYWORDS)
+    # Популярность есть только у тегов из топа Last.fm. По длине каталога
+    # судить нельзя: курированных жанров больше 12 и без сети.
+    from_lastfm = any(item["popularity"] for item in catalog)
     if not from_lastfm:
         catalog = catalog or _fallback_catalog()
     set_cache(
@@ -305,7 +409,7 @@ def tag_artists(tag: str, limit: int = 30) -> List[str]:
     name = (tag or "").strip()
     if not name:
         return []
-    cache_key = f"prefs:tag_artists:v1:{name.lower()}"
+    cache_key = f"prefs:tag_artists:v2:{name.lower()}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached[:limit]
@@ -314,7 +418,7 @@ def tag_artists(tag: str, limit: int = 30) -> List[str]:
     if net is None:
         return []
     try:
-        items = net.get_tag(name).get_top_artists(limit=max(limit, 30))
+        items = net.get_tag(name).get_top_artists(limit=max(limit, _TAG_ARTISTS_FETCH))
     except Exception as exc:  # noqa: BLE001
         logger.warning("last.fm top artists failed for tag %s: %s", name, exc)
         return []
@@ -340,6 +444,19 @@ def tag_artists(tag: str, limit: int = 30) -> List[str]:
     return names[:limit]
 
 
+def _artist_tags_key(name: str) -> str:
+    return f"prefs:artist_tags:v2:{name.strip().lower()}"
+
+
+def _cached_artist_tags(name: str):
+    """Теги артиста из кэша без сети; None — ещё не спрашивали."""
+    clean = (name or "").strip()
+    if not clean:
+        return None
+    cached = get_cache(_artist_tags_key(clean))
+    return None if cached is None else [(tag, weight) for tag, weight in cached]
+
+
 def artist_tags(name: str) -> List[tuple]:
     """Верхние теги артиста с весами: [(тег, вес 0..100)]. БЛОКИРУЮЩАЯ.
 
@@ -355,7 +472,7 @@ def artist_tags(name: str) -> List[tuple]:
     clean = (name or "").strip()
     if not clean:
         return []
-    cache_key = f"prefs:artist_tags:v2:{clean.lower()}"
+    cache_key = _artist_tags_key(clean)
     cached = get_cache(cache_key)
     if cached is not None:
         return [(tag, weight) for tag, weight in cached]
@@ -475,13 +592,55 @@ def artists_for_genres(genres, limit: int = 24, per_genre: int = 12) -> List[str
     if not wanted:
         return []
 
-    per_tag = [(tag, tag_artists(tag, limit=per_genre)) for tag in wanted]
+    full = [(tag, tag_artists(tag, limit=_TAG_ARTISTS_FETCH)) for tag in wanted]
+    per_tag = [(tag, names[:per_genre]) for tag, names in full]
     tag_map = _artist_tag_map([name for _, names in per_tag for name in names])
     ranked = [
         sorted(names, key=lambda n: -_genre_affinity(tag, tag_map.get(n)))
         for tag, names in per_tag
     ]
-    return _round_robin(ranked, limit)
+    # Голова от длины выдачи не зависит, поэтому страницы подгрузки с разным
+    # offset режут один и тот же список.
+    picked = _round_robin(ranked, limit)
+    if len(picked) < limit:
+        tails = [(tag, names[per_genre:]) for tag, names in full]
+        picked.extend(_verified_tails(tails, limit - len(picked), {n.lower() for n in picked}))
+    return picked
+
+
+def _verified_tails(tails, need: int, seen: set) -> List[str]:
+    """Хвосты тегов (глубже проверенной головы) по кругу, без мимо-жанровых.
+
+    Хвосты показывает подгрузка сетки при прокрутке. Проверять их целиком —
+    сотни запросов к Last.fm, поэтому на каждый вызов проверяется не больше
+    `_VERIFY_BUDGET` ещё не известных артистов из тех, что пойдут в выдачу;
+    их теги кэшируются на месяц, и следующая страница опирается уже на кэш.
+    Непроверенный (бюджет кончился, Last.fm молчит) остаётся: пустая сетка
+    хуже неточной.
+    """
+    pairs = []
+    depth = max((len(names) for _, names in tails), default=0)
+    for row in range(depth):
+        for tag, names in tails:
+            if row < len(names) and names[row].lower() not in seen:
+                seen.add(names[row].lower())
+                pairs.append((tag, names[row]))
+
+    known = {name: _cached_artist_tags(name) for _, name in pairs[: need * 2]}
+    unknown = [name for name, tags in known.items() if tags is None]
+    known.update(_artist_tag_map(unknown[:_VERIFY_BUDGET]))
+
+    out: List[str] = []
+    for tag, name in pairs:
+        tags = known.get(name)
+        if tags is None:
+            tags = _cached_artist_tags(name)
+        if tags is not None and _genre_affinity(tag, tags) == 0:
+            continue
+        out.append(name)
+        if len(out) >= need:
+            break
+    return out
 
 
 async def artists_for_genres_async(

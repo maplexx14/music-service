@@ -89,17 +89,33 @@ def test_catalog_groups_by_genre_family(top_tags):
     assert groups["soul"] == "r&b"
 
 
+def test_curated_genres_extend_catalog(top_tags):
+    """Топ Last.fm — 50 тегов; курированные жанры добавляются после него, в
+    своих группах и с русскими подписями, и проходят проверку при сохранении."""
+    catalog = {o["key"]: o for o in lastfm_genres.build_catalog()}
+    assert catalog["russian rap"]["group"] == "hip-hop"
+    assert catalog["russian rap"]["label"] == "Русский рэп"
+    # «funk» наш словарь сводит к фонку — в каталоге он в R&B и соул.
+    assert catalog["funk"]["group"] == "r&b"
+    assert catalog["funk"]["group_label"] == "R&B и соул"
+    assert lastfm_genres.is_known_genre("synthwave")
+
+
 def test_catalog_labels_are_localized(top_tags):
     labels = {o["key"]: o["label"] for o in lastfm_genres.build_catalog()}
     assert labels["black metal"] == "Блэк-метал"
     assert labels["techno"] == "Техно"
 
 
+OFFLINE_KEYS = set(GENRE_KEYWORDS) | {tag for tag, _, _ in lastfm_genres._CURATED_GENRES}
+
+
 def test_catalog_falls_back_without_network(monkeypatch):
-    """Ключа/сети нет — онбординг всё равно показывает наши 12 жанров."""
+    """Ключа/сети нет — онбординг всё равно показывает наши 12 жанров и
+    курированные теги: они заданы в коде и сети не требуют."""
     monkeypatch.setattr(beets_similar, "get_network", lambda: None)
     catalog = lastfm_genres.genre_catalog()
-    assert {o["key"] for o in catalog} == set(GENRE_KEYWORDS)
+    assert {o["key"] for o in catalog} == OFFLINE_KEYS
     assert all(o["label"] for o in catalog)
 
 
@@ -109,7 +125,7 @@ def test_catalog_falls_back_on_lastfm_error(monkeypatch):
             raise RuntimeError("last.fm 403")
 
     monkeypatch.setattr(beets_similar, "get_network", lambda: Boom())
-    assert {o["key"] for o in lastfm_genres.genre_catalog()} == set(GENRE_KEYWORDS)
+    assert {o["key"] for o in lastfm_genres.genre_catalog()} == OFFLINE_KEYS
 
 
 @pytest.mark.parametrize("value", ["phonk", "black metal", "Techno", "punk rock"])
@@ -223,21 +239,29 @@ def test_artists_by_genres_endpoint(client, db, monkeypatch):
 
 
 def test_artists_by_genres_tops_up_from_catalog(client, db, monkeypatch):
-    """Last.fm молчит — подсказки не пустые: добираем каталогом по прослушкам."""
+    """Last.fm молчит — добираем каталогом по прослушкам, но при выбранных
+    жанрах только артистами этих жанров: иначе подсказки для любых жанров
+    были одним и тем же общим топом."""
     create_user(db)
     db.add_all([
-        Track(title="A", artist="Популярный", duration=100, source="local", play_count=50),
-        Track(title="B", artist="Редкий", duration=100, source="local", play_count=1),
+        Track(title="A", artist="Популярный", duration=100, source="local", play_count=50, genre="Pop"),
+        Track(title="B", artist="Техно-артист", duration=100, source="local", play_count=5, genre="Techno"),
+        Track(title="C", artist="Хаус-артист", duration=100, source="local", play_count=1, genre="Deep House"),
     ])
     db.commit()
     monkeypatch.setattr(lastfm_genres, "tag_artists", lambda tag, limit=30: [])
+    headers = auth_headers(client)
 
     resp = client.get(
         "/api/users/artists/by-genres",
         params={"genres": "techno", "limit": 5},
-        headers=auth_headers(client),
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
+    # «techno» — тег ветки electronic: её ключевые слова ловят и house.
+    assert resp.json() == ["Техно-артист", "Хаус-артист"]
+
+    resp = client.get("/api/users/artists/by-genres", params={"limit": 5}, headers=headers)
     assert resp.json()[0] == "Популярный"
 
 
@@ -255,3 +279,36 @@ def test_preferences_accept_lastfm_tag_and_drop_meta(client, db):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["preferred_genres"] == ["black metal", "phonk"]
+
+
+def test_artists_for_genres_pages_into_tails(monkeypatch):
+    """Подгрузка сетки при прокрутке: глубже per_genre идут хвосты тегов, а
+    голова списка не меняется от запрошенной длины — страницы не пересекаются."""
+    per_tag = {
+        "phonk": [f"P{i}" for i in range(40)],
+        "jazz": [f"J{i}" for i in range(40)],
+    }
+    monkeypatch.setattr(
+        lastfm_genres, "tag_artists", lambda tag, limit=30: per_tag.get(tag, [])
+    )
+    monkeypatch.setattr(lastfm_genres, "artist_tags", lambda name: [])
+    short = lastfm_genres.artists_for_genres(["phonk", "jazz"], limit=24, per_genre=12)
+    long = lastfm_genres.artists_for_genres(["phonk", "jazz"], limit=60, per_genre=12)
+    assert long[:24] == short
+    assert long[24:28] == ["P12", "J12", "P13", "J13"]
+    assert len(set(long)) == 60
+
+
+def test_artists_for_genres_drops_off_genre_tails(monkeypatch):
+    """Хвост тега проверяется на жанр: Бибер в «black metal» на подгрузке не
+    всплывает, а артист без тегов на Last.fm остаётся (наказывать нечем)."""
+    head = [f"H{i}" for i in range(12)]
+    monkeypatch.setattr(
+        lastfm_genres, "tag_artists",
+        lambda tag, limit=30: head + ["Justin Bieber", "Mayhem", "Unknown Band"],
+    )
+    monkeypatch.setattr(lastfm_genres, "_cached_artist_tags", lambda name: None)
+    tags = {"Justin Bieber": [("pop", 100), ("black metal", 58)], "Mayhem": [("black metal", 100)]}
+    monkeypatch.setattr(lastfm_genres, "artist_tags", lambda name: tags.get(name, []))
+    names = lastfm_genres.artists_for_genres(["black metal"], limit=20, per_genre=12)
+    assert names[12:] == ["Mayhem", "Unknown Band"]

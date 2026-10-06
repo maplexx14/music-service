@@ -71,6 +71,13 @@ class UserPreferencesUpdate(BaseModel):
     discovery_ratio: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
+class ArtistCard(BaseModel):
+    """Артист в сетке выбора любимых: фото и число фанатов (Deezer)."""
+    name: str
+    cover_url: Optional[str] = None
+    fans: int = 0
+
+
 class GenreOption(BaseModel):
     """Пункт списка жанров для выбора: технический ключ + подпись.
 

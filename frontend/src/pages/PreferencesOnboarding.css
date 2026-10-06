@@ -20,6 +20,12 @@
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
 }
 
+/* Шаги жанров и артистов — плитки и сетка фото: в 560px влезало бы по
+   три плитки и четыре кружка. */
+.onboarding-card.wide {
+  max-width: 760px;
+}
+
 .onboarding-header {
   margin-bottom: 28px;
   text-align: center;

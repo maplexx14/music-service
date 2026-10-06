@@ -186,7 +186,7 @@ function PreferencesOnboarding() {
           onClose={() => setImportProgress(null)}
         />
       )}
-      <div className="onboarding-card">
+      <div className={`onboarding-card ${step < 2 ? 'wide' : ''}`}>
         <div className="onboarding-steps" aria-label={`Шаг ${step + 1} из ${STEPS.length}`}>
           {STEPS.map((_, index) => (
             <span
