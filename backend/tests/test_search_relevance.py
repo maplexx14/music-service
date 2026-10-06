@@ -12,7 +12,9 @@
    имени артиста лимит съедали чужие треки, где это имя мелькнуло в названии.
 """
 
-from app.models import Track
+from sqlalchemy import update
+
+from app.models import Track, User
 from app.routers.aggregate import _merge_sources
 from app.routers.ytdlp import _query_names_artist
 from app.schemas import ExternalTrackResponse
@@ -153,3 +155,34 @@ def test_local_search_ignores_blank_query(client, db):
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["tracks"] == []
+
+
+def test_local_search_users_expose_only_public_fields(client, db):
+    """Найденный юзер — без почты и флагов. Почта, которую не пропускает
+    EmailStr (admin@localhost), раньше роняла весь поиск в 500."""
+    db.add(User(username="kirpich", email="admin@localhost", hashed_password="x", is_admin=True))
+    db.commit()
+
+    resp = client.get("/api/search", params={"q": "kirpich", "limit": 50})
+
+    assert resp.status_code == 200, resp.text
+    (user,) = resp.json()["users"]
+    assert set(user) == {"id", "username", "full_name", "avatar_url"}
+
+
+def test_local_search_survives_null_play_count(client, db):
+    """play_count NULL в старой строке — не повод отдавать 500."""
+    track = Track(title="Glory Box", artist="Portishead Live", duration=180)
+    db.add(track)
+    db.commit()
+    # Через ORM NULL не записать: на вставке срабатывает default=0.
+    db.execute(update(Track).where(Track.id == track.id).values(play_count=None))
+    db.commit()
+    # Сессия у теста и эндпоинта общая: без этого поиск получил бы из
+    # identity map объект с play_count=0, а не строку из БД.
+    db.expunge_all()
+
+    resp = client.get("/api/search", params={"q": "glory box", "limit": 50})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tracks"][0]["play_count"] == 0

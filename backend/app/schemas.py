@@ -294,6 +294,13 @@ class TrackResponse(TrackBase):
         # http://localhost:9000/covers/… без миграции БД.
         return storage.normalize_cover_url(v)
 
+    @field_validator("play_count", mode="before")
+    @classmethod
+    def _null_play_count(cls, v: Optional[int]) -> int:
+        # Колонка nullable (default=0 только на ORM-вставке): строка с NULL
+        # роняла сериализацию всей выдачи — поиск отдавал 500.
+        return v or 0
+
     class Config:
         from_attributes = True
 
@@ -351,10 +358,27 @@ class PlaylistUpdate(BaseModel):
     is_public: Optional[bool] = None
 
 
+class PublicUserResponse(BaseModel):
+    """Чужой пользователь в выдаче поиска — только то, что видно всем.
+
+    Раньше поиск отдавал UserResponse: почту, is_admin и флаги 2FA любого
+    найденного юзера, в том числе анонимам. А EmailStr в нём заново валидировал
+    почту из БД, и адрес, который не проходит нынешний email-validator
+    (admin@localhost), ронял весь поиск в 500.
+    """
+    id: int
+    username: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class SearchResponse(BaseModel):
     tracks: List[TrackResponse] = []
     playlists: List[PlaylistSummaryResponse] = []
-    users: List[UserResponse] = []
+    users: List[PublicUserResponse] = []
 
 
 class ImportRequest(BaseModel):

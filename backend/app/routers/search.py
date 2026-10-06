@@ -4,7 +4,7 @@ from sqlalchemy import and_, case, or_
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User
-from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse, UserResponse
+from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse, PublicUserResponse
 from app.dependencies import get_current_user_optional
 
 router = APIRouter()
@@ -99,7 +99,7 @@ def search(
     response = SearchResponse(
         tracks=[TrackResponse.model_validate(t) for t in tracks],
         playlists=[PlaylistSummaryResponse.model_validate(p) for p in playlists],
-        users=[UserResponse.model_validate(u) for u in users]
+        users=[PublicUserResponse.model_validate(u) for u in users]
     )
     set_cache(cache_key, response.model_dump(mode="json"), expire=_SEARCH_TTL)
     return response
