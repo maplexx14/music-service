@@ -40,6 +40,10 @@ function Search() {
   const artists = useSearchStore((state) => state.artists)
   const searchError = useSearchStore((state) => state.searchError)
   const [loading, setLoading] = useState(false)
+  // Внешний каталог отвечает за 2–5 с — дольше локальной выдачи, после
+  // которой гаснет основной спиннер. Без своего индикатора страница успевала
+  // показать «Ничего не найдено», а треки появлялись через секунды.
+  const [externalLoading, setExternalLoading] = useState(false)
   // Long-press / правый клик на треке — контекстное меню (лайк и др.).
   const trackMenu = useTrackContextMenu()
 
@@ -62,6 +66,7 @@ function Search() {
 
     useSearchStore.getState().clearSearch()
     setLoading(false)
+    setExternalLoading(false)
   }, [query])
 
   const performSearch = async (searchQuery, signal) => {
@@ -97,6 +102,7 @@ function Search() {
 
     // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
     // его секции дорисовываются по мере прихода ответов.
+    setExternalLoading(true)
     const externalRequest = api
       .get('/search/external/grouped', {
         // Слоты делятся между источниками (каталог артиста / YouTube Music /
@@ -124,6 +130,9 @@ function Search() {
       })
       .catch((error) => {
         if (!signal.aborted) console.error('External search error:', error)
+      })
+      .finally(() => {
+        if (!signal.aborted) setExternalLoading(false)
       })
     const externalPlaylistsRequest = api
       .get('/search/external/playlists', {
@@ -426,6 +435,9 @@ function Search() {
             </div>
           )}
 
+          {externalLoading && (
+            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
+          )}
           {renderExternalSection('YouTube Music', externalTracks.ytmusic)}
           {renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
@@ -450,7 +462,7 @@ function Search() {
             </div>
           )}
 
-          {!loading && query && !hasResults && (
+          {!loading && !externalLoading && query && !hasResults && (
             <div className="no-results">
               <p>Ничего не найдено</p>
             </div>
