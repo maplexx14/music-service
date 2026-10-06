@@ -27,6 +27,11 @@ _RELATED_TTL = 7 * 24 * 3600
 _RELATED_MISS_TTL = 3600
 _MAX_RELATED = 20
 
+# Идущие поиски карточек по ключу артиста. Одного артиста одновременно
+# просят соседние пачки сетки, похожие и другие пользователи с теми же
+# жанрами; лишний поиск — минус слот в общем троттле Deezer.
+_inflight: dict = {}
+
 
 def _card_key(name: str) -> str:
     return f"artist_card:v1:{artist_key(name)}"
@@ -78,18 +83,29 @@ async def artist_card(name: str) -> dict:
     if isinstance(cached, dict):
         return {**cached, "name": name}
 
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.ensure_future(_search_card(name, key))
+        _inflight[key] = task
+        task.add_done_callback(lambda _t: _inflight.pop(key, None))
+    card = await asyncio.shield(task)
+    # Имя оставляем пользовательское: под ним артист уже лежит в выборе, а
+    # другое написание («Zemfira» против «Земфира») выглядело бы как подмена.
+    return {**(card or empty), "name": name}
+
+
+async def _search_card(name: str, key: str) -> Optional[dict]:
+    """Поиск карточки в Deezer; None — сбой, ответ не кэшируется."""
     data = await _api_get("/search/artist", {"q": name, "limit": 5})
     if data is None:
-        return empty
+        return None
     found = next(
         (item for item in data.get("data") or [] if same_artist(item.get("name") or "", name)),
         None,
     )
-    card = _card(found) if found else empty
+    card = _card(found) if found else {"name": name, "cover_url": None, "fans": 0, "deezer_id": None}
     await set_cache_async(key, card, expire=_CARD_TTL if found else _CARD_MISS_TTL)
-    # Имя оставляем пользовательское: под ним артист уже лежит в выборе, а
-    # другое написание («Zemfira» против «Земфира») выглядело бы как подмена.
-    return {**card, "name": name}
+    return card
 
 
 async def artist_cards(names: Iterable[str]) -> List[dict]:

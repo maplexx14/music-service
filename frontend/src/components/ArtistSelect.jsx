@@ -21,7 +21,11 @@ import './PreferencePicker.css'
  * excludedArtists }).
  */
 const SIMILAR_COUNT = 3
-const CARDS_BATCH = 30
+// Фото ищутся в Deezer под общим троттлом (~8 запросов в секунду на сервер),
+// и ответ на пачку ждёт её последнего артиста. Мелкие пачки, отправленные
+// разом по порядку сетки, показывают первый ряд за секунду, а не всю
+// страницу за пять.
+const CARDS_BATCH = 8
 
 const keyOf = (name) => (name || '').trim().toLowerCase().replace(/\s+/g, ' ')
 

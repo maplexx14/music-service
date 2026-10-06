@@ -81,3 +81,21 @@ def test_similar_skips_shown_and_caches_neighbours(cache):
         asyncio.run(artist_cards.artist_card("Coldplay"))
     assert [c["name"] for c in similar] == ["Coldplay", "Maroon 5", "OneRepublic"]
     assert calls == ["/search/artist", "/artist/10/related"]
+
+
+def test_concurrent_requests_share_one_search(cache):
+    """Соседние пачки сетки просят одного артиста разом — поиск один."""
+    calls = []
+
+    async def slow(path, params=None):
+        calls.append(path)
+        await asyncio.sleep(0.01)
+        return {"data": [_artist(1, "Ed Sheeran")]}
+
+    async def main():
+        return await asyncio.gather(*(artist_cards.artist_card("Ed Sheeran") for _ in range(5)))
+
+    with mock.patch.object(artist_cards, "_api_get", slow):
+        cards = asyncio.run(main())
+    assert calls == ["/search/artist"]
+    assert all(c["deezer_id"] == 1 for c in cards)

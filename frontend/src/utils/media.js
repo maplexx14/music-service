@@ -12,8 +12,10 @@ import defaultCover from '../assets/default-cover.webp'
 //   card  — карточки, шапки плейлистов (до ~200px);
 //   full  — полноэкранный плеер и системный виджет.
 const COVER_VARIANTS = {
-  thumb: { google: 'w120-h120', yandex: '200x200', soundcloud: 't300x300', spotify: 'ab67616d00001e02' },
-  card: { google: 'w300-h300', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d00001e02' },
+  thumb: { google: 'w120-h120', yandex: '200x200', soundcloud: 't300x300', spotify: 'ab67616d00001e02', deezer: '120x120' },
+  // Deezer — фото артистов в выборе любимых: кружок до ~160px, 320 на
+  // ретине хватает, а весит вдвое меньше 500×500 из API.
+  card: { google: 'w300-h300', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d00001e02', deezer: '320x320' },
   // Яндекс в full — те же 400: полноэкранный плеер ждёт прогрева обложки
   // (preloadCover, 450мс), а 1000×1000 весит в разы больше.
   // Google — 800 с качеством JPEG 75: обложка ytmusic 1200×1200 при родных
@@ -26,6 +28,7 @@ const COVER_VARIANTS = {
     yandex: '400x400',
     soundcloud: 't500x500',
     spotify: 'ab67616d0000b273',
+    deezer: '500x500',
   },
 }
 
@@ -52,6 +55,9 @@ const sizeCover = (url, size) => {
   }
   if (url.includes('avatars.yandex.net') || url.includes('avatars.mds.yandex.net')) {
     return url.replace(/\/(?:\d+x\d+|orig)$/, `/${v.yandex}`)
+  }
+  if (url.includes('dzcdn.net')) {
+    return url.replace(/\/\d+x\d+-/, `/${v.deezer}-`)
   }
   if (url.includes('scdn.co')) {
     return url.replace(SPOTIFY_ALBUM_SIZE_RE, `/image/${v.spotify}`)
