@@ -93,15 +93,21 @@ function FullScreenProgress() {
   const seekTo = usePlayerStore((s) => s.seekTo)
   const fillRef = useRef(null)
   const thumbRef = useRef(null)
+  // Протяжка ползунка: доля под пальцем, пока он не отпущен. Перематываем
+  // один раз, на отпускании, — серия перемоток по потоку в WebKit залипает
+  // в seeking (см. kickStalled в Player).
+  const dragRef = useRef(null)
+  const [dragRatio, setDragRatio] = useState(null)
 
-  const ratio = duration ? Math.min(1, currentTime / duration) : 0
+  const playedRatio = duration ? Math.min(1, currentTime / duration) : 0
+  const ratio = dragRatio ?? playedRatio
 
   useEffect(() => {
     if (!isPlaying || !(duration > 0)) return undefined
     let raf
     const tick = () => {
       const audio = getActive()
-      if (audio && fillRef.current) {
+      if (audio && fillRef.current && !dragRef.current) {
         const r = Math.min(1, audio.currentTime / duration)
         fillRef.current.style.transform = `scaleX(${r})`
         if (thumbRef.current) thumbRef.current.style.transform = thumbTransform(r)
@@ -112,18 +118,41 @@ function FullScreenProgress() {
     return () => cancelAnimationFrame(raf)
   }, [isPlaying, duration])
 
-  const handleSeek = (e) => {
-    if (!duration) return
+  const ratioAt = (e, rect) => Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+
+  const handlePointerDown = (e) => {
+    if (!duration || e.button > 0) return
+    e.currentTarget.setPointerCapture?.(e.pointerId)
     const rect = e.currentTarget.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-    seekTo(ratio * duration)
+    dragRef.current = { pointerId: e.pointerId, rect }
+    setDragRatio(ratioAt(e, rect))
+  }
+
+  const handlePointerMove = (e) => {
+    const drag = dragRef.current
+    if (!drag || e.pointerId !== drag.pointerId) return
+    setDragRatio(ratioAt(e, drag.rect))
+  }
+
+  const finishDrag = (e) => {
+    const drag = dragRef.current
+    if (!drag || e.pointerId !== drag.pointerId) return
+    dragRef.current = null
+    const next = ratioAt(e, drag.rect)
+    setDragRatio(null)
+    // Касание отобрала система — позицию не трогаем.
+    if (e.type === 'pointercancel' || !duration) return
+    seekTo(next * duration, 'fullscreen-bar')
   }
 
   return (
     <div className="fullscreen-progress">
       <div
-        className="fullscreen-progress-bar"
-        onClick={handleSeek}
+        className={`fullscreen-progress-bar${dragRatio != null ? ' is-dragging' : ''}`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
         role="slider"
         aria-label="Перемотка"
         aria-valuemin={0}
@@ -136,7 +165,7 @@ function FullScreenProgress() {
         <div ref={thumbRef} className="fullscreen-progress-thumb" style={{ transform: thumbTransform(ratio) }} />
       </div>
       <div className="fullscreen-progress-time">
-        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(dragRatio != null ? dragRatio * duration : currentTime)}</span>
         <span>{formatTime(duration)}</span>
       </div>
 
@@ -289,6 +318,11 @@ function FullScreenPlayer() {
 
   const handleTouchStart = (e) => {
     if (e.touches.length !== 1) return
+    // Протяжка ползунка перемотки — не свайп карусели и не закрытие плеера.
+    if (e.target.closest?.('[role="slider"]')) {
+      gestureRef.current = null
+      return
+    }
     const t = e.touches[0]
     gestureRef.current = { x: t.clientX, y: t.clientY, axis: null, t0: performance.now() }
   }
@@ -583,6 +617,10 @@ function FullScreenPlayer() {
                     src={slot ? thumb || defaultCover : coverUrl}
                     alt={slot ? '' : currentTrack.title}
                     aria-hidden={slot ? 'true' : undefined}
+                    // Без проявления (services/imageFade): под картинкой уже
+                    // лежит подложка-миниатюра, и фейд из нуля гасил бы её
+                    // вместе с картинкой — обложка моргала при открытии.
+                    data-no-fade=""
                     draggable={false}
                     onError={handleCoverError}
                   />

@@ -445,6 +445,9 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   cursor: pointer;
+  /* Протяжку ведёт сам ползунок (pointer events): без этого браузер забирал
+     бы горизонтальное движение пальца под свои жесты. */
+  touch-action: none;
 }
 
 /* Прозрачная зона нажатия выше самой полоски — удобнее попадать пальцем. */
@@ -507,7 +510,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 }
 
 .fullscreen-progress-bar:hover .fullscreen-progress-thumb::after,
-.fullscreen-progress-bar:active .fullscreen-progress-thumb::after {
+.fullscreen-progress-bar:active .fullscreen-progress-thumb::after,
+.fullscreen-progress-bar.is-dragging .fullscreen-progress-thumb::after {
   transform: scale(1);
 }
 
