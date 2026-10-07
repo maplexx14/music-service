@@ -112,8 +112,11 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
   })
   return new Promise((resolve) => {
     anim.onfinish = () => {
-      clone.remove()
+      // Сначала открываем настоящую обложку (resolve → setActive(-1) →
+      // рендер React), клон снимаем через кадр: снятый сразу, он оставлял
+      // кадр с пустым местом, пока React не перерисовал visibility.
       resolve(true)
+      requestAnimationFrame(() => requestAnimationFrame(() => clone.remove()))
     }
     anim.oncancel = () => {
       clone.remove()
