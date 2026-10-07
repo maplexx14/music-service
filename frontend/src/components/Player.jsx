@@ -30,6 +30,9 @@ import * as engine from '../services/audioEngine'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
 
+// Сколько тап по мини-плееру ждёт hi-res обложку перед открытием фуллскрина.
+const OPEN_COVER_WAIT_MS = 120
+
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
 // случае отдаёт 503, а не 404 (см. ytdlp.py: TransientResolveError). Вместо
@@ -544,8 +547,11 @@ function PlayerInner() {
   // отдаст из кэша): без чанка Suspense-фолбэк мелькнул бы на секунду до
   // плеера. Затем — hi-res обложку: фуллскрин показывает её в увеличенном
   // виде, и без прогрева она ловилась бы ещё не декодированной (пустая
-  // заглушка → скачок после морфа). Таймаут внутри preloadCover страхует
-  // от блокировки открытия на холодной сети.
+  // заглушка → скачок после морфа). Ждём не дольше OPEN_COVER_WAIT_MS:
+  // прогретая обложка декодируется быстрее, а холодную (первые секунды
+  // трека, см. heavyCoverTrackId) ждать нельзя — штатные 450 мс были
+  // заметной паузой между тапом и началом слайда. Не успела — клон летит с
+  // мини-обложкой, а в плеере под картинкой лежит та же маленькая.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
@@ -555,7 +561,7 @@ function PlayerInner() {
     }
     const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
     // Не успела прогреться — клон летит с мини-обложкой: мягче, но не пустой.
-    const hiResReady = hiRes ? await preloadCover(hiRes) : false
+    const hiResReady = hiRes ? await preloadCover(hiRes, OPEN_COVER_WAIT_MS) : false
     beginOpenMorph(miniCoverRef.current, hiResReady ? hiRes : undefined)
     openFullScreen(karaoke)
   }

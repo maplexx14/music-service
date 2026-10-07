@@ -9,13 +9,13 @@
      нейтральный тёмный. */
   background-color: var(--fs-tint, #1c1b20);
   /* Фирменная фактура сервиса (как у hero потока): зерно поверх цвета
-     и затемнение книзу под кнопками. Зерно —
-     крошечная SVG-плитка, растеризуется один раз; overlay смешивает его
-     только с фоном, обложка и текст лежат выше и не зашумлены. */
+     и затемнение книзу под кнопками. Зерно — крошечная серая SVG-плитка с
+     прозрачностью, растеризуется один раз. Без background-blend-mode:
+     смешивание во весь экран WebKit пересчитывал на каждой перерисовке
+     плеера, и отклик на нажатия заметно проседал. */
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
     linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.42) 100%);
-  background-blend-mode: overlay, normal;
   color: #ffffff;
   display: flex;
   flex-direction: column;
@@ -528,7 +528,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   margin-top: 30px;
 }
 
-/* Перемотка и плей — стеклянная капсула, как мини-плеер. */
+/* Перемотка и плей — капсула, как мини-плеер. Без backdrop-filter: фон под
+   ней однотонный, размытие не видно, а стоило перерасчёта на каждом кадре. */
 .fullscreen-transport {
   display: flex;
   align-items: center;
@@ -536,8 +537,6 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   padding: 6px;
   border-radius: var(--radius-pill);
   background: rgba(10, 10, 14, 0.35);
-  backdrop-filter: blur(12px) saturate(160%);
-  -webkit-backdrop-filter: blur(12px) saturate(160%);
 }
 
 .fullscreen-controls .fullscreen-icon {
