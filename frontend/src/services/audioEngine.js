@@ -103,18 +103,6 @@ function createSlot(label) {
 
 const slots = [createSlot('a'), createSlot('b')]
 
-// Слоты, которые уже звучали настоящим треком (тишина разблокировки не в счёт).
-// Такой элемент, заряженный следующим треком, WebKit берёт кандидатом в Now
-// Playing вперёд играющего: после подмены в фоне прогрев грузится как раз в
-// только что отыгравший слот, и на экране блокировки ⏸ сменяется на ▶ в момент
-// его загрузки (подтверждено на устройстве). См. idleHasPlayed и Player.
-const audibleSlots = new WeakSet()
-for (const el of slots) {
-  el?.addEventListener('playing', () => {
-    if (el.src && el.src !== SILENCE_URL) audibleSlots.add(el)
-  })
-}
-
 // «Мост» аудиосессии. Отдельный элемент, который крутит тишину в те моменты,
 // когда играть по-настоящему нечего, но отдавать сессию нельзя.
 //
@@ -187,12 +175,6 @@ export function getActive() {
 
 export function getIdle() {
   return slots[1 - activeIndex]
-}
-
-// Звучал ли свободный слот настоящим треком (см. audibleSlots).
-export function idleHasPlayed() {
-  const idle = getIdle()
-  return Boolean(idle && audibleSlots.has(idle))
 }
 
 // Инвариант «звучит только активный слот». Нарушается, когда в фоне теряются
