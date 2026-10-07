@@ -180,6 +180,7 @@ def upload_object(bucket: str, key: str, local_path: str, content_type: str) -> 
         phys_bucket, phys_key, local_path, content_type=content_type, **_write_sse()
     )
     _stat_cache_invalidate(bucket, key)
+    _disk_cache_drop(bucket, key)
 
 
 def stat_object_size(bucket: str, key: str) -> int:
@@ -190,6 +191,7 @@ def stat_object_size(bucket: str, key: str) -> int:
 def remove_object(bucket: str, key: str) -> None:
     phys_bucket, phys_key = locate(bucket, key)
     _stat_cache_invalidate(bucket, key)
+    _disk_cache_drop(bucket, key)
     _get_internal_client().remove_object(phys_bucket, phys_key)
 
 
@@ -1116,6 +1118,336 @@ def _build_low_variant(file_path: str, low_key: str) -> bool:
                 pass
 
 
+# ─────────────── дисковый кэш объектов внешнего S3 ───────────────
+#
+# Плеер читает трек со скоростью проигрывания (nginx режет отдачу до 160 КБ/с
+# после первых 2 МБ), и прямой прокси держал соединение с хранилищем всё
+# прослушивание. bucket.ru на сотнях одновременных соединений проседает:
+# 16 параллельных скачиваний — 37 МБ/с, 64 — всего 13.5 МБ/с, и под ~600
+# слушателями старт нового трека уходил в секунды, а слушатели заикались.
+#
+# Поэтому объект скачивается целиком одним GET на полной скорости (трек 4 МБ —
+# ~0.5 с) в файл на диске VPS, а ответ плееру читается из этого файла по мере
+# докачки: первый байт не ждёт конца скачивания. Соединение с хранилищем
+# занято полсекунды вместо минут, повторное прослушивание идёт с диска.
+# Вытеснение — LRU по mtime с потолком S3_DISK_CACHE_MAX_MB. Только для
+# внешнего S3: локальный MinIO и так на том же диске.
+
+_DISK_CACHE_DIR = os.getenv("S3_DISK_CACHE_DIR") or os.path.join(
+    os.getenv("YTDLP_CACHE_DIR", tempfile.gettempdir()), "s3"
+)
+_DISK_CACHE_MAX = int(os.getenv("S3_DISK_CACHE_MAX_MB", "3072")) * 1024 * 1024
+# Свободного места на диске меньше этого — не кэшируем, отдаём прямо из S3.
+_DISK_CACHE_MIN_FREE = int(os.getenv("S3_DISK_CACHE_MIN_FREE_MB", "1024")) * 1024 * 1024
+# Одновременных скачиваний на воркер: bucket.ru держит ~16 параллельных
+# на полной скорости, у нас 4 воркера.
+_DOWNLOAD_CONCURRENCY = int(os.getenv("S3_DOWNLOAD_CONCURRENCY", "4"))
+_DISK_CHUNK = 256 * 1024
+_EVICT_EVERY = 30.0
+# Обновлять mtime (LRU) не чаще: каждый Range-запрос плеера трогал бы диск.
+_TOUCH_EVERY = 3600.0
+
+_download_sem: Optional[asyncio.Semaphore] = None
+_downloads: dict[str, "_Download"] = {}
+_last_evict = 0.0
+
+_AUDIO_TYPES = {
+    "m4a": "audio/mp4", "mp4": "audio/mp4", "aac": "audio/aac", "opus": "audio/opus",
+    "webm": "audio/webm", "flac": "audio/flac", "wav": "audio/wav", "mp3": "audio/mpeg",
+}
+
+
+def _guess_audio_type(key: str) -> str:
+    return _AUDIO_TYPES.get(key.rsplit(".", 1)[-1].lower() if "." in key else "", "audio/mpeg")
+
+
+def _disk_cache_enabled() -> bool:
+    return bool(S3_ENDPOINT) and _DISK_CACHE_MAX > 0
+
+
+def _disk_cache_path(bucket: str, key: str) -> str:
+    digest = hashlib.sha1(f"{bucket}/{key}".encode()).hexdigest()
+    ext = os.path.splitext(key)[1].lower()[:8]
+    return os.path.join(_DISK_CACHE_DIR, digest[:2], digest + ext)
+
+
+def disk_cached_path(bucket: str, key: str) -> Optional[str]:
+    """Готовая локальная копия объекта или None."""
+    if not _disk_cache_enabled():
+        return None
+    path = _disk_cache_path(bucket, key)
+    return path if os.path.isfile(path) else None
+
+
+def _disk_cache_drop(bucket: str, key: str) -> None:
+    if not _disk_cache_enabled():
+        return
+    try:
+        os.remove(_disk_cache_path(bucket, key))
+    except OSError:
+        pass
+
+
+def _evict_disk_cache() -> None:
+    """LRU по mtime; брошенные .part (упавший воркер) старше часа — тоже."""
+    files = []
+    total = 0
+    now = time.time()
+    for root, _dirs, names in os.walk(_DISK_CACHE_DIR):
+        for name in names:
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if name.endswith(".part"):
+                if now - st.st_mtime > 3600:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                continue
+            files.append((st.st_mtime, st.st_size, path))
+            total += st.st_size
+    if total <= _DISK_CACHE_MAX:
+        return
+    target = _DISK_CACHE_MAX * 0.9
+    for _mtime, size, path in sorted(files):
+        try:
+            os.remove(path)
+        except OSError:
+            continue
+        total -= size
+        if total <= target:
+            break
+
+
+def _maybe_evict() -> None:
+    global _last_evict
+    if time.monotonic() - _last_evict < _EVICT_EVERY:
+        return
+    _last_evict = time.monotonic()
+    def _evict_logged() -> None:
+        try:
+            _evict_disk_cache()
+        except Exception:  # noqa: BLE001 — вытеснение best-effort
+            logger.warning("S3 disk cache eviction failed", exc_info=True)
+
+    asyncio.get_running_loop().run_in_executor(None, _evict_logged)
+
+
+class _Download:
+    """Скачивание объекта в .part, за которым могут идти читатели."""
+
+    def __init__(self, final: str) -> None:
+        self.final = final
+        self.part = f"{final}.{os.getpid()}.{id(self):x}.part"
+        self.size: Optional[int] = None
+        self.content_type: Optional[str] = None
+        self.written = 0
+        self.done = False
+        self.error: Optional[BaseException] = None
+        self.ready = asyncio.Event()  # размер известен или скачивание упало
+        self._progress = asyncio.Event()
+
+    def notify(self) -> None:
+        # Ждущие держат ссылку на старое событие — set() будит их, новое
+        # событие ловит следующий прогресс.
+        self._progress.set()
+        self._progress = asyncio.Event()
+
+    def progress(self) -> asyncio.Event:
+        return self._progress
+
+
+async def _run_download(d: _Download, bucket: str, key: str, file_path: str) -> None:
+    global _download_sem
+    if _download_sem is None:
+        _download_sem = asyncio.Semaphore(_DOWNLOAD_CONCURRENCY)
+    phys_bucket, phys_key = locate(bucket, key)
+    import aiofiles
+
+    try:
+        async with _download_sem:
+            try:
+                resp = await _get_async_client().get_object(
+                    Bucket=phys_bucket, Key=phys_key, **_async_sse()
+                )
+            except Exception as exc:
+                if _is_missing_error(exc):
+                    raise ObjectMissing(file_path) from exc
+                raise
+            body = resp["Body"]
+            try:
+                d.size = int(resp["ContentLength"])
+                d.content_type = resp.get("ContentType") or _guess_audio_type(key)
+                os.makedirs(os.path.dirname(d.final), exist_ok=True)
+                async with aiofiles.open(d.part, "wb") as fh:
+                    d.ready.set()
+                    async for chunk in body.iter_chunks(_DISK_CHUNK):
+                        await fh.write(chunk)
+                        await fh.flush()  # читатели видят байты сразу
+                        d.written += len(chunk)
+                        d.notify()
+            finally:
+                body.close()
+        if d.written != d.size:
+            raise IOError(f"S3 отдал {d.written} из {d.size} байт {file_path}")
+        os.replace(d.part, d.final)
+        d.done = True
+    except BaseException as exc:  # noqa: BLE001 — читатели узнают через d.error
+        d.error = exc
+        try:
+            os.remove(d.part)
+        except OSError:
+            pass
+        if not isinstance(exc, (ObjectMissing, asyncio.CancelledError)):
+            logger.warning("S3 disk cache: %s не скачался", file_path, exc_info=True)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+    finally:
+        d.ready.set()
+        d.notify()
+        _downloads.pop(d.final, None)
+        if d.done:
+            _maybe_evict()
+
+
+def _start_download(bucket: str, key: str, file_path: str) -> Optional[_Download]:
+    """Идущее или новое скачивание объекта; None — места на диске мало."""
+    final = _disk_cache_path(bucket, key)
+    d = _downloads.get(final)
+    if d is not None:
+        return d
+    try:
+        os.makedirs(_DISK_CACHE_DIR, exist_ok=True)
+        import shutil
+
+        if shutil.disk_usage(_DISK_CACHE_DIR).free < _DISK_CACHE_MIN_FREE:
+            return None
+    except OSError:
+        return None
+    d = _Download(final)
+    _downloads[final] = d
+    d.task = asyncio.create_task(_run_download(d, bucket, key, file_path))
+    return d
+
+
+async def _iter_cached_file(path: str, start: int, end: int) -> AsyncIterator[bytes]:
+    import aiofiles
+
+    async with aiofiles.open(path, "rb") as fh:
+        await fh.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = await fh.read(min(_DISK_CHUNK, remaining))
+            if not chunk:
+                raise IOError(f"кэш-файл {path} короче ожидаемого")
+            remaining -= len(chunk)
+            yield chunk
+
+
+async def _iter_downloading(d: _Download, start: int, end: int) -> AsyncIterator[bytes]:
+    """Байты [start, end] из скачивающегося файла: ждёт, пока докачаются."""
+    import aiofiles
+
+    pos = start
+    fh = None
+    try:
+        while pos <= end:
+            available = d.written
+            if available <= pos:
+                if d.error is not None:
+                    raise IOError("скачивание из S3 оборвалось") from d.error
+                if d.done:
+                    raise IOError("объект короче заявленного размера")
+                event = d.progress()
+                await event.wait()
+                continue
+            if fh is None:
+                # .part переименовывается в итоговый файл по завершении: если
+                # открыть не успели — открываем уже итоговый.
+                try:
+                    fh = await aiofiles.open(d.part, "rb")
+                except FileNotFoundError:
+                    fh = await aiofiles.open(d.final, "rb")
+                await fh.seek(pos)
+            chunk = await fh.read(min(_DISK_CHUNK, available - pos, end - pos + 1))
+            if not chunk:
+                await asyncio.sleep(0.01)  # flush ещё не дошёл до читателя
+                continue
+            pos += len(chunk)
+            yield chunk
+    finally:
+        if fh is not None:
+            await fh.close()
+
+
+async def _disk_cached_response(
+    file_path: str, request: Request, max_age: Optional[int], db_content_type: Optional[str]
+) -> Optional[Response]:
+    """Ответ из дискового кэша (готового или докачивающегося) или None —
+    тогда обычный путь прямо из S3."""
+    if not _disk_cache_enabled():
+        return None
+    bucket, key = parse_object_path(file_path)
+    final = _disk_cache_path(bucket, key)
+    d: Optional[_Download] = None
+    try:
+        st = os.stat(final)
+        size = st.st_size
+        if time.time() - st.st_mtime > _TOUCH_EVERY:
+            try:
+                os.utime(final)
+            except OSError:
+                pass
+        cached = _stat_cache_get(bucket, key)
+        content_type = (cached[1] if cached else None) or db_content_type or _guess_audio_type(key)
+    except FileNotFoundError:
+        d = _start_download(bucket, key, file_path)
+        if d is None:
+            return None
+        await d.ready.wait()
+        if d.error is not None or d.size is None:
+            if isinstance(d.error, ObjectMissing):
+                raise d.error
+            return None  # S3 недоступен для скачивания — пусть попробует прямой путь
+        size = d.size
+        content_type = db_content_type or d.content_type
+        if d.done:
+            d = None  # успело докачаться — читаем готовый файл
+
+    etag = music_etag(key, size)
+    _stat_cache_put(bucket, key, (size, content_type, etag))
+    common_headers = audio_common_headers(etag)
+    if max_age is not None:
+        common_headers["Cache-Control"] = f"private, max-age={max_age}"
+    if if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=common_headers)
+
+    range_header = request.headers.get("range")
+    if range_header and not if_range_allows_206(request, etag):
+        range_header = None
+    if range_header:
+        parsed = parse_range_header(range_header, size)
+        if parsed is None:
+            return Response(
+                status_code=416,
+                headers={**common_headers, "Content-Range": f"bytes */{size}"},
+            )
+        start, end = parsed
+    else:
+        start, end = 0, size - 1
+
+    body = _iter_downloading(d, start, end) if d is not None else _iter_cached_file(final, start, end)
+    headers = {**common_headers, "Content-Length": str(end - start + 1)}
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        body, status_code=206 if range_header else 200, media_type=content_type, headers=headers
+    )
+
+
 async def minio_range_response_async(
     file_path: str, request: Request, quality: Optional[str] = None, db_size: int = None, db_content_type: str = None
 ) -> Response:
@@ -1147,6 +1479,11 @@ async def minio_range_response_async(
                 _low_ready_at.pop(low_path, None)
 
     from app import adts
+
+    if not adts.wants_adts(request):
+        cached_response = await _disk_cached_response(file_path, request, max_age, db_content_type)
+        if cached_response is not None:
+            return cached_response
 
     if (
         stat is None

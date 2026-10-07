@@ -213,6 +213,9 @@ async def adts_for_object(file_path: str, etag: str) -> Optional[str]:
 
     async def produce():
         bucket, key = storage.parse_object_path(file_path)
+        cached = storage.disk_cached_path(bucket, key)
+        if cached:
+            return cached, False  # дисковый кэш S3 — не удалять после конвертации
         fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(key)[1] or ".m4a")
         os.close(fd)
         await asyncio.to_thread(storage.download_object, bucket, key, tmp)

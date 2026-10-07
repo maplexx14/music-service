@@ -160,6 +160,11 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_SSE_C_KEY: ${S3_SSE_C_KEY:-}
+      # Дисковый кэш треков из внешнего S3 (storage.py) — в томе ytdlp_cache.
+      # Потолок скромный, пока на диске живёт локальный MinIO (откат): после его
+      # удаления можно поднять до нескольких ГБ.
+      S3_DISK_CACHE_MAX_MB: ${S3_DISK_CACHE_MAX_MB:-1024}
+      S3_DISK_CACHE_MIN_FREE_MB: ${S3_DISK_CACHE_MIN_FREE_MB:-2048}
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env.prod (openssl rand -hex 32)}
       # Конкретный origin вместо "*": включает allow_credentials=True
       # (main.py:31) и ограничивает, кто может обращаться к API из браузера.
