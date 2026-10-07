@@ -298,6 +298,8 @@ export function unlock() {
       }
     }
     try {
+      // Разрешение засчитывается только звучащему элементу, а не приглушённому.
+      el.muted = false
       el.src = SILENCE_URL
       const promise = el.play()
       if (promise?.then) {
@@ -459,6 +461,14 @@ export function preload(url) {
   }
   idle.preload = 'auto'
   idle.volume = sharedVolume
+  // Заряженный элемент на паузе с живым источником WebKit берёт в Now Playing
+  // вперёд играющего: на экране блокировки ⏸ сменяется на ▶ ровно в момент
+  // прогрева (подтверждено на устройстве, и на первом треке, и после подмены).
+  // Приглушённый элемент iOS кандидатом не считает (тот же эффект, из-за
+  // которого muted не годится в swapTo), так что прогрев идёт с muted, а
+  // swapTo снимает его перед стартом. Повторный play() на играющем выбор
+  // WebKit не меняет, а pause()+play() даёт слышимый провал — пробовали.
+  idle.muted = true
   idle.src = abs
   watchPreload(idle, abs)
   try {
@@ -580,6 +590,8 @@ export function swapTo(url) {
   }
   idle.preload = ACTIVE_PRELOAD
   idle.volume = sharedVolume
+  // Прогрев держал элемент приглушённым (см. preload) — звучать ему пора сейчас.
+  idle.muted = false
   // Свежепрогретый элемент и так стоит на нуле, а трогать позицию без нужды
   // нельзя: seek по только что открытому потоку WebKit переживает плохо
   // (перезапрос диапазона, залипание в seeking). Проверка на ненулевую позицию
