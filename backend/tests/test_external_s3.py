@@ -332,6 +332,7 @@ def disk_cache(external_s3, monkeypatch, tmp_path):
     monkeypatch.setattr(storage, "_DISK_CACHE_DIR", str(tmp_path / "s3"))
     monkeypatch.setattr(storage, "_download_sem", None)
     monkeypatch.setattr(storage, "_downloads", {})
+    monkeypatch.setattr(storage, "_HEAD_BYTES", 3000)  # голова и хвост — два запроса
     return tmp_path / "s3"
 
 
@@ -341,7 +342,17 @@ def _fake_s3(monkeypatch, data, **body_kw):
     class _Client:
         async def get_object(self, **kw):
             calls.append(kw)
-            return {"Body": _SlowBody(data, **body_kw), "ContentLength": len(data), "ContentType": "audio/mp4"}
+            start, _, end = kw["Range"][len("bytes="):].partition("-")
+            start = int(start)
+            end = min(int(end), len(data) - 1) if end else len(data) - 1
+            kw_body = dict(body_kw)
+            if kw_body.get("fail_after") is not None:
+                kw_body["fail_after"] = max(0, kw_body["fail_after"] - start)
+            return {
+                "Body": _SlowBody(data[start:end + 1], **kw_body),
+                "ContentRange": f"bytes {start}-{end}/{len(data)}",
+                "ContentType": "audio/mp4",
+            }
 
     monkeypatch.setattr(storage, "_get_async_client", lambda: _Client())
     return calls
@@ -369,8 +380,9 @@ def test_disk_cache_streams_while_downloading_then_serves_from_disk(disk_cache, 
         return first, seek
 
     first, seek = asyncio.run(scenario())
-    assert len(calls) == 1 and "Range" not in calls[0]  # один GET объекта целиком
-    assert calls[0]["SSECustomerKey"] == _KEY
+    # голова мимо очереди и хвост — каждый байт объекта скачан один раз
+    assert [c["Range"] for c in calls] == ["bytes=0-2999", "bytes=3000-"]
+    assert all(c["SSECustomerKey"] == _KEY for c in calls)
     assert first.headers["etag"] == seek.headers["etag"] == storage.music_etag("external/ytmusic/dc1.m4a", len(data))
     assert storage.disk_cached_path("music", "external/ytmusic/dc1.m4a")
 
@@ -389,7 +401,7 @@ def test_disk_cache_parallel_requests_share_one_download(disk_cache, monkeypatch
 
     b1, b2 = asyncio.run(scenario())
     assert b1 == data[:5000] and b2 == data[6000:]
-    assert len(calls) == 1
+    assert len(calls) == 2  # одно скачивание (голова + хвост) на оба запроса
 
 
 def test_disk_cache_missing_object_raises(disk_cache, monkeypatch):
@@ -472,3 +484,21 @@ def test_upload_drops_disk_copy(disk_cache, monkeypatch, tmp_path):
 
     storage.upload_object("music", "external/ytmusic/dc6.m4a", str(src), "audio/mp4")
     assert storage.disk_cached_path("music", "external/ytmusic/dc6.m4a") is None
+
+
+def test_disk_cache_head_does_not_wait_for_queue(disk_cache, monkeypatch):
+    """Старт трека не ждёт, пока очередь докачает чужие файлы."""
+    data = b"h" * 3000 + b"t" * 3000
+    _fake_s3(monkeypatch, data, chunk=1000)
+
+    async def scenario():
+        storage._download_sem = asyncio.Semaphore(1)
+        await storage._download_sem.acquire()  # очередь занята чужой закачкой
+        resp = await asyncio.wait_for(storage.minio_range_response_async(
+            "minio://music/external/ytmusic/dc7.m4a", _request({"range": "bytes=0-2999"})
+        ), timeout=1)
+        head = await asyncio.wait_for(_collect(resp), timeout=1)
+        storage._download_sem.release()
+        return head
+
+    assert asyncio.run(scenario()) == data[:3000]
