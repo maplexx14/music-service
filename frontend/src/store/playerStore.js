@@ -1087,13 +1087,16 @@ const usePlayerStore = create((set, get) => ({
   // Запрос на перемотку из компонентов без доступа к <audio> (полноэкранный
   // плеер). Player подхватывает seekRequest и выставляет audio.currentTime.
   seekRequest: null,
-  seekTo: (time) => {
+  // from — кто перематывает, для диагностики плеера: «сам прыгнул» на
+  // телефоне без этого не отличить от случайного касания диска или полосы.
+  seekTo: (time, from = 'unknown') => {
     if (time == null || isNaN(time)) return
     set({
       currentTime: time,
       seekRequest: {
         id: ++seekRequestSequence,
         time,
+        from,
         trackId: get().currentTrack?.id ?? null,
       },
     })

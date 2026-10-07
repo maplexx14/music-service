@@ -246,7 +246,7 @@ function applySnapshot(data) {
   if (sameTrack) {
     // Как и в Player: перемотка потока внешнего трека в WebKit залипает в
     // seeking, поэтому их не двигаем (список — EXTERNAL_SOURCES в Player).
-    if (!STREAMED_SOURCES.includes(track.source)) usePlayerStore.getState().seekTo(savedPosition)
+    if (!STREAMED_SOURCES.includes(track.source)) usePlayerStore.getState().seekTo(savedPosition, 'restore')
   } else if (savedPosition > 0) {
     restoreAt = { trackId: track.id, time: savedPosition }
   }

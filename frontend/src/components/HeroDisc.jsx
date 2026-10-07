@@ -13,6 +13,9 @@ const DEG = 180 / Math.PI
 // успевает откликаться на палец, но поток не захлёбывается. Последняя позиция
 // доезжает отдельным seek на отпускании, так что точность не теряется.
 const SEEK_THROTTLE_MS = 120
+// Поворот, с которого жест считается перемоткой, а не касанием: дрожь пальца
+// при тапе даёт пару градусов.
+const SEEK_MIN_DEG = 6
 
 // Анимация вращения разошлась с позицией звука больше чем на столько —
 // переставляем её. Меньше не трогаем: позиция в сторе приходит раз в секунду
@@ -220,6 +223,7 @@ function HeroDisc() {
       accum: 0,
       progress: base,
       lastSeekAt: 0,
+      turned: false,
     }
     setIsDragging(true)
   }
@@ -248,10 +252,12 @@ function HeroDisc() {
     // с задержкой, и диск отставал бы от руки.
     if (coverRef.current) coverRef.current.style.transform = `rotate(${drag.progress * 360}deg)`
 
+    if (Math.abs(drag.accum) >= SEEK_MIN_DEG) drag.turned = true
+    if (!drag.turned) return
     const now = performance.now()
     if (now - drag.lastSeekAt >= SEEK_THROTTLE_MS) {
       drag.lastSeekAt = now
-      st.seekTo(drag.progress * dur)
+      st.seekTo(drag.progress * dur, 'disc')
     }
   }
 
@@ -260,14 +266,21 @@ function HeroDisc() {
     if (!drag || (e && e.pointerId !== drag.pointerId)) return
     dragRef.current = null
     setIsDragging(false)
-    // Финальная перемотка — на отпускании, а не только по троттлингу: иначе
-    // последние ~120мс жеста (самая точная его часть) терялись бы.
     const st = usePlayerStore.getState()
     const dur = readDuration(st, st.currentTrack)
-    if (dur > 0) {
-      st.seekTo(drag.progress * dur)
-      spinRef.current?.resume(drag.progress * dur)
+    if (!(dur > 0)) return
+    // Тап без поворота и жест, который браузер забрал под прокрутку
+    // (pointercancel), — не перемотка. Раньше и они перематывали на угол
+    // диска: тот считается по анимации, а не по звуку, и случайное касание
+    // главной прыгало по треку, после чего WebKit мог замолчать на потоке.
+    if (!drag.turned || e?.type === 'pointercancel') {
+      spinRef.current?.resume(st.currentTime)
+      return
     }
+    // Финальная перемотка — на отпускании, а не только по троттлингу: иначе
+    // последние ~120мс жеста (самая точная его часть) терялись бы.
+    st.seekTo(drag.progress * dur, 'disc')
+    spinRef.current?.resume(drag.progress * dur)
   }
 
   // Клавиатура: диск — это слайдер перемотки, стрелки двигают позицию.
@@ -278,7 +291,7 @@ function HeroDisc() {
     if (!(dur > 0)) return
     e.preventDefault()
     const step = e.shiftKey ? 30 : 5
-    st.seekTo(clamp(st.currentTime + (e.key === 'ArrowRight' ? step : -step), 0, dur))
+    st.seekTo(clamp(st.currentTime + (e.key === 'ArrowRight' ? step : -step), 0, dur), 'disc-key')
   }
 
   if (!currentTrack) return null

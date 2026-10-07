@@ -301,6 +301,7 @@ function PlayerProgress({ audioRef }) {
     const percentage = x / rect.width
     if (!(duration > 0)) return
     const newTime = percentage * duration
+    diag('seek', { from: 'mini-bar', to: Math.round(newTime * 10) / 10 })
     audio.currentTime = newTime
     setCurrentTime(newTime)
   }
@@ -1820,6 +1821,10 @@ function PlayerInner() {
       audio &&
       !isNaN(seekRequest.time)
     ) {
+      diag('seek', {
+        from: seekRequest.from,
+        to: Math.round(seekRequest.time * 10) / 10,
+      })
       audio.currentTime = seekRequest.time
     }
     clearSeekRequest(seekRequest.id)
@@ -1916,6 +1921,7 @@ function PlayerInner() {
         Math.max(audio.currentTime + offset, 0),
         Number.isFinite(audio.duration) ? audio.duration : audio.currentTime + offset,
       )
+      diag('seek', { from: 'system-skip', to: Math.round(nextTime * 10) / 10 })
       audio.currentTime = nextTime
       setCurrentTime(nextTime)
       syncPositionState(audio)
@@ -2039,6 +2045,7 @@ function PlayerInner() {
           Math.max(details.seekTime, 0),
           Number.isFinite(audio.duration) ? audio.duration : details.seekTime,
         )
+        diag('seek', { from: 'system', to: Math.round(seekTime * 10) / 10 })
         if (details.fastSeek && typeof audio.fastSeek === 'function') {
           audio.fastSeek(seekTime)
         } else {

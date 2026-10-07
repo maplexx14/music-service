@@ -68,7 +68,7 @@ function LyricsPanel({ showOnlyText = false }) {
   // Click on a synced line to seek
   const handleLineClick = (time) => {
     if (showOnlyText) return
-    seekTo(time)
+    seekTo(time, 'lyrics')
   }
 
   if (!currentTrack) return null
