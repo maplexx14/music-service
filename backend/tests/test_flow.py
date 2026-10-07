@@ -2336,6 +2336,75 @@ def test_dislike_is_not_squeezed_out_of_the_taste_window(db):
     assert hated.id in profile["recent_ids"], "дизлайкнутый трек обязан быть исключён"
 
 
+def test_skip_is_not_squeezed_out_of_the_taste_window(db):
+    """Скипнутый трек не возвращается в волну через сутки.
+
+    Активный слушатель набирает _TASTE_QUERY_LIMIT скипов за день, и скип,
+    вытесненный из окна свежими, снова пускал трек в волну. Исключение трека
+    держится _SKIP_EXCLUDE_DAYS, а не _TASTE_QUERY_LIMIT строк.
+    """
+    from app.routers.flow import _SKIP_EXCLUDE_DAYS, _TASTE_QUERY_LIMIT
+
+    user = create_user(db, username="skip-window-user")
+    skipped = Track(
+        title="скипнутый", artist="SkippedArtist", duration=100, source="ytmusic",
+        external_id="skipvid0001",
+    )
+    expired = Track(
+        title="давний скип", artist="ExpiredArtist", duration=100, source="local"
+    )
+    db.add_all([skipped, expired])
+    db.commit()
+    db.execute(
+        user_track_skips.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": skipped.id,
+                "skip_count": 1,
+                "disliked": False,
+                "last_skipped": datetime.now(timezone.utc) - timedelta(days=2),
+            },
+            {
+                "user_id": user.id,
+                "track_id": expired.id,
+                "skip_count": 1,
+                "disliked": False,
+                "last_skipped": datetime.now(timezone.utc)
+                - timedelta(days=_SKIP_EXCLUDE_DAYS + 1),
+            },
+        ],
+    )
+
+    filler = [
+        Track(title=f"скип {i}", artist=f"SkipArtist{i}", duration=100, source="local")
+        for i in range(_TASTE_QUERY_LIMIT)
+    ]
+    db.add_all(filler)
+    db.commit()
+    db.execute(
+        user_track_skips.insert(),
+        [
+            {
+                "user_id": user.id,
+                "track_id": track.id,
+                "skip_count": 1,
+                "disliked": False,
+                "last_skipped": datetime.now(timezone.utc),
+            }
+            for track in filler
+        ],
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert skipped.id in profile["skipped_ids"]
+    assert skipped.id in profile["recent_ids"]
+    assert "skipvid0001" in profile["recent_video_ids"]
+    assert any("скипнутый" in key[1] for key in profile["recent_keys"])
+    assert expired.id not in profile["skipped_ids"], "старый скип должен отпускать трек"
+
+
 def test_external_dislike_keeps_the_track_out_of_the_flow(client, db, monkeypatch):
     """Дизлайк внешнего трека действует и без материализации.
 

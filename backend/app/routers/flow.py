@@ -260,6 +260,12 @@ _ARTIST_REPEAT_CAP = 1.2
 # смысловая отсечка.
 _TASTE_HALF_LIFE_DAYS = 14.0
 _TASTE_QUERY_LIMIT = 300
+# Сколько дней скипнутый трек не возвращается в волну. Окно по ВРЕМЕНИ, а не
+# _TASTE_QUERY_LIMIT последних строк: фронт шлёт скип автоматически при <25%
+# прослушивания, и активный слушатель набирает 300 скипов за сутки — трек
+# выпадал из окна на следующий день и снова приходил в волну (до 30–50% показов
+# волны были повторами уже скипнутого за последние трое суток).
+_SKIP_EXCLUDE_DAYS = 60
 # Штраф артисту за ЯВНЫЙ дизлайк трека: сильнее лайка (+3.0) и плейлиста
 # (+4.0 — курирование всё же перевешивает один дизлайк), без затухания по
 # времени. Осознанное «не нравится» должно убирать артиста из волны сразу,
@@ -842,9 +848,47 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         artist_weight[key] = artist_weight.get(key, 0) - penalty
         artist_display.setdefault(key, effective_artist)
 
+    # Окно выше решает только штраф артисту. Сам трек исключаем по всем скипам
+    # за _SKIP_EXCLUDE_DAYS: иначе скип, вытесненный из окна свежими, через
+    # сутки снова пускал трек в волну. Лёгкие колонки, без ORM-объектов —
+    # строк здесь тысячи.
+    skip_cutoff = datetime.now(timezone.utc) - timedelta(days=_SKIP_EXCLUDE_DAYS)
+    older_skip_rows = (
+        db.query(
+            Track.id,
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.external_id,
+            Track.album,
+        )
+        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
+        .filter(
+            user_track_skips.c.user_id == user_id,
+            user_track_skips.c.last_skipped >= skip_cutoff,
+        )
+        .all()
+    )
+    for track_id, artist, title, source, external_id, album in older_skip_rows:
+        if track_id in skipped_ids:
+            continue
+        old_artist, old_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        skipped_ids.add(track_id)
+        key = _norm_key(old_artist, old_title)
+        if all(key):
+            skipped_keys.add(key)
+        if external_id:
+            skipped_video_ids.add(external_id)
+
     # A fast external skip is recorded before materialisation.  The durable
     # telemetry identity must therefore exclude the provider item directly;
     # otherwise a failed/slow import loses the user's strongest negative signal.
+    # Same time window as above, not the last _TASTE_QUERY_LIMIT events.
     external_skip_rows = db.execute(
         select(
             recommendation_events.c.source,
@@ -855,9 +899,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             recommendation_events.c.user_id == user_id,
             recommendation_events.c.surface == "flow",
             recommendation_events.c.event_type == "skip",
-        ).order_by(recommendation_events.c.occurred_at.desc()).limit(
-            _TASTE_QUERY_LIMIT
-        )
+            recommendation_events.c.occurred_at >= skip_cutoff,
+        ).distinct()
     ).all()
     skipped_external_ids = set()
     for source, external_id, artist, title in external_skip_rows:
