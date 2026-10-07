@@ -347,10 +347,14 @@ function Artist() {
         {/* Размытый аватар — фактура под градиентом: сплошная заливка тоном
             смотрится плоско. Декоративный, поэтому alt пустой. */}
         {artist.cover_url && (
+          // Миниатюра, а не полное фото: под blur(64px) разрешение не видно,
+          // а полноразмерное декодировалось синхронно и растеризовалось с
+          // размытием на слое 140% экрана — кадр до полсекунды при открытии.
           <img
-            src={resolveCoverUrl(artist.cover_url)}
+            src={resolveCoverUrl(artist.cover_url, 'thumb') || resolveCoverUrl(artist.cover_url)}
             alt=""
             aria-hidden="true"
+            decoding="async"
             className="artist-hero-backdrop"
             onError={(e) => {
               e.currentTarget.style.display = 'none'
@@ -361,6 +365,7 @@ function Artist() {
           <img
             src={resolveCoverUrl(artist.cover_url) || defaultCover}
             alt={artist.name}
+            decoding="async"
             className="artist-avatar"
             onError={handleCoverError}
           />
