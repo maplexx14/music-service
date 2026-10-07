@@ -564,7 +564,9 @@ function FullScreenPlayer() {
         ) : (
           <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
         )}
-        <span className="fullscreen-header-spacer" aria-hidden="true" />
+        <button type="button" className="fullscreen-icon" onClick={handleShare} aria-label="Поделиться">
+          <Share size={20} />
+        </button>
       </div>
 
       <div className="fullscreen-body">
@@ -614,11 +616,6 @@ function FullScreenPlayer() {
                 onNavigate={closeFullScreen}
               />
             </div>
-            <div className="fullscreen-actions">
-              <button type="button" className="fullscreen-icon" onClick={handleShare} aria-label="Поделиться">
-                <Share size={20} />
-              </button>
-            </div>
           </div>
 
           {/* Desktop: lyrics appear to the right of art+info */}
@@ -650,15 +647,18 @@ function FullScreenPlayer() {
         >
           <ThumbsDown size={22} fill={isDisliked ? 'currentColor' : 'none'} />
         </button>
-        <button className="fullscreen-icon" onClick={previousTrack} aria-label="Назад">
-          <SkipBack size={26} fill="currentColor" />
-        </button>
-        <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
-          {isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
-        </button>
-        <button className="fullscreen-icon" onClick={handleSkipForward} aria-label="Вперёд" title="Вперёд">
-          <SkipForward size={26} fill="currentColor" />
-        </button>
+        {/* Перемотка и плей — одна капсула, как мини-плеер. */}
+        <div className="fullscreen-transport">
+          <button className="fullscreen-icon" onClick={previousTrack} aria-label="Назад">
+            <SkipBack size={26} fill="currentColor" />
+          </button>
+          <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+            {isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
+          </button>
+          <button className="fullscreen-icon" onClick={handleSkipForward} aria-label="Вперёд" title="Вперёд">
+            <SkipForward size={26} fill="currentColor" />
+          </button>
+        </div>
         <button
           type="button"
           className={`fullscreen-icon fullscreen-like ${isLiked ? 'active' : ''}`}
