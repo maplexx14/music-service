@@ -36,15 +36,6 @@ const ART_GAP = 24
 const DOUBLE_TAP_MS = 300
 const SETTLE_MS = 340
 
-// Подпись в шапке — откуда играет очередь. Плейлисты передают source=null,
-// их имени в store нет — тогда в шапке остаётся логотип.
-function queueLabel(source, track) {
-  if (source === 'album') return track.album ? `Альбом «${track.album}»` : 'Альбом'
-  if (source === 'artist') return track.artist || null
-  if (source === 'flow') return 'Поток'
-  return null
-}
-
 // Карусель доезжает из `from` (px) в ноль. Сначала без перехода ставим
 // стартовую позицию и форсируем раскладку — иначе браузер склеит два
 // присваивания transform и анимации не будет.
@@ -174,7 +165,6 @@ function FullScreenPlayer() {
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const karaokeMode = usePlayerStore((s) => s.karaokeMode)
-  const queueSource = usePlayerStore((s) => s.source)
   const prevTrack = usePlayerStore((s) => s.getPrevTrack())
   const upNext = usePlayerStore((s) => s.getNextTrack(1))
   const [loadingLike, setLoadingLike] = useState(false)
@@ -525,7 +515,6 @@ function FullScreenPlayer() {
     }
   }
 
-  const label = queueLabel(queueSource, currentTrack)
   // Соседние обложки карусели. Ключ — id трека: при переключении <img>
   // переезжает между слотами, а не перезагружается.
   const slides = [
@@ -559,11 +548,7 @@ function FullScreenPlayer() {
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
-        {label ? (
-          <div className="fullscreen-queue-label">{label}</div>
-        ) : (
-          <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
-        )}
+        <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
         <button type="button" className="fullscreen-icon" onClick={handleShare} aria-label="Поделиться">
           <Share size={20} />
         </button>

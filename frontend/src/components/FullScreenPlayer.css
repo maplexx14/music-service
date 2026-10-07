@@ -61,26 +61,6 @@
   object-fit: contain;
 }
 
-/* Откуда играет очередь («Альбом «…»», «Поток»). */
-.fullscreen-queue-label {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-inline: auto;
-  padding: 8px 14px;
-  border-radius: var(--radius-pill);
-  background: rgba(10, 10, 14, 0.35);
-  backdrop-filter: blur(12px) saturate(160%);
-  -webkit-backdrop-filter: blur(12px) saturate(160%);
-  text-align: center;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.9);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .fullscreen-header > .fullscreen-icon {
   border: 0;
   background: transparent;
