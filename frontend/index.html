@@ -10,11 +10,11 @@
          то есть 331 КБ, которых не платит ни один другой браузер, плюс
          apple-touch-startup-image ниже. Здесь ссылки на корректные варианты:
          favicon-64-64.png — даунскейл мастера favicon-64.png, 64×64 (3.5 КБ),
-         и 180×180 (apple-touch-icon-v2.png). Мастер при смене картинки пересобрать
+         и 180×180 (apple-touch-icon-v3.png). Иконки -v3 (180/192/512) — мастер со свечением акцентом снизу, scripts/make_icon_glow.py, оттуда же favicon-64-v2.png (64×64). Мастер при смене картинки пересобрать
          (и сменить имена -vN: iOS и SW держат иконку по URL):
          python3 -c "from PIL import Image; Image.open('favicon-64.png').convert('RGBA').resize((64,64), Image.LANCZOS).save('favicon-64-64.png', optimize=True)" -->
-    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64-64.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-v2.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64-v2.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-v3.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <!-- maximum-scale=1: iOS зумит страницу при фокусе на поле с шрифтом
          мельче 16px и не отзумливает обратно — интерфейс «уезжал». Ручной
