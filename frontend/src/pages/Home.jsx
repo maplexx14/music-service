@@ -507,23 +507,22 @@ function Home() {
         </div>
       </div>
 
-      <div className="home-tabs">
+      <div className="home-tabs" role="tablist" data-active={activeTab}>
         <button
           type="button"
-          className={`home-tab-card ${activeTab === 'home' ? 'active' : ''}`}
+          role="tab"
+          aria-selected={activeTab === 'home'}
+          className={`home-tab ${activeTab === 'home' ? 'active' : ''}`}
           onClick={() => setActiveTab('home')}
         >
-          <span className="home-tab-icon">
-            <HomeIcon size={20} />
-          </span>
-          <span className="home-tab-text">
-            <span className="home-tab-title">Главная</span>
-            <span className="home-tab-subtitle">Рекомендации и подборки</span>
-          </span>
+          <HomeIcon size={18} strokeWidth={2.25} />
+          Главная
         </button>
         <button
           type="button"
-          className={`home-tab-card ${activeTab === 'history' ? 'active' : ''}`}
+          role="tab"
+          aria-selected={activeTab === 'history'}
+          className={`home-tab ${activeTab === 'history' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('history')
             if ((!historyRequestedRef.current || history.length === 0) && !historyLoading) {
@@ -531,13 +530,8 @@ function Home() {
             }
           }}
         >
-          <span className="home-tab-icon">
-            <History size={20} />
-          </span>
-          <span className="home-tab-text">
-            <span className="home-tab-title">История</span>
-            <span className="home-tab-subtitle">Недавно слушали</span>
-          </span>
+          <History size={18} strokeWidth={2.25} />
+          История
         </button>
       </div>
 
