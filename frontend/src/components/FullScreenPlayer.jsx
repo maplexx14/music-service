@@ -17,7 +17,7 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { getActive } from '../services/audioEngine'
-import { morphTransition } from '../services/navigation'
+import { holdHeavyAnimations, morphTransition } from '../services/navigation'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
@@ -282,6 +282,10 @@ function FullScreenPlayer() {
   }
 
   useEffect(() => subscribeCoverMorph((count) => setCoverHidden(count > 0)), [])
+
+  // Плеер непрозрачен и закрывает экран целиком: WebGL-фон главной под ним
+  // не виден, но рисовал 30 кадров/с всё время, пока плеер открыт.
+  useEffect(() => holdHeavyAnimations(), [])
 
   // Пока фуллскрин открыт, страница под ним не прокручивается вовсе —
   // ни тачем, ни колесом, ни клавиатурой. Классический симптом «тяну
