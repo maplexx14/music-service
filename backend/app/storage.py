@@ -1148,6 +1148,7 @@ _DISK_CHUNK = 256 * 1024
 # 2 МБ — это и потолок без лимита скорости у nginx, и ~1.5 мин звука: за это
 # время хвост успеет пройти очередь.
 _HEAD_BYTES = int(os.getenv("S3_HEAD_BYTES", str(2 * 1024 * 1024)))
+_RESUME_ATTEMPTS = 3
 _EVICT_EVERY = 30.0
 # Обновлять mtime (LRU) не чаще: каждый Range-запрос плеера трогал бы диск.
 _TOUCH_EVERY = 3600.0
@@ -1293,6 +1294,26 @@ async def _run_download(d: _Download, bucket: str, key: str, file_path: str) -> 
         finally:
             body.close()
 
+    async def _fill(fh, resp, upto: int) -> None:
+        """Дописывает байты до ``upto``. bucket.ru под нагрузкой рвёт длинные
+        ответы посреди тела (aiohttp ContentLengthError) — докачиваем с места
+        обрыва, а не роняем весь файл и слушателей, идущих за ним."""
+        failures = 0
+        while d.written < upto:
+            try:
+                if resp is None:
+                    resp = await _get(f"bytes={d.written}-{upto - 1}")
+                await _append(fh, resp)
+            except ObjectMissing:
+                raise
+            except Exception:
+                failures += 1
+                if failures > _RESUME_ATTEMPTS:
+                    raise
+                logger.info("S3 disk cache: обрыв %s на %d байте, докачиваю", file_path, d.written)
+                await asyncio.sleep(0.2 * failures)
+            resp = None
+
     try:
         head = await _get(f"bytes=0-{_HEAD_BYTES - 1}")
         try:
@@ -1304,10 +1325,10 @@ async def _run_download(d: _Download, bucket: str, key: str, file_path: str) -> 
         os.makedirs(os.path.dirname(d.final), exist_ok=True)
         async with aiofiles.open(d.part, "wb") as fh:
             d.ready.set()
-            await _append(fh, head)
+            await _fill(fh, head, min(d.size, _HEAD_BYTES))
             if d.written < d.size:
                 async with _download_sem:
-                    await _append(fh, await _get(f"bytes={d.written}-"))
+                    await _fill(fh, None, d.size)
         if d.written != d.size:
             raise IOError(f"S3 отдал {d.written} из {d.size} байт {file_path}")
         os.replace(d.part, d.final)

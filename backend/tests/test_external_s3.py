@@ -381,7 +381,7 @@ def test_disk_cache_streams_while_downloading_then_serves_from_disk(disk_cache, 
 
     first, seek = asyncio.run(scenario())
     # голова мимо очереди и хвост — каждый байт объекта скачан один раз
-    assert [c["Range"] for c in calls] == ["bytes=0-2999", "bytes=3000-"]
+    assert [c["Range"] for c in calls] == ["bytes=0-2999", f"bytes=3000-{len(data) - 1}"]
     assert all(c["SSECustomerKey"] == _KEY for c in calls)
     assert first.headers["etag"] == seek.headers["etag"] == storage.music_etag("external/ytmusic/dc1.m4a", len(data))
     assert storage.disk_cached_path("music", "external/ytmusic/dc1.m4a")
@@ -416,7 +416,37 @@ def test_disk_cache_missing_object_raises(disk_cache, monkeypatch):
         ))
 
 
+def test_disk_cache_resumes_after_dropped_connection(disk_cache, monkeypatch):
+    data = bytes(range(250)) * 40  # 10000 байт, обрыв в хвосте один раз
+    drops = {"left": 1}
+
+    class _Client:
+        async def get_object(self, **kw):
+            start, _, end = kw["Range"][len("bytes="):].partition("-")
+            start, end = int(start), int(end)
+            fail = None
+            if start >= 3000 and drops["left"]:
+                drops["left"] -= 1
+                fail = 2000
+            return {
+                "Body": _SlowBody(data[start:end + 1], chunk=1000, fail_after=fail),
+                "ContentRange": f"bytes {start}-{end}/{len(data)}",
+            }
+
+    monkeypatch.setattr(storage, "_get_async_client", lambda: _Client())
+
+    async def scenario():
+        resp = await storage.minio_range_response_async(
+            "minio://music/external/ytmusic/dc8.m4a", _request({"range": "bytes=0-"})
+        )
+        return await _collect(resp)
+
+    assert asyncio.run(scenario()) == data
+    assert storage.disk_cached_path("music", "external/ytmusic/dc8.m4a")
+
+
 def test_disk_cache_failed_download_leaves_no_file(disk_cache, monkeypatch):
+    monkeypatch.setattr(storage, "_RESUME_ATTEMPTS", 0)
     data = b"x" * 4000
     _fake_s3(monkeypatch, data, chunk=1000, fail_after=2000)
     path = "minio://music/external/ytmusic/dc4.m4a"
