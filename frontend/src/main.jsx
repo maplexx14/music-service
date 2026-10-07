@@ -4,6 +4,7 @@ import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 import { installImageFade } from './services/imageFade'
+import { installFrameMeter } from './utils/frameMeter'
 import { installPressFeedback } from './services/pressFeedback'
 import { installTouchGuard } from './services/touchGuard'
 import { applyGpuClass } from './utils/gpu'
@@ -12,6 +13,7 @@ import { applyGpuClass } from './utils/gpu'
 applyGpuClass()
 installPressFeedback()
 installImageFade()
+installFrameMeter()
 installTouchGuard()
 
 ReactDOM.createRoot(document.getElementById('root')).render(

@@ -12,6 +12,12 @@ import TwoFactorSettings from '../components/TwoFactorSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
+import {
+  clearFrameMeter,
+  formatFrameMeter,
+  isFrameMeterEnabled,
+  setFrameMeterEnabled,
+} from '../utils/frameMeter'
 import './Settings.css'
 
 // Режимы качества потока: значение из стора + подпись. 'auto' оставляет решение
@@ -209,6 +215,29 @@ function Settings() {
     try {
       await navigator.clipboard.writeText(formatDiag())
       toast.success('Лог скопирован')
+    } catch {
+      toast.error('Не удалось скопировать — выделите текст вручную')
+    }
+  }
+
+  // Замер плавности (utils/frameMeter): включается здесь, копится, пока
+  // пользуются приложением, и читается тут же.
+  const [meterOn, setMeterOn] = useState(isFrameMeterEnabled)
+  const [meterText, setMeterText] = useState(null)
+
+  const handleToggleMeter = () => {
+    const next = !meterOn
+    setFrameMeterEnabled(next)
+    setMeterOn(next)
+  }
+
+  const handleCopyMeter = async () => {
+    const text = formatFrameMeter()
+    setMeterText(text || 'Пока пусто — попользуйтесь приложением минуту.')
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success('Отчёт скопирован')
     } catch {
       toast.error('Не удалось скопировать — выделите текст вручную')
     }
@@ -578,6 +607,33 @@ function Settings() {
                   </button>
                 </div>
                 {diagText !== null && <pre className="settings-diag-log">{diagText}</pre>}
+              </div>
+              <div className="settings-card">
+                <div className="settings-section-title">Замер плавности</div>
+                <p className="settings-hint settings-section-hint">
+                  Считает пропущенные кадры и где они случились: прокрутка, жесты,
+                  открытие плеера. Включите, пользуйтесь приложением пару минут как
+                  обычно, затем скопируйте отчёт.
+                </p>
+                <div className="settings-prefs-actions">
+                  <button type="button" className="settings-save-btn" onClick={handleToggleMeter}>
+                    {meterOn ? 'Выключить замер' : 'Включить замер'}
+                  </button>
+                  <button type="button" className="settings-save-btn" onClick={handleCopyMeter}>
+                    Скопировать отчёт
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-save-btn"
+                    onClick={() => {
+                      clearFrameMeter()
+                      setMeterText('Отчёт очищен.')
+                    }}
+                  >
+                    Очистить
+                  </button>
+                </div>
+                {meterText !== null && <pre className="settings-diag-log">{meterText}</pre>}
               </div>
             </div>
           )}
