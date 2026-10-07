@@ -62,7 +62,7 @@
   left: 6px;
   width: calc(50% - 6px);
   border-radius: var(--radius-pill);
-  background: rgba(168, 85, 247, 0.22);
+  background: #55308a;
   transition: transform 0.38s var(--ease-drawer);
 }
 
