@@ -19,6 +19,8 @@
 // Лог хранится в localStorage, поэтому переживает выгрузку PWA из памяти —
 // именно она и происходит, когда «пришлось открыть PWA заново».
 
+import { noteFrameEvent } from './frameMeter'
+
 const STORAGE_KEY = 'player_diag_v1'
 const MAX_ENTRIES = 300
 
@@ -59,6 +61,7 @@ export function snapshotAudio(audio) {
 }
 
 export function diag(event, detail) {
+  noteFrameEvent(event)
   entries.push({
     t: new Date().toISOString().slice(11, 23),
     hidden: document.hidden || undefined,

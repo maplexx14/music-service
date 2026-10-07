@@ -35,6 +35,35 @@ let touching = false
 let lastMoveAt = 0
 let lastScrollAt = 0
 
+// Недавние события (смена трека, события плеера из diag, тапы) — чтобы у
+// долгого кадра было видно, что его запустило. Хранится последняя секунда.
+const EVENT_WINDOW_MS = 1000
+const EVENTS_PER_FRAME = 4
+let recentEvents = []
+
+export function noteFrameEvent(name) {
+  if (!running) return
+  const now = performance.now()
+  recentEvents.push({ name, at: now })
+  while (recentEvents.length && now - recentEvents[0].at > EVENT_WINDOW_MS) recentEvents.shift()
+}
+
+function eventsBefore(now) {
+  return recentEvents
+    .filter((e) => now - e.at <= EVENT_WINDOW_MS)
+    .slice(-EVENTS_PER_FRAME)
+    .map((e) => `${e.name} −${Math.round(now - e.at)}мс`)
+    .join(', ')
+}
+
+// Короткое имя того, по чему тапнули: класс ближайшей кнопки или элемента.
+function describeTarget(target) {
+  const el = target instanceof Element ? target.closest('button, a, [role], [class]') : null
+  if (!el) return 'tap'
+  const cls = typeof el.className === 'string' ? el.className.split(' ')[0] : ''
+  return `tap:${el.getAttribute('aria-label') || cls || el.tagName.toLowerCase()}`.slice(0, 40)
+}
+
 function readEnabled() {
   try {
     return localStorage.getItem(ENABLED_KEY) === '1'
@@ -97,7 +126,7 @@ function record(delta, now) {
   }
   if (delta > LONG_MS) {
     entry.long += 1
-    worst.push({ ms: Math.round(delta), at: Date.now(), ctx: key })
+    worst.push({ ms: Math.round(delta), at: Date.now(), ctx: key, ev: eventsBefore(now) })
     worst.sort((a, b) => b.ms - a.ms)
     if (worst.length > WORST_KEEP) worst.length = WORST_KEEP
   }
@@ -130,7 +159,11 @@ const onTouchMove = () => {
 }
 const onTouchEnd = (e) => {
   touching = e.touches.length > 0
+  if (e.type === 'touchend' && performance.now() - lastMoveAt > MOVE_HOLD_MS) {
+    noteFrameEvent(describeTarget(e.target))
+  }
 }
+let unsubscribeTrack = null
 const onScroll = () => {
   lastScrollAt = performance.now()
 }
@@ -150,6 +183,9 @@ function start() {
   document.addEventListener('touchend', onTouchEnd, { capture: true, passive: true })
   document.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true })
   document.addEventListener('visibilitychange', onHide)
+  unsubscribeTrack = usePlayerStore.subscribe((state, prev) => {
+    if (state.currentTrack?.id !== prev.currentTrack?.id) noteFrameEvent('трек')
+  })
   loop()
 }
 
@@ -163,6 +199,9 @@ function stop() {
   document.removeEventListener('touchend', onTouchEnd, { capture: true })
   document.removeEventListener('touchcancel', onTouchEnd, { capture: true })
   document.removeEventListener('visibilitychange', onHide)
+  unsubscribeTrack?.()
+  unsubscribeTrack = null
+  recentEvents = []
 }
 
 export function isFrameMeterEnabled() {
@@ -233,7 +272,7 @@ export function formatFrameMeter() {
     lines.push('', 'Самые долгие кадры:')
     worst.forEach((w) => {
       const time = new Date(w.at).toTimeString().slice(0, 8)
-      lines.push(`${time} ${w.ms}мс ${w.ctx}`)
+      lines.push(`${time} ${w.ms}мс ${w.ctx}${w.ev ? ` ← ${w.ev}` : ''}`)
     })
   }
   return lines.join('\n')
