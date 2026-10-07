@@ -57,6 +57,15 @@ const ENTER_SHIFT = 0.25
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 const EASE_START_SLOPE = 2.25
 const IGNORE = 'input, textarea, select, [contenteditable="true"], [role="slider"], [data-swipe-ignore]'
+// Полоса у левой кромки, где iOS в установленной PWA запускает свой жест
+// «назад» по истории: он листает снапшот WebKit без наших экранов, и после
+// отпускания страница отрисовывалась заново — выглядело как перезагрузка.
+// Касание в полосе забираем (preventDefault на touchstart — единственное,
+// что этот жест отменяет), и дальше его ведёт наш свайп.
+const EDGE_PX = 20
+const TAP_SLOP_PX = 10
+const isStandalone = () =>
+  window.navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches
 
 // Энергосбережение на iOS режет обновление страницы до 30 кадров/с (касания
 // приходят чаще, но рисуется каждое второе), и экран под пальцем шёл
@@ -400,11 +409,39 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       settle(MAX_MS)
     }
 
+    // Касание у кромки, забранное у системы. preventDefault отменяет и
+    // синтетический click, поэтому тап (палец почти не сдвинулся) кликаем сами.
+    let edgeTap = null
+    const onEdgeStart = (e) => {
+      edgeTap = null
+      if (e.touches.length !== 1) return
+      const t = e.touches[0]
+      if (t.clientX > EDGE_PX) return
+      const target = e.target instanceof Element ? e.target : null
+      if (!target || target.closest(IGNORE)) return
+      e.preventDefault()
+      edgeTap = { target, x: t.clientX, y: t.clientY }
+    }
+    const onEdgeEnd = (e) => {
+      const tap = edgeTap
+      edgeTap = null
+      const t = e.changedTouches?.[0]
+      if (!tap || !t) return
+      if (Math.abs(t.clientX - tap.x) > TAP_SLOP_PX || Math.abs(t.clientY - tap.y) > TAP_SLOP_PX) return
+      tap.target.click()
+    }
+    const guardEdge = isStandalone()
+
+    // Обработчик кромки — до основного: тот должен увидеть то же касание.
+    if (guardEdge) container.addEventListener('touchstart', onEdgeStart, { passive: false })
     container.addEventListener('touchstart', onStart, { passive: true })
     container.addEventListener('touchmove', onMove, { passive: true })
     container.addEventListener('touchend', onEnd, { passive: true })
     container.addEventListener('touchcancel', onCancel, { passive: true })
+    if (guardEdge) container.addEventListener('touchend', onEdgeEnd, { passive: true })
     return () => {
+      container.removeEventListener('touchstart', onEdgeStart)
+      container.removeEventListener('touchend', onEdgeEnd)
       container.removeEventListener('touchstart', onStart)
       container.removeEventListener('touchmove', onMove)
       container.removeEventListener('touchend', onEnd)
