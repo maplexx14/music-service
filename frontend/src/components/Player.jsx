@@ -405,7 +405,10 @@ function PlayerInner() {
     const offIdleReady = engine.onIdleReady(() => {
       // Буфер следующего трека доехал — если переход был отложен (кончился трек
       // в фоне, играть было нечего), доигрываем его прямо сейчас.
-      resumeDeferredRef.current?.()
+      if (resumeDeferredRef.current?.()) return
+      // Иначе прогрев лёг рядом с играющим треком — и мог увести у него Now
+      // Playing (см. reclaimNowPlaying).
+      reclaimNowPlayingRef.current?.('preload:ready')
     })
     const offIdleFailed = engine.onIdleFailed(() => {
       // Следующий трек не грузится и после повторов — отложенный переход
@@ -442,6 +445,10 @@ function PlayerInner() {
   // Момент последней паузы активного элемента (0 — играет). По нему ▶ на
   // системном виджете решает, нужна ли перезагрузка (LONG_PAUSE_RELOAD_MS).
   const pausedAtRef = useRef(0)
+  // Элемент, на котором идёт reclaimNowPlaying: его pause — служебная, виджет
+  // по ней в 'paused' уводить нельзя. Снимается на 'playing'.
+  const reclaimingRef = useRef(null)
+  const reclaimNowPlayingRef = useRef(null)
   // Момент старта загрузки текущего src. Время до первого звука — вход для
   // автовыбора качества потока (utils/streamQuality): именно оно говорит, тянет
   // ли канал текущий битрейт. Ставится в двух местах, где реально назначается
@@ -839,6 +846,7 @@ function PlayerInner() {
     }
     const handlePause = () => {
       if (!isLive()) return
+      if (reclaimingRef.current === audio) return
       pausedAtRef.current = Date.now()
       syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     }
@@ -1017,6 +1025,7 @@ function PlayerInner() {
     const handlePlayingSync = () => {
       if (!isLive()) return
       pausedAtRef.current = 0
+      if (reclaimingRef.current === audio) reclaimingRef.current = null
       // Активный элемент реально заиграл — второго звучащего быть не должно
       // (см. engine.pauseInactive). Если кого-то пришлось заглушить, его pause
       // стала последним переходом для системы — переобъявляем «играю».
@@ -1267,6 +1276,46 @@ function PlayerInner() {
       /* значения вне диапазона — пропускаем */
     }
   }
+
+  // Возврат Now Playing играющему элементу, когда его увёл прогрев.
+  //
+  // После подмены в фоне свободным становится только что отыгравший слот, и
+  // следующий трек грузится в него. WebKit такой элемент (уже звучал, источник
+  // есть, на паузе) выбирает в Now Playing вперёд играющего — виджет на экране
+  // блокировки встаёт в ▶ ровно в момент прогрева (на устройстве: ⏸ сразу после
+  // перехода, затем ▶). reassertNowPlaying тут бессилен: play() на играющем
+  // элементе — no-op, а выбор WebKit меняет только настоящий переход
+  // «пауза → игра». Его и делаем: pause() + play() в одном тике, конвейер
+  // остановиться не успевает. Служебную паузу handlePause пропускает.
+  //
+  // Только iOS и только если прогрет звучавший слот: свежий элемент (лишь
+  // тишина разблокировки) Now Playing не уводит, дёргать играющий незачем.
+  const reclaimNowPlaying = (where) => {
+    if (!isIOS) return
+    const el = engine.getActive()
+    if (!el || el.paused || el.ended) return
+    if (!usePlayerStore.getState().isPlaying) return
+    if (!engine.idleHasPlayed()) return
+    diag('nowPlaying:reclaim', { where, ...snapshotAudio(el) })
+    reclaimingRef.current = el
+    try {
+      el.pause()
+    } catch {
+      reclaimingRef.current = null
+      return
+    }
+    playWithDiag(el, `reclaim:${where}`).then(() => {
+      if (!el.paused) return
+      // play() отвергнут — пауза стала настоящей. Говорим системе правду:
+      // рабочая ▶ на виджете вернёт звук жестом.
+      if (reclaimingRef.current === el) reclaimingRef.current = null
+      if (engine.getActive() !== el) return
+      pausedAtRef.current = Date.now()
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
+    })
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'
+  }
+  reclaimNowPlayingRef.current = reclaimNowPlaying
 
   // Синхронный (в контексте текущего жеста/события) старт соседнего трека
   // очереди прямо на <audio>-элементе — общий путь для естественного конца
