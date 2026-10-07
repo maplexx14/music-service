@@ -17,7 +17,7 @@ import base64
 import httpx
 from pathlib import Path
 from mutagen import File as MutagenFile
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.cache import get_cache, get_cache_async, set_cache, set_cache_async
 from app.recommendation_cache import invalidate_recommendation_cache
 from app.recommendation_telemetry import link_materialized_deliveries
@@ -363,9 +363,7 @@ async def stream_track(
     # поэтому sync-запрос уходит в тредпул: блокирующий SQLAlchemy в event
     # loop подвешивал ВСЕ запросы на время каждого lookup'а (см. рекомендации —
     # там тот же приём с run_in_executor).
-    track = await asyncio.to_thread(
-        db.query(Track).filter(Track.id == track_id).first
-    )
+    track = await asyncio.to_thread(_load_track_released, db, track_id)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
@@ -404,7 +402,7 @@ async def stream_track(
             logger.warning("track %s: object %s missing in storage", track_id, track.file_path)
             if not external:
                 raise HTTPException(status_code=404, detail="Audio file not found")
-            await asyncio.to_thread(_unlink_missing_object, db, track)
+            await asyncio.to_thread(_unlink_missing_object, track)
         except Exception:  # noqa: BLE001 — хранилище недоступно; внешний трек есть где взять
             if not external:
                 raise
@@ -559,17 +557,37 @@ def create_track(
     return db_track
 
 
-def _unlink_missing_object(db: Session, track: Track) -> None:
+def _load_track_released(db: Session, track_id: int) -> Optional[Track]:
+    """Трек для стрима — с уже отпущенным соединением БД.
+
+    Сессия из Depends(get_db) закрывается только после того, как
+    StreamingResponse доотдал тело, а стрим длится минуты: соединение висело
+    «idle in transaction» всё прослушивание. Под 300 слушателями это выбрало
+    пул (30 на воркер), и падали все прочие запросы — QueuePool timeout.
+    close() отсоединяет загруженный объект, атрибуты остаются читаемыми.
+    """
+    track = db.query(Track).filter(Track.id == track_id).first()
+    db.close()
+    return track
+
+
+def _unlink_missing_object(track: Track) -> None:
     """Отвязывает внешний трек от пропавшего объекта хранилища.
 
     Иначе ленивая архивация считала бы трек заархивированным (file_path
     minio://…) и не клала бы его заново, а каждый старт ходил бы в хранилище
     за несуществующим объектом. Кэш пути архива сбрасываем по той же причине.
+    Своя короткая сессия: сессию запроса стрим отпустил сразу после чтения.
     """
     set_cache(f"archive:path:{track.source}/{track.external_id}", "", expire=300)
-    track.file_path = None
-    track.file_size = None
-    db.commit()
+    db = SessionLocal()
+    try:
+        db.query(Track).filter(
+            Track.id == track.id, Track.file_path == track.file_path
+        ).update({Track.file_path: None, Track.file_size: None}, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
 
 
 def _link_archived_object(db: Session, track: Track) -> None:

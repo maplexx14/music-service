@@ -234,6 +234,10 @@ def test_missing_object_raises_before_response_headers(monkeypatch):
 
 
 def test_missing_object_falls_back_to_provider_and_unlinks(client, db, monkeypatch):
+    from app.routers import tracks as tracks_router
+    from tests.conftest import TestingSessionLocal
+
+    monkeypatch.setattr(tracks_router, "SessionLocal", TestingSessionLocal)
     create_user(db)
     headers = auth_headers(client)
     t = Track(
@@ -252,8 +256,8 @@ def test_missing_object_falls_back_to_provider_and_unlinks(client, db, monkeypat
 
     assert resp.status_code == 307
     assert resp.headers["location"] == "/api/ytdlp/stream/vidgone"
-    db.refresh(t)
-    assert t.file_path is None
+    # Сессию запроса стрим закрыл сразу после чтения трека — перечитываем.
+    assert db.get(Track, t.id).file_path is None
 
 
 def test_missing_uploaded_track_is_404(client, db, monkeypatch):
@@ -271,5 +275,26 @@ def test_missing_uploaded_track_is_404(client, db, monkeypatch):
     )
     resp = client.get(f"/api/tracks/{t.id}/stream", headers=headers, follow_redirects=False)
     assert resp.status_code == 404
+    assert db.get(Track, t.id).file_path == "minio://music/uploads/u.m4a"
+
+
+def test_stream_releases_db_connection_before_body(client, db, monkeypatch):
+    """Стрим длится минуты — соединение БД не должно висеть всё это время."""
+    create_user(db)
+    headers = auth_headers(client)
+    t = Track(duration=100, title="rel", artist="A", source="local",
+              file_path="minio://music/uploads/rel.m4a", file_size=1000)
+    db.add(t)
+    db.commit()
     db.refresh(t)
-    assert t.file_path == "minio://music/uploads/u.m4a"
+    seen = {}
+
+    async def fake_response(*args, **kwargs):
+        seen["in_transaction"] = db.in_transaction()
+        from fastapi import Response
+        return Response(status_code=206)
+
+    monkeypatch.setattr(storage, "minio_range_response_async", fake_response)
+    resp = client.get(f"/api/tracks/{t.id}/stream", headers=headers)
+    assert resp.status_code == 206
+    assert seen["in_transaction"] is False
