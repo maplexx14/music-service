@@ -192,6 +192,36 @@ async def _init_async_storage_client() -> None:
 
     if storage.is_minio_backend():
         await storage.init_async_client()
+        storage.start_keep_warm()
+
+
+@app.on_event("startup")
+async def _archive_index_loop() -> None:
+    # Пути архивов внешних треков — в Redis заранее (external_archive.
+    # index_archive_paths): иначе первый старт каждого трека ждал LIST в
+    # хранилище. Один воркер-лидер, как у остальных фоновых задач.
+    import logging
+
+    from app import external_archive, storage
+    from app.cache import redis_client
+
+    if not storage.is_minio_backend():
+        return
+    logger = logging.getLogger("archive_index")
+    interval = int(os.getenv("ARCHIVE_INDEX_INTERVAL_SEC", "21600"))
+    lock_key = "background:archive_index:leader"
+
+    async def _loop() -> None:
+        while True:
+            try:
+                if redis_client.set(lock_key, "1", nx=True, ex=max(60, interval - 60)):
+                    count = await asyncio.to_thread(external_archive.index_archive_paths)
+                    logger.info("archive index: %d paths", count)
+            except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
+                logger.exception("archive index failed")
+            await asyncio.sleep(interval)
+
+    asyncio.create_task(_loop())
 
 
 @app.on_event("shutdown")

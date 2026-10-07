@@ -306,9 +306,39 @@ async def init_async_client() -> None:
     _async_client = await _async_client_cm.__aenter__()
 
 
+# Простаивающее соединение с внешним S3 живёт ~15 с (keepalive aiohttp), а новое
+# стоит TLS-рукопожатия: до bucket.ru это +150-380 мс к каждому первому запросу
+# после паузы — то есть почти к каждому старту трека. Лёгкий запрос раз в
+# _KEEP_WARM_INTERVAL держит соединение воркера открытым; запросы у провайдера
+# бесплатные. Локальному MinIO не нужно — там соединение почти ничего не стоит.
+_KEEP_WARM_INTERVAL = float(os.getenv("S3_KEEP_WARM_SEC", "10"))
+_keep_warm_task: Optional[asyncio.Task] = None
+
+
+async def _keep_warm_loop() -> None:
+    while True:
+        await asyncio.sleep(_KEEP_WARM_INTERVAL)
+        if _async_client is None:
+            continue
+        try:
+            await _async_client.head_bucket(Bucket=locate(MUSIC_BUCKET, "")[0])
+        except Exception:  # noqa: BLE001 — прогрев best-effort
+            logger.debug("S3 keep-warm failed", exc_info=True)
+
+
+def start_keep_warm() -> None:
+    """Запускает прогрев соединения в текущем воркере (из startup-хука)."""
+    global _keep_warm_task
+    if S3_ENDPOINT and _keep_warm_task is None and _KEEP_WARM_INTERVAL > 0:
+        _keep_warm_task = asyncio.create_task(_keep_warm_loop())
+
+
 async def close_async_client() -> None:
     """Закрывает async-клиент текущего воркера (вызывать на shutdown)."""
-    global _async_client_cm, _async_client
+    global _async_client_cm, _async_client, _keep_warm_task
+    if _keep_warm_task is not None:
+        _keep_warm_task.cancel()
+        _keep_warm_task = None
     if _async_client_cm is not None:
         await _async_client_cm.__aexit__(None, None, None)
     _async_client_cm = None
@@ -437,8 +467,17 @@ def normalize_cover_url(cover_url: Optional[str]) -> Optional[str]:
     return public_cover_url(key) if key else cover_url
 
 
+def is_archive_original(key: str, stem: str) -> bool:
+    """``key`` — сам архив ``stem`` (``<stem>.<ext>``), а не низкий вариант
+    ``<stem>.low.m4a`` и не чужой id с тем же началом (SoundCloud ``123`` и
+    ``1234.m4a``). Варианты сортируются раньше оригинала (``.low`` < ``.m4a``),
+    и поиск по голому префиксу принимал их за архив трека."""
+    rest = key[len(stem):]
+    return key.startswith(stem) and rest.startswith(".") and "." not in rest[1:]
+
+
 def find_music_object(prefix: str) -> Optional[str]:
-    """Первый аудио-объект с данным префиксом ключа в music-бакете.
+    """Архивный аудио-объект ``<prefix>.<ext>`` в music-бакете.
 
     Возвращает file_path (minio://…) или None. Нужно, чтобы понять, был ли
     внешний трек уже заархивирован, не зная точного расширения
@@ -448,10 +487,12 @@ def find_music_object(prefix: str) -> Optional[str]:
         return None
     try:
         client = _get_internal_client()
-        phys_bucket, phys_prefix = locate(MUSIC_BUCKET, prefix)
-        strip = len(phys_prefix) - len(prefix)
+        phys_bucket, phys_prefix = locate(MUSIC_BUCKET, prefix + ".")
+        strip = len(phys_prefix) - len(prefix) - 1
         for obj in client.list_objects(phys_bucket, prefix=phys_prefix, recursive=True):
-            return make_object_path(MUSIC_BUCKET, obj.object_name[strip:])
+            key = obj.object_name[strip:]
+            if is_archive_original(key, prefix):
+                return make_object_path(MUSIC_BUCKET, key)
     except Exception:  # noqa: BLE001 — отсутствие объекта не должно ломать стрим
         logger.exception("MinIO: list_objects по префиксу %s не удался", prefix)
     return None
@@ -642,6 +683,65 @@ async def _opened(gen: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
             yield chunk
 
     return _rest()
+
+
+async def _ranged_get_with_stat(
+    file_path: str, request: Request
+) -> Optional[tuple[tuple[int, str, str], int, int, AsyncIterator[bytes], object]]:
+    """Range-запрос без предварительного HEAD: размер берём из Content-Range.
+
+    До внешнего S3 каждый запрос — круг ~80 мс, и HEAD перед GET удваивал
+    задержку старта трека, которого ещё нет в stat-кэше. Работает только для
+    диапазона с явным началом (так шлют плееры); суффиксный и пустой Range,
+    If-Range и ADTS идут обычным путём через HEAD.
+
+    Возвращает (stat, start, end, поток, тело S3 для закрытия без чтения) или
+    None — тогда обычный путь.
+    """
+    range_header = request.headers.get("range")
+    if not range_header or request.headers.get("if-range") is not None:
+        return None
+    try:
+        unit, raw_range = range_header.strip().split("=", 1)
+        raw_start, raw_end = raw_range.split("-", 1)
+        if unit.lower() != "bytes" or "," in raw_range or not raw_start:
+            return None
+        start = int(raw_start)
+        end = int(raw_end) if raw_end else None
+        if start < 0 or (end is not None and end < start):
+            return None
+    except ValueError:
+        return None
+
+    bucket, key = parse_object_path(file_path)
+    phys_bucket, phys_key = locate(bucket, key)
+    try:
+        resp = await _get_async_client().get_object(
+            Bucket=phys_bucket, Key=phys_key,
+            Range=f"bytes={start}-{'' if end is None else end}", **_async_sse(),
+        )
+    except Exception as exc:
+        if _is_missing_error(exc):
+            raise ObjectMissing(file_path) from exc
+        return None  # InvalidRange (старт за концом) и прочее — обычный путь даст 416/ошибку
+
+    stream = resp["Body"]
+    try:
+        size = int(resp["ContentRange"].rsplit("/", 1)[1])
+    except (KeyError, ValueError, IndexError):
+        stream.close()
+        return None
+    stat = (size, resp.get("ContentType") or "audio/mpeg", music_etag(key, size))
+    _stat_cache_put(bucket, key, stat)
+
+    async def _body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in stream.iter_chunks(64 * 1024):
+                yield chunk
+        finally:
+            stream.close()
+
+    return stat, start, min(end if end is not None else size - 1, size - 1), _body(), stream
 
 
 # ─────────────── условные запросы и Range-парсинг ───────────────
@@ -1046,6 +1146,35 @@ async def minio_range_response_async(
                 logger.warning("MinIO: низкий вариант %s недоступен", low_path, exc_info=True)
                 _low_ready_at.pop(low_path, None)
 
+    from app import adts
+
+    if (
+        stat is None
+        and S3_ENDPOINT
+        and not db_size
+        and _stat_cache_get(*parse_object_path(file_path)) is None
+        and not adts.wants_adts(request)
+    ):
+        ranged = await _ranged_get_with_stat(file_path, request)
+        if ranged is not None:
+            (file_size, mime_type, etag), start, end, body, s3_body = ranged
+            common_headers = audio_common_headers(etag)
+            if max_age is not None:
+                common_headers["Cache-Control"] = f"private, max-age={max_age}"
+            if if_none_match_matches(request, etag):
+                s3_body.close()  # генератор не стартовал — его finally не сработает
+                return Response(status_code=304, headers=common_headers)
+            return StreamingResponse(
+                await _opened(body),
+                status_code=206,
+                media_type=mime_type,
+                headers={
+                    **common_headers,
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Content-Length": str(end - start + 1),
+                },
+            )
+
     if stat is None:
         stat = await stat_music_object_async(file_path, db_size, db_content_type)
     file_size, mime_type, etag = stat
@@ -1057,8 +1186,6 @@ async def minio_range_response_async(
 
     # ?fmt=adts — PWA на iOS: тот же AAC без MP4-контейнера, с которым Safari
     # стартует в разы быстрее (см. app/adts.py). Не вышло — отдаём оригинал.
-    from app import adts
-
     if adts.wants_adts(request) and adts.is_mp4_audio(file_path, mime_type):
         converted = await adts.adts_for_object(file_path, etag)
         if converted:

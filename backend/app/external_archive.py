@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import json
 import logging
 import mimetypes
 import os
@@ -150,7 +151,46 @@ async def _note_archived(source: str, external_id: str, file_path: str) -> None:
     этой записи только что заархивированный трек продолжал бы играться
     медленным путём резолва до истечения negative-TTL.
     """
-    await set_cache_async(f"archive:path:{source}/{external_id}", file_path, expire=24 * 3600)
+    await set_cache_async(f"archive:path:{source}/{external_id}", file_path, expire=ARCHIVE_PATH_TTL)
+
+
+# Путь архива живёт долго: объект под ключом исчезает только при перезаливке
+# (её публикует _note_archived) или потере у провайдера (стрим ловит
+# ObjectMissing и сбрасывает запись). Каждый промах кэша — LIST в хранилище,
+# до внешнего S3 это ~80-300 мс прямо на старте трека.
+ARCHIVE_PATH_TTL = 30 * 24 * 3600
+
+
+def index_archive_paths() -> int:
+    """Кладёт в Redis путь каждого архива ``external/<source>/<id>.<ext>``.
+
+    Один листинг бакета (~1000 ключей на запрос) вместо LIST на первом старте
+    каждого трека. Порядок как у storage.find_music_object: из нескольких
+    расширений одного id побеждает первое по алфавиту, низкие варианты и
+    чужие id с тем же началом не считаются. Возвращает число записей.
+    """
+    from app.cache import redis_client
+
+    client = storage._get_internal_client()
+    phys_bucket, phys_prefix = storage.locate(storage.MUSIC_BUCKET, "external/")
+    strip = len(phys_prefix) - len("external/")
+    paths: dict[str, str] = {}
+    for obj in client.list_objects(phys_bucket, prefix=phys_prefix, recursive=True):
+        key = obj.object_name[strip:]
+        parts = key.split("/")
+        if len(parts) != 3 or "." not in parts[2]:
+            continue
+        stem = key.split(".", 1)[0]
+        if not storage.is_archive_original(key, stem):
+            continue
+        archive_key = stem[len("external/"):]
+        paths.setdefault(archive_key, storage.make_object_path(storage.MUSIC_BUCKET, key))
+
+    pipe = redis_client.pipeline(transaction=False)
+    for archive_key, path in paths.items():
+        pipe.setex(f"archive:path:{archive_key}", ARCHIVE_PATH_TTL, json.dumps(path))
+    pipe.execute()
+    return len(paths)
 
 
 async def _note_acoustic_features(

@@ -57,13 +57,125 @@ def test_find_music_object_strips_physical_prefix(external_s3, monkeypatch):
     class _Client:
         def list_objects(self, bucket, prefix, recursive):
             calls.append((bucket, prefix))
-            return iter([SimpleNamespace(object_name="music/external/ytmusic/vid.m4a")])
+            # Низкий вариант сортируется раньше оригинала.
+            return iter([
+                SimpleNamespace(object_name="music/external/ytmusic/vid.low.m4a"),
+                SimpleNamespace(object_name="music/external/ytmusic/vid.m4a"),
+            ])
 
     monkeypatch.setattr(storage, "is_minio_backend", lambda: True)
     monkeypatch.setattr(storage, "_get_internal_client", lambda: _Client())
 
     assert storage.find_music_object("external/ytmusic/vid") == "minio://music/external/ytmusic/vid.m4a"
-    assert calls == [("bms", "music/external/ytmusic/vid")]
+    assert calls == [("bms", "music/external/ytmusic/vid.")]
+
+
+def test_archive_original_excludes_low_variant_and_longer_ids():
+    stem = "external/soundcloud/123"
+    assert storage.is_archive_original(f"{stem}.m4a", stem)
+    assert not storage.is_archive_original(f"{stem}.low.m4a", stem)
+    assert not storage.is_archive_original("external/soundcloud/1234.m4a", stem)
+
+
+def test_index_archive_paths_fills_redis(external_s3, monkeypatch):
+    from app import external_archive
+    from app.cache import get_cache
+
+    names = [
+        "music/external/soundcloud/123.low.m4a",
+        "music/external/soundcloud/123.m4a",
+        "music/external/soundcloud/1234.mp3",
+        "music/external/ytmusic/idx_test01.m4a",
+        "music/external/ytmusic/idx_test01.mp3",
+    ]
+
+    class _Client:
+        def list_objects(self, bucket, prefix, recursive):
+            assert (bucket, prefix) == ("bms", "music/external/")
+            return iter(SimpleNamespace(object_name=n) for n in names)
+
+    monkeypatch.setattr(storage, "_get_internal_client", lambda: _Client())
+
+    assert external_archive.index_archive_paths() == 3
+    assert get_cache("archive:path:soundcloud/123") == "minio://music/external/soundcloud/123.m4a"
+    assert get_cache("archive:path:soundcloud/1234") == "minio://music/external/soundcloud/1234.mp3"
+    assert get_cache("archive:path:ytmusic/idx_test01") == "minio://music/external/ytmusic/idx_test01.m4a"
+
+
+class _Body:
+    def __init__(self, data):
+        self.data, self.closed = data, False
+
+    async def iter_chunks(self, size):
+        yield self.data
+
+    def close(self):
+        self.closed = True
+
+
+def test_external_s3_range_skips_head(external_s3, monkeypatch):
+    """До внешнего S3 HEAD перед GET — лишний круг на старте трека: размер
+    берётся из Content-Range ответа на сам GET."""
+    monkeypatch.setattr(storage, "S3_ENDPOINT", "https://s3.example")
+    seen = []
+
+    class _Client:
+        async def head_object(self, **kw):
+            raise AssertionError("HEAD не нужен")
+
+        async def get_object(self, **kw):
+            seen.append(kw)
+            return {"Body": _Body(b"y" * 100), "ContentRange": "bytes 0-99/5000", "ContentType": "audio/mp4"}
+
+    monkeypatch.setattr(storage, "_get_async_client", lambda: _Client())
+
+    resp = asyncio.run(storage.minio_range_response_async(
+        "minio://music/external/ytmusic/fast1.m4a", _request({"range": "bytes=0-99"})
+    ))
+    assert resp.status_code == 206
+    assert resp.headers["content-range"] == "bytes 0-99/5000"
+    assert resp.headers["content-length"] == "100"
+    assert resp.headers["etag"] == storage.music_etag("external/ytmusic/fast1.m4a", 5000)
+    assert seen[0]["Range"] == "bytes=0-99" and seen[0]["Key"] == "music/external/ytmusic/fast1.m4a"
+    assert seen[0]["SSECustomerKey"] == _KEY
+    # stat попал в кэш — следующий запрос знает размер без сети
+    assert storage._stat_cache_get("music", "external/ytmusic/fast1.m4a")[0] == 5000
+
+
+def test_external_s3_open_range_clamps_to_size(external_s3, monkeypatch):
+    monkeypatch.setattr(storage, "S3_ENDPOINT", "https://s3.example")
+
+    class _Client:
+        async def get_object(self, **kw):
+            assert kw["Range"] == "bytes=4900-"
+            return {"Body": _Body(b"z" * 100), "ContentRange": "bytes 4900-4999/5000"}
+
+    monkeypatch.setattr(storage, "_get_async_client", lambda: _Client())
+
+    resp = asyncio.run(storage.minio_range_response_async(
+        "minio://music/external/ytmusic/fast2.m4a", _request({"range": "bytes=4900-"})
+    ))
+    assert resp.headers["content-range"] == "bytes 4900-4999/5000"
+    assert resp.headers["content-length"] == "100"
+
+
+def test_external_s3_fast_path_304_closes_body(external_s3, monkeypatch):
+    monkeypatch.setattr(storage, "S3_ENDPOINT", "https://s3.example")
+    body = _Body(b"q" * 10)
+
+    class _Client:
+        async def get_object(self, **kw):
+            return {"Body": body, "ContentRange": "bytes 0-9/700"}
+
+    monkeypatch.setattr(storage, "_get_async_client", lambda: _Client())
+    etag = storage.music_etag("external/ytmusic/fast3.m4a", 700)
+
+    resp = asyncio.run(storage.minio_range_response_async(
+        "minio://music/external/ytmusic/fast3.m4a",
+        _request({"range": "bytes=0-9", "if-none-match": etag}),
+    ))
+    assert resp.status_code == 304
+    assert body.closed
 
 
 def test_sync_reads_and_writes_carry_sse_c(external_s3, monkeypatch, tmp_path):

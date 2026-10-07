@@ -2087,7 +2087,7 @@ async def _probe(client: httpx.AsyncClient, url: str) -> tuple[int, Optional[int
 # list_objects уходил бы в сеть на КАЖДЫЙ Range-запрос плеера. Положительный
 # ответ живёт долго (объект не исчезает), отрицательный — коротко, чтобы трек,
 # заархивированный только что, быстро начал отдаваться из хранилища.
-_ARCHIVE_HIT_TTL = 24 * 3600
+_ARCHIVE_HIT_TTL = 30 * 24 * 3600  # = external_archive.ARCHIVE_PATH_TTL
 _ARCHIVE_MISS_TTL = 300
 
 
