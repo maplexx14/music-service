@@ -251,11 +251,11 @@
   padding: 0;
   color: #ffffff;
   cursor: pointer;
-  background: var(--brand-accent);
+  background: #55308a;
   border: none;
   box-shadow:
     0 14px 36px rgba(0, 0, 0, 0.35),
-    0 0 0 6px rgba(162, 89, 255, 0.25);
+    0 0 0 6px rgba(85, 48, 138, 0.35);
   transition: transform 0.2s ease, background 0.2s ease;
 }
 
@@ -281,7 +281,7 @@
 }
 
 .wave-title:hover {
-  background: var(--brand-accent-hover);
+  background: #603a99;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -291,7 +291,7 @@
 }
 
 .wave-title:active {
-  background: var(--brand-accent-active);
+  background: #4a2a78;
   transform: scale(0.96);
   transition-duration: 100ms;
 }
