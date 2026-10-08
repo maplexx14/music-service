@@ -165,6 +165,14 @@ _PLAYLIST_ARTIST_MIN_TRACKS = 3
 # каталог, у остальных — лишь хиты (app/mainstream.py). Выбор владельца
 # продукта, 2026-10-01; у активных юзеров это 15 и 9 артистов.
 _DEEP_CATALOG_MIN_TRACKS = 5
+# Потолок доли порции у артистов, впервые попавших в коллекцию за последние
+# _FRESH_CLUSTER_DAYS. Прод, 2026-10-09: за 5–8 окт. владелец лайкнул в волне
+# ~40 хитов 70–80-х, каждый лайк открывал каталог артиста и свежие сиды, и за
+# 3 дня AC/DC, Lynyrd Skynyrd, Status Quo, CCR… шли вровень с Limp Bizkit (98
+# треков в коллекции). Свежий кластер не вырезаем — он ограничен долей, а
+# долгосрочное ядро вкуса получает остальную порцию.
+_FRESH_CLUSTER_DAYS = 7
+_FRESH_CLUSTER_SHARE = 0.3
 # Сколько ждём Last.fm в мейнстрим-фильтре сверх сетевых источников. Не успевшие
 # запросы догреют кэш в фоне — см. mainstream.artist_hits.
 _MAINSTREAM_WAIT = 1.5
@@ -531,6 +539,48 @@ def deep_catalog_artist_keys(collection_rows, excluded=()) -> List[str]:
         for artist, songs in songs_by_artist.items()
         if artist and len(songs) >= _DEEP_CATALOG_MIN_TRACKS and artist not in excluded
     )
+
+
+def fresh_collection_artist_keys(db: Session, user_id: int, now=None) -> List[str]:
+    """Артисты, чья первая песня в коллекции добавлена за _FRESH_CLUSTER_DAYS.
+
+    Пусто, если свежая вся коллекция: у нового юзера нет долгосрочного ядра,
+    которое потолок _FRESH_CLUSTER_SHARE должен защищать.
+    """
+    rows = (
+        db.query(
+            Track.artist,
+            Track.title,
+            Track.source,
+            Track.album,
+            func.min(playlist_tracks.c.added_at).label("added_at"),
+        )
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .filter(Playlist.owner_id == user_id)
+        .group_by(Track.id)
+        .all()
+    )
+    first_added: dict[str, datetime] = {}
+    for artist, title, source, album, added_at in rows:
+        if added_at is None:
+            continue
+        if added_at.tzinfo is None:
+            added_at = added_at.replace(tzinfo=timezone.utc)
+        effective_artist, _effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        key = primary_artist_key(effective_artist)
+        if key and (key not in first_added or added_at < first_added[key]):
+            first_added[key] = added_at
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=_FRESH_CLUSTER_DAYS)
+    fresh = sorted(key for key, added_at in first_added.items() if added_at >= since)
+    if len(fresh) == len(first_added):
+        return []
+    return fresh
 
 
 def _taste_profile(db: Session, user_id: int) -> dict:
@@ -1298,8 +1348,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "deep_catalog_artist_keys": deep_catalog_artist_keys(
             collection_rows, excluded_artists
         ),
+        "fresh_cluster_artist_keys": fresh_collection_artist_keys(db, user_id),
         "curated_artist_keys": curated_artist_keys,
-        "catalog_artists": [artist_display.get(k, k) for k in catalog_artist_keys],
+        "catalog_artists":[artist_display.get(k, k) for k in catalog_artist_keys],
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
         "explicit_genres": pref_genres,
@@ -2757,6 +2808,12 @@ async def get_flow(
                 else {}
             ),
             "novel": artist_key(artist) not in (profile.get("artist_weight") or {}),
+            **(
+                {"fresh_cluster": True}
+                if primary_artist_key(artist)
+                in (profile.get("fresh_cluster_artist_keys") or ())
+                else {}
+            ),
             "discovery_requested": round(requested_ratio, 3),
             "discovery_effective": round(explore_ratio, 3),
         }
@@ -3574,6 +3631,16 @@ async def get_flow(
             )
             novel_selection = novel_selection[:discovery_target]
 
+    # Свежий кластер коллекции (см. _FRESH_CLUSTER_SHARE): лайки и добор делят
+    # один потолок. Не влезшее идёт в конец добора — пустая волна хуже.
+    fresh_cluster = set(profile.get("fresh_cluster_artist_keys") or [])
+    fresh_cap = max(1, math.floor(limit * _FRESH_CLUSTER_SHARE))
+
+    def _in_fresh_cluster(candidate) -> bool:
+        return primary_artist_key(_item_artist_title(candidate)[0]) in fresh_cluster
+
+    fresh_used = sum(1 for candidate in novel_selection if _in_fresh_cluster(candidate))
+
     # Понравившееся берём в порядке общего рейтинга, но ровно liked_target штук.
     # Лайк — трек знакомого артиста, так что с novel_selection пересечений нет;
     # дедуп по id ниже всё равно на месте, чтобы порядок отбора не был неявным
@@ -3583,6 +3650,10 @@ async def get_flow(
         for candidate in ranked_candidates:
             if _item_identity(candidate) not in liked_identities:
                 continue
+            if _in_fresh_cluster(candidate):
+                if fresh_used >= fresh_cap:
+                    continue
+                fresh_used += 1
             liked_selection.append(candidate)
             if len(liked_selection) >= liked_target:
                 break
@@ -3596,13 +3667,21 @@ async def get_flow(
         reserved.append(candidate)
     # Добор — общим рейтингом, но БЕЗ лайков: их квота уже заполнена, и всё
     # сверх неё вытеснило бы из порции то новое, за чем в поток и приходят.
-    filler = [
-        candidate
-        for candidate in ranked_candidates
-        if id(candidate) not in reserved_ids
-        and _item_identity(candidate) not in liked_identities
-    ]
-    selected_candidates = (reserved + filler)[:limit]
+    filler: List = []
+    fresh_overflow: List = []
+    for candidate in ranked_candidates:
+        if (
+            id(candidate) in reserved_ids
+            or _item_identity(candidate) in liked_identities
+        ):
+            continue
+        if _in_fresh_cluster(candidate):
+            if fresh_used >= fresh_cap:
+                fresh_overflow.append(candidate)
+                continue
+            fresh_used += 1
+        filler.append(candidate)
+    selected_candidates = (reserved + filler + fresh_overflow)[:limit]
 
     mix: List[dict] = [
         _candidate_payload(candidate) for candidate in selected_candidates

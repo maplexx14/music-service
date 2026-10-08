@@ -28,11 +28,13 @@ from app.models import (
     user_track_skips,
 )
 from app.routers.flow import (
+    _FRESH_CLUSTER_DAYS,
     _LIKED_REPLAY_COOLDOWN_DAYS,
     _liked_candidates,
     _persisted_flow_history,
     _pick_favorite_artists,
     _taste_profile,
+    fresh_collection_artist_keys,
 )
 from app.schemas import ExternalTrackResponse
 
@@ -157,6 +159,91 @@ def test_flow_uses_one_score_instead_of_source_slots(client, db, monkeypatch):
     ), tracks
     assert bonuses["favorite0"] == pytest.approx(0.12)
     assert bonuses["lfm0"] == pytest.approx(0.08)
+
+
+def _liked_at(db, user, entries):
+    """Лайки с заданной датой добавления: [(artist, title, added_at)]."""
+    playlist = Playlist(name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id)
+    db.add(playlist)
+    db.commit()
+    db.refresh(playlist)
+    for position, (artist, title, added_at) in enumerate(entries):
+        track = Track(title=title, artist=artist, duration=100, source="local")
+        db.add(track)
+        db.commit()
+        db.execute(
+            playlist_tracks.insert().values(
+                playlist_id=playlist.id,
+                track_id=track.id,
+                position=position,
+                added_at=added_at,
+            )
+        )
+    db.commit()
+
+
+def test_fresh_collection_artists_only_when_a_long_term_core_exists(db):
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=_FRESH_CLUSTER_DAYS + 30)
+    newbie = create_user(db, username="fresh-only-user")
+    _liked_at(db, newbie, [("NewArtist", "a", now), ("OtherNew", "b", now)])
+    # Свежая вся коллекция — защищать нечего, потолка нет.
+    assert fresh_collection_artist_keys(db, newbie.id) == []
+
+    user = create_user(db, username="fresh-and-core-user")
+    _liked_at(
+        db,
+        user,
+        [
+            ("CoreArtist", "core", old),
+            ("FreshArtist", "fresh", now),
+            # Артист с давней песней свежим не становится от нового лайка.
+            ("ReturningArtist", "old", old),
+            ("ReturningArtist", "new", now),
+        ],
+    )
+    assert fresh_collection_artist_keys(db, user.id) == ["freshartist"]
+
+
+def test_flow_caps_the_share_of_freshly_liked_artists(client, db, monkeypatch):
+    """Прод, 2026-10-09: пачка свежих лайков хитов 70–80-х забивала волну
+    каталогами новых артистов, вытесняя давнее ядро вкуса. Свежий кластер
+    получает не больше _FRESH_CLUSTER_SHARE порции, даже с лучшим score."""
+    user = create_user(db, username="fresh-cluster-user")
+    now = datetime.now(timezone.utc)
+    _liked_at(
+        db,
+        user,
+        [
+            ("CoreArtist", "core-liked", now - timedelta(days=_FRESH_CLUSTER_DAYS + 30)),
+            ("FreshArtist", "fresh-liked", now),
+        ],
+    )
+
+    async def _favorite(request, artist):
+        prefix = "fresh" if artist == "FreshArtist" else "core"
+        return [_external(artist, f"{prefix}-{i}", f"{prefix}{i}") for i in range(20)]
+
+    def _score(item, **kwargs):
+        external_id = getattr(item, "external_id", None) or ""
+        if external_id.startswith("fresh"):
+            return 100.0
+        if external_id.startswith("core"):
+            return 50.0
+        return -10.0
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", _score)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="fresh-cluster-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    tracks = resp.json()
+    assert len(tracks) == 15
+    fresh = [t for t in tracks if t["artist"] == "FreshArtist"]
+    assert 1 <= len(fresh) <= 4, tracks
 
 
 def test_flow_does_not_wait_for_slow_provider_past_budget(client, db, monkeypatch):
