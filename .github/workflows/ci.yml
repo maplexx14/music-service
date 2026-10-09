@@ -13,8 +13,12 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     services:
+      # Официальные образы с зеркала ECR Public, а не Docker Hub: тот режет
+      # анонимные pull'ы по IP, и с общих IP раннеров GitHub контейнеры
+      # сервисов не скачивались («Docker pull failed») — CI падал, CD пропускал
+      # деплой.
       redis:
-        image: redis:7-alpine
+        image: public.ecr.aws/docker/library/redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -48,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15-alpine
+        image: public.ecr.aws/docker/library/postgres:15-alpine
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-password
