@@ -35,7 +35,11 @@ function ImportProgressModal({ importId, title, onClose }) {
 
     const poll = async () => {
       try {
-        const { data } = await api.get(`/import/progress/${importId}`)
+        // skipErrorToast: первый опрос обгоняет POST /import и ловит 404 —
+        // без флага перехватчик показывал тост «Импорт не найден».
+        const { data } = await api.get(`/import/progress/${importId}`, {
+          skipErrorToast: true,
+        })
         if (active) setState(data)
       } catch {
         // 404 до первой записи прогресса — просто ждём следующего опроса.

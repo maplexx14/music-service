@@ -101,7 +101,12 @@ function ExternalPlaylist() {
     if (importing || !playlist) return
     setImporting(true)
     try {
-      const { data } = await api.post('/import', { url: playlist.permalink_url })
+      // Без таймаута: большой плейлист импортируется дольше глобальных 60 с.
+      const { data } = await api.post(
+        '/import',
+        { url: playlist.permalink_url },
+        { timeout: 0 },
+      )
       toast.success(`Плейлист «${data.playlist.name}» добавлен в медиатеку`)
       navigate(`/playlists/${data.playlist.id}`)
     } catch (error) {

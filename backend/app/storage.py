@@ -216,6 +216,29 @@ def _split_endpoint(value: str) -> tuple[str, bool]:
     return value, MINIO_SECURE
 
 
+def _http_client():
+    """PoolManager как у minio по умолчанию, но с короткими таймаутами.
+
+    Дефолт minio — 5 минут на connect и на read. bucket.ru молча роняет
+    простаивающие keep-alive соединения, и запрос в такое соединение висел
+    все 5 минут: импорт «Мне нравится» замирал на сохранении первого же трека.
+    read — пауза между байтами ответа, а не время всей загрузки, поэтому
+    большие объекты и стримы он не режет; после таймаута Retry повторяет
+    запрос уже в свежем соединении.
+    """
+    import certifi
+    import urllib3
+    from urllib3.util import Retry, Timeout
+
+    return urllib3.PoolManager(
+        timeout=Timeout(connect=5, read=30),
+        maxsize=10,
+        cert_reqs="CERT_REQUIRED",
+        ca_certs=os.environ.get("SSL_CERT_FILE") or certifi.where(),
+        retries=Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504]),
+    )
+
+
 def _get_internal_client():
     global _internal_client
     if _internal_client is None:
@@ -228,6 +251,7 @@ def _get_internal_client():
             secret_key=MINIO_SECRET_KEY,
             secure=secure,
             region=MINIO_REGION,
+            http_client=_http_client(),
         )
     return _internal_client
 

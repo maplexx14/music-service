@@ -149,7 +149,10 @@ function PreferencesOnboarding() {
       body.import_id = importId
       setImportProgress({ id: importId, title: preview?.title })
       if (isProfilePreview) body.collections = [...selectedCollections]
-      const { data } = await api.post('/import', body)
+      // Без таймаута: большой плейлист (сотни треков) импортируется дольше
+      // глобальных 60 с axios — браузер рвал запрос, хотя сервер доделывал
+      // импорт. Ход виден в окне прогресса, ограничивает только nginx (1 ч).
+      const { data } = await api.post('/import', body, { timeout: 0 })
       const parts = [`Импортировано треков: ${data.imported}`]
       if (data.playlists?.length > 1) parts.push(`плейлистов: ${data.playlists.length}`)
       if (data.matched) parts.push(`подобрано: ${data.matched}`)
