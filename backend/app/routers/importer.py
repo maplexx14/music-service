@@ -937,7 +937,12 @@ def _save_playlist(
     cover: Optional[str],
     imports: List[ExternalTrackImport],
 ) -> Tuple[Playlist, int]:
-    """Материализует треки и собирает из них плейлист. → (плейлист, число треков)."""
+    """Материализует треки и собирает из них плейлист. → (плейлист, число треков).
+
+    Блокирующая — звать через to_thread: на трек уходит commit и LIST в S3
+    (_link_archived_object), и «Мне нравится» на 750 треков держал event loop
+    дольше таймаута gunicorn — воркер убивали посреди импорта.
+    """
     # Сначала материализуем ВСЕ треки (get_or_create_external_track идемпотентен
     # по (source, external_id) и коммитит сам, в т.ч. с откатом при гонке —
     # поэтому делаем это ДО создания плейлиста, чтобы его вставку не откатило).
@@ -1028,7 +1033,8 @@ async def _import_yandex_profile(
 
         is_likes = coll.kind == "likes"
         await progress.update(stage="saving")
-        playlist, count = _save_playlist(
+        playlist, count = await asyncio.to_thread(
+            _save_playlist,
             db,
             user,
             f"{coll.title} — {name}" if is_likes else coll.title,
@@ -1117,7 +1123,8 @@ async def _import(
         )
 
     await progress.update(stage="saving", total=progress.state["total"] or len(imports))
-    new_playlist, imported = _save_playlist(
+    new_playlist, imported = await asyncio.to_thread(
+        _save_playlist,
         db,
         current_user,
         payload.playlist_name or title or "Импортированный плейлист",
