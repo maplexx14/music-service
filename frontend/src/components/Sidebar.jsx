@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, Upload, ChevronLeft, ChevronRight, Shield, Settings2 } from 'lucide-react'
+import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settings2 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import './Sidebar.css'
@@ -26,9 +26,8 @@ function Sidebar() {
   const navItems = [
     { path: '/', icon: Home, label: 'Главная' },
     { path: '/search', icon: Search, label: 'Поиск' },
-    { path: '/playlists', icon: Library, label: 'Моя музыка' },
+    { path: '/playlists', icon: Library, label: 'Медиатека' },
     { path: '/liked', icon: Heart, label: 'Понравившиеся' },
-    { path: '/upload', icon: Upload, label: 'Загрузить трек' },
     ...(user?.is_admin ? [{ path: '/admin', icon: Shield, label: 'Админ' }] : []),
   ]
 

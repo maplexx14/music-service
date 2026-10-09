@@ -10,7 +10,7 @@
   height: 232px;
   object-fit: cover;
   border-radius: 8px;
-  background-color: #333;
+  background-color: var(--surface-4);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
@@ -19,7 +19,7 @@
   align-items: center;
   justify-content: center;
   font-size: 96px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .playlist-header-info {
@@ -32,7 +32,7 @@
 .playlist-type {
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -41,7 +41,7 @@
 .playlist-title {
   font-size: 72px;
   font-weight: bold;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 16px;
   line-height: 1;
   /* Unbounded — широкий дисплейный гротеск: на 72px межбуквенные просветы
@@ -52,7 +52,7 @@
 
 .playlist-description {
   font-size: 16px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin-bottom: 16px;
 }
 
@@ -61,7 +61,7 @@
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin-bottom: 24px;
 }
 
@@ -71,41 +71,10 @@
   gap: 16px;
 }
 
-.play-button-large {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 32px;
-  background-color: var(--brand-accent);
-  color: #ffffff;
-  border: none;
-  border-radius: 999px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out);
-}
-
-.play-button-large:hover {
-  background-color: var(--brand-accent-hover);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .play-button-large:hover {
-    transform: scale(1.05);
-  }
-}
-
-.play-button-large:active:not(:disabled) {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
 .action-button {
   background: none;
   border: none;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 8px;
   border-radius: 50%;
@@ -117,8 +86,8 @@
 }
 
 .action-button:hover {
-  color: #ffffff;
-  background-color: #1a1a1a;
+  color: var(--text-primary);
+  background-color: var(--surface-1);
 }
 
 .playlist-tracks {
@@ -156,7 +125,7 @@
 }
 
 .tracks-table thead {
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .tracks-table th {
@@ -164,7 +133,7 @@
   padding: 12px;
   font-size: 12px;
   font-weight: 600;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -186,12 +155,12 @@
 }
 
 .track-row:hover {
-  background-color: #1a1a1a;
+  background-color: var(--surface-1);
 }
 
 /* Строка трека — тоже «кнопка»: подтверждаём нажатие сразу. */
 .track-row:active {
-  background-color: #222;
+  background-color: var(--surface-2);
 }
 
 .track-row td {
@@ -201,7 +170,7 @@
 
 .track-number {
   text-align: center;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   width: 40px;
 }
 
@@ -216,52 +185,37 @@
   height: 40px;
   object-fit: cover;
   border-radius: 4px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .track-name {
   font-size: 16px;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .track-artist {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .track-album {
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .track-duration {
   text-align: right;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .empty-playlist {
   text-align: center;
   padding: 128px 32px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 /* Вторичная кнопка в шапке (напр. «Добавить в медиатеку» у внешнего плейлиста). */
-.play-button-large.secondary {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: inherit;
-}
-
-.play-button-large.secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.play-button-large.secondary:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
 /* --- Индикация играющего трека и действия над треком --- */
 
 .track-row.playing .track-name {
@@ -339,7 +293,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .track-action-btn:hover {
-    color: #ffffff;
+    color: var(--text-primary);
     background-color: var(--brand-accent-soft);
   }
 
@@ -351,7 +305,6 @@
 .track-action-btn:active {
   color: var(--brand-accent);
   background-color: var(--brand-accent-soft-strong);
-  transform: scale(0.96);
 }
 
 .track-action-btn:focus-visible {
@@ -363,37 +316,6 @@
   display: flex;
   justify-content: center;
   padding: 24px 0;
-}
-
-.load-more-btn {
-  padding: 10px 28px;
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.2s;
-}
-
-.load-more-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .load-more-btn:hover:not(:disabled) {
-    transform: scale(1.03);
-  }
-}
-
-.load-more-btn:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.load-more-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 /* --- Мобильная адаптация (Понравившиеся / детали плейлиста) --- */
@@ -441,8 +363,6 @@
 
   .play-button-large {
     flex: 1;
-    justify-content: center;
-    padding: 12px 20px;
   }
 
   /* В ряду с «Перемешать» кнопок две, и обе с подписями: при базовых отбивках
@@ -457,8 +377,7 @@
 
   .shuffle-actions .play-button-large {
     flex: 1 1 auto;
-    padding: 12px 14px;
-    gap: 8px;
+    padding: 0 16px;
     font-size: var(--text-base);
   }
 
@@ -482,7 +401,7 @@
     align-items: center;
     gap: 12px;
     padding: 10px 4px;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--border-subtle);
     /* Строки за пределами экрана браузер не раскладывает и не рисует —
        длинные плейлисты и «Понравившиеся» прокручиваются легче. auto в
        размере: после первого показа запоминается настоящая высота строки,

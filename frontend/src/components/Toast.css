@@ -27,10 +27,9 @@
   border-radius: 16px;
   /* Плотный фон без backdrop-filter: читается на любом контенте и не
      пересчитывает размытие под собой. */
-  background: #1f1f24;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  color: #fff;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -100,7 +99,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .toast-close:hover {
-    color: #fff;
+    color: var(--text-primary);
     background-color: rgba(255, 255, 255, 0.08);
   }
 }

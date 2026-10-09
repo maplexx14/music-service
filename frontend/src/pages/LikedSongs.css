@@ -13,7 +13,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
+  color: var(--text-primary);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
@@ -27,7 +27,7 @@
 .liked-type {
   font-size: var(--text-base);
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -36,7 +36,7 @@
 .liked-title {
   font-size: clamp(32px, 8vw, 72px);
   font-weight: bold;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 16px;
   line-height: 1;
   /* Крупный кегль — отрицательный трекинг (Unbounded широкий). */
@@ -48,7 +48,7 @@
   align-items: center;
   gap: 8px;
   font-size: var(--text-base);
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin-bottom: 24px;
 }
 
@@ -56,37 +56,6 @@
   display: flex;
   align-items: center;
   gap: 16px;
-}
-
-.play-button-large {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 32px;
-  background-color: var(--brand-accent);
-  color: #ffffff;
-  border: none;
-  border-radius: 999px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out);
-}
-
-.play-button-large:hover {
-  background-color: var(--brand-accent-hover);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .play-button-large:hover {
-    transform: scale(1.05);
-  }
-}
-
-.play-button-large:active:not(:disabled) {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
 }
 
 .liked-tracks {
@@ -99,7 +68,7 @@
 }
 
 .tracks-table thead {
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .tracks-table th {
@@ -107,7 +76,7 @@
   padding: 12px;
   font-size: 12px;
   font-weight: 600;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -144,11 +113,7 @@
 
 .track-remove-btn:hover {
   background-color: var(--brand-accent-soft);
-  color: #ff5a6a;
-}
-
-.track-remove-btn:active {
-  transform: scale(0.96);
+  color: var(--status-danger);
 }
 
 .track-remove-btn:disabled {
@@ -163,11 +128,11 @@
 }
 
 .track-row:hover {
-  background-color: #1a1a1a;
+  background-color: var(--surface-1);
 }
 
 .track-row:active {
-  background-color: #222;
+  background-color: var(--surface-2);
 }
 
 .track-row td {
@@ -177,7 +142,7 @@
 
 .track-number {
   text-align: center;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   width: 40px;
 }
 
@@ -192,34 +157,34 @@
   height: 40px;
   object-fit: cover;
   border-radius: 4px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .track-name {
   font-size: var(--text-md);
   font-weight: 500;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .track-artist {
   font-size: var(--text-base);
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .track-album {
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .track-duration {
   text-align: right;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .empty-liked {
   text-align: center;
   padding: 128px 32px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .empty-liked p {
@@ -229,7 +194,7 @@
 
 .empty-liked-subtitle {
   font-size: 14px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 @media (max-width: 768px) {
@@ -266,7 +231,6 @@
 
   .play-button-large {
     width: 100%;
-    justify-content: center;
   }
 
   .liked-tracks {
@@ -290,7 +254,7 @@
     align-items: center;
     gap: 12px;
     padding: 10px 4px;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .track-row td {
@@ -341,33 +305,3 @@
   padding: 24px 0;
 }
 
-.load-more-btn {
-  padding: 10px 28px;
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.2s;
-}
-
-.load-more-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .load-more-btn:hover:not(:disabled) {
-    transform: scale(1.03);
-  }
-}
-
-.load-more-btn:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.load-more-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}

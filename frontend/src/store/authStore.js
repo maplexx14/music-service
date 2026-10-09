@@ -22,6 +22,22 @@ const setStoredAuth = (data) => {
   }
 }
 
+// Ответы бэкенда о смене почты — по-английски; юзеру показываем по-русски.
+// 422 — адрес не прошёл валидацию EmailStr.
+const EMAIL_CHANGE_ERRORS = {
+  'Incorrect password': 'Неверный пароль',
+  'Email already registered': 'Эта почта уже привязана к другому аккаунту',
+  'This is already your email': 'Это и есть ваша текущая почта',
+  'Invalid or expired code': 'Неверный или просроченный код',
+  'Email 2FA temporarily unavailable': 'Не получилось отправить письмо, попробуйте позже',
+}
+
+const emailChangeError = (error, fallback) => {
+  if (error.response?.status === 422) return 'Проверьте адрес почты'
+  const detail = error.response?.data?.detail
+  return EMAIL_CHANGE_ERRORS[detail] || (typeof detail === 'string' ? detail : fallback)
+}
+
 const useAuthStore = create((set, get) => ({
       user: null,
       token: null,
@@ -180,7 +196,7 @@ const useAuthStore = create((set, get) => ({
         }
       },
 
-      // Второй шаг входа: TOTP-код, код из письма либо резервный код.
+      // Второй шаг входа: код из письма.
       verifyMfa: async (mfaToken, code, method) => {
         try {
           const response = await api.post('/auth/mfa/verify', {
@@ -286,48 +302,7 @@ const useAuthStore = create((set, get) => ({
         }
       },
       
-      // --- Двухфакторка (TOTP) ---
-      // Секрет и QR приходят с бэка; коды восстановления показываются ровно
-      // один раз при включении, поэтому наружу их отдаёт вызывающий экран.
-      setupTwoFactor: async () => {
-        try {
-          const response = await api.post('/auth/2fa/setup', null, { skipErrorToast: true })
-          return { success: true, data: response.data }
-        } catch (error) {
-          return { success: false, error: error.response?.data?.detail || 'Не удалось начать настройку' }
-        }
-      },
-
-      enableTwoFactor: async (code, password) => {
-        try {
-          const response = await api.post('/auth/2fa/enable', { code, password }, {
-            skipErrorToast: true,
-            skipAuthRedirect: true,
-          })
-          // Профиль поменялся (totp_enabled) — обновляем, чтобы настройки и
-          // остальной UI не показывали устаревшее состояние.
-          await useAuthStore.getState().refreshUser()
-          return { success: true, recoveryCodes: response.data.recovery_codes || [] }
-        } catch (error) {
-          return { success: false, error: error.response?.data?.detail || 'Не удалось включить 2FA' }
-        }
-      },
-
-      disableTwoFactor: async (password) => {
-        try {
-          await api.post('/auth/2fa/disable', { password }, {
-            skipErrorToast: true,
-            skipAuthRedirect: true,
-          })
-          await useAuthStore.getState().refreshUser()
-          return { success: true }
-        } catch (error) {
-          return { success: false, error: error.response?.data?.detail || 'Не удалось выключить 2FA' }
-        }
-      },
-
       // --- Двухфакторка по почте ---
-      // Ключ отдельный от TOTP: факторы включаются независимо друг от друга.
       setupEmailTwoFactor: async () => {
         try {
           const response = await api.post('/auth/2fa/email/setup', null, {
@@ -380,6 +355,39 @@ const useAuthStore = create((set, get) => ({
             success: false,
             error: error.response?.data?.detail || 'Не удалось выключить вход по коду из почты',
           }
+        }
+      },
+
+      // --- Смена почты ---
+      // Код уходит на НОВЫЙ адрес; почта меняется только после него.
+      requestEmailChange: async (newEmail, password) => {
+        try {
+          const response = await api.post('/auth/email/change', {
+            new_email: newEmail,
+            password,
+          }, { skipErrorToast: true, skipAuthRedirect: true })
+          return {
+            success: true,
+            sent: response.data.sent,
+            emailMasked: response.data.email_masked,
+            cooldownSeconds: response.data.cooldown_seconds,
+          }
+        } catch (error) {
+          return { success: false, error: emailChangeError(error, 'Не удалось отправить код') }
+        }
+      },
+
+      confirmEmailChange: async (code) => {
+        try {
+          const response = await api.post('/auth/email/change/confirm', { code }, {
+            skipErrorToast: true,
+            skipAuthRedirect: true,
+          })
+          set({ user: response.data })
+          setStoredAuth({ token: get().token, user: response.data })
+          return { success: true }
+        } catch (error) {
+          return { success: false, error: emailChangeError(error, 'Не удалось сменить почту') }
         }
       },
 

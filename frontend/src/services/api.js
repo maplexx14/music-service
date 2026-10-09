@@ -76,7 +76,7 @@ api.interceptors.response.use(
     const status = error.response?.status
     // skipAuthRedirect — для запросов, где 401 означает «неверные данные в
     // форме», а не «сессия умерла»: шаг 2FA при входе, подтверждение пароля.
-    // Без флага опечатка в TOTP-коде выкидывала бы на экран входа.
+    // Без флага опечатка в коде из письма выкидывала бы на экран входа.
     if (status === 401 && error.config?.skipAuthRedirect !== true) {
       // Не делаем полный reload: он уничтожает <audio>, очередь и Media Session.
       // Store обработает событие и React Router покажет экран входа без перезагрузки.

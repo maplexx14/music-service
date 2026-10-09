@@ -130,18 +130,13 @@ function Login() {
     setPassword('')
   }
 
-  const hasTotp = mfaMethods.includes('totp')
   const hasEmail = mfaMethods.includes('email')
-  const codeHint = hasTotp && hasEmail
-    ? 'Введите код из приложения-аутентификатора, код из письма или резервный код.'
-    : hasEmail
-      ? `Введите 6-значный код, отправленный на ${emailMasked || 'вашу почту'}, или резервный код.`
-      : 'Введите код из приложения-аутентификатора или один из резервных кодов.'
+  const codeHint = `Введите 6-значный код, отправленный на ${emailMasked || 'вашу почту'}.`
   return (
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>bolt</h1>
+          <h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}
           <p>{mfaToken ? 'Подтвердите вход' : 'Войдите в свой аккаунт'}</p>
         </div>
 
@@ -164,7 +159,7 @@ function Login() {
 
             <div className="form-group">
               <label htmlFor="mfa-code">Код подтверждения</label>
-              <input
+              <input className="field"
                 id="mfa-code"
                 type="text"
                 value={code}
@@ -172,19 +167,19 @@ function Login() {
                 required
                 autoFocus
                 autoComplete="one-time-code"
-                inputMode="text"
+                inputMode="numeric"
                 placeholder="123456"
               />
             </div>
 
-            <button type="submit" className="auth-button" disabled={loading}>
+            <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
               {loading ? 'Проверка...' : 'Подтвердить'}
             </button>
 
             {hasEmail && (
               <button
                 type="button"
-                className="auth-button secondary"
+                className="btn btn--secondary btn--lg btn--block auth-button"
                 onClick={handleSendEmailCode}
                 disabled={emailSending}
               >
@@ -222,7 +217,7 @@ function Login() {
                 )}
                 <button
                   type="button"
-                  className="auth-button secondary"
+                  className="btn btn--secondary btn--lg btn--block auth-button"
                   onClick={handleResend}
                   disabled={resendState === 'sending'}
                 >
@@ -235,7 +230,7 @@ function Login() {
 
             <div className="form-group">
               <label htmlFor="username">Имя пользователя или email</label>
-              <input
+              <input className="field"
                 id="username"
                 type="text"
                 value={username}
@@ -253,7 +248,7 @@ function Login() {
                 <label htmlFor="password">Пароль</label>
                 <Link to="/forgot-password">Забыли пароль?</Link>
               </div>
-              <input
+              <input className="field"
                 id="password"
                 type="password"
                 value={password}
@@ -263,7 +258,7 @@ function Login() {
               />
             </div>
 
-            <button type="submit" className="auth-button" disabled={loading}>
+            <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
               {loading ? 'Вход...' : 'Войти'}
             </button>
           </form>

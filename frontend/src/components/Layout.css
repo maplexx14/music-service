@@ -3,7 +3,7 @@
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
-  background-color: #121212;
+  background-color: var(--bg-app);
 }
 
 /* Контейнер стека экранов (ScreenStack.jsx). Сам не прокручивается: у
@@ -13,7 +13,7 @@
   position: relative;
   overflow: hidden;
   margin-left: 240px;
-  background: linear-gradient(180deg, #1a1a1a 0%, #121212 100%);
+  background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
   transition: margin-left 0.3s var(--ease-morph);
 }
 
@@ -49,7 +49,7 @@
 
 @media (max-width: 768px) {
   .layout {
-    background-color: #050505;
+    background-color: var(--bg-app-mobile);
   }
 
   .main-content {
@@ -59,7 +59,7 @@
 
   /* Непрозрачный фон: при свайпе под экраном виден соседний. */
   .screen {
-    background: #050505;
+    background: var(--bg-app-mobile);
   }
 
   .screen-scroll {
@@ -123,14 +123,10 @@
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.06);
-    color: #ffffff;
+    color: var(--text-primary);
     display: grid;
     place-items: center;
     cursor: pointer;
-  }
-
-  .mobile-back-btn:active {
-    transform: scale(0.96);
   }
 
   .mobile-topbar-title {
@@ -252,13 +248,9 @@
     height: 44px;
   }
 
-  .mobile-nav-global-item:active {
-    transform: scale(0.92);
-  }
-
   /* Активный пункт: цвет иконки поверх плавающей подсветки. */
   .mobile-nav-global-item.active {
-    color: #c084fc;
+    color: var(--brand-accent-text);
   }
 
 }

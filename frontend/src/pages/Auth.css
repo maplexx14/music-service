@@ -6,17 +6,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: black;
+  background: var(--bg-app-mobile);
   padding: 20px;
 }
 
 .auth-card {
-  background-color: #181818;
-  border-radius: 12px;
+  background-color: var(--surface-1);
+  border-radius: var(--radius-lg);
   padding: 40px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-dialog);
 }
 
 .auth-header {
@@ -26,15 +26,24 @@
 
 .auth-header h1 {
   font-size: 32px;
-  font-weight: bold;
-  color: #ffffff;
+  font-weight: 700;
+  color: var(--text-primary);
   margin-bottom: 8px;
   letter-spacing: -0.01em;
 }
 
+/* Логотип вместо текста — пока выключен.
+.auth-logo {
+  display: block;
+  height: 80px;
+  width: auto;
+  margin: 0 auto;
+}
+*/
+
 .auth-header p {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .auth-form {
@@ -52,7 +61,7 @@
 .form-group label {
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .form-label-row {
@@ -72,106 +81,18 @@
   text-decoration: underline;
 }
 
-.form-group input {
-  padding: 12px 16px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 8px;
-  color: #ffffff;
-  font-size: 14px;
-  transition: border-color var(--duration-base) var(--ease-out),
-              background-color var(--duration-base) var(--ease-out);
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: var(--brand-accent);
-  background-color: #222;
-}
-
-.error-message {
-  padding: 12px;
-  background-color: #e22134;
-  color: #ffffff;
-  border-radius: 8px;
-  font-size: 14px;
-  text-align: center;
-}
-
 .auth-button {
-  display: block;
-  padding: 14px;
-  background-color: var(--brand-accent);
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out),
-              opacity var(--duration-base) var(--ease-out);
   margin-top: 8px;
-  text-align: center;
-  text-decoration: none;
-}
-
-.auth-button:hover:not(:disabled) {
-  background-color: var(--brand-accent-hover);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .auth-button:hover:not(:disabled) {
-    transform: scale(1.02);
-  }
-}
-
-.auth-button:not(.secondary):active:not(:disabled) {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
-.auth-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* Повторная отправка письма рядом с основным действием формы:
-   контурная, чтобы не спорить за внимание с «Войти». */
-.auth-button.secondary {
-  background-color: transparent;
-  border: 1px solid #535353;
-  color: #ffffff;
-}
-
-.auth-button.secondary:hover:not(:disabled) {
-  background-color: #2a2a2a;
-  border-color: #b3b3b3;
-}
-
-.auth-button.secondary:active:not(:disabled) {
-  background-color: #222;
-  transform: scale(0.98);
-}
-
-.success-message {
-  padding: 12px;
-  background-color: var(--status-success-soft);
-  border: 1px solid var(--status-success-border);
-  color: var(--status-success);
-  border-radius: 8px;
-  font-size: 14px;
-  text-align: center;
 }
 
 /* Заметное, но не тревожное сообщение: вход с нового устройства — нормальная
    ситуация, а не ошибка, поэтому не красный .error-message. */
 .auth-notice {
   padding: 12px;
-  background-color: rgba(162, 89, 255, 0.12);
-  border: 1px solid rgba(162, 89, 255, 0.4);
-  border-radius: 8px;
-  color: #e6d9ff;
+  background-color: var(--brand-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--brand-accent), transparent 60%);
+  border-radius: var(--radius-card);
+  color: var(--brand-accent-text);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -179,7 +100,7 @@
 /* Пояснение на шаге подтверждения 2FA */
 .auth-hint {
   font-size: 13px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   line-height: 1.5;
   margin: -4px 0 0;
 }
@@ -190,14 +111,14 @@
   background: none;
   border: none;
   padding: 4px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   transition: color var(--duration-base) var(--ease-out);
 }
 
 .auth-link-button:hover {
-  color: #ffffff;
+  color: var(--text-primary);
   text-decoration: underline;
 }
 
@@ -217,7 +138,7 @@
 
 .auth-footer p {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .auth-footer a {

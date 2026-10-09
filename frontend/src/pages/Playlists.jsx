@@ -24,7 +24,7 @@ import './Playlists.css'
 function Playlists() {
   const navigate = useNavigate()
   // Список из прошлого захода рисуется сразу, свежий приезжает фоном: вкладка
-  // «Моя музыка» открывается без спиннера.
+  // «Медиатека» открывается без спиннера.
   const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
   const [loading, setLoading] = useState(() => !peekCache(LIBRARY_CACHE_KEY))
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -191,23 +191,23 @@ function Playlists() {
         />
       )}
       <div className="playlists-header">
-        <h1>Моя музыка</h1>
+        <h1>Медиатека</h1>
         <div className="playlists-header-actions">
-          {/* Загрузка своего трека: в нижней навигации на мобильном её больше
-              нет, а страница /upload осталась — ссылка на неё живёт здесь. */}
-          <Link to="/upload" className="import-playlist-btn">
+          {/* Загрузка своего трека: отдельного пункта меню под неё нет ни
+              на мобильном, ни в сайдбаре — ссылка на /upload живёт здесь. */}
+          <Link to="/upload" className="btn btn--secondary import-playlist-btn">
             <Upload size={20} />
             Загрузить трек
           </Link>
           <button
-            className="import-playlist-btn"
+            className="btn btn--secondary import-playlist-btn"
             onClick={() => { setShowImportForm(!showImportForm); setShowCreateForm(false) }}
           >
             <Download size={20} />
             Импорт по ссылке
           </button>
           <button
-            className="create-playlist-btn"
+            className="btn btn--primary create-playlist-btn"
             onClick={() => { setShowCreateForm(!showCreateForm); setShowImportForm(false) }}
           >
             <Plus size={20} />
@@ -248,6 +248,7 @@ function Playlists() {
 
           <div className="import-input-row">
             <input
+              className="field"
               type="url"
               placeholder="https://open.spotify.com/... , https://music.yandex.ru/... или https://soundcloud.com/..."
               value={importUrl}
@@ -256,7 +257,7 @@ function Playlists() {
             />
             <button
               type="button"
-              className="submit-btn"
+              className="btn btn--primary submit-btn"
               onClick={handlePreview}
               disabled={previewing || importing || !importUrl.trim()}
             >
@@ -293,7 +294,7 @@ function Playlists() {
           <div className="form-actions">
             <button
               type="button"
-              className="submit-btn"
+              className="btn btn--primary submit-btn"
               onClick={handleImport}
               disabled={importing || !importUrl.trim() || (isProfilePreview && !selectedCollections.size)}
             >
@@ -303,7 +304,7 @@ function Playlists() {
                   ? `Импортировать (${selectedCollections.size} · ${selectedTrackCount(preview, selectedCollections)} треков)`
                   : 'Импортировать'}
             </button>
-            <button type="button" className="cancel-btn" onClick={resetImport}>
+            <button type="button" className="btn btn--ghost cancel-btn" onClick={resetImport}>
               Отмена
             </button>
           </div>
@@ -313,6 +314,7 @@ function Playlists() {
       {showCreateForm && (
         <form onSubmit={handleCreatePlaylist} className="create-playlist-form">
           <input
+            className="field"
             type="text"
             placeholder="Название плейлиста"
             value={newPlaylistName}
@@ -327,12 +329,12 @@ function Playlists() {
             onChange={(e) => setCoverFile(e.target.files?.[0] || null)}
           />
           <div className="form-actions">
-            <button type="submit" className="submit-btn" disabled={creating}>
+            <button type="submit" className="btn btn--primary submit-btn" disabled={creating}>
               {creating ? 'Создание...' : 'Создать'}
             </button>
             <button
               type="button"
-              className="cancel-btn"
+              className="btn btn--ghost cancel-btn"
               onClick={() => {
                 setShowCreateForm(false)
                 setNewPlaylistName('')

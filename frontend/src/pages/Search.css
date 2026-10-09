@@ -5,10 +5,10 @@
 .search-input {
   width: 100%;
   padding: 16px 24px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
+  background-color: var(--surface-1);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 16px;
   transition: border-color var(--duration-base) var(--ease-out),
               background-color var(--duration-base) var(--ease-out);
@@ -16,8 +16,8 @@
 
 .search-input:focus {
   outline: none;
-  border-color: #a259ff;
-  background-color: #222;
+  border-color: var(--brand-accent);
+  background-color: var(--surface-2);
 }
 
 /* Кликнув в поле, пользователь должен видеть каретку сразу —
@@ -34,7 +34,7 @@
 }
 
 .search-input::placeholder {
-  color: #7a7a7a;
+  color: var(--text-tertiary);
 }
 
 .search-results {
@@ -50,7 +50,7 @@
 .results-title {
   font-size: 20px;
   font-weight: bold;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 16px;
 }
 
@@ -65,7 +65,7 @@
   align-items: center;
   gap: 16px;
   padding: 12px;
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   cursor: pointer;
   transition: background-color var(--duration-base) var(--ease-out),
@@ -74,12 +74,7 @@
 }
 
 .track-item:hover {
-  background-color: #282828;
-}
-
-/* Отклик в момент нажатия, не после отпускания. */
-.track-item:active {
-  transform: scale(0.99);
+  background-color: var(--surface-3);
 }
 
 .track-item-cover {
@@ -87,7 +82,7 @@
   height: 56px;
   object-fit: cover;
   border-radius: 4px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .track-item-cover.placeholder {
@@ -95,7 +90,7 @@
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .track-item-info {
@@ -106,7 +101,7 @@
 .track-item-title {
   font-size: 16px;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -118,7 +113,7 @@
 
 .track-item-artist {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -135,7 +130,7 @@
    значений не «дышал» по ширине от строки к строке. */
 .track-item-duration {
   font-size: 13px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -146,28 +141,24 @@
   border-radius: 999px;
   display: grid;
   place-items: center;
-  color: #d7d7d7;
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   text-decoration: none;
 }
 
 .track-download:hover {
-  color: #ffffff;
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.1);
 }
 
 .track-download:focus-visible {
-  outline: 2px solid #a259ff;
+  outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
 }
 
-.track-download:active {
-  transform: scale(0.94);
-}
-
 .playlist-item {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
@@ -179,11 +170,7 @@
 }
 
 .playlist-item:hover {
-  background-color: #282828;
-}
-
-.playlist-item:active {
-  transform: scale(0.98);
+  background-color: var(--surface-3);
 }
 
 .playlist-item-cover {
@@ -192,7 +179,7 @@
   object-fit: cover;
   border-radius: 4px;
   margin-bottom: 12px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .playlist-item-cover.placeholder {
@@ -200,13 +187,13 @@
   align-items: center;
   justify-content: center;
   font-size: 48px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .playlist-item-name {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -215,7 +202,7 @@
 
 .playlist-item-description {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   line-height: 1.4;
   /* Две строки максимум: иначе описание плейлиста растягивает всю ленту по
      высоте самой болтливой карточки. */
@@ -236,7 +223,7 @@
   align-items: center;
   gap: 16px;
   padding: 16px;
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   cursor: pointer;
   transition: background-color var(--duration-base) var(--ease-out),
@@ -244,11 +231,7 @@
 }
 
 .user-item:hover {
-  background-color: #282828;
-}
-
-.user-item:active {
-  transform: scale(0.98);
+  background-color: var(--surface-3);
 }
 
 .user-avatar {
@@ -256,7 +239,7 @@
   height: 56px;
   border-radius: 50%;
   object-fit: cover;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .user-avatar.placeholder {
@@ -265,26 +248,26 @@
   justify-content: center;
   font-size: 24px;
   font-weight: bold;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .user-name {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .user-username {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .search-error {
   text-align: center;
   padding: 16px;
   margin-bottom: 16px;
-  color: #ff8080;
+  color: var(--status-danger);
   background-color: rgba(226, 33, 52, 0.1);
   border: 1px solid rgba(226, 33, 52, 0.3);
   border-radius: 8px;
@@ -293,18 +276,18 @@
 .no-results {
   text-align: center;
   padding: 64px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .search-placeholder {
   text-align: center;
   padding: 128px 32px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .search-placeholder h2 {
   font-size: 32px;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 16px;
   letter-spacing: -0.01em;
 }
@@ -321,7 +304,7 @@
     z-index: 5;
     margin: 0 -16px 20px;
     padding: 8px 16px 12px;
-    background: linear-gradient(180deg, #050505 75%, rgba(5, 5, 5, 0));
+    background: linear-gradient(180deg, var(--bg-app-mobile) 75%, rgba(5, 5, 5, 0));
   }
 
   .search-input {
@@ -380,7 +363,7 @@
   align-items: center;
   gap: 8px;
   padding: 16px 12px;
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   text-align: center;
   text-decoration: none;
@@ -390,11 +373,7 @@
 }
 
 .artist-card:hover {
-  background-color: #282828;
-}
-
-.artist-card:active {
-  transform: scale(0.97);
+  background-color: var(--surface-3);
 }
 
 .artist-card-cover {
@@ -402,13 +381,13 @@
   height: 96px;
   border-radius: 50%;
   object-fit: cover;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .artist-card-name {
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -417,7 +396,7 @@
 
 .artist-card-meta {
   font-size: 12px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {

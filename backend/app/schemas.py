@@ -44,7 +44,6 @@ class UserResponse(UserBase):
     is_active: bool
     is_admin: bool = False
     email_verified: bool = False
-    totp_enabled: bool = False
     email_2fa_enabled: bool = False
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
@@ -112,8 +111,8 @@ class LoginResult(BaseModel):
     token_type: Optional[str] = None
     mfa_token: Optional[str] = None
     mfa_required: bool = False
-    # Какие факторы у юзера включены: "totp", "email" или оба. Фронт по этому
-    # списку решает, показать поле кода сразу или дать выбор способа.
+    # Способы подтверждения. Остался один — "email"; список, а не флаг, —
+    # формат, который уже понимают клиенты.
     mfa_methods: List[str] = []
     # Код на почту уже отправлен этим ответом — фронту не надо звать /send.
     email_code_sent: bool = False
@@ -141,12 +140,8 @@ class RevokeAllDevicesResponse(BaseModel):
 
 
 class MfaLoginRequest(BaseModel):
-    """Второй шаг входа: TOTP-код, код из письма или резервный код.
-
-    method задаёт, какой фактор проверять ("totp" / "email"). Без него
-    проверяются все включённые по очереди — так работает вход, когда способ
-    один и выбирать нечего.
-    """
+    """Второй шаг входа: код из письма. method — пережиток выбора между
+    TOTP и почтой, принимается и игнорируется ради старых клиентов."""
     mfa_token: str
     code: str
     method: Optional[str] = None
@@ -167,12 +162,7 @@ class MfaEmailCodeResponse(BaseModel):
 
 
 class TwoFactorStatus(BaseModel):
-    """Статус 2FA в профиле. totp_secret и otpauth_url заполнены только во
-    время незавершённого включения (между setup и enable) — они нужны фронту,
-    чтобы показать QR, и не должны светиться после."""
-    totp_enabled: bool
-    totp_secret: Optional[str] = None
-    otpauth_url: Optional[str] = None
+    """Статус почтовой 2FA в профиле."""
     email_2fa_enabled: bool = False
     # Адрес в маскированном виде: на экране настроек надо показать, КУДА
     # уйдёт код, но полный адрес там уже и так виден в профиле.
@@ -188,32 +178,25 @@ class EmailTwoFactorSetupResponse(BaseModel):
 
 class EmailTwoFactorEnableRequest(BaseModel):
     """Подтверждение включения: код из письма + пароль (переподтверждение
-    опасной операции, как и у TOTP)."""
+    опасной операции)."""
     code: str
     password: str
-
-
-class TwoFactorSetupResponse(BaseModel):
-    totp_secret: str
-    otpauth_url: str
-    qr_png: Optional[str] = None  # data:image/png;base64 — для десктопов без нативного QR
-
-
-class TwoFactorEnableRequest(BaseModel):
-    """Подтверждение включения: код с приложения-аутентификатора + пароль
-    (переподтверждение опасной операции)."""
-    code: str
-    password: str
-
-
-class TwoFactorEnableResponse(BaseModel):
-    """Коды показываются ровно один раз, поэтому приходят в открытом виде —
-    дальше в БД только их bcrypt-хэши."""
-    recovery_codes: List[str] = []
 
 
 class TwoFactorDisableRequest(BaseModel):
     password: str
+
+
+class EmailChangeRequest(BaseModel):
+    """Шаг 1 смены почты: новый адрес + пароль (сессии мало — смена почты
+    отдаёт и сброс пароля, и почтовую 2FA)."""
+    new_email: EmailStr
+    password: str
+
+
+class EmailChangeConfirm(BaseModel):
+    """Шаг 2: код, пришедший на новый адрес."""
+    code: str
 
 
 class EmailVerifyRequest(BaseModel):

@@ -127,7 +127,7 @@ function TrustedDevices() {
                 {!device.current && (
                   <button
                     type="button"
-                    className="settings-save-btn devices-revoke"
+                    className="btn btn--danger-ghost btn--sm devices-revoke"
                     onClick={() => handleRevoke(device)}
                     disabled={busyId === device.id || revokingAll}
                   >
@@ -142,7 +142,7 @@ function TrustedDevices() {
             <div className="settings-prefs-actions">
               <button
                 type="button"
-                className="settings-save-btn devices-revoke-all"
+                className="btn btn--danger devices-revoke-all"
                 onClick={handleRevokeAll}
                 disabled={revokingAll || busyId !== null}
               >

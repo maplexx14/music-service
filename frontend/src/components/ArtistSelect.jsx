@@ -401,7 +401,7 @@ function ArtistSelect({
           placeholder="Найти артиста"
         />
         {term && (
-          <button type="button" className="pref-add-btn" onClick={() => addArtist(query)}>
+          <button type="button" className="btn btn--primary btn--sm pref-add-btn" onClick={() => addArtist(query)}>
             <Plus size={16} /> Добавить
           </button>
         )}

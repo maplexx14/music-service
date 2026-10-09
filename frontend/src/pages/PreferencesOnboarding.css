@@ -9,7 +9,7 @@
 }
 
 .onboarding-card {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 12px;
   padding: 32px;
   width: 100%;
@@ -34,7 +34,7 @@
 .onboarding-header h1 {
   font-size: 26px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
   margin: 0 0 10px;
   text-wrap: balance;
 }
@@ -42,7 +42,7 @@
 .onboarding-header p {
   font-size: 14px;
   line-height: 1.5;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -65,7 +65,7 @@
   width: 28px;
   height: 4px;
   border-radius: 999px;
-  background: #333;
+  background: var(--surface-4);
   transition: background 0.2s ease;
 }
 
@@ -74,7 +74,7 @@
 }
 
 .onboarding-step-dot.active {
-  background: #a259ff;
+  background: var(--brand-accent);
 }
 
 .onboarding-step-counter {
@@ -82,28 +82,11 @@
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.03em;
-  color: #8b8b8b;
+  color: var(--text-tertiary);
 }
 
 .onboarding-back {
   flex-shrink: 0;
-  padding: 14px 18px;
-  background: transparent;
-  border: none;
-  color: #9b9b9b;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-
-.onboarding-back:hover:not(:disabled) {
-  color: #ffffff;
-}
-
-.onboarding-back:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 /* --- Шаг 3: импорт из других сервисов --- */
@@ -118,15 +101,15 @@
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  background: #1a1a1a;
-  border: 1px solid #333;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
-  color: #888;
+  color: var(--text-tertiary);
   transition: border-color 0.15s ease;
 }
 
 .onboarding-import-input:focus-within {
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
 }
 
 .onboarding-import-input input {
@@ -136,21 +119,21 @@
   background: transparent;
   border: none;
   outline: none;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 14px;
 }
 
 .onboarding-import-input input::placeholder {
-  color: #777;
+  color: var(--text-tertiary);
 }
 
 .onboarding-import-check {
   flex-shrink: 0;
   padding: 8px 12px;
-  border: 1px solid #444;
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   background: transparent;
-  color: #e6e6e6;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -158,8 +141,8 @@
 }
 
 .onboarding-import-check:hover:not(:disabled) {
-  border-color: #a259ff;
-  color: #ffffff;
+  border-color: var(--brand-accent);
+  color: var(--text-primary);
 }
 
 .onboarding-import-check:disabled {
@@ -170,7 +153,7 @@
 .onboarding-import-examples {
   margin: 0;
   padding-left: 18px;
-  color: #8b8b8b;
+  color: var(--text-tertiary);
   font-size: 12px;
   line-height: 1.7;
   word-break: break-all;
@@ -204,38 +187,13 @@
 .onboarding-preview-title {
   font-size: 15px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
 .onboarding-preview-meta {
   font-size: 12px;
-  color: #b3b3b3;
-}
-
-.onboarding-import-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 11px 14px;
-  border: none;
-  border-radius: 8px;
-  background: #a259ff;
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.onboarding-import-btn:hover:not(:disabled) {
-  background: var(--brand-accent-hover);
-}
-
-.onboarding-import-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  color: var(--text-secondary);
 }
 
 .onboarding-imported {
@@ -244,52 +202,15 @@
   gap: 6px;
   margin: 0;
   font-size: 13px;
-  color: #cfa6ff;
+  color: var(--brand-accent-text);
 }
 
 .onboarding-skip {
   flex-shrink: 0;
-  padding: 14px 20px;
-  background: transparent;
-  border: 1px solid #333;
-  border-radius: 8px;
-  color: #cfcfcf;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-
-.onboarding-skip:hover:not(:disabled) {
-  border-color: #666;
-  color: #ffffff;
 }
 
 .onboarding-save {
   flex: 1;
-  padding: 14px;
-  background: #a259ff;
-  border: none;
-  border-radius: 8px;
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.onboarding-save:hover:not(:disabled) {
-  background: var(--brand-accent-hover);
-}
-
-.onboarding-save:active:not(:disabled) {
-  transform: scale(0.99);
-}
-
-.onboarding-skip:disabled,
-.onboarding-save:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 @media (max-width: 600px) {

@@ -14,6 +14,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
+import { settleStrip } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { getActive } from '../services/audioEngine'
@@ -34,20 +35,6 @@ function formatTime(seconds) {
 const ART_GAP = 24
 // Второй тап по обложке в пределах этого окна — лайк.
 const DOUBLE_TAP_MS = 300
-const SETTLE_MS = 340
-
-// Карусель доезжает из `from` (px) в ноль. Сначала без перехода ставим
-// стартовую позицию и форсируем раскладку — иначе браузер склеит два
-// присваивания transform и анимации не будет.
-function settleStrip(strip, from) {
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  strip.style.transition = 'none'
-  strip.style.transform = from && !reduced ? `translateX(${from}px)` : ''
-  if (!from || reduced) return
-  strip.getBoundingClientRect()
-  strip.style.transition = `transform ${SETTLE_MS}ms var(--ease-out)`
-  strip.style.transform = ''
-}
 
 // Сердце логотипа поверх обложки при лайке — тот же LikeHeart, что в
 // кнопке лайка, с той же анимацией (полоса по мазку, заливка, молния), только

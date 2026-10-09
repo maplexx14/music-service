@@ -171,16 +171,8 @@ class User(Base):
     # миграция 0011 проставляет true — иначе релиз запер бы всех снаружи.
     email_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     is_admin = Column(Boolean, default=False, nullable=False, server_default="false")
-    # Двухфакторка (TOTP). totp_secret живёт и до подтверждения: между
-    # /2fa/setup и /2fa/enable юзер сканирует QR, поэтому секрет надо сохранить,
-    # но фактором он становится только когда totp_enabled=True.
-    totp_secret = Column(String, nullable=True)
-    totp_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
-    # Резервные коды одноразового входа — bcrypt-хэши, как и пароль: утечка БД
-    # не должна давать вход. Использованный код удаляется из списка.
-    totp_recovery_codes = Column(JSON, nullable=False, default=list, server_default="[]")
-    # Двухфакторка по почте: 6-значный код письмом. Второй независимый способ,
-    # включается отдельно от TOTP; когда включены оба, юзер выбирает на входе.
+    # Двухфакторка по почте: 6-значный код письмом. Единственный фактор:
+    # приложение-аутентификатор (TOTP) убрано, см. миграцию 0028.
     # Сам код в БД не хранится — он расходник и живёт в Redis (см. email_2fa.py).
     email_2fa_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
     # Явные музыкальные предпочтения, выбранные при онбординге/в настройках.

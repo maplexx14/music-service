@@ -5,7 +5,7 @@
   right: 16px;
   height: 76px;
   transition: left 0.3s var(--ease-morph);
-  background: #1e1e1e;
+  background: var(--surface-2);
   border: none;
   /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */
   border-radius: 999px;
@@ -52,7 +52,7 @@
 }
 
 .player-progress-top:hover .player-progress-top-fill {
-  background-color: #a259ff;
+  background-color: var(--brand-accent);
 }
 
 .player-progress-thumb {
@@ -62,7 +62,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #a259ff;
+  background: var(--brand-accent);
   /* Появление из scale(0.6) + прозрачность: ничто не возникает из ниоткуда. */
   transform: translateY(-50%) scale(0.6);
   opacity: 0;
@@ -87,7 +87,7 @@
   background: #0d0d0d;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: var(--text-xs, 12px);
   font-weight: 600;
   white-space: nowrap;
@@ -114,7 +114,7 @@
   background: #0d0d0d;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: var(--text-xs, 12px);
   font-weight: 600;
   white-space: nowrap;
@@ -130,6 +130,33 @@
   min-width: 0;
   position: relative;
   z-index: 1;
+}
+
+/* Соседний трек в карусели мини-плеера (см. useTrackCarousel): капсула-
+   двойник на шаг «ширина + зазор» слева или справа. Свайп двигает саму
+   .player, двойники едут вместе с ней. Фон плотнее, без блюра: backdrop-
+   filter внутри элемента с backdrop-filter видит только его содержимое. */
+.player-ghost {
+  position: absolute;
+  inset: 0;
+  transform: translateX(calc(var(--slot) * (100% + var(--strip-gap))));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(10, 10, 14, 0.92);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.player-ghost .player-cover {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.player-ghost .player-info {
+  flex: 1;
 }
 
 .player-cover-wrap {
@@ -161,7 +188,7 @@
   height: 50px;
   object-fit: cover;
   border-radius: 8px;
-  background-color: #181818;
+  background-color: var(--surface-1);
 }
 
 /* Оверлей поверх обложки на время (пере)резолва потока внешнего трека —
@@ -186,7 +213,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1.2;
-  color: #ffffff;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -232,11 +259,11 @@
 }
 
 .like-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .like-btn.liked {
-  color: #a259ff;
+  color: var(--brand-accent);
   /* Поп при лайке: редкий «момент радости», разрешаем чуть заметный отскок. */
   animation: likePop 0.3s var(--ease-out);
 }
@@ -263,11 +290,11 @@
 }
 
 .dislike-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .dislike-btn.disliked {
-  color: #ff6b6b;
+  color: var(--status-danger);
 }
 
 .add-btn {
@@ -287,7 +314,7 @@
 }
 
 .add-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .add-btn:visited {
@@ -310,7 +337,7 @@
 }
 
 .lyrics-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .like-btn svg,
@@ -319,13 +346,6 @@
 .lyrics-btn svg {
   width: 24px;
   height: 24px;
-}
-
-.like-btn:active,
-.dislike-btn:active,
-.add-btn:active,
-.lyrics-btn:active {
-  transform: scale(0.96);
 }
 
 .lyrics-btn.disabled {
@@ -343,7 +363,7 @@
 .lyrics-btn:focus-visible,
 .control-btn:focus-visible,
 .play-pause-btn:focus-visible {
-  outline: 2px solid #a259ff;
+  outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
 }
 
@@ -380,12 +400,12 @@
 }
 
 .control-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.07);
 }
 
 .control-btn.active {
-  color: #a259ff;
+  color: var(--brand-accent);
   background: rgba(162, 89, 255, 0.1);
   border-color: rgba(162, 89, 255, 0.16);
 }
@@ -404,7 +424,7 @@
 .play-pause-btn {
   background: #55308a;
   border: none;
-  color: #ffffff;
+  color: var(--text-primary);
   cursor: pointer;
   width: 44px;
   height: 44px;
@@ -458,9 +478,22 @@
     -webkit-backdrop-filter: blur(12px) saturate(160%);
   }
 
+  /* Горизонталь — карусель треков, вертикаль за фиксированным плеером
+     скроллить нечего: жест целиком отдаём JS. */
+  .player {
+    touch-action: none;
+  }
+
   .player-left {
     flex: 2;
     gap: 10px;
+  }
+
+  /* Тап по имени артиста открывает плеер, как и по остальной капсуле:
+     попасть пальцем в ссылку на узкой строке почти нельзя, и вместо плеера
+     внезапно открывалась страница артиста. */
+  .player-info {
+    pointer-events: none;
   }
 
   .player-cover {
@@ -505,7 +538,7 @@
   height: 5px;
   -webkit-appearance: none;
   appearance: none;
-  background: #3b3b3b;
+  background: var(--surface-4);
   border-radius: 999px;
   outline: none;
   cursor: pointer;
@@ -517,7 +550,7 @@
   appearance: none;
   width: 12px;
   height: 12px;
-  background: #ffffff;
+  background: var(--surface-inverse);
   border-radius: 50%;
   cursor: pointer;
 }
@@ -525,7 +558,7 @@
 .volume-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  background: #ffffff;
+  background: var(--surface-inverse);
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -537,11 +570,11 @@
 }
 
 .volume-slider:hover::-webkit-slider-thumb {
-  background: #a259ff;
+  background: var(--brand-accent);
 }
 
 .volume-slider:hover::-moz-range-thumb {
-  background: #a259ff;
+  background: var(--brand-accent);
 }
 
 /* The mini player itself fills as the track progresses. */

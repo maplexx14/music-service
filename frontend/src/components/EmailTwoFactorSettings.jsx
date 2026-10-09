@@ -6,9 +6,6 @@ import './TwoFactorSettings.css'
 /**
  * Второй фактор по почте: код из письма при входе.
  *
- * Стили и разметка переиспользуют карточку TOTP-настроек — фактор другой,
- * но экран для юзера тот же по смыслу.
- *
  * Включение требует и кода из письма, и пароля: код доказывает доступ к
  * ящику, пароль — что фактор включает владелец аккаунта, а не тот, кто
  * подобрал брошенную сессию.
@@ -102,7 +99,7 @@ function EmailTwoFactorSettings() {
           <div className="twofa-status twofa-status-on">Включён</div>
           <label className="twofa-field">
             <span>Пароль для подтверждения</span>
-            <input
+            <input className="field"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -111,7 +108,7 @@ function EmailTwoFactorSettings() {
             />
           </label>
           <div className="settings-prefs-actions">
-            <button type="submit" className="settings-save-btn twofa-danger" disabled={busy}>
+            <button type="submit" className="btn btn--danger settings-save-btn" disabled={busy}>
               {busy ? 'Выключение...' : 'Выключить'}
             </button>
           </div>
@@ -132,7 +129,7 @@ function EmailTwoFactorSettings() {
 
           <label className="twofa-field">
             <span>Код из письма</span>
-            <input
+            <input className="field"
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
@@ -145,7 +142,7 @@ function EmailTwoFactorSettings() {
 
           <label className="twofa-field">
             <span>Пароль</span>
-            <input
+            <input className="field"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -155,12 +152,12 @@ function EmailTwoFactorSettings() {
           </label>
 
           <div className="settings-prefs-actions">
-            <button type="submit" className="settings-save-btn" disabled={busy}>
+            <button type="submit" className="btn btn--primary settings-save-btn" disabled={busy}>
               {busy ? 'Включение...' : 'Включить'}
             </button>
             <button
               type="button"
-              className="settings-save-btn"
+              className="btn btn--secondary settings-save-btn"
               onClick={handleSendCode}
               disabled={busy}
             >
@@ -168,7 +165,7 @@ function EmailTwoFactorSettings() {
             </button>
             <button
               type="button"
-              className="settings-save-btn"
+              className="btn btn--ghost settings-save-btn"
               onClick={() => setCodeRequested(false)}
               disabled={busy}
             >
@@ -182,7 +179,7 @@ function EmailTwoFactorSettings() {
           <div className="settings-prefs-actions">
             <button
               type="button"
-              className="settings-save-btn"
+              className="btn btn--primary settings-save-btn"
               onClick={handleSendCode}
               disabled={busy}
             >

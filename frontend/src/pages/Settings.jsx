@@ -8,7 +8,7 @@ import { toast } from '../store/toastStore'
 import GenreSelect from '../components/GenreSelect'
 import ArtistSelect from '../components/ArtistSelect'
 import api from '../services/api'
-import TwoFactorSettings from '../components/TwoFactorSettings'
+import EmailChangeSettings from '../components/EmailChangeSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
@@ -39,7 +39,7 @@ const SECTIONS = [
   { id: 'recs', label: 'Рекомендации', hint: 'Новые открытия', icon: Sparkles },
   { id: 'playback', label: 'Воспроизведение', hint: 'Качество звука', icon: Headphones },
   { id: 'appearance', label: 'Оформление', hint: 'Облегчённый режим, GIF', icon: Palette },
-  { id: 'security', label: 'Безопасность', hint: 'Двухфакторка, устройства', icon: Shield },
+  { id: 'security', label: 'Безопасность', hint: 'Почта, двухфакторка, устройства', icon: Shield },
   // Диагностика плеера — отладочный инструмент, обычному пользователю не
   // нужен: лог событий воспроизведения имеет смысл только при разборе багов,
   // о которых сообщили админам.
@@ -569,10 +569,10 @@ function Settings() {
 
           {activeTab === 'security' && (
             <div {...panelProps('security')}>
-              {/* Сначала способы второго фактора, потом устройства: доверенное
-                  устройство — это как раз то, что второй фактор позволяет
-                  пропускать при входе. */}
-              <TwoFactorSettings />
+              {/* Почта первой: на неё завязан второй фактор. Дальше сам
+                  фактор, потом устройства — доверенное устройство как раз то,
+                  что второй фактор позволяет пропускать при входе. */}
+              <EmailChangeSettings />
               <EmailTwoFactorSettings />
               <TrustedDevices />
             </div>
@@ -588,15 +588,15 @@ function Settings() {
                   воспроизведите сбой — и вернитесь сюда.
                 </p>
                 <div className="settings-prefs-actions">
-                  <button type="button" className="settings-save-btn" onClick={handleShowDiag}>
+                  <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleShowDiag}>
                     Показать лог
                   </button>
-                  <button type="button" className="settings-save-btn" onClick={handleCopyDiag}>
+                  <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleCopyDiag}>
                     Скопировать
                   </button>
                   <button
                     type="button"
-                    className="settings-save-btn"
+                    className="btn btn--secondary btn--sm settings-save-btn"
                     onClick={() => {
                       if (!window.confirm('Очистить журнал диагностики?')) return
                       clearDiag()
@@ -616,15 +616,15 @@ function Settings() {
                   обычно, затем скопируйте отчёт.
                 </p>
                 <div className="settings-prefs-actions">
-                  <button type="button" className="settings-save-btn" onClick={handleToggleMeter}>
+                  <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleToggleMeter}>
                     {meterOn ? 'Выключить замер' : 'Включить замер'}
                   </button>
-                  <button type="button" className="settings-save-btn" onClick={handleCopyMeter}>
+                  <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleCopyMeter}>
                     Скопировать отчёт
                   </button>
                   <button
                     type="button"
-                    className="settings-save-btn"
+                    className="btn btn--secondary btn--sm settings-save-btn"
                     onClick={() => {
                       clearFrameMeter()
                       setMeterText('Отчёт очищен.')

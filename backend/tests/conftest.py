@@ -66,18 +66,6 @@ def _reset_rate_limiter():
 
 
 @pytest.fixture(autouse=True)
-def _reset_totp_replay_cache():
-    """Ключи «код уже использован» живут 90 с в общем Redis и переживают
-    конец теста. Без очистки повторный прогон падает: тот же юзер с тем же
-    секретом в том же временном окне получает свой код как использованный."""
-    from app.cache import clear_pattern
-
-    clear_pattern("2fa:used:*")
-    yield
-    clear_pattern("2fa:used:*")
-
-
-@pytest.fixture(autouse=True)
 def _reset_email_verification_tokens():
     """Токены и незавершённые регистрации живут 24 ч в общем Redis."""
     from app.cache import clear_pattern
@@ -370,7 +358,7 @@ def auth_headers(client, username="alice", password="password123"):
     Через /login больше нельзя: вход с незнакомого устройства требует второй
     фактор (см. trusted_devices), а в тесте его нечем закрыть — код к письму
     не достать. Тестам ниже нужен просто авторизованный запрос, поэтому токен
-    выписываем напрямую; сам вход проверяется в test_two_factor.py,
+    выписываем напрямую; сам вход проверяется в
     test_email_2fa.py и test_trusted_devices.py.
     """
     from app.auth import create_access_token

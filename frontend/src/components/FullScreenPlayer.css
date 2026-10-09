@@ -7,7 +7,7 @@
   /* Фон — приглушённый цвет обложки (--fs-tint ставит FullScreenPlayer из
      useThemeColor), книзу чуть темнее под кнопками. Пока цвет не посчитан —
      нейтральный тёмный. */
-  background-color: var(--fs-tint, #1c1b20);
+  background-color: var(--fs-tint, var(--surface-2));
   /* Фирменная фактура сервиса (как у hero потока): зерно поверх цвета
      и затемнение книзу под кнопками. Зерно — крошечная серая SVG-плитка с
      прозрачностью, растеризуется один раз. Без background-blend-mode:
@@ -16,7 +16,7 @@
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
     linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.42) 100%);
-  color: #ffffff;
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   padding: calc(env(safe-area-inset-top, 0px) + 22px) var(--fs-pad-x) calc(env(safe-area-inset-bottom, 0px) + 24px);
@@ -72,7 +72,7 @@
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.06);
-  color: #d7d7d7;
+  color: var(--text-primary);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -82,11 +82,7 @@
 
 .fullscreen-icon:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
-}
-
-.fullscreen-icon:active {
-  transform: scale(0.96);
+  color: var(--text-primary);
 }
 
 .fullscreen-icon:disabled {
@@ -96,13 +92,13 @@
 
 .fullscreen-icon.active {
   border-color: rgba(162, 89, 255, 0.45);
-  color: #a259ff;
+  color: var(--brand-accent);
 }
 
 /* Дизлайк — негативное действие, поэтому красный, а не акцентный фиолетовый
    (.fullscreen-icon.active), который читается как «включено/нравится». */
 .fullscreen-dislike.active {
-  color: #ff6b6b;
+  color: var(--status-danger);
 }
 
 .fullscreen-like.active svg {
@@ -214,7 +210,7 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   /* Под картинкой — её маленькая версия (background-image инлайном из
      FullScreenPlayer), пока полноразмерная не загрузилась. */
-  background-color: #181818;
+  background-color: var(--surface-1);
   background-size: cover;
   background-position: center;
 }
@@ -502,7 +498,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   height: 10px;
   margin-top: -5px;
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--surface-inverse);
   box-shadow: 0 0 0 4px rgba(162, 89, 255, 0.35);
   /* Точка появляется только под пальцем/курсором — в покое полоса чистая. */
   transform: scale(0);
@@ -548,7 +544,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   height: 52px;
   border: 0;
   background: transparent;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .fullscreen-controls .fullscreen-icon:hover {
@@ -588,12 +584,12 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 }
 
 .fullscreen-tool:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 /* Включённый режим — акцент и точка под иконкой. */
 .fullscreen-tool.active {
-  color: #ffffff;
+  color: var(--text-primary);
   background: var(--brand-accent-soft-strong);
 }
 
@@ -609,7 +605,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   height: 72px;
   border-radius: 999px;
   background: var(--brand-accent);
-  color: #ffffff;
+  color: var(--text-primary);
   border: none;
   display: grid;
   place-items: center;
@@ -627,7 +623,6 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-play:active {
   background: var(--brand-accent-active);
-  transform: scale(0.96);
   transition-duration: 100ms;
 }
 

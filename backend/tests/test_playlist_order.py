@@ -12,14 +12,14 @@ from app.models import Playlist, Track, playlist_tracks
 from tests.conftest import create_user, auth_headers
 
 
-def make_playlist(db, owner, plays):
+def make_playlist(db, owner, plays, origin="manual"):
     """Плейлист с треками, добавленными в порядке, ОБРАТНОМ популярности.
 
     position растёт вместе с индексом, play_count — убывает, поэтому
     сортировка по position дала бы ровно перевёрнутый ожидаемый порядок:
     тест отличает новый ORDER BY от старого.
     """
-    playlist = Playlist(name="pl", owner_id=owner.id, is_public=False)
+    playlist = Playlist(name="pl", owner_id=owner.id, is_public=False, origin=origin)
     db.add(playlist)
     db.commit()
     db.refresh(playlist)
@@ -154,3 +154,16 @@ def test_add_and_remove_track_check_membership(client, db):
     assert remaining == track_ids[1:]
 
     assert client.post(f"{url}/{track_ids[0]}", headers=headers).status_code == 200
+
+
+def test_imported_playlist_keeps_source_order(client, db):
+    """Импорт пишет position в порядке источника — его и отдаём, а не
+    заигранность: иначе импортированный плейлист перемешивается."""
+    user = create_user(db, "importer")
+    playlist = make_playlist(db, user, plays=[1, 50, 7, 300], origin="imported")
+    headers = auth_headers(client, "importer")
+
+    resp = client.get(f"/api/playlists/{playlist.id}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    titles = [t["title"] for t in resp.json()["tracks"]]
+    assert titles == ["t0", "t1", "t2", "t3"]

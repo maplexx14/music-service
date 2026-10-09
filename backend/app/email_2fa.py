@@ -42,6 +42,8 @@ EMAIL_CODE_RESEND_COOLDOWN_SEC = int(os.getenv("EMAIL_2FA_RESEND_COOLDOWN_SEC", 
 # настройках, не должен проходить как второй фактор на входе, и наоборот.
 PURPOSE_LOGIN = "login"
 PURPOSE_ENABLE = "enable"
+# Смена почты: код уходит на НОВЫЙ адрес — доказывает, что юзер им владеет.
+PURPOSE_CHANGE_EMAIL = "change_email"
 
 # Без SMTP код доставить нечем, а вход с нового устройства требует его
 # обязательно — то есть ненастроенная почта запирает всех снаружи. В локальной
@@ -89,6 +91,40 @@ def _attempts_key(user_id: int, purpose: str) -> str:
 
 def _cooldown_key(user_id: int, purpose: str) -> str:
     return f"2fa:mail:cooldown:{purpose}:{user_id}"
+
+
+def _new_email_key(user_id: int) -> str:
+    return f"2fa:mail:new_email:{user_id}"
+
+
+def set_pending_email(user_id: int, new_email: str) -> None:
+    """Запоминает адрес, на который юзер меняет почту, пока жив код к нему.
+
+    Адрес хранится рядом с кодом, а не приходит повторно с подтверждением:
+    иначе кодом, высланным на один ящик, можно было бы подтвердить другой.
+    """
+    try:
+        redis_client.setex(_new_email_key(user_id), EMAIL_CODE_TTL_SEC, new_email)
+    except Exception as exc:  # noqa: BLE001
+        raise EmailCodeUnavailable(str(exc)) from exc
+
+
+def get_pending_email(user_id: int) -> str | None:
+    try:
+        raw = redis_client.get(_new_email_key(user_id))
+    except Exception as exc:  # noqa: BLE001
+        raise EmailCodeUnavailable(str(exc)) from exc
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else raw
+
+
+def clear_pending_email(user_id: int) -> None:
+    clear_email_code(user_id, PURPOSE_CHANGE_EMAIL)
+    try:
+        redis_client.delete(_new_email_key(user_id))
+    except Exception:  # noqa: BLE001 — протухнет по TTL
+        logger.warning("failed to clear pending email for user %s", user_id)
 
 
 def generate_email_code() -> str:
@@ -202,6 +238,9 @@ def send_email_code(to_email: str, username: str, code: str, purpose: str = PURP
     if purpose == PURPOSE_ENABLE:
         subject = "Код подтверждения — Music Streaming"
         intro = "Код для включения двухфакторной аутентификации по почте:"
+    elif purpose == PURPOSE_CHANGE_EMAIL:
+        subject = "Подтверждение новой почты — Music Streaming"
+        intro = "Код, чтобы привязать этот адрес к аккаунту:"
     else:
         subject = "Код для входа — Music Streaming"
         intro = "Код для входа в аккаунт:"

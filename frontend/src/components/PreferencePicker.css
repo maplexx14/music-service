@@ -14,13 +14,13 @@
 .pref-title {
   font-size: 18px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .pref-subtitle {
   font-size: 13px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin: 0 0 8px;
 }
 
@@ -47,7 +47,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b8b8b;
+  color: var(--text-tertiary);
 }
 
 .pref-hint {
@@ -75,7 +75,7 @@
   background:
     radial-gradient(120% 90% at 0% 0%, oklch(0.68 0.16 var(--tile-hue) / 0.9), transparent 60%),
     linear-gradient(135deg, oklch(0.5 0.15 var(--tile-hue)), oklch(0.3 0.09 calc(var(--tile-hue) + 35)));
-  color: #ffffff;
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   /* Невыбранные приглушены: выбор читается по яркости, а не только по галке. */
@@ -87,10 +87,6 @@
 
 .pref-genre-tile:hover {
   filter: saturate(0.95) brightness(0.95);
-}
-
-.pref-genre-tile:active {
-  transform: scale(0.97);
 }
 
 .pref-genre-tile:focus-visible {
@@ -126,7 +122,7 @@
 }
 
 .pref-genre-check {
-  background: #ffffff;
+  background: var(--surface-inverse);
   color: oklch(0.4 0.15 var(--tile-hue));
   opacity: 0;
   transform: scale(0.4);
@@ -140,7 +136,7 @@
 
 .pref-genre-detected {
   background: rgba(0, 0, 0, 0.3);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 /* Поп выбора: онбординг видят один раз — здесь уместна щедрость. */
@@ -175,7 +171,7 @@
   border-radius: 999px;
   border: 1px dashed rgba(162, 89, 255, 0.6);
   background: transparent;
-  color: #cfa6ff;
+  color: var(--brand-accent-text);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -184,7 +180,7 @@
 
 .pref-apply-detected:hover {
   background: rgba(162, 89, 255, 0.12);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 /* --- Артисты: ввод + сетка фото --- */
@@ -193,19 +189,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #1a1a1a;
-  border: 1px solid #333;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 0 10px;
   transition: border-color 0.15s ease;
 }
 
 .pref-artist-input:focus-within {
-  border-color: #a259ff;
+  border-color: var(--brand-accent);
 }
 
 .pref-artist-icon {
-  color: #888;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -215,33 +211,17 @@
   background: transparent;
   border: none;
   outline: none;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 14px;
   padding: 12px 0;
 }
 
 .pref-artist-input input::placeholder {
-  color: #777;
+  color: var(--text-tertiary);
 }
 
 .pref-add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   flex-shrink: 0;
-  padding: 8px 12px;
-  border: none;
-  border-radius: 8px;
-  background: #a259ff;
-  color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.pref-add-btn:hover {
-  background: var(--brand-accent-hover);
 }
 
 .pref-detected-artist {
@@ -259,13 +239,13 @@
   border: 1px solid rgba(162, 89, 255, 0.45);
   border-radius: 999px;
   background: transparent;
-  color: #cfa6ff;
+  color: var(--brand-accent-text);
   cursor: pointer;
 }
 
 .pref-dismiss-detected:hover {
   background: rgba(162, 89, 255, 0.14);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .pref-suggestions {
@@ -281,9 +261,9 @@
   gap: 5px;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid #333;
+  border: 1px solid var(--border-default);
   background: transparent;
-  color: #cfcfcf;
+  color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease,
@@ -291,12 +271,8 @@
 }
 
 .pref-suggestion:hover {
-  border-color: #a259ff;
-  color: #ffffff;
-}
-
-.pref-suggestion:active {
-  transform: scale(0.96);
+  border-color: var(--brand-accent);
+  color: var(--text-primary);
 }
 
 /* --- Блок «определено по прослушиваниям» (артисты) --- */
@@ -319,7 +295,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #cfa6ff;
+  color: var(--brand-accent-text);
 }
 
 .pref-detected .pref-suggestions {
@@ -328,7 +304,7 @@
 
 .pref-suggestion.detected {
   border-color: rgba(162, 89, 255, 0.45);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 /* --- Сетка артистов: круглые фото, имя, фанаты --- */
@@ -376,7 +352,7 @@
   aspect-ratio: 1;
   margin-bottom: 6px;
   border-radius: 50%;
-  background: #262626;
+  background: var(--surface-3);
   transition: transform var(--duration-fast) var(--ease-out),
               box-shadow 0.2s ease;
 }
@@ -398,8 +374,8 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  background: linear-gradient(135deg, #3a2a5c, #1f1f1f);
-  color: #e6d6ff;
+  background: linear-gradient(135deg, #3a2a5c, var(--surface-2));
+  color: var(--brand-accent-text);
   font-size: 34px;
   font-weight: 700;
 }
@@ -444,8 +420,8 @@
   height: 28px;
   border-radius: 50%;
   background: var(--brand-accent);
-  color: #ffffff;
-  border: 3px solid #181818;
+  color: var(--text-primary);
+  border: 3px solid var(--border-subtle);
   opacity: 0;
   transform: scale(0.4);
   transition: opacity 0.15s ease, transform 0.25s var(--ease-out);
@@ -463,7 +439,7 @@
   white-space: nowrap;
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .pref-artist-fans {
@@ -472,7 +448,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: #8b8b8b;
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 

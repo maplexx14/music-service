@@ -9,7 +9,7 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
@@ -55,7 +55,7 @@
   flex: 1;
   min-width: 0;
   font-size: 14px;
-  color: #ffffff;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -64,7 +64,7 @@
 .import-collection-count {
   flex-shrink: 0;
   font-size: 12px;
-  color: #888;
+  color: var(--text-tertiary);
 }
 
 /* Телефон: строка коллекции целиком — цель под палец (вся строка — label,

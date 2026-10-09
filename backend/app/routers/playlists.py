@@ -53,6 +53,10 @@ def _paginated_playlist_response(
     /tracks/me/liked). Заигранность менялась бы при каждом прослушивании и
     перетасовывала бы страницу; position назначается монотонно (max+1),
     added_at страхует от старых строк с одинаковым position.
+
+    Импортированные (origin="imported") — в порядке источника: импорт пишет
+    position по порядку треков в исходном плейлисте, а сортировка по
+    заигранности перемешивала его сразу после импорта.
     """
     if playlist.is_liked:
         order = (
@@ -60,6 +64,8 @@ def _paginated_playlist_response(
             playlist_tracks.c.added_at.desc(),
             playlist_tracks.c.track_id.desc(),
         )
+    elif playlist.origin == "imported":
+        order = (playlist_tracks.c.position, Track.id)
     else:
         order = (Track.play_count.desc(), playlist_tracks.c.position, Track.id)
     tracks_query = (

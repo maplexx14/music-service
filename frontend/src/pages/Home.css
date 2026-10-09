@@ -82,7 +82,7 @@
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
-  font-family: 'Unbounded', sans-serif;
+  font-family: var(--font-display);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -92,15 +92,11 @@
 }
 
 .home-tab:hover:not(.active) {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .home-tab.active {
-  color: #ffffff;
-}
-
-.home-tab:active {
-  transform: scale(0.97);
+  color: var(--text-primary);
 }
 
 .home-tab:focus-visible {
@@ -115,7 +111,7 @@
 }
 
 .home-empty {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: var(--text-md);
   padding: 24px 8px;
 }
@@ -125,7 +121,7 @@
   align-items: center;
   justify-content: center;
   height: 400px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: var(--text-lg);
 }
 
@@ -227,12 +223,12 @@
   transform: translateX(-50%) scale(1.3, 0.85);
   transform-origin: 50% 100%;
   white-space: nowrap;
-  font-family: 'Unbounded', sans-serif;
+  font-family: var(--font-display);
   font-weight: 800;
   font-size: clamp(44px, 6vw, 84px);
   line-height: 1;
   letter-spacing: -0.02em;
-  color: #ffffff;
+  color: var(--text-primary);
   text-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   user-select: none;
@@ -249,7 +245,7 @@
   display: grid;
   place-items: center;
   padding: 0;
-  color: #ffffff;
+  color: var(--text-primary);
   cursor: pointer;
   background: #55308a;
   border: none;
@@ -292,7 +288,6 @@
 
 .wave-title:active {
   background: #4a2a78;
-  transform: scale(0.96);
   transition-duration: 100ms;
 }
 
@@ -328,7 +323,6 @@
 /* Отклик нажатия: кнопка потока с GIF подтверждает нажатие сразу,
    без ожидания hover (на таче hover нет). */
 .wave-gif-button:active {
-  transform: scale(0.97);
   transition-duration: 100ms;
 }
 
@@ -345,7 +339,7 @@
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.25);
-  color: #ffffff;
+  color: var(--text-primary);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   pointer-events: none;
 }
@@ -355,8 +349,8 @@
   height: 32px;
   border-radius: 50%;
   border: none;
-  background: color-mix(in srgb, var(--wave-color) 80%, #ffffff);
-  color: #0b0b0e;
+  background: color-mix(in srgb, var(--wave-color) 80%, var(--surface-inverse));
+  color: var(--text-inverse);
   font-size: 18px;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -390,7 +384,7 @@
 .section-title {
   font-size: var(--text-xl);
   font-weight: bold;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 24px;
 }
 
@@ -420,7 +414,7 @@
 }
 
 .track-card {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
@@ -436,14 +430,13 @@
 }
 
 .track-card:hover {
-  background-color: #282828;
+  background-color: var(--surface-3);
 }
 
 /* Отклик в момент нажатия: тач-устройства не имеют hover, без :active
    нажатие на карточку никак не подтверждается до перехода. Вход —
    мгновенный (100ms), возврат — базовые 200ms. */
 .track-card:active {
-  transform: scale(0.98);
   transition-duration: 100ms;
 }
 
@@ -459,7 +452,7 @@
   object-fit: cover;
   border-radius: 4px;
   margin-bottom: 12px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .track-cover.placeholder {
@@ -467,7 +460,7 @@
   align-items: center;
   justify-content: center;
   font-size: 48px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .track-info {
@@ -478,7 +471,7 @@
 .track-title {
   font-size: var(--text-md);
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -487,7 +480,7 @@
 
 .track-artist {
   font-size: var(--text-base);
-  color: #b3b3b3;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -500,7 +493,7 @@
 }
 
 .playlist-card {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
@@ -512,16 +505,15 @@
 }
 
 .playlist-card:focus-visible {
-  outline: 2px solid #a259ff;
+  outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
 }
 
 .playlist-card:hover {
-  background-color: #282828;
+  background-color: var(--surface-3);
 }
 
 .playlist-card:active {
-  transform: scale(0.98);
   transition-duration: 100ms;
 }
 
@@ -537,7 +529,7 @@
   object-fit: cover;
   border-radius: 4px;
   margin-bottom: 12px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .playlist-cover.placeholder {
@@ -545,13 +537,13 @@
   align-items: center;
   justify-content: center;
   font-size: 48px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .playlist-name {
   font-size: var(--text-md);
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -560,7 +552,7 @@
 
 .playlist-description {
   font-size: var(--text-base);
-  color: #b3b3b3;
+  color: var(--text-secondary);
   line-height: 1.4;
   overflow: hidden;
   display: -webkit-box;
@@ -594,7 +586,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   display: grid;
   place-items: center;
-  color: #ffffff;
+  color: var(--text-primary);
   cursor: pointer;
 }
 
@@ -608,7 +600,7 @@
   border: none;
   display: grid;
   place-items: center;
-  color: #ffffff;
+  color: var(--text-primary);
   font-weight: 600;
   font-size: 12px;
   cursor: pointer;
@@ -632,12 +624,12 @@
 .mobile-player-title {
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .mobile-player-artist {
   font-size: 12px;
-  color: #b5b5b5;
+  color: var(--text-secondary);
 }
 
 .play-toggle {
@@ -645,8 +637,8 @@
   height: 44px;
   border-radius: 999px;
   border: none;
-  background: #a259ff;
-  color: #0b0b0e;
+  background: var(--brand-accent);
+  color: var(--text-inverse);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -815,7 +807,7 @@
 
 .home-skeleton-card {
   flex: 0 0 var(--carousel-item-width, 200px);
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
 }
@@ -839,7 +831,7 @@
 
 .home-skeleton-cover,
 .home-skeleton-line {
-  background-color: #282828;
+  background-color: var(--surface-3);
   position: relative;
   overflow: hidden;
 }

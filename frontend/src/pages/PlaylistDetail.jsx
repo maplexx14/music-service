@@ -205,12 +205,12 @@ function PlaylistDetail() {
             )}
           </div>
           <div className="playlist-actions shuffle-actions">
-            <button className="play-button-large" onClick={handlePlay}>
+            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
             </button>
             <button
-              className="play-button-large secondary"
+              className="btn btn--secondary btn--lg play-button-large"
               onClick={handleShuffle}
               disabled={shuffling}
               title="Перемешать и воспроизвести"
@@ -263,7 +263,7 @@ function PlaylistDetail() {
             {loadError ? (
               <button
                 type="button"
-                className="load-more-btn"
+                className="btn btn--secondary load-more-btn"
                 onClick={handleLoadMore}
                 disabled={loadingMore}
               >

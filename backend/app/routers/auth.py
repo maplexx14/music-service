@@ -1,6 +1,5 @@
 from datetime import timedelta
 from typing import List
-import base64
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,6 +13,8 @@ from app.models import User
 from app.schemas import (
     CaptchaConfig,
     EmailResendRequest,
+    EmailChangeConfirm,
+    EmailChangeRequest,
     EmailTwoFactorEnableRequest,
     EmailTwoFactorSetupResponse,
     EmailVerifyRequest,
@@ -30,9 +31,6 @@ from app.schemas import (
     Token,
     TrustedDeviceResponse,
     TwoFactorDisableRequest,
-    TwoFactorEnableRequest,
-    TwoFactorEnableResponse,
-    TwoFactorSetupResponse,
     TwoFactorStatus,
     UserCreate,
     UserResponse,
@@ -67,33 +65,26 @@ from app.email_verification import (
 )
 from app.email_2fa import (
     EMAIL_CODE_RESEND_COOLDOWN_SEC,
+    PURPOSE_CHANGE_EMAIL,
     PURPOSE_ENABLE,
     PURPOSE_LOGIN,
     EmailCodeCooldown,
     EmailCodeUnavailable,
     clear_email_code,
+    clear_pending_email,
+    get_pending_email,
+    set_pending_email,
     issue_email_code,
     mask_email,
     send_email_code,
     verify_email_code,
 )
+from app.mailer import send_mail
 from app.password_reset import (
     PasswordResetUnavailable,
     consume_reset_token,
     issue_reset_token,
     send_password_reset_email,
-)
-from app.two_factor import (
-    ReplayCacheUnavailable,
-    build_totp_qr_png,
-    build_totp_uri,
-    check_recovery_code,
-    consume_recovery_code,
-    consume_totp_code,
-    generate_recovery_codes,
-    generate_totp_secret,
-    hash_recovery_codes,
-    verify_totp,
 )
 from app.trusted_devices import (
     DEVICE_TOKEN_HEADER,
@@ -110,10 +101,6 @@ router = APIRouter()
 logger = logging.getLogger("auth")
 
 MFA_REQUIRED = "2FA code required"
-INVALID_CODE = "Invalid 2FA code"
-# Отдельная формулировка: «код правильный, но уже использован» — иначе юзер,
-# честно вводящий свежий код после реплея, не понимает, почему отказ.
-CODE_ALREADY_USED = "This code was already used, wait for a new one"
 # Фронт различает этот отказ по коду 403 + этой строке, чтобы показать экран
 # «проверьте почту» с кнопкой повторной отправки вместо ошибки логина.
 EMAIL_NOT_VERIFIED = "Email not verified"
@@ -129,14 +116,9 @@ CAPTCHA_UNAVAILABLE = "Captcha temporarily unavailable"
 
 
 def _mfa_methods(user: User) -> list[str]:
-    """Включённые факторы. Порядок задаёт и порядок проверки в /mfa/verify,
-    и то, какой способ фронт предлагает первым: TOTP быстрее письма."""
-    methods = []
-    if user.totp_enabled:
-        methods.append("totp")
-    if user.email_2fa_enabled:
-        methods.append("email")
-    return methods
+    """Включённые факторы. Остался один — код на почту: приложение-
+    аутентификатор (TOTP) убрано целиком, миграция 0028 сносит его колонки."""
+    return ["email"] if user.email_2fa_enabled else []
 
 
 def _send_login_code(user: User) -> bool:
@@ -320,11 +302,8 @@ def login(
             data={"sub": user.username, "mfa": True},
             expires_delta=mfa_token_expires,
         )
-        # Письмо отправляем сразу, когда почта — единственный доступный способ
-        # (включена только она либо это проверка нового устройства без своей
-        # 2FA). Если есть TOTP, юзер обычно им и войдёт — письмо было бы
-        # лишним, для него есть /auth/mfa/email/send по кнопке.
-        email_code_sent = methods == ["email"] and _send_login_code(user)
+        # Почта — единственный способ, так что письмо уходит сразу.
+        email_code_sent = _send_login_code(user)
         return {
             "mfa_token": mfa_token,
             "mfa_required": True,
@@ -601,7 +580,7 @@ def verify_mfa(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Второй шаг входа: TOTP-код, код из письма или резервный код.
+    """Второй шаг входа: код из письма.
 
     Успех запоминает устройство и возвращает device_token: следующий вход с
     него пройдёт в один шаг (если юзер не включал свою 2FA).
@@ -609,14 +588,12 @@ def verify_mfa(
     user = _resolve_mfa_user(payload.mfa_token, db)
 
     code = (payload.code or "").strip()
-    method = (payload.method or "").strip().lower() or None
-    methods = _login_methods(user)
 
     def _success() -> dict:
         # Токен устройства выдаём ТОЛЬКО здесь — после реально пройденного
         # второго фактора. До этого устройство ничем не подтверждено. Уже
         # знакомому устройству возвращается его же токен (см. remember_device),
-        # иначе вход юзера с TOTP каждый раз добавлял бы дубль в список.
+        # иначе каждый вход с почтовой 2FA добавлял бы дубль в список.
         device_token = remember_device(
             db,
             user.id,
@@ -625,40 +602,12 @@ def verify_mfa(
         )
         return _issue_access_token(user, device_token)
 
-    # Код из письма. Проверяем первым, когда фронт явно назвал способ; иначе
-    # порядок не важен — форматы кодов не пересекаются настолько, чтобы
-    # чужой код случайно подошёл.
-    if "email" in methods and method in (None, "email"):
-        try:
-            if verify_email_code(user.id, code, PURPOSE_LOGIN):
-                return _success()
-        except EmailCodeUnavailable:
-            raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
-        if method == "email":
-            raise HTTPException(status_code=401, detail=INVALID_EMAIL_CODE)
-
-    if user.totp_enabled and method in (None, "totp"):
-        if verify_totp(user.totp_secret or "", code):
-            # Код верный криптографически — теперь гасим его, чтобы тот же код
-            # нельзя было предъявить ещё раз в пределах его 90-секундного окна.
-            try:
-                if not consume_totp_code(user.id, code):
-                    raise HTTPException(status_code=401, detail=CODE_ALREADY_USED)
-            except ReplayCacheUnavailable:
-                # Без Redis гарантию одноразовости не дать. Пускать нельзя —
-                # это ровно та дыра, которую закрывает кеш.
-                raise HTTPException(status_code=503, detail="2FA temporarily unavailable")
+    try:
+        if verify_email_code(user.id, code, PURPOSE_LOGIN):
             return _success()
-
-    # Резервные коды работают при любом включённом факторе: это запасной вход,
-    # когда недоступны ни телефон, ни почта.
-    if check_recovery_code(user.totp_recovery_codes or [], code):
-        # bcrypt не говорит, какой хэш совпал, — вычищаем отдельным проходом.
-        user.totp_recovery_codes = consume_recovery_code(user.totp_recovery_codes or [], code)
-        db.commit()
-        return _success()
-
-    raise HTTPException(status_code=401, detail=INVALID_CODE)
+    except EmailCodeUnavailable:
+        raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
+    raise HTTPException(status_code=401, detail=INVALID_EMAIL_CODE)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -670,103 +619,7 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
 def get_two_factor_status(
     current_user: User = Depends(get_current_active_user),
 ):
-    """Текущее состояние 2FA. Показываем незавершённый секрет (setup без
-    enable): после перезагрузки страницы настроек QR должен быть доступен
-    снова, а не протухать в никуда."""
-    if not current_user.totp_enabled and current_user.totp_secret:
-        return TwoFactorStatus(
-            totp_enabled=False,
-            totp_secret=current_user.totp_secret,
-            otpauth_url=build_totp_uri(current_user.username, current_user.totp_secret),
-            email_2fa_enabled=current_user.email_2fa_enabled,
-            email_masked=mask_email(current_user.email),
-        )
     return TwoFactorStatus(
-        totp_enabled=current_user.totp_enabled,
-        email_2fa_enabled=current_user.email_2fa_enabled,
-        email_masked=mask_email(current_user.email),
-    )
-
-
-@router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
-def setup_two_factor(
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    """Новый TOTP-секрет + QR. Каждый вызов перегенерирует секрет и
-    инвалидирует предыдущий незавершённый setup. Если 2FA уже включена — 409:
-    секрет нельзя сменить, не выключив (иначе кража сессии = смена фактора).
-
-    QR рисуем на бэке: у фронта нет QR-библиотеки в зависимостях, а тянуть её
-    ради одного экрана дороже, чем отдать готовый PNG.
-    """
-    if current_user.totp_enabled:
-        raise HTTPException(status_code=409, detail="2FA is already enabled")
-    secret = generate_totp_secret()
-    current_user.totp_secret = secret
-    db.commit()
-    uri = build_totp_uri(current_user.username, secret)
-    png = base64.b64encode(build_totp_qr_png(uri)).decode("ascii")
-    return TwoFactorSetupResponse(
-        totp_secret=secret,
-        otpauth_url=uri,
-        qr_png=f"data:image/png;base64,{png}",
-    )
-
-
-@router.post("/2fa/enable", response_model=TwoFactorEnableResponse)
-@limiter.limit("10/minute")
-def enable_two_factor(
-    payload: TwoFactorEnableRequest,
-    request: Request,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    """Подтверждение включения: TOTP-код + пароль.
-
-    Пароль — переподтверждение опасной операции (вход станет двухшаговым).
-    Код доказывает, что секрет реально отсканирован в приложение, а не
-    сгенерирован мимо. Возвращает одноразовые резервные коды."""
-    if current_user.totp_enabled:
-        raise HTTPException(status_code=409, detail="2FA is already enabled")
-    if not current_user.totp_secret:
-        raise HTTPException(status_code=400, detail="Run /2fa/setup first")
-    if not verify_password(payload.password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect password")
-    if not verify_totp(current_user.totp_secret, payload.code):
-        raise HTTPException(status_code=400, detail=INVALID_CODE)
-    # Гасим и здесь: иначе кодом, который юзер только что ввёл при включении,
-    # можно тут же пройти mfa/verify. Redis недоступен — включение отклоняем,
-    # включать 2FA без работающей защиты от повтора смысла нет.
-    try:
-        if not consume_totp_code(current_user.id, payload.code):
-            raise HTTPException(status_code=400, detail=CODE_ALREADY_USED)
-    except ReplayCacheUnavailable:
-        raise HTTPException(status_code=503, detail="2FA temporarily unavailable")
-
-    codes = generate_recovery_codes()
-    current_user.totp_enabled = True
-    current_user.totp_recovery_codes = hash_recovery_codes(codes)
-    db.commit()
-    return TwoFactorEnableResponse(recovery_codes=codes)
-
-
-@router.post("/2fa/disable", response_model=TwoFactorStatus)
-@limiter.limit("10/minute")
-def disable_two_factor(
-    payload: TwoFactorDisableRequest,
-    request: Request,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    if not verify_password(payload.password, current_user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect password")
-    current_user.totp_enabled = False
-    current_user.totp_secret = None
-    current_user.totp_recovery_codes = []
-    db.commit()
-    return TwoFactorStatus(
-        totp_enabled=False,
         email_2fa_enabled=current_user.email_2fa_enabled,
         email_masked=mask_email(current_user.email),
     )
@@ -821,7 +674,7 @@ def enable_email_two_factor(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """Шаг 2: код из письма + пароль. Пароль — как у TOTP: включение фактора
+    """Шаг 2: код из письма + пароль. Пароль — потому что включение фактора
     меняет условия входа, одной живой сессии для этого мало."""
     if current_user.email_2fa_enabled:
         raise HTTPException(status_code=400, detail="Email 2FA is already enabled")
@@ -837,7 +690,6 @@ def enable_email_two_factor(
     current_user.email_2fa_enabled = True
     db.commit()
     return TwoFactorStatus(
-        totp_enabled=current_user.totp_enabled,
         email_2fa_enabled=True,
         email_masked=mask_email(current_user.email),
     )
@@ -858,10 +710,116 @@ def disable_email_two_factor(
     # Выданный код входа больше ни к чему — не оставляем его дожидаться TTL.
     clear_email_code(current_user.id, PURPOSE_LOGIN)
     return TwoFactorStatus(
-        totp_enabled=current_user.totp_enabled,
         email_2fa_enabled=False,
         email_masked=mask_email(current_user.email),
     )
+
+
+EMAIL_TAKEN = "Email already registered"
+
+
+def _email_taken(db: Session, email: str, user_id: int) -> bool:
+    return (
+        db.query(User.id)
+        .filter(func.lower(User.email) == email.lower(), User.id != user_id)
+        .first()
+        is not None
+    )
+
+
+@router.post("/email/change", response_model=EmailTwoFactorSetupResponse)
+@limiter.limit("5/minute")
+def request_email_change(
+    payload: EmailChangeRequest,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Шаг 1 смены почты: выслать код на новый адрес.
+
+    Почта меняется только после кода с нового ящика — иначе опечатка в адресе
+    (или чужой адрес) отрезала бы юзера от сброса пароля и 2FA.
+    """
+    if not verify_password(payload.password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect password")
+    new_email = str(payload.new_email).strip()
+    if new_email.lower() == (current_user.email or "").lower():
+        raise HTTPException(status_code=400, detail="This is already your email")
+    if _email_taken(db, new_email, current_user.id):
+        raise HTTPException(status_code=400, detail=EMAIL_TAKEN)
+
+    # Новый адрес вместо прежнего — свежий код, cooldown не держит: юзер мог
+    # ошибиться в адресе и сразу ввести правильный.
+    try:
+        if get_pending_email(current_user.id) not in (None, new_email):
+            clear_pending_email(current_user.id)
+        code = issue_email_code(current_user.id, PURPOSE_CHANGE_EMAIL)
+        set_pending_email(current_user.id, new_email)
+    except EmailCodeCooldown as exc:
+        return EmailTwoFactorSetupResponse(
+            sent=False,
+            email_masked=mask_email(new_email),
+            cooldown_seconds=exc.seconds_left,
+        )
+    except EmailCodeUnavailable:
+        raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
+
+    if not send_email_code(new_email, current_user.username, code, PURPOSE_CHANGE_EMAIL):
+        logger.error("could not deliver email-change code to user %s", current_user.id)
+        clear_pending_email(current_user.id)
+        raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
+    return EmailTwoFactorSetupResponse(
+        sent=True,
+        email_masked=mask_email(new_email),
+        cooldown_seconds=EMAIL_CODE_RESEND_COOLDOWN_SEC,
+    )
+
+
+@router.post("/email/change/confirm", response_model=UserResponse)
+@limiter.limit("10/minute")
+def confirm_email_change(
+    payload: EmailChangeConfirm,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Шаг 2: код с нового адреса — почта меняется и сразу считается
+    подтверждённой (код до неё дошёл)."""
+    try:
+        new_email = get_pending_email(current_user.id)
+        if new_email is None or not verify_email_code(
+            current_user.id, (payload.code or "").strip(), PURPOSE_CHANGE_EMAIL
+        ):
+            raise HTTPException(status_code=400, detail=INVALID_EMAIL_CODE)
+    except EmailCodeUnavailable:
+        raise HTTPException(status_code=503, detail=MAIL_2FA_UNAVAILABLE)
+
+    # Адрес могли занять, пока шло письмо.
+    if _email_taken(db, new_email, current_user.id):
+        clear_pending_email(current_user.id)
+        raise HTTPException(status_code=400, detail=EMAIL_TAKEN)
+    old_email = current_user.email
+    current_user.email = new_email
+    current_user.email_verified = True
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        clear_pending_email(current_user.id)
+        raise HTTPException(status_code=400, detail=EMAIL_TAKEN)
+    clear_pending_email(current_user.id)
+    db.refresh(current_user)
+
+    # Старый ящик узнаёт о смене: если почту сменил не владелец, это
+    # единственный сигнал, который до него дойдёт.
+    send_mail(
+        old_email,
+        "Почта аккаунта изменена — Music Streaming",
+        f"Здравствуйте, {current_user.username}!\n\n"
+        f"Почта вашего аккаунта изменена на {mask_email(new_email)}.\n"
+        "Если это сделали не вы, срочно восстановите доступ и смените пароль.\n",
+    )
+    return current_user
 
 
 @router.get("/devices", response_model=List[TrustedDeviceResponse])

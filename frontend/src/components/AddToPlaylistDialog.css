@@ -27,10 +27,9 @@
   width: 100%;
   max-width: 440px;
   max-height: min(640px, calc(100dvh - 48px));
-  background-color: #1c1c1f;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  background-color: var(--surface-2);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
   outline: none;
   animation: atp-pop 200ms var(--ease-out) backwards;
 }
@@ -54,14 +53,14 @@
 .atp-title {
   font-size: var(--text-lg);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
   line-height: 1.3;
 }
 
 .atp-subtitle {
   margin-top: 4px;
   font-size: var(--text-base);
-  color: #9a9a9a;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -77,14 +76,10 @@
   border: none;
   border-radius: var(--radius-avatar);
   background: transparent;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-out),
               background-color var(--duration-fast) var(--ease-out);
-}
-
-.atp-close:active {
-  transform: scale(0.94);
 }
 
 .atp-search {
@@ -95,8 +90,8 @@
   padding: 0 14px;
   height: 44px;
   border-radius: var(--radius-pill);
-  background-color: #2a2a2e;
-  color: #8a8a8a;
+  background-color: var(--surface-3);
+  color: var(--text-tertiary);
 }
 
 .atp-search:focus-within {
@@ -109,7 +104,7 @@
   height: 100%;
   border: none;
   background: transparent;
-  color: #ffffff;
+  color: var(--text-primary);
   font: inherit;
   /* 16px — меньше iOS зумит страницу при фокусе. */
   font-size: 16px;
@@ -119,7 +114,7 @@
 }
 
 .atp-search input::placeholder {
-  color: #7a7a7a;
+  color: var(--text-tertiary);
 }
 
 .atp-body {
@@ -144,7 +139,7 @@
   border: none;
   border-radius: var(--radius-card);
   background: transparent;
-  color: #ffffff;
+  color: var(--text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -173,8 +168,8 @@
   height: 44px;
   border-radius: var(--radius-sm);
   object-fit: cover;
-  background-color: #2e2e33;
-  color: #8a8a8a;
+  background-color: var(--surface-3);
+  color: var(--text-tertiary);
 }
 
 .atp-row-cover-create {
@@ -200,12 +195,12 @@
 
 .atp-row-meta {
   font-size: var(--text-sm);
-  color: #8a8a8a;
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
 .atp-row.is-exists .atp-row-meta {
-  color: #c9a0ff;
+  color: var(--brand-accent-text);
 }
 
 .atp-row-status {
@@ -220,7 +215,7 @@
   padding: 20px 12px;
   text-align: center;
   font-size: var(--text-base);
-  color: #9a9a9a;
+  color: var(--text-tertiary);
 }
 
 .atp-create-form {
@@ -230,62 +225,15 @@
   padding: 8px 12px 12px;
 }
 
-.atp-create-input {
-  height: 48px;
-  padding: 0 16px;
-  border: 1px solid #333;
-  border-radius: var(--radius-card);
-  background-color: #2a2a2e;
-  color: #ffffff;
-  font: inherit;
-  font-size: 16px;
-  outline: none;
-}
-
-.atp-create-input:focus {
-  border-color: var(--brand-accent);
-}
-
 .atp-create-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.atp-btn {
-  min-height: 44px;
-  padding: 0 18px;
-  border: none;
-  border-radius: var(--radius-pill);
-  font: inherit;
-  font-size: var(--text-base);
-  font-weight: 600;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.atp-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.atp-btn-primary {
-  background-color: var(--brand-accent);
-  color: #ffffff;
-}
-
-.atp-btn-primary:active:not(:disabled) {
-  background-color: var(--brand-accent-active);
-}
-
-.atp-btn-ghost {
-  background: transparent;
-  color: #d0d0d0;
-}
-
 @media (hover: hover) and (pointer: fine) {
   .atp-close:hover {
-    color: #ffffff;
+    color: var(--text-primary);
     background-color: rgba(255, 255, 255, 0.08);
   }
 
@@ -293,13 +241,6 @@
     background-color: rgba(255, 255, 255, 0.06);
   }
 
-  .atp-btn-primary:hover:not(:disabled) {
-    background-color: var(--brand-accent-hover);
-  }
-
-  .atp-btn-ghost:hover:not(:disabled) {
-    background-color: rgba(255, 255, 255, 0.08);
-  }
 }
 
 @keyframes atp-fade {

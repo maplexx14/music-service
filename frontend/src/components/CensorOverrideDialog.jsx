@@ -126,7 +126,7 @@ export default function CensorOverrideDialog() {
 
         <form className="atp-create-form" onSubmit={onSubmit}>
           <input
-            className="atp-create-input"
+            className="field"
             type="url"
             inputMode="url"
             placeholder="Ссылка на трек в SoundCloud"
@@ -135,14 +135,14 @@ export default function CensorOverrideDialog() {
             disabled={saving}
           />
           <div className="atp-create-actions">
-            <button type="submit" className="atp-btn atp-btn-primary" disabled={!link.trim() || saving}>
+            <button type="submit" className="btn btn--primary" disabled={!link.trim() || saving}>
               Привязать
             </button>
           </div>
         </form>
 
         <div className="censor-check">
-          <button type="button" className="atp-btn atp-btn-ghost" onClick={checkAudio} disabled={checking || saving}>
+          <button type="button" className="btn btn--ghost" onClick={checkAudio} disabled={checking || saving}>
             {checking ? 'Сравниваем звук…' : 'Проверить по звуку'}
           </button>
           {report && <CheckReport report={report} />}

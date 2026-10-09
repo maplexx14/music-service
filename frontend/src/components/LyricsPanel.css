@@ -64,7 +64,7 @@
 }
 
 .lyrics-line.active {
-  color: #ffffff;
+  color: var(--text-primary);
   transform: scale(1.02);
   transform-origin: center center;
 }

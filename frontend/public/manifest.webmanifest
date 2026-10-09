@@ -63,8 +63,8 @@
       ]
     },
     {
-      "name": "Моя музыка",
-      "short_name": "Моя музыка",
+      "name": "Медиатека",
+      "short_name": "Медиатека",
       "url": "/playlists",
       "icons": [
         {

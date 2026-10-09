@@ -12,13 +12,14 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
-import { useSwipe } from '../hooks/useSwipe'
+import { useTrackCarousel } from '../hooks/useTrackCarousel'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
 import { useAuthStore } from '../store/authStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ArtistLink from './ArtistLink'
+import { splitArtists } from '../utils/artists'
 import BoltLoader from './BoltLoader'
 import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
@@ -32,6 +33,9 @@ import { registerSkipForward } from '../services/playerTransport'
 
 // Сколько тап по мини-плееру ждёт hi-res обложку перед открытием фуллскрина.
 const OPEN_COVER_WAIT_MS = 120
+// Зазор между капсулами в карусели мини-плеера, px. Тот же шаг задаёт CSS через
+// --strip-gap (ставится инлайном), чтобы JS и вёрстка не разъехались.
+const MINI_STRIP_GAP = 24
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
@@ -336,6 +340,41 @@ function PlayerProgress({ audioRef }) {
   )
 }
 
+// Ширина мобильной раскладки — та же граница, что у @media в Player.css.
+const MOBILE_QUERY = '(max-width: 768px)'
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY)
+    const onChange = () => setMobile(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return mobile
+}
+
+// Соседний трек в карусели мини-плеера: капсула-двойник, видна только во
+// время свайпа. Миниатюра та же, что у текущей обложки, — она уже в кэше.
+function MiniGhost({ track, slot }) {
+  return (
+    <div className="player-ghost" style={{ '--slot': slot }} aria-hidden="true">
+      <img
+        src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+        alt=""
+        className="player-cover"
+        decoding="async"
+        draggable={false}
+        onError={handleCoverError}
+      />
+      <div className="player-info">
+        <div className="player-track-title">{track.title}</div>
+        <div className="player-track-artist">{splitArtists(track.artist).join(', ')}</div>
+      </div>
+    </div>
+  )
+}
+
 function PlayerInner() {
   // Определяем платформу для iOS-специфичной логики
   const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
@@ -528,15 +567,30 @@ function PlayerInner() {
   skipForwardRef.current = handleSkipForward
   useEffect(() => registerSkipForward(() => skipForwardRef.current?.()), [])
 
-  // Горизонтальный свайп по области трека переключает треки (только тач).
+  // Горизонтальный свайп по области трека листает треки так же, как обложка
+  // в полноэкранном плеере (только тач, см. useTrackCarousel). Вперёд можно
+  // и без соседа в очереди, если плейлист загружен не весь — handleSkipForward
+  // дотянет хвост (queuePager).
   // ВАЖНО: хук вызывается здесь, до раннего `if (!currentTrack) return null`,
   // иначе на рендере без трека он пропускается и число хуков «прыгает»
   // (React error #310: Rendered more hooks than during the previous render).
-  const swipeHandlers = useSwipe({
-    onSwipeLeft: handleSkipForward,
-    onSwipeRight: previousTrack,
-    onSwipe: () => haptic(HAPTIC.selection),
-    threshold: 60,
+  const prevTrack = usePlayerStore((s) => s.getPrevTrack())
+  const upNext = usePlayerStore((s) => s.getNextTrack(1))
+  const hasQueuePager = usePlayerStore((s) => Boolean(s.queuePager))
+  const stripRef = useRef(null)
+  const isMobile = useIsMobile()
+  const { handlers: swipeHandlers, swipedRef } = useTrackCarousel({
+    enabled: isMobile,
+    ignore: '[role="slider"], .player-progress-top',
+    stripRef,
+    gap: MINI_STRIP_GAP,
+    currentId: currentTrack?.id,
+    prevId: prevTrack?.id,
+    nextId: upNext?.id,
+    canPrev: Boolean(prevTrack),
+    canNext: Boolean(upNext) || hasQueuePager,
+    onPrev: previousTrack,
+    onNext: handleSkipForward,
   })
 
   // Открытие фуллскрина — чистый CSS-drawer (@starting-style-слайд вверх,
@@ -565,6 +619,21 @@ function PlayerInner() {
     const hiResReady = hiRes ? await preloadCover(hiRes, OPEN_COVER_WAIT_MS) : false
     beginOpenMorph(miniCoverRef.current, hiResReady ? hiRes : undefined)
     openFullScreen(karaoke)
+  }
+
+  // Тап по мини-плееру — а не только по обложке — открывает фуллскрин.
+  // Кнопки, ссылки и перемотка работают сами по себе, конец свайпа — не тап.
+  // На десктопе бар полон своих контролов, поэтому там открывает только
+  // область трека (обложка, название), а не любой клик мимо кнопок.
+  const handlePlayerTap = (event) => {
+    if (swipedRef.current) {
+      swipedRef.current = false
+      return
+    }
+    const target = event.target
+    if (target.closest('button, a, input, [role="slider"], .player-progress-top')) return
+    if (!isMobile && !target.closest('.player-cover-wrap, .player-info')) return
+    openFullScreenWithTransition(false)
   }
 
   // Звук текущего трека уже пошёл и отыграл свою фору — тяжёлые загрузки
@@ -2327,7 +2396,18 @@ function PlayerInner() {
   audioErrorRef.current = handleAudioError
 
   return (
-    <div className="player">
+    <div
+      className="player"
+      ref={stripRef}
+      onClick={handlePlayerTap}
+      {...swipeHandlers}
+      style={{ '--strip-gap': `${MINI_STRIP_GAP}px` }}
+    >
+      {/* Соседние треки — такие же капсулы слева и справа на шаг «ширина +
+          зазор»: свайп листает капсулу целиком (useTrackCarousel). Только
+          на мобильном — на десктопе жеста нет. */}
+      {isMobile && prevTrack && <MiniGhost track={prevTrack} slot={-1} />}
+      {isMobile && upNext && <MiniGhost track={upNext} slot={1} />}
       <PlayerProgress audioRef={audioRef} />
       {/* <audio> здесь больше нет: оба элемента живут в services/audioEngine,
           вне дерева React. Причина — не эстетика, а фон: React волен
@@ -2338,7 +2418,7 @@ function PlayerInner() {
           следующим треком) держать их в дереве стало нечем — их время жизни
           принципиально длиннее любого компонента. Слушатели навешиваются в
           эффектах выше и переезжают на новый элемент по swapVersion. */}
-      <div className="player-left" {...swipeHandlers}>
+      <div className="player-left">
         <button
           type="button"
           className="player-cover-wrap"

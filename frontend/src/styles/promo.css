@@ -1,0 +1,173 @@
+/* Стиль промо-ролика поверх тёмной базы.
+
+   Из ролика берём акценты, а не всю палитру: фон остаётся тёмным, иначе
+   обложки и длинные списки читаются хуже. Переносим:
+   - фиолетовое свечение с точечным растром вверху экранов;
+   - глитч-заголовки (циан/розовый сдвиг, Unbounded 800);
+   - жёсткую тень-сдвиг (чернильная + розовая) у главной кнопки, диалогов
+     и карточек при наведении;
+   - полный промо-фон с молниями на экранах входа.
+   Токены — в index.css (--promo-*, --shadow-pop*). */
+
+/* ── Фон ─────────────────────────────────────────────────────────────── */
+
+/* Растр точек, как в ролике. Один тайл 8px, рисуется GPU без картинки. */
+:root {
+  --promo-dots: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1.4px)
+    0 0 / 8px 8px;
+  --promo-glow: radial-gradient(90% 55% at 15% -8%, rgba(130, 46, 232, 0.42), transparent 70%),
+    radial-gradient(60% 40% at 95% -5%, rgba(255, 47, 160, 0.12), transparent 70%);
+}
+
+html .main-content {
+  background: var(--promo-glow),
+    linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+}
+
+/* Растр гаснет к середине экрана — внизу он мешал бы читать списки.
+   Псевдоэлемент идёт первым в потоке, экраны (.screen) рисуются поверх. */
+html .main-content::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 420px;
+  background: var(--promo-dots);
+  -webkit-mask-image: linear-gradient(180deg, #000, transparent);
+  mask-image: linear-gradient(180deg, #000, transparent);
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  html .main-content {
+    background: transparent;
+  }
+
+  html .main-content::before {
+    display: none;
+  }
+
+  /* На мобильном экран непрозрачный (под ним при свайпе соседний), поэтому
+     свечение — на самом экране. */
+  html .screen {
+    background: var(--promo-glow), var(--bg-app-mobile);
+  }
+}
+
+/* ── Заголовки ───────────────────────────────────────────────────────── */
+
+html .auth-header h1,
+html .playlists-header h1,
+html .settings-header h1,
+html .upload-header h1,
+html .onboarding-header h1,
+html .liked-title,
+html .playlist-title,
+html .admin-title,
+html .section-title,
+html .results-title {
+  font-weight: 800;
+  text-shadow: var(--promo-glitch);
+}
+
+/* ── Главная кнопка ──────────────────────────────────────────────────── */
+
+/* Тень вместо border — высота кнопки не меняется. При нажатии ступень
+   «вдавливается»: тень короче. */
+html .btn--primary {
+  box-shadow: var(--shadow-pop-sm);
+  transition-property: background-color, color, box-shadow, opacity;
+}
+
+html .btn--primary:active:not(:disabled) {
+  box-shadow: 1px 1px 0 var(--promo-ink), 2px 2px 0 var(--promo-pink);
+}
+
+html .btn--primary:disabled {
+  box-shadow: none;
+}
+
+/* ── Диалоги ─────────────────────────────────────────────────────────── */
+
+html .auth-card,
+html .atp-dialog,
+html .surface-dialog {
+  box-shadow: var(--shadow-pop);
+}
+
+/* Шторка снизу: сдвиг тени уходит за край экрана и выглядит обрезанным. */
+@media (max-width: 768px) {
+  html .atp-dialog {
+    box-shadow: var(--shadow-dialog);
+  }
+}
+
+/* ── Карточки ────────────────────────────────────────────────────────── */
+
+/* Обложка при наведении получает ту же ступень, что кнопка. Только для
+   мыши: на таче hover залипает после касания. */
+@media (hover: hover) and (pointer: fine) {
+  html .track-card .track-cover,
+  html .playlist-card .playlist-cover {
+    transition: box-shadow var(--duration-base) var(--ease-out);
+  }
+
+  html .track-card:hover .track-cover,
+  html .playlist-card:hover .playlist-cover {
+    box-shadow: var(--shadow-pop-sm);
+  }
+}
+
+/* ── Экраны входа: полный промо-фон ──────────────────────────────────── */
+
+html .auth-container {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--promo-dots),
+    radial-gradient(70% 60% at 30% 85%, var(--promo-violet-light), transparent 70%),
+    radial-gradient(80% 70% at 85% 20%, #7b2ff0, transparent 70%),
+    linear-gradient(160deg, var(--promo-violet-deep) 0%, var(--promo-violet) 100%);
+}
+
+/* Молнии-каракули из ролика: фиолетовая заливка, чернильный контур,
+   глитч-копии контура циан/розовый. */
+html .auth-container::before,
+html .auth-container::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 120px;
+  height: 180px;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 96'%3E%3Cg stroke-linejoin='round' stroke-width='3' fill='none'%3E%3Cpath d='M20 4l26 2-12 32h18L12 92l10-42H6z' stroke='%2322e4ff' transform='translate(-2 1)'/%3E%3Cpath d='M20 4l26 2-12 32h18L12 92l10-42H6z' stroke='%23ff2fa0' transform='translate(2 1)'/%3E%3Cpath d='M20 4l26 2-12 32h18L12 92l10-42H6z' fill='%238b3cf0' stroke='%230d0420'/%3E%3C/g%3E%3C/svg%3E");
+  pointer-events: none;
+}
+
+html .auth-container::before {
+  top: 8%;
+  left: max(4%, calc(50% - 360px));
+  rotate: -14deg;
+}
+
+html .auth-container::after {
+  bottom: 6%;
+  right: max(4%, calc(50% - 380px));
+  width: 90px;
+  height: 135px;
+  rotate: 18deg;
+  opacity: 0.85;
+}
+
+@media (max-width: 480px) {
+  html .auth-container::before {
+    top: 2%;
+    width: 72px;
+    height: 108px;
+  }
+
+  html .auth-container::after {
+    bottom: 2%;
+    width: 60px;
+    height: 90px;
+  }
+}

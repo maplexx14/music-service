@@ -7,44 +7,13 @@
 
 .playlists-header h1 {
   font-size: 32px;
-  font-weight: bold;
-  color: #ffffff;
+  font-weight: 700;
+  color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
-.create-playlist-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 24px;
-  background-color: var(--brand-accent);
-  color: #ffffff;
-  border: none;
-  border-radius: 999px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out);
-}
-
-.create-playlist-btn:hover {
-  background-color: var(--brand-accent-hover);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .create-playlist-btn:hover {
-    transform: scale(1.05);
-  }
-}
-
-.create-playlist-btn:active {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
 .create-playlist-form {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 24px;
   margin-bottom: 32px;
@@ -60,86 +29,36 @@
   }
 }
 
-.create-playlist-form input {
-  width: 100%;
-  padding: 12px 16px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 8px;
-  color: #ffffff;
-  font-size: 16px;
+.create-playlist-form .field {
   margin-bottom: 16px;
 }
-.create-playlist-form input[type="file"]{
-  background-color: #1a1a1a;
+
+.create-playlist-form input[type="file"] {
+  margin-bottom: 16px;
 }
-.create-playlist-form-input-btn{
-  color: #1a1a1a;
+.create-playlist-form-input-btn {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
 }
 .create-playlist-form-input-form{
-  border: 2px dashed #333;
+  border: 2px dashed var(--border-default);
   border-radius: 12px;
   padding: 48px;
   text-align: center;
-  background-color: #181818;
+  background-color: var(--surface-1);
   transition: border-color var(--duration-base) var(--ease-out),
               background-color var(--duration-base) var(--ease-out);
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
-.create-playlist-form input:focus {
-  outline: none;
-  border-color: var(--brand-accent);
-  background-color: #222;
-}
-
 .form-actions {
   display: flex;
   gap: 12px;
 }
 
-.submit-btn {
-  padding: 10px 24px;
-  background-color: var(--brand-accent);
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out);
-}
-
-.submit-btn:hover:not(:disabled) {
-  background-color: var(--brand-accent-hover);
-}
-
-.submit-btn:active:not(:disabled) {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
-.cancel-btn {
-  padding: 10px 24px;
-  background-color: transparent;
-  color: #b3b3b3;
-  border: 1px solid #333;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color var(--duration-base) var(--ease-out),
-              border-color var(--duration-base) var(--ease-out);
-}
-
-.cancel-btn:hover {
-  color: #ffffff;
-  border-color: #444;
-}
-
 .empty-state {
   text-align: center;
   padding: 128px 32px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .empty-state p {
@@ -149,7 +68,7 @@
 
 .empty-state-subtitle {
   font-size: 14px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .playlists-grid {
@@ -159,7 +78,7 @@
 }
 
 .playlist-card {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
   text-decoration: none;
@@ -182,7 +101,7 @@
   border: none;
   border-radius: 50%;
   background-color: rgba(0, 0, 0, 0.6);
-  color: #ffffff;
+  color: var(--text-primary);
   cursor: pointer;
   opacity: 0.85;
   transition: opacity var(--duration-base) var(--ease-out),
@@ -195,7 +114,7 @@
 }
 
 .playlist-delete-btn:hover {
-  background-color: #e53935;
+  background-color: var(--status-danger);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -205,11 +124,7 @@
 }
 
 .playlist-card:hover {
-  background-color: #282828;
-}
-
-.playlist-card:active {
-  transform: scale(0.98);
+  background-color: var(--surface-3);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -230,7 +145,7 @@
   object-fit: cover;
   border-radius: 4px;
   margin-bottom: 12px;
-  background-color: #333;
+  background-color: var(--surface-4);
 }
 
 .playlist-cover.placeholder {
@@ -238,26 +153,26 @@
   align-items: center;
   justify-content: center;
   font-size: 48px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 .playlist-name {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .playlist-description {
   font-size: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   margin-bottom: 8px;
   line-height: 1.4;
 }
 
 .playlist-tracks-count {
   font-size: 12px;
-  color: #666;
+  color: var(--text-disabled);
 }
 
 /* --- Импорт по ссылке --- */
@@ -266,41 +181,8 @@
   gap: 12px;
 }
 
-.import-playlist-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 24px;
-  background-color: transparent;
-  color: #ffffff;
-  border: 1px solid var(--brand-accent);
-  border-radius: 999px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  /* Класс носят и <button>, и ссылка на /upload — у ссылки снимаем подчёркивание. */
-  text-decoration: none;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out);
-}
-
-.import-playlist-btn:hover {
-  background-color: var(--brand-accent-hover);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .import-playlist-btn:hover {
-    transform: scale(1.05);
-  }
-}
-
-.import-playlist-btn:active {
-  background-color: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
 .import-playlist-form {
-  background-color: #181818;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 24px;
   margin-bottom: 32px;
@@ -308,13 +190,13 @@
 }
 
 .import-hint {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 16px;
 }
 
 .import-examples {
-  background-color: #1a1a1a;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 12px 16px;
   margin-bottom: 16px;
@@ -340,7 +222,7 @@
 }
 
 .import-example-url {
-  color: #666;
+  color: var(--text-disabled);
   font-family: monospace;
   font-size: 11px;
 }
@@ -351,24 +233,12 @@
   margin-bottom: 16px;
 }
 
-.import-input-row input {
+.import-input-row .field {
   flex: 1;
-  padding: 12px 16px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 8px;
-  color: #ffffff;
-  font-size: 15px;
-}
-
-.import-input-row input:focus {
-  outline: none;
-  border-color: var(--brand-accent);
-  background-color: #222;
 }
 
 .import-preview {
-  background-color: #1a1a1a;
+  background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
@@ -376,7 +246,7 @@
 
 .import-preview-title {
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 12px;
 }
 
@@ -394,11 +264,11 @@
   justify-content: space-between;
   gap: 12px;
   font-size: 13px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
 }
 
 .import-preview-track {
-  color: #ffffff;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -406,10 +276,10 @@
 
 .import-preview-artist {
   flex-shrink: 0;
-  color: #888;
+  color: var(--text-tertiary);
 }
 
-/* --- Мобильная адаптация (Моя музыка) --- */
+/* --- Мобильная адаптация (Медиатека) --- */
 @media (max-width: 768px) {
   .playlists-header {
     flex-direction: column;
@@ -432,7 +302,6 @@
   .import-playlist-btn,
   .create-playlist-btn {
     width: 100%;
-    justify-content: center;
   }
 
   /* Форма импорта: поле и кнопка друг под другом. */

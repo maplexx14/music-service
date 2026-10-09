@@ -5,13 +5,13 @@
 .settings-header h1 {
   font-size: 32px;
   font-weight: bold;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 6px;
   letter-spacing: -0.01em;
 }
 
 .settings-header p {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -45,7 +45,7 @@
   min-height: 56px;
   padding: 8px 12px;
   border-radius: var(--radius-lg);
-  color: #b3b3b3;
+  color: var(--text-secondary);
   text-decoration: none;
   touch-action: manipulation;
   transition: background-color var(--duration-fast) var(--ease-out),
@@ -59,7 +59,7 @@
 
 .settings-menu-item.active {
   background: var(--brand-accent-soft);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-menu-icon {
@@ -69,13 +69,13 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: #1f1f25;
-  color: #d0d0d8;
+  background: var(--surface-2);
+  color: var(--text-primary);
 }
 
 .settings-menu-item.active .settings-menu-icon {
   background: var(--brand-accent);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-menu-text {
@@ -96,12 +96,12 @@
 }
 
 .settings-menu-item.active .settings-menu-label {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-menu-hint {
   font-size: var(--text-sm);
-  color: #7a7a80;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -112,7 +112,7 @@
 .settings-menu-chevron {
   display: none;
   flex: none;
-  color: #5a5a62;
+  color: var(--text-disabled);
 }
 
 .settings-menu-item:active {
@@ -122,7 +122,7 @@
 @media (hover: hover) and (pointer: fine) {
   .settings-menu-item:hover:not(.active) {
     background: rgba(255, 255, 255, 0.05);
-    color: #ffffff;
+    color: var(--text-primary);
   }
 }
 
@@ -146,7 +146,7 @@
   display: grid;
   place-items: center;
   background: var(--brand-accent);
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: var(--text-lg);
   font-weight: 700;
 }
@@ -158,7 +158,7 @@
 .settings-profile-name {
   font-size: var(--text-md);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -167,7 +167,7 @@
 .settings-profile-email {
   margin-top: 2px;
   font-size: var(--text-sm);
-  color: #8a8a90;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -176,7 +176,7 @@
 .settings-menu-group {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #242428;
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* «Выйти» — <button>: сбрасываем нативный вид под соседние ссылки. */
@@ -191,18 +191,18 @@ button.settings-menu-item {
 
 .settings-menu-danger,
 .settings-menu-danger .settings-menu-label {
-  color: #ff6b6b;
+  color: var(--status-danger);
 }
 
 .settings-menu-danger .settings-menu-icon {
   background: rgba(255, 107, 107, 0.12);
-  color: #ff6b6b;
+  color: var(--status-danger);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .settings-menu-danger:hover:not(.active) {
     background: rgba(255, 107, 107, 0.08);
-    color: #ff6b6b;
+    color: var(--status-danger);
   }
 }
 
@@ -258,8 +258,8 @@ button.settings-menu-item {
 
   .settings-menu ul {
     gap: 0;
-    background: #141418;
-    border: 1px solid #242428;
+    background: var(--surface-1);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     overflow: hidden;
   }
@@ -300,7 +300,7 @@ button.settings-menu-item {
     left: 60px;
     right: 0;
     height: 1px;
-    background: #22222a;
+    background: var(--surface-2);
   }
 }
 
@@ -314,8 +314,8 @@ button.settings-menu-item {
 }
 
 .settings-card {
-  background: #141418;
-  border: 1px solid #242428;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
   padding: 20px;
   max-width: 600px;
@@ -327,7 +327,7 @@ button.settings-menu-item {
 
 .settings-card h2 {
   font-size: 18px;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 16px;
 }
 
@@ -337,7 +337,7 @@ button.settings-menu-item {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 0;
-  border-top: 1px solid #22222a;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-row:first-of-type {
@@ -345,12 +345,12 @@ button.settings-menu-item {
 }
 
 .settings-label {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
 .settings-hint {
-  color: #7a7a80;
+  color: var(--text-tertiary);
   font-size: 12px;
   margin-top: 4px;
   max-width: 360px;
@@ -360,8 +360,8 @@ button.settings-menu-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #111115;
-  border: 1px solid #242428;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -379,7 +379,7 @@ button.settings-menu-item {
   width: 88px;
   background: transparent;
   border: none;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 13px;
   text-transform: uppercase;
 }
@@ -404,7 +404,7 @@ button.settings-menu-item {
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background: #2a2a33;
+  background: var(--surface-3);
   border-radius: 999px;
   transition: background var(--duration-base) var(--ease-out);
 }
@@ -417,7 +417,7 @@ button.settings-menu-item {
   left: 3px;
   top: 3px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--surface-inverse);
   /* Быстрый разгон, мягкий докат — характер тумблера, а не линейное ease. */
   transition: transform var(--duration-base) var(--ease-out);
 }
@@ -430,7 +430,7 @@ button.settings-menu-item {
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {
-  background: #a259ff;
+  background: var(--brand-accent);
 }
 
 .settings-toggle input:checked + .settings-toggle-slider::before {
@@ -444,11 +444,11 @@ button.settings-menu-item {
 }
 
 .settings-gif-upload {
-  background: #111115;
-  border: 1px solid #242428;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 8px 12px;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
   text-align: center;
@@ -469,20 +469,20 @@ button.settings-menu-item {
   height: 80px;
   border-radius: 12px;
   object-fit: cover;
-  background: #0f0f12;
+  background: var(--surface-1);
 }
 
 .settings-gif-preview button {
   border: none;
-  background: #2a2a33;
-  color: #ffffff;
+  background: var(--surface-3);
+  color: var(--text-primary);
   border-radius: 8px;
   padding: 6px 10px;
   cursor: pointer;
 }
 
 .settings-error {
-  color: #ff6b6b;
+  color: var(--status-danger);
   font-size: 12px;
 }
 
@@ -490,7 +490,7 @@ button.settings-menu-item {
 .settings-section-title {
   font-size: 18px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-section-hint {
@@ -509,7 +509,7 @@ button.settings-menu-item {
 .settings-balance {
   margin-top: 24px;
   padding-top: 20px;
-  border-top: 1px solid #22222a;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-balance-head .settings-hint {
@@ -527,11 +527,11 @@ button.settings-menu-item {
 }
 
 .settings-balance-new {
-  color: #a259ff;
+  color: var(--brand-accent);
 }
 
 .settings-balance-known {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-balance-slider {
@@ -544,8 +544,8 @@ button.settings-menu-item {
      полосой, а не обещают фиксированное число позиций. */
   background: linear-gradient(
     to right,
-    #a259ff 0 var(--balance-fill, 20%),
-    #3b3b3b var(--balance-fill, 20%) 100%
+    var(--brand-accent) 0 var(--balance-fill, 20%),
+    var(--surface-4) var(--balance-fill, 20%) 100%
   );
   border-radius: 999px;
   outline: none;
@@ -557,7 +557,7 @@ button.settings-menu-item {
   appearance: none;
   width: 16px;
   height: 16px;
-  background: #ffffff;
+  background: var(--surface-inverse);
   border-radius: 50%;
   cursor: pointer;
 }
@@ -565,14 +565,14 @@ button.settings-menu-item {
 .settings-balance-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  background: #ffffff;
+  background: var(--surface-inverse);
   border: none;
   border-radius: 50%;
   cursor: pointer;
 }
 
 .settings-balance-slider:focus-visible {
-  outline: 2px solid #a259ff;
+  outline: 2px solid var(--brand-accent);
   outline-offset: 4px;
 }
 
@@ -581,34 +581,8 @@ button.settings-menu-item {
   justify-content: space-between;
   gap: 12px;
   margin-top: 8px;
-  color: #7a7a80;
+  color: var(--text-tertiary);
   font-size: 12px;
-}
-
-.settings-save-btn {
-  padding: 12px 22px;
-  background: #a259ff;
-  border: none;
-  border-radius: 8px;
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.settings-save-btn:hover:not(:disabled) {
-  background: var(--brand-accent-hover);
-}
-
-.settings-save-btn:active:not(:disabled) {
-  background: var(--brand-accent-active);
-  transform: scale(0.98);
-}
-
-.settings-save-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 @media (max-width: 600px) {
@@ -649,9 +623,9 @@ button.settings-menu-item {
   flex-shrink: 0;
   gap: 2px;
   padding: 3px;
-  border: 1px solid #2a2a33;
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: #1a1a20;
+  background: var(--surface-2);
 }
 
 .settings-seg-btn {
@@ -659,7 +633,7 @@ button.settings-menu-item {
   border: none;
   border-radius: 999px;
   background: transparent;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font: inherit;
   font-size: 13px;
   white-space: nowrap;
@@ -670,12 +644,12 @@ button.settings-menu-item {
 }
 
 .settings-seg-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .settings-seg-btn.active {
-  background: #a259ff;
-  color: #ffffff;
+  background: var(--brand-accent);
+  color: var(--text-primary);
 }
 
 /* На телефоне подпись с подсказкой и три кнопки в строку не влезают —

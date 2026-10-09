@@ -30,24 +30,24 @@ function ResetPassword() {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <div className="auth-header"><h1>bolt</h1><p>Новый пароль</p></div>
+        <div className="auth-header"><h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}<p>Новый пароль</p></div>
         {done ? (
           <div className="auth-form">
             <div className="success-message">Пароль изменён. Теперь можно войти.</div>
-            <Link className="auth-button" to="/login">Перейти ко входу</Link>
+            <Link className="btn btn--primary btn--lg btn--block auth-button" to="/login">Перейти ко входу</Link>
           </div>
         ) : (
           <form className="auth-form" onSubmit={handleSubmit}>
             {error && <div className="error-message">{error}</div>}
             <div className="form-group">
               <label htmlFor="new-password">Новый пароль</label>
-              <input id="new-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="new-password" autoFocus />
+              <input className="field" id="new-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="new-password" autoFocus />
             </div>
             <div className="form-group">
               <label htmlFor="confirm-password">Повторите пароль</label>
-              <input id="confirm-password" type="password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} required autoComplete="new-password" />
+              <input className="field" id="confirm-password" type="password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} required autoComplete="new-password" />
             </div>
-            <button className="auth-button" type="submit" disabled={loading || !token}>
+            <button className="btn btn--primary btn--lg btn--block auth-button" type="submit" disabled={loading || !token}>
               {loading ? 'Сохранение...' : 'Сохранить пароль'}
             </button>
           </form>

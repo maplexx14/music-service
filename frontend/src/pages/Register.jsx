@@ -144,7 +144,7 @@ function Register() {
 
             <button
               type="button"
-              className="auth-button secondary"
+              className="btn btn--secondary btn--lg btn--block auth-button"
               onClick={handleResend}
               disabled={resendState === 'sending'}
             >
@@ -166,7 +166,7 @@ function Register() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>bolt</h1>
+          <h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}
           <p>Создайте новый аккаунт</p>
         </div>
         
@@ -175,7 +175,7 @@ function Register() {
           
           <div className="form-group">
             <label htmlFor="username">Имя пользователя</label>
-            <input
+            <input className="field"
               id="username"
               name="username"
               type="text"
@@ -191,7 +191,7 @@ function Register() {
 
           <div className="form-group">
             <label htmlFor="email">Email</label>
-            <input
+            <input className="field"
               id="email"
               name="email"
               type="email"
@@ -204,7 +204,7 @@ function Register() {
 
           <div className="form-group">
             <label htmlFor="password">Пароль</label>
-            <input
+            <input className="field"
               id="password"
               name="password"
               type="password"
@@ -225,7 +225,7 @@ function Register() {
             />
           )}
 
-          <button type="submit" className="auth-button" disabled={loading || !captcha.loaded}>
+          <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading || !captcha.loaded}>
             {loading
               ? 'Регистрация...'
               : !captcha.loaded

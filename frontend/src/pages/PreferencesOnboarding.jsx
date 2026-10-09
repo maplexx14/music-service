@@ -22,7 +22,7 @@ import './PreferencesOnboarding.css'
  * 2. любимые артисты — подсказки зависят от жанров шага 1 (tag.getTopArtists),
  *    плюс поиск по каталогу и YouTube Music;
  * 3. импорт профилей и плейлистов из других сервисов (тот же /import, что и на
- *    странице «Моя музыка»).
+ *    странице «Медиатека»).
  *
  * Пропустить можно ЛЮБОЙ шаг: онбординг остаётся необязательным, всё то же
  * есть в настройках. Предпочтения сохраняются при уходе со второго шага —
@@ -293,7 +293,7 @@ function PreferencesOnboarding() {
                 )}
                 <button
                   type="button"
-                  className="onboarding-import-btn"
+                  className="btn btn--primary onboarding-import-btn"
                   onClick={handleImport}
                   disabled={importing || (isProfilePreview && !selectedCollections.size)}
                 >
@@ -319,7 +319,7 @@ function PreferencesOnboarding() {
           {step > 0 && (
             <button
               type="button"
-              className="onboarding-back"
+              className="btn btn--ghost btn--lg onboarding-back"
               onClick={() => setStep(step - 1)}
               disabled={busy}
             >
@@ -328,7 +328,7 @@ function PreferencesOnboarding() {
           )}
           <button
             type="button"
-            className="onboarding-skip"
+            className="btn btn--ghost btn--lg onboarding-skip"
             onClick={skipStep}
             disabled={busy}
           >
@@ -336,7 +336,7 @@ function PreferencesOnboarding() {
           </button>
           <button
             type="button"
-            className="onboarding-save"
+            className="btn btn--primary btn--lg onboarding-save"
             onClick={goNext}
             disabled={busy}
           >

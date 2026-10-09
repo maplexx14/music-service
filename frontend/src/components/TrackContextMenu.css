@@ -12,10 +12,9 @@
 .track-ctx-menu {
   position: fixed;
   width: 230px;
-  background: rgba(24, 24, 24, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--surface-2);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-popover);
   padding: 6px;
   animation: track-ctx-in 150ms var(--ease-out) both;
   touch-action: none;
@@ -62,7 +61,7 @@
 }
 
 .track-ctx-close:hover {
-  color: #fff;
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -74,8 +73,7 @@
   padding: 10px;
   border: none;
   background: transparent;
-  color: #ffffff;
-  font-family: 'Unbounded', sans-serif;
+  color: var(--text-primary);
   font-size: var(--text-sm);
   text-align: left;
   border-radius: var(--radius-card);
@@ -132,7 +130,7 @@
 
 .track-ctx-menu.sheet .track-ctx-title {
   font-size: var(--text-base);
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 /* Крестик — 44px под палец, иконка та же. */

@@ -279,7 +279,7 @@ function UploadTrack() {
           <div className="form-row">
             <div className="form-group">
               <label htmlFor="title">Название трека *</label>
-              <input
+              <input className="field"
                 id="title"
                 name="title"
                 type="text"
@@ -292,7 +292,7 @@ function UploadTrack() {
 
             <div className="form-group">
               <label htmlFor="artist">Исполнитель *</label>
-              <input
+              <input className="field"
                 id="artist"
                 name="artist"
                 type="text"
@@ -307,7 +307,7 @@ function UploadTrack() {
           <div className="form-row">
             <div className="form-group">
               <label htmlFor="album">Альбом</label>
-              <input
+              <input className="field"
                 id="album"
                 name="album"
                 type="text"
@@ -319,7 +319,7 @@ function UploadTrack() {
 
             <div className="form-group">
               <label htmlFor="genre">Жанр</label>
-              <input
+              <input className="field"
                 id="genre"
                 name="genre"
                 type="text"
@@ -349,7 +349,7 @@ function UploadTrack() {
             <button
               type="button"
               onClick={handleCancelUpload}
-              className="cancel-btn"
+              className="btn btn--ghost cancel-btn"
             >
               Отмена
             </button>
@@ -357,14 +357,14 @@ function UploadTrack() {
             <button
               type="button"
               onClick={() => navigate('/')}
-              className="cancel-btn"
+              className="btn btn--ghost cancel-btn"
             >
               Назад
             </button>
           )}
           <button
             type="submit"
-            className="submit-btn"
+            className="btn btn--primary submit-btn"
             disabled={loading || !file}
           >
             {loading ? 'Загрузка...' : 'Загрузить трек'}

@@ -17,8 +17,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
+  background-color: var(--surface-1);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
 }
 
@@ -33,7 +33,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ffffff;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
 }
@@ -49,7 +49,7 @@
 }
 
 .devices-meta {
-  color: #b3b3b3;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
@@ -57,23 +57,6 @@
    на прозрачном фоне заметен и не перетягивает внимание с самого списка. */
 .devices-revoke {
   flex-shrink: 0;
-  background-color: transparent;
-  border: 1px solid rgba(226, 33, 52, 0.6);
-  color: #ff6b7a;
-}
-
-.devices-revoke:hover:not(:disabled) {
-  background-color: rgba(226, 33, 52, 0.15);
-  border-color: #ff4757;
-  color: #ffffff;
-}
-
-.devices-revoke-all {
-  background-color: #e22134;
-}
-
-.devices-revoke-all:hover:not(:disabled) {
-  background-color: #ff4757;
 }
 
 @media (max-width: 600px) {

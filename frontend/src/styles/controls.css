@@ -1,0 +1,227 @@
+/* Общие контролы сервиса: кнопки и поля ввода.
+
+   Раньше у каждого экрана была своя кнопка (.auth-button, .submit-btn,
+   .settings-save-btn, .atp-btn-primary…): часть — таблетки, часть со
+   скруглением 8px, высоты от 36 до 50px, шрифт 13–16px. Здесь одна кнопка в
+   нескольких вариантах; экранные классы остаются только для раскладки
+   (ширина, отступы, позиция).
+
+   Нажатие (scale) даёт services/pressFeedback.js — здесь его не задаём. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--control-h-md);
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-text);
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition-property: background-color, color, box-shadow, opacity;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-out);
+}
+
+.btn svg {
+  flex: 0 0 auto;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Размеры */
+.btn--sm {
+  height: var(--control-h-sm);
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.btn--lg {
+  height: var(--control-h-lg);
+  padding: 0 28px;
+  font-size: 15px;
+}
+
+.btn--block {
+  display: flex;
+  width: 100%;
+}
+
+/* Главное действие экрана: одно на экран. */
+.btn--primary {
+  background-color: var(--brand-accent);
+  color: var(--text-primary);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background-color: var(--brand-accent-hover);
+}
+
+.btn--primary:active:not(:disabled) {
+  background-color: var(--brand-accent-active);
+}
+
+/* Второстепенное действие рядом с главным. Контур — тенью, а не border:
+   высота кнопки не зависит от варианта. */
+.btn--secondary {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--text-secondary);
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.btn--secondary:active:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Нейтральное действие на заливке (обновить, фильтр). */
+.btn--tonal {
+  background-color: var(--surface-3);
+}
+
+.btn--tonal:hover:not(:disabled) {
+  background-color: var(--surface-4);
+}
+
+/* Отмена, «ещё», действия в диалогах без акцента. */
+.btn--ghost {
+  color: var(--text-secondary);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Необратимое: удалить, выйти со всех устройств. */
+.btn--danger {
+  background-color: var(--status-danger);
+  color: var(--text-primary);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--status-danger), white 12%);
+}
+
+.btn--danger-ghost {
+  color: var(--status-danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--status-danger), transparent 50%);
+}
+
+.btn--danger-ghost:hover:not(:disabled) {
+  background-color: var(--status-danger-soft);
+  box-shadow: inset 0 0 0 1px var(--status-danger);
+}
+
+/* Поле ввода. 16px на тач-устройствах: меньший шрифт заставляет iOS
+   приближать страницу при фокусе. */
+.field {
+  width: 100%;
+  height: var(--control-h-lg);
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-card);
+  background-color: var(--surface-3);
+  color: var(--text-primary);
+  font-family: var(--font-text);
+  font-size: var(--text-base);
+  outline: none;
+  transition-property: border-color, background-color;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-out);
+}
+
+textarea.field {
+  height: auto;
+  min-height: 96px;
+  padding: 12px 14px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.field::placeholder {
+  color: var(--text-tertiary);
+}
+
+.field:hover:not(:focus):not(:disabled) {
+  border-color: var(--border-default);
+}
+
+.field:focus {
+  border-color: var(--brand-accent);
+  background-color: var(--surface-2);
+}
+
+.field:disabled {
+  opacity: 0.5;
+}
+
+.field[aria-invalid='true'] {
+  border-color: var(--status-danger);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .field {
+    font-size: 16px;
+  }
+}
+
+/* Поверхность диалога / всплывающей панели. */
+.surface-dialog {
+  background-color: var(--surface-1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+}
+
+.surface-popover {
+  background-color: var(--surface-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Сообщения в формах: одна форма, три тона. */
+.error-message,
+.success-message {
+  padding: 12px 14px;
+  border-radius: var(--radius-card);
+  font-size: var(--text-base);
+  line-height: 1.45;
+}
+
+.error-message {
+  background-color: var(--status-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--status-danger), transparent 60%);
+  color: var(--status-danger);
+}
+
+.success-message {
+  background-color: var(--status-success-soft);
+  border: 1px solid var(--status-success-border);
+  color: var(--status-success);
+}
+
+/* Обложки и аватары: тонкий белый контур внутрь, чтобы тёмная обложка не
+   растворялась в тёмном фоне. Контур — outline: он повторяет скругление
+   картинки и не меняет её размер. */
+:is([class*='cover'], [class*='avatar'], [class*='photo'], .fullscreen-art) > img,
+img.atp-row-cover,
+img.user-avatar,
+img.settings-profile-avatar,
+img.mobile-avatar-img {
+  outline: var(--image-outline);
+  outline-offset: -1px;
+}

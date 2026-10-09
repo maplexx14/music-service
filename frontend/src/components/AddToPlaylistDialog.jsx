@@ -36,7 +36,7 @@ function AddToPlaylistDialog() {
 
 function Dialog({ request, leaving, onClose }) {
   const { track, resolveId, excludePlaylistId } = request
-  // Список из кэша вкладки «Моя музыка» рисуется сразу, свежий приезжает фоном.
+  // Список из кэша вкладки «Медиатека» рисуется сразу, свежий приезжает фоном.
   const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? null)
   const [loadError, setLoadError] = useState(false)
   const [query, setQuery] = useState('')
@@ -235,7 +235,7 @@ function Dialog({ request, leaving, onClose }) {
             <form className="atp-create-form" onSubmit={createAndAdd}>
               <input
                 type="text"
-                className="atp-create-input"
+                className="field"
                 placeholder="Название плейлиста"
                 aria-label="Название плейлиста"
                 value={newName}
@@ -247,7 +247,7 @@ function Dialog({ request, leaving, onClose }) {
               <div className="atp-create-actions">
                 <button
                   type="button"
-                  className="atp-btn atp-btn-ghost"
+                  className="btn btn--ghost"
                   onClick={() => {
                     setCreating(false)
                     setNewName('')
@@ -258,7 +258,7 @@ function Dialog({ request, leaving, onClose }) {
                 </button>
                 <button
                   type="submit"
-                  className="atp-btn atp-btn-primary"
+                  className="btn btn--primary"
                   disabled={!newName.trim() || submittingNew}
                 >
                   {submittingNew ? 'Создание...' : 'Создать и добавить'}

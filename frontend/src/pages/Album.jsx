@@ -207,7 +207,7 @@ function Album() {
           </div>
           <div className="playlist-actions">
             <button
-              className="play-button-large"
+              className="btn btn--primary btn--lg play-button-large"
               onClick={handlePlay}
               disabled={tracks.length === 0}
             >
@@ -215,7 +215,7 @@ function Album() {
               Воспроизвести
             </button>
             <button
-              className="play-button-large secondary"
+              className="btn btn--secondary btn--lg play-button-large"
               onClick={handleSaveToLibrary}
               disabled={saving || tracks.length === 0}
               title="Сохранить альбом плейлистом в медиатеку"

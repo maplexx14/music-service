@@ -32,7 +32,7 @@
 }
 
 .carousel-track:focus-visible {
-  outline: 2px solid #a259ff;
+  outline: 2px solid var(--brand-accent);
   outline-offset: 4px;
   border-radius: var(--radius-card);
 }
@@ -60,7 +60,7 @@
   border-radius: var(--radius-avatar);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(18, 18, 18, 0.92);
-  color: #ffffff;
+  color: var(--text-primary);
   display: none;
   place-items: center;
   cursor: pointer;

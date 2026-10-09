@@ -1,5 +1,4 @@
 """Двухфакторка по почте: включение, вход кодом, лимиты и одноразовость."""
-import pyotp
 
 from app import email_2fa
 from app.email_2fa import (
@@ -12,7 +11,6 @@ from app.email_2fa import (
 )
 from app.models import User
 from app.trusted_devices import DEVICE_TOKEN_HEADER
-from app.two_factor import generate_totp_secret, hash_recovery_codes
 from tests.conftest import auth_headers, create_user, trust_device
 
 
@@ -224,59 +222,6 @@ def test_email_send_rejects_access_token(client, db, monkeypatch):
     assert resp.status_code == 401
 
 
-def test_both_factors_offer_choice_and_no_auto_email(client, db, monkeypatch):
-    """Когда включены оба фактора, письмо на логине не шлём: TOTP под рукой,
-    а лишнее письмо — и спам, и потраченный cooldown."""
-    user = create_user(db, "bob")
-    secret = generate_totp_secret()
-    user.totp_secret = secret
-    user.totp_enabled = True
-    user.totp_recovery_codes = hash_recovery_codes(["RECOVERY01"])
-    user.email_2fa_enabled = True
-    db.commit()
-    box = _sent_codes(monkeypatch)
-
-    body = _login(client)
-    assert body["mfa_methods"] == ["totp", "email"]
-    assert body["email_code_sent"] is False
-    assert box == []
-
-    # TOTP работает как раньше.
-    resp = client.post(
-        "/api/auth/mfa/verify",
-        json={"mfa_token": body["mfa_token"], "code": pyotp.TOTP(secret).now()},
-    )
-    assert resp.status_code == 200, resp.text
-
-    # Письмо приходит по кнопке, и его код тоже пускает внутрь.
-    second = _login(client)
-    sent = client.post(
-        "/api/auth/mfa/email/send", json={"mfa_token": second["mfa_token"]}
-    )
-    assert sent.json()["sent"] is True
-    resp = client.post(
-        "/api/auth/mfa/verify",
-        json={"mfa_token": second["mfa_token"], "code": box[-1]["code"]},
-    )
-    assert resp.status_code == 200
-
-
-def test_recovery_code_works_with_email_only_2fa(client, db, monkeypatch):
-    """Резервные коды — запасной вход, когда недоступна и почта."""
-    user = create_user(db, "bob")
-    user.email_2fa_enabled = True
-    user.totp_recovery_codes = hash_recovery_codes(["RECOVERY01"])
-    db.commit()
-    _sent_codes(monkeypatch)
-
-    body = _login(client)
-    resp = client.post(
-        "/api/auth/mfa/verify",
-        json={"mfa_token": body["mfa_token"], "code": "RECOVERY01"},
-    )
-    assert resp.status_code == 200, resp.text
-
-
 def test_setup_and_enable_email_2fa(client, db, monkeypatch):
     user = create_user(db, "bob")
     headers = auth_headers(client, "bob")
@@ -349,15 +294,13 @@ def test_setup_email_2fa_requires_verified_email(client, db, monkeypatch):
 def test_disable_email_2fa_requires_password(client, db, monkeypatch):
     user = create_user(db, "bob")
     _enable_email_2fa(db, user)
-    user.totp_recovery_codes = hash_recovery_codes(["RECOVERY01"])
-    db.commit()
-    _sent_codes(monkeypatch)
+    box = _sent_codes(monkeypatch)
 
-    # Для настроек нужен полноценный токен — проходим второй шаг резервным кодом.
+    # Для настроек нужен полноценный токен — проходим второй шаг кодом из письма.
     body = _login(client)
     verified = client.post(
         "/api/auth/mfa/verify",
-        json={"mfa_token": body["mfa_token"], "code": "RECOVERY01"},
+        json={"mfa_token": body["mfa_token"], "code": box[0]["code"]},
     ).json()
     access = verified["access_token"]
     headers = {"Authorization": f"Bearer {access}"}
@@ -471,3 +414,109 @@ def test_code_goes_to_log_only_in_debug(monkeypatch):
     assert seen["log_fallback"] == ""
 
 
+
+
+def _change_email(client, headers, new_email="bob.new@example.com", password="password123"):
+    return client.post(
+        "/api/auth/email/change",
+        headers=headers,
+        json={"new_email": new_email, "password": password},
+    )
+
+
+def test_change_email_sends_code_to_new_address(client, db, monkeypatch):
+    user = create_user(db, "bob")
+    old_email = user.email
+    headers = auth_headers(client, "bob")
+    box = _sent_codes(monkeypatch)
+    notices = []
+    monkeypatch.setattr(
+        "app.routers.auth.send_mail", lambda to, subject, body, **kw: notices.append(to) or True
+    )
+
+    resp = _change_email(client, headers)
+    assert resp.status_code == 200, resp.text
+    assert box[0]["to"] == "bob.new@example.com"
+    assert box[0]["purpose"] == email_2fa.PURPOSE_CHANGE_EMAIL
+    # До подтверждения почта прежняя.
+    db.refresh(user)
+    assert user.email == old_email
+
+    resp = client.post(
+        "/api/auth/email/change/confirm", headers=headers, json={"code": box[0]["code"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["email"] == "bob.new@example.com"
+    db.refresh(user)
+    assert user.email == "bob.new@example.com"
+    assert user.email_verified is True
+    # Старый ящик предупреждён о смене.
+    assert notices == [old_email]
+
+    # Код одноразовый.
+    again = client.post(
+        "/api/auth/email/change/confirm", headers=headers, json={"code": box[0]["code"]}
+    )
+    assert again.status_code == 400
+
+
+def test_change_email_requires_password(client, db, monkeypatch):
+    create_user(db, "bob")
+    headers = auth_headers(client, "bob")
+    box = _sent_codes(monkeypatch)
+
+    resp = _change_email(client, headers, password="wrong")
+    assert resp.status_code == 400
+    assert box == []
+
+
+def test_change_email_rejects_taken_address(client, db, monkeypatch):
+    create_user(db, "bob")
+    other = create_user(db, "carol")
+    headers = auth_headers(client, "bob")
+    box = _sent_codes(monkeypatch)
+
+    resp = _change_email(client, headers, new_email=other.email.upper())
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Email already registered"
+    assert box == []
+
+
+def test_change_email_wrong_code_keeps_old_address(client, db, monkeypatch):
+    user = create_user(db, "bob")
+    old_email = user.email
+    headers = auth_headers(client, "bob")
+    _sent_codes(monkeypatch)
+
+    _change_email(client, headers)
+    resp = client.post(
+        "/api/auth/email/change/confirm", headers=headers, json={"code": "000000"}
+    )
+    assert resp.status_code == 400
+    db.refresh(user)
+    assert user.email == old_email
+
+
+def test_change_email_code_bound_to_requested_address(client, db, monkeypatch):
+    """Повторный запрос на другой адрес гасит прежний код: кодом, ушедшим на
+    первый ящик, нельзя подтвердить второй."""
+    user = create_user(db, "bob")
+    headers = auth_headers(client, "bob")
+    box = _sent_codes(monkeypatch)
+    monkeypatch.setattr("app.routers.auth.send_mail", lambda *a, **kw: True)
+
+    _change_email(client, headers, new_email="first@example.com")
+    resp = _change_email(client, headers, new_email="second@example.com")
+    assert resp.status_code == 200
+    assert resp.json()["sent"] is True
+
+    stale = client.post(
+        "/api/auth/email/change/confirm", headers=headers, json={"code": box[0]["code"]}
+    )
+    assert stale.status_code == 400 or box[0]["code"] == box[1]["code"]
+    resp = client.post(
+        "/api/auth/email/change/confirm", headers=headers, json={"code": box[1]["code"]}
+    )
+    assert resp.status_code == 200, resp.text
+    db.refresh(user)
+    assert user.email == "second@example.com"

@@ -182,12 +182,12 @@ function ExternalPlaylist() {
             )}
           </div>
           <div className="playlist-actions">
-            <button className="play-button-large" onClick={handlePlay}>
+            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
             </button>
             <button
-              className="play-button-large secondary"
+              className="btn btn--secondary btn--lg play-button-large"
               onClick={handleImport}
               disabled={importing}
             >

@@ -6,7 +6,6 @@ from app import trusted_devices
 from app.email_2fa import PURPOSE_LOGIN
 from app.models import User, user_trusted_devices
 from app.trusted_devices import DEVICE_TOKEN_HEADER, device_label_from_user_agent
-from app.two_factor import generate_totp_secret, hash_recovery_codes
 from tests.conftest import create_user
 
 
@@ -129,33 +128,6 @@ def test_device_token_issued_only_after_second_factor(client, db, monkeypatch):
 
     rows = db.execute(select(user_trusted_devices.c.id)).all()
     assert rows == []
-
-
-def test_totp_user_skips_code_on_known_device(client, db, monkeypatch):
-    """Второй фактор — только на незнакомом устройстве, своя 2FA тоже:
-    знакомое устройство уже прошло TOTP, его токен — доказательство."""
-    import pyotp
-
-    user = create_user(db, "bob")
-    secret = generate_totp_secret()
-    user.totp_secret = secret
-    user.totp_enabled = True
-    user.totp_recovery_codes = hash_recovery_codes(["RECOVERY01"])
-    db.commit()
-    _sent_codes(monkeypatch)
-
-    body = _login(client)
-    assert body["mfa_methods"] == ["totp"]
-    resp = client.post(
-        "/api/auth/mfa/verify",
-        json={"mfa_token": body["mfa_token"], "code": pyotp.TOTP(secret).now()},
-    )
-    assert resp.status_code == 200, resp.text
-    device_token = resp.json()["device_token"]
-
-    second = _login(client, device_token=device_token)
-    assert second["mfa_required"] is False
-    assert second["access_token"]
 
 
 def test_email_2fa_user_skips_code_on_known_device(client, db, monkeypatch):

@@ -24,7 +24,7 @@ function ForgotPassword() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>bolt</h1>
+          <h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}
           <p>Восстановление пароля</p>
         </div>
         {sent ? (
@@ -40,9 +40,9 @@ function ForgotPassword() {
             <p className="auth-hint">Укажите почту аккаунта. Ссылка будет действовать один час.</p>
             <div className="form-group">
               <label htmlFor="reset-email">Почта</label>
-              <input id="reset-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" autoFocus />
+              <input className="field" id="reset-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" autoFocus />
             </div>
-            <button className="auth-button" type="submit" disabled={loading}>
+            <button className="btn btn--primary btn--lg btn--block auth-button" type="submit" disabled={loading}>
               {loading ? 'Отправка...' : 'Отправить ссылку'}
             </button>
           </form>

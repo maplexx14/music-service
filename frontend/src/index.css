@@ -61,15 +61,72 @@
   --icon-lg: 20px;
   --icon-xl: 24px;
   --icon-2xl: 48px;
+  /* Шрифт сервиса — Unbounded везде (см. @font-face выше). */
+  --font-text: 'Unbounded', sans-serif;
+  --font-display: var(--font-text);
   /* Service palette: purple is interactive; green is reserved for success. */
   --brand-accent: #a259ff;
   --brand-accent-hover: #b578ff;
   --brand-accent-active: #8f46e8;
+  --brand-accent-text: #cfa6ff;
   --brand-accent-soft: rgba(162, 89, 255, 0.14);
   --brand-accent-soft-strong: rgba(162, 89, 255, 0.22);
+  /* Промо-ролик: фиолетовый градиент, розовая жёсткая тень, глитч
+     циан/розовый у заголовков. Применение — styles/promo.css. */
+  --promo-violet-deep: #2f086d;
+  --promo-violet: #6626b6;
+  --promo-violet-light: #a262dc;
+  --promo-pink: #ff2fa0;
+  --promo-cyan: #22e4ff;
+  --promo-ink: #0d0420;
+  --promo-glitch: -0.035em 0.015em 0 var(--promo-cyan),
+    0.035em 0.015em 0 var(--promo-pink);
   --status-success: #4ade80;
   --status-success-soft: rgba(74, 222, 128, 0.14);
   --status-success-border: rgba(74, 222, 128, 0.3);
+  /* Один красный на весь сервис: ошибки, удаление, дизлайк. */
+  --status-danger: #ff5c63;
+  --status-danger-soft: rgba(255, 92, 99, 0.14);
+  --status-warning: #e8b44c;
+  --status-warning-soft: rgba(232, 180, 76, 0.14);
+  /* Поверхности снизу вверх: фон приложения → карточки → приподнятое →
+     поля и hover → активное. Нейтральные, без оттенка: обложки дают цвет. */
+  --bg-app: #121212;
+  --bg-app-mobile: #050505;
+  --surface-1: #181818;
+  --surface-2: #222222;
+  --surface-3: #2a2a2a;
+  --surface-4: #333333;
+  --surface-inverse: #ffffff;
+  --surface-overlay: rgba(24, 24, 24, 0.92);
+  --scrim: rgba(0, 0, 0, 0.6);
+  /* Текст: четыре ступени, без промежуточных серых. */
+  --text-primary: #ffffff;
+  --text-secondary: #b3b3b3;
+  --text-tertiary: #8a8a8a;
+  --text-disabled: #5c5c5c;
+  --text-inverse: #000000;
+  /* Границы прозрачные — ложатся на любую поверхность одинаково. */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.28);
+  /* Тени для приподнятых поверхностей (меню, диалоги, тосты). */
+  --shadow-popover: 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-dialog: 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 24px 64px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.35);
+  /* Жёсткая тень-сдвиг из промо: чернильная ступень, под ней розовая. */
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.1), 6px 6px 0 var(--promo-ink),
+    9px 9px 0 var(--promo-pink);
+  --shadow-pop-sm: 3px 3px 0 var(--promo-ink), 5px 5px 0 var(--promo-pink);
+  /* Обводка картинок (обложки, аватары): чистый белый, не тонированный. */
+  --image-outline: 1px solid rgba(255, 255, 255, 0.1);
+  /* Нажатие: одно значение на весь сервис. */
+  --press-scale: 0.96;
+  /* Высоты контролов. */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 48px;
   /* Motion tokens */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -82,7 +139,8 @@
   /* Radius family (Spotify-reference: не смешивать семейства) */
   --radius-sm: 4px;      /* мелкие чипы, progress-thumb */
   --radius-card: 8px;    /* карточки, инпуты, строки — базовый контент */
-  --radius-lg: 12px;     /* крупные поверхности: панели, обложки, модалки */
+  --radius-lg: 12px;     /* крупные поверхности: панели, обложки, меню */
+  --radius-dialog: 16px; /* модальные окна и шторки */
   --radius-pill: 999px;  /* кнопки, теги */
   --radius-avatar: 50%;  /* аватары, круглые иконки */
   --radius: 0.625rem;
@@ -120,12 +178,12 @@
 }
 
 body {
-  font-family: 'Unbounded', sans-serif;
+  font-family: var(--font-text);
   font-size: var(--text-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #121212;
-  color: #ffffff;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
   overflow-x: hidden;
   /* Нативное приложение никогда не выделяет текст пальцем. Выделение
      остаётся там, где оно по смыслу: ввод и читаемый контент. */
@@ -143,7 +201,7 @@ body {
 @media (max-width: 768px) {
   html,
   body {
-    background-color: #050505;
+    background-color: var(--bg-app-mobile);
   }
 }
 
@@ -162,6 +220,15 @@ html {
 
 img {
   -webkit-user-drag: none;
+}
+
+/* Контролы по умолчанию не наследуют шрифт — без этого кнопки и поля
+   рисовались бы системным шрифтом браузера. */
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
 }
 
 #root {
@@ -252,13 +319,13 @@ html[data-nav] .toast-container {
   animation-fill-mode: both;
   /* Экран на мобильном прозрачный (фон даёт .layout) — без подложки
      въезжающий экран просвечивал бы, и сквозь него был виден старый. */
-  background-color: #121212;
+  background-color: var(--bg-app);
 }
 
 @media (max-width: 768px) {
   ::view-transition-old(page),
   ::view-transition-new(page) {
-    background-color: #050505;
+    background-color: var(--bg-app-mobile);
   }
 }
 
@@ -402,26 +469,26 @@ code {
   font-weight: 600;
   letter-spacing: 0.4px;
   line-height: 14px;
-  color: #b3b3b3;
+  color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.1);
 }
 
 .track-badge-e {
-  color: #ffffff;
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.14);
 }
 
 .track-badge-clean {
-  color: #e8b44c;
+  color: var(--status-warning);
   background: rgba(232, 180, 76, 0.14);
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: var(--surface-1);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
+  background: var(--surface-4);
   border-radius: 8px;
 }
 
@@ -527,8 +594,7 @@ code {
   }
 }
 
-body{
-  font-family: 'Unbounded', sans-serif;
+body {
   font-weight: 400;
 }
 
