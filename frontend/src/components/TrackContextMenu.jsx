@@ -33,7 +33,7 @@ export function useTrackContextMenu() {
 
   const clearPress = useCallback(() => {
     if (pressTimer.current) {
-      clearTimeout(pressTimer.current)
+      cancelAnimationFrame(pressTimer.current)
       pressTimer.current = null
     }
     startPoint.current = null
@@ -78,14 +78,24 @@ export function useTrackContextMenu() {
         if (e.touches.length !== 1) return clearPress()
         const t = e.touches[0]
         startPoint.current = { x: t.clientX, y: t.clientY }
-        pressTimer.current = setTimeout(() => {
+        // Отсчёт кадрами, а не setTimeout: таймер, поставленный на касании,
+        // iOS WebKit ждёт перед тем, как отдать клик (ловит меню по
+        // наведению), — обычный тап по строке приходил бы с задержкой.
+        if (pressTimer.current) cancelAnimationFrame(pressTimer.current)
+        const start = performance.now()
+        const wait = () => {
+          if (performance.now() - start < LONG_PRESS_MS) {
+            pressTimer.current = requestAnimationFrame(wait)
+            return
+          }
           pressTimer.current = null
           const p = startPoint.current
           startPoint.current = null
           if (!p) return
           haptic(HAPTIC.light)
           setMenu({ track, x: p.x, y: p.y })
-        }, LONG_PRESS_MS)
+        }
+        pressTimer.current = requestAnimationFrame(wait)
       },
       onTouchMove: (e) => {
         // Палец ушёл со строки — это скролл, а не long-press.
