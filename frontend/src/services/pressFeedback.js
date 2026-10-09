@@ -50,7 +50,7 @@ export function installPressFeedback() {
     const c = current
     current = null
     if (!c) return
-    clearTimeout(c.timer)
+    cancelAnimationFrame(c.frame)
     if (!c.animation) {
       // Тап короче задержки: нажатие не успело проявиться — даём короткий
       // «пульс», иначе быстрые тапы остались бы вовсе без отклика.
@@ -97,10 +97,22 @@ export function installPressFeedback() {
       release()
       const el = e.target instanceof Element ? e.target.closest(PRESSABLE) : null
       if (!el || el.closest('[data-no-press], input[type="range"]')) return
-      const c = { el, x: e.clientX, y: e.clientY, timer: 0, animation: null }
+      const c = { el, x: e.clientX, y: e.clientY, frame: 0, animation: null }
       current = c
-      if (e.pointerType === 'mouse' || !el.closest(SCROLLABLE)) press(c)
-      else c.timer = setTimeout(() => press(c), TOUCH_DELAY_MS)
+      if (e.pointerType === 'mouse' || !el.closest(SCROLLABLE)) {
+        press(c)
+        return
+      }
+      // Отсчёт задержки кадрами, а не setTimeout: таймер, поставленный на
+      // касании, WebKit на iPhone ждёт, прежде чем отдать клик (так он ловит
+      // меню по наведению), — и каждый тап по списку приходил на ~50 мс позже.
+      const start = performance.now()
+      const wait = () => {
+        if (current !== c) return
+        if (performance.now() - start >= TOUCH_DELAY_MS) press(c)
+        else c.frame = requestAnimationFrame(wait)
+      }
+      c.frame = requestAnimationFrame(wait)
     },
     { passive: true, capture: true },
   )

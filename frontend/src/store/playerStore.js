@@ -1161,9 +1161,17 @@ function prefetchOnIntent(track, { immediate = false } = {}) {
 
 // Готовые пропсы для строки/карточки трека: распылить через
 // {...trackIntentHandlers(track)} на кликабельный элемент.
+//
+// Наведение — только настоящей мышью (pointerType), не onMouseEnter: на iPhone
+// mouseenter синтетический и приходит при каждом тапе, а таймер, поставленный
+// в обработчике наведения, WebKit ждёт перед тем, как отдать клик (проверяет,
+// не открылось ли меню по наведению). 300-мс таймер prefetchOnIntent так
+// задерживал тап по треку на ~300 мс.
 function trackIntentHandlers(track) {
   return {
-    onMouseEnter: () => prefetchOnIntent(track),
+    onPointerEnter: (e) => {
+      if (e.pointerType === 'mouse') prefetchOnIntent(track)
+    },
     onPointerDown: () => prefetchOnIntent(track, { immediate: true }),
   }
 }

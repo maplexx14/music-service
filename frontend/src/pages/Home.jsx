@@ -341,7 +341,11 @@ function Home() {
   // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
   // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
   const waveIntentHandlers = {
-    onMouseEnter: () => usePlayerStore.getState().preloadFlow(),
+    // Только мышь: синтетический mouseenter на тапе задерживал бы клик (см.
+    // trackIntentHandlers в playerStore).
+    onPointerEnter: (e) => {
+      if (e.pointerType === 'mouse') usePlayerStore.getState().preloadFlow()
+    },
     onPointerDown: () => usePlayerStore.getState().preloadFlow(),
   }
 
