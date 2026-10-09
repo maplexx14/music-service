@@ -612,8 +612,9 @@ function Settings() {
                 <div className="settings-section-title">Замер плавности</div>
                 <p className="settings-hint settings-section-hint">
                   Считает пропущенные кадры и где они случились: прокрутка, жесты,
-                  открытие плеера. Включите, пользуйтесь приложением пару минут как
-                  обычно, затем скопируйте отчёт.
+                  открытие плеера, — и отклик: сколько проходит от тапа до реакции
+                  (смена вкладки, открытие плеера). Включите, пользуйтесь
+                  приложением пару минут как обычно, затем скопируйте отчёт.
                 </p>
                 <div className="settings-prefs-actions">
                   <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleToggleMeter}>

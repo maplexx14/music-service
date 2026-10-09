@@ -28,6 +28,8 @@ const MOVE_HOLD_MS = 100
 let running = false
 let stats = {}
 let worst = []
+// Отклик: от тапа до первого кадра, где видна реакция, по типам действий.
+let reactions = {}
 let startedAt = 0
 let lastSavedAt = 0
 
@@ -40,6 +42,66 @@ let lastScrollAt = 0
 const EVENT_WINDOW_MS = 1000
 const EVENTS_PER_FRAME = 4
 let recentEvents = []
+
+// Отклик на действие. Тап (touchend) — момент, когда палец отпущен: и
+// нативные кнопки, и веб-клик срабатывают по отпусканию. Конец отсчёта —
+// кадр (rAF), в котором реакция уже в DOM; на экран он выходит ещё через
+// ~1 кадр (16 мс), это одинаково для всех строк и в цифры не добавляется.
+//
+// - «тап»: любой тап → первый кадр после обработчиков клика (задержка ввода
+//   плюс синхронная работа обработчика);
+// - «вкладка»: тап по нижнему меню → кадр, где показан экран этой вкладки;
+// - «плеер»: тап по мини-плееру → кадр, где появился полноэкранный плеер.
+const REACTION_KEEP = 60
+const REACTION_TIMEOUT_MS = 3000
+const TAP_CLICK_WINDOW_MS = 600
+let lastTapAt = 0
+let probe = null
+
+function noteReaction(name, ms) {
+  const list = reactions[name] || (reactions[name] = [])
+  list.push(Math.round(ms))
+  if (list.length > REACTION_KEEP) list.shift()
+}
+
+// Что считать завершением действия для тапа по target.
+function probeFor(target) {
+  const navItem = target.closest?.('.mobile-nav-global-item, .sidebar-nav .nav-item')
+  if (navItem) {
+    const to = new URL(navItem.href, window.location.href).pathname
+    if (to === window.location.pathname) return null
+    return {
+      name: 'вкладка',
+      done: () => document.querySelector(`.screen[data-active][data-screen="tab:${to}"]`),
+    }
+  }
+  if (
+    target.closest?.('.player') &&
+    !target.closest('.like-btn, .dislike-btn, .add-btn, .play-pause-btn, .control-btn, .player-progress-top, input')
+  ) {
+    return { name: 'плеер', done: () => document.querySelector('.fullscreen-player') }
+  }
+  return null
+}
+
+const onClick = (e) => {
+  const now = performance.now()
+  const t0 = now - lastTapAt < TAP_CLICK_WINDOW_MS ? lastTapAt : e.timeStamp
+  requestAnimationFrame((frame) => noteReaction('тап', frame - t0))
+  const next = e.target instanceof Element ? probeFor(e.target) : null
+  if (next) probe = { ...next, t0 }
+}
+
+function checkProbe(now) {
+  if (!probe) return
+  if (probe.done()) {
+    noteReaction(probe.name, now - probe.t0)
+    probe = null
+  } else if (now - probe.t0 > REACTION_TIMEOUT_MS) {
+    noteReaction(`${probe.name} (не дождались)`, now - probe.t0)
+    probe = null
+  }
+}
 
 export function noteFrameEvent(name) {
   if (!running) return
@@ -78,6 +140,7 @@ function loadReport() {
     if (data && typeof data === 'object') {
       stats = data.stats || {}
       worst = data.worst || []
+      reactions = data.reactions || {}
       startedAt = data.startedAt || Date.now()
       return
     }
@@ -86,12 +149,13 @@ function loadReport() {
   }
   stats = {}
   worst = []
+  reactions = {}
   startedAt = Date.now()
 }
 
 function saveReport() {
   try {
-    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, startedAt }))
+    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, startedAt }))
   } catch {
     /* хранилище недоступно — отчёт живёт до перезапуска */
   }
@@ -141,6 +205,7 @@ function loop() {
       const delta = now - last
       if (delta < GAP_MS) record(delta, now)
     }
+    checkProbe(now)
     last = now
     if (now - lastSavedAt > SAVE_EVERY_MS) {
       lastSavedAt = now
@@ -160,6 +225,7 @@ const onTouchMove = () => {
 const onTouchEnd = (e) => {
   touching = e.touches.length > 0
   if (e.type === 'touchend' && performance.now() - lastMoveAt > MOVE_HOLD_MS) {
+    lastTapAt = e.timeStamp
     noteFrameEvent(describeTarget(e.target))
   }
 }
@@ -182,6 +248,7 @@ function start() {
   document.addEventListener('touchmove', onTouchMove, { capture: true, passive: true })
   document.addEventListener('touchend', onTouchEnd, { capture: true, passive: true })
   document.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true })
+  document.addEventListener('click', onClick, { capture: true, passive: true })
   document.addEventListener('visibilitychange', onHide)
   unsubscribeTrack = usePlayerStore.subscribe((state, prev) => {
     if (state.currentTrack?.id !== prev.currentTrack?.id) noteFrameEvent('трек')
@@ -198,10 +265,12 @@ function stop() {
   document.removeEventListener('touchmove', onTouchMove, { capture: true })
   document.removeEventListener('touchend', onTouchEnd, { capture: true })
   document.removeEventListener('touchcancel', onTouchEnd, { capture: true })
+  document.removeEventListener('click', onClick, { capture: true })
   document.removeEventListener('visibilitychange', onHide)
   unsubscribeTrack?.()
   unsubscribeTrack = null
   recentEvents = []
+  probe = null
 }
 
 export function isFrameMeterEnabled() {
@@ -228,6 +297,7 @@ export function installFrameMeter() {
 export function clearFrameMeter() {
   stats = {}
   worst = []
+  reactions = {}
   startedAt = Date.now()
   try {
     localStorage.removeItem(REPORT_KEY)
@@ -236,13 +306,28 @@ export function clearFrameMeter() {
   }
 }
 
+const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
+
+function formatReactions() {
+  const rows = Object.entries(reactions).filter(([, list]) => list.length)
+  if (!rows.length) return []
+  const lines = ['', 'Отклик, тап → кадр с реакцией (+~16 мс до экрана):', 'действие | раз | медиана | p90 | худший']
+  rows.forEach(([name, list]) => {
+    const sorted = [...list].sort((a, b) => a - b)
+    lines.push(
+      `${name} | ${sorted.length} | ${percentile(sorted, 0.5)}мс | ${percentile(sorted, 0.9)}мс | ${sorted[sorted.length - 1]}мс`,
+    )
+  })
+  return lines
+}
+
 const pct = (part, whole) => (whole ? `${((100 * part) / whole).toFixed(1)}%` : '—')
 
 export function formatFrameMeter() {
   if (running) saveReport()
   else loadReport()
   const rows = Object.entries(stats).filter(([, s]) => s.frames >= 30)
-  if (!rows.length) return ''
+  if (!rows.length) return formatReactions().join('\n').trim()
   const total = rows.reduce(
     (acc, [, s]) => ({ frames: acc.frames + s.frames, janky: acc.janky + s.janky, missed: acc.missed + s.missed }),
     { frames: 0, janky: 0, missed: 0 },
@@ -268,6 +353,7 @@ export function formatFrameMeter() {
         `${key} | ${s.frames} | ${pct(s.janky, s.frames)} | ${pct(s.missed, s.frames + s.missed)} | ${s.long} | ${s.worst}мс`,
       )
     })
+  lines.push(...formatReactions())
   if (worst.length) {
     lines.push('', 'Самые долгие кадры:')
     worst.forEach((w) => {
