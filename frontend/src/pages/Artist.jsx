@@ -109,7 +109,9 @@ function Artist() {
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
-  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  // Только id: страница отмечает текущую строку, а подписка на весь объект
+  // перерисовывала её и тогда, когда трек тот же, а объект новый.
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const queueSource = usePlayerStore((s) => s.source)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
@@ -214,7 +216,7 @@ function Artist() {
   // Очередь уже из треков этого исполнителя — кнопка становится паузой, а не
   // перезапуском с первого трека (на телефоне это главная кнопка страницы).
   const isArtistCurrent =
-    queueSource === 'artist' && !!currentTrack && tracks.some((t) => t.id === currentTrack.id)
+    queueSource === 'artist' && currentTrackId != null && tracks.some((t) => t.id === currentTrackId)
   const isArtistPlaying = isArtistCurrent && isPlaying
 
   const handlePlayToggle = () => {
@@ -479,7 +481,7 @@ function Artist() {
             </thead>
             <tbody>
               {visibleTracks.map((track, index) => {
-                const isCurrent = currentTrack?.id === track.id
+                const isCurrent = currentTrackId === track.id
                 const dbId =
                   typeof track.id === 'number'
                     ? track.id

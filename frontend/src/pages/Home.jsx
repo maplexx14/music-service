@@ -171,15 +171,16 @@ function Home() {
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const source = usePlayerStore((s) => s.source)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
-  // Текущий трек нужен главной только ради цвета фона под его обложку:
-  // подписка добавляет перерисовку на смену трека (событие редкое), тиков
-  // времени в ней нет.
-  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  // Текущий трек нужен главной только ради цвета фона под его обложку. Берём
+  // лишь обложку и id: подписка на весь объект перерисовывала главную и
+  // тогда, когда трек тот же, а объект новый (материализация трека и т.п.).
+  const currentCoverUrl = usePlayerStore((s) => s.currentTrack?.cover_url)
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   // В облегчённом режиме фон всегда стандартный: обложку не разбираем вовсе
   // (сеть, декод картинки и canvas на каждый трек) — вспышки на фиолетовом
   // фоне логотипа и так смотрятся цельно.
-  const coverColors = useCoverColors(liteMode ? null : currentTrack?.cover_url)
+  const coverColors = useCoverColors(liteMode ? null : currentCoverUrl)
   // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
   // дефолтная фиолетовая пара, как было зашито в hero раньше.
   const heroColors = (!liteMode && coverColors) || DEFAULT_HERO_COLORS
@@ -204,7 +205,7 @@ function Home() {
     if (liteMode) return
     const next = usePlayerStore.getState().getNextTrack(1)
     prefetchCoverColors(next?.cover_url)
-  }, [currentTrack, liteMode])
+  }, [currentTrackId, liteMode])
 
   // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
   // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
@@ -445,7 +446,7 @@ function Home() {
                 zoom={0.9}
                 rippleFrom=".hero-disc"
                 rippleStrength={1}
-                rippleKey={currentTrack ? 1 : 0}
+                rippleKey={currentTrackId != null ? 1 : 0}
                 active={isWavePlaying}
               />
             </Suspense>

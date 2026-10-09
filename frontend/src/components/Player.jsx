@@ -13,6 +13,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
+import { noteSpan } from '../utils/frameMeter'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
 import { useAuthStore } from '../store/authStore'
@@ -385,6 +386,16 @@ function PlayerInner() {
   // воспроизведения. currentTime здесь сознательно НЕ выбирается — он нужен
   // только PlayerProgress (см. выше); экшены в zustand стабильны по ссылке.
   const currentTrack = usePlayerStore((s) => s.currentTrack)
+  // Замер плавности: сколько синхронно идут эффекты плеера на смене трека.
+  // Эффекты компонента выполняются в порядке объявления, поэтому метка в
+  // первом и итог в последнем (перед ранним return ниже) охватывают все.
+  const trackFxRef = useRef({ layout: 0, passive: 0 })
+  useLayoutEffect(() => {
+    trackFxRef.current.layout = performance.now()
+  }, [currentTrack?.id])
+  useEffect(() => {
+    trackFxRef.current.passive = performance.now()
+  }, [currentTrack?.id])
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const volume = usePlayerStore((s) => s.volume)
   const duration = usePlayerStore((s) => s.duration)
@@ -2218,6 +2229,13 @@ function PlayerInner() {
       /* значения вне диапазона — пропускаем */
     }
   }, [duration, currentTrack?.id, currentTrack?.duration])
+
+  useLayoutEffect(() => {
+    noteSpan('плеер: layout-эффекты трека', performance.now() - trackFxRef.current.layout)
+  }, [currentTrack?.id])
+  useEffect(() => {
+    noteSpan('плеер: эффекты трека', performance.now() - trackFxRef.current.passive)
+  }, [currentTrack?.id])
 
   if (!currentTrack) {
     return null

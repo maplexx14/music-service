@@ -40,7 +40,9 @@ function PlaylistDetail() {
   // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
   const shufflePlaylist = usePlayerStore((s) => s.shufflePlaylist)
-  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  // Только id: страница отмечает текущую строку, а подписка на весь объект
+  // перерисовывала её и тогда, когда трек тот же, а объект новый.
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
@@ -236,7 +238,7 @@ function PlaylistDetail() {
             </thead>
             <tbody>
               {playlist.tracks.map((track, index) => {
-                const isCurrent = currentTrack?.id === track.id
+                const isCurrent = currentTrackId === track.id
                 const isLiked = likedSet.has(track.id)
                 return (
                   <TrackTableRow

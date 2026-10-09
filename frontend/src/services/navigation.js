@@ -152,6 +152,37 @@ function transitionKind(from, to, action) {
   return null
 }
 
+// Вкладка, показанная по тапу раньше коммита роутера. Роутер коммитит смену
+// локации в startTransition (v7_startTransition, App.jsx) — под стеком
+// смонтированных экранов это несколько кадров после тапа, а в нативном
+// таб-баре вкладка сменяется в следующем же кадре. Экран вкладки уже
+// смонтирован (ScreenStack держит корни вкладок), поэтому показать его можно
+// сразу: ScreenStack подписан на это значение, а коммит роутера потом лишь
+// подтверждает тот же экран.
+let shownTab = null
+const shownTabListeners = new Set()
+
+const notifyShownTab = () => shownTabListeners.forEach((fn) => fn())
+
+export function showTabNow(path) {
+  if (shownTab === path) return
+  shownTab = path
+  notifyShownTab()
+}
+
+export function clearShownTab() {
+  if (shownTab === null) return
+  shownTab = null
+  notifyShownTab()
+}
+
+export function subscribeShownTab(fn) {
+  shownTabListeners.add(fn)
+  return () => shownTabListeners.delete(fn)
+}
+
+export const getShownTab = () => shownTab
+
 // Роутер (startTransition) коммитит новый экран асинхронно, а
 // startViewTransition должен дождаться, пока DOM станет «новым». О коммите
 // сообщает RouteCommitSignal (App.jsx) из useLayoutEffect — после эффектов

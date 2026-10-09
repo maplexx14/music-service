@@ -27,9 +27,15 @@ export default defineConfig(({ mode }) => {
       },
     },
     resolve: {
-      alias: {
-        '@': path.resolve(__dirname, './src'),
-      },
+      alias: [
+        { find: '@', replacement: path.resolve(__dirname, './src') },
+        // Profiling-сборка react-dom: в ней работают <Profiler> и onRender,
+        // по ним замер плавности (utils/frameMeter) раскладывает долгие кадры
+        // по частям интерфейса прямо на iPhone, где профилировщика нет.
+        // Время считается только у поддеревьев под <Profiler>; в dev
+        // profiling.js сам отдаёт обычную dev-сборку.
+        { find: /^react-dom$/, replacement: 'react-dom/profiling' },
+      ],
     },
     server: {
       // Явно событийный file-watcher (без поллинга): поллинг опрашивает

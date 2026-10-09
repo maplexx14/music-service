@@ -30,6 +30,8 @@ let stats = {}
 let worst = []
 // Отклик: от тапа до первого кадра, где видна реакция, по типам действий.
 let reactions = {}
+// Рендеры частей интерфейса (MeterProfiler): сколько раз и сколько времени.
+let renders = {}
 let startedAt = 0
 let lastSavedAt = 0
 
@@ -40,7 +42,7 @@ let lastScrollAt = 0
 // Недавние события (смена трека, события плеера из diag, тапы) — чтобы у
 // долгого кадра было видно, что его запустило. Хранится последняя секунда.
 const EVENT_WINDOW_MS = 1000
-const EVENTS_PER_FRAME = 4
+const EVENTS_PER_FRAME = 6
 let recentEvents = []
 
 // Отклик на действие. Тап (touchend) — момент, когда палец отпущен: и
@@ -84,12 +86,37 @@ function probeFor(target) {
   return null
 }
 
+// Тап по частям: доставка (палец отпущен → клик дошёл до документа),
+// обработчики (все слушатели клика, включая React), ожидание кадра (от конца
+// обработчиков до rAF — сюда попадает рендер, если React отложил его, и
+// чужая работа в очереди). Конец обработчиков ловит слушатель на window в
+// фазе всплытия: он срабатывает последним, после корня React.
+let pendingTap = null
+
 const onClick = (e) => {
+  // Служебные клики (свитч тактильного отклика в haptics.js и т.п.) — не тап.
+  if (!e.isTrusted) return
   const now = performance.now()
-  const t0 = now - lastTapAt < TAP_CLICK_WINDOW_MS ? lastTapAt : e.timeStamp
-  requestAnimationFrame((frame) => noteReaction('тап', frame - t0))
+  const fromTouch = now - lastTapAt < TAP_CLICK_WINDOW_MS
+  const t0 = fromTouch ? lastTapAt : e.timeStamp
+  const tap = { t0, dispatchAt: now, handledAt: 0 }
+  pendingTap = tap
+  // Итог пишем в кадре, а не в onClickDone: обработчик мог остановить
+  // всплытие, и тогда до window клик не дойдёт — без разбивки, но тап учтём.
+  requestAnimationFrame((frame) => {
+    if (pendingTap === tap) pendingTap = null
+    noteReaction('тап', frame - t0)
+    if (!tap.handledAt) return
+    if (fromTouch) noteReaction('тап: доставка клика', tap.dispatchAt - t0)
+    noteReaction('тап: обработчики', tap.handledAt - tap.dispatchAt)
+    noteReaction('тап: ожидание кадра', frame - tap.handledAt)
+  })
   const next = e.target instanceof Element ? probeFor(e.target) : null
   if (next) probe = { ...next, t0 }
+}
+
+const onClickDone = (e) => {
+  if (e.isTrusted && pendingTap) pendingTap.handledAt = performance.now()
 }
 
 function checkProbe(now) {
@@ -101,6 +128,29 @@ function checkProbe(now) {
     noteReaction(`${probe.name} (не дождались)`, now - probe.t0)
     probe = null
   }
+}
+
+// Рендеры короче этого не пишем: они не делают кадр долгим, а забивают
+// список событий у долгих кадров.
+const RENDER_NOTE_MS = 4
+
+// onRender у <Profiler> (components/MeterProfiler). actualDuration — время
+// рендера поддерева в этом коммите, включая вложенные компоненты, которые
+// перерисовались сами (подписки на стор).
+export function noteRender(id, phase, actualDuration) {
+  if (!running || actualDuration < RENDER_NOTE_MS) return
+  const ms = Math.round(actualDuration)
+  const entry = renders[id] || (renders[id] = { count: 0, total: 0, worst: 0 })
+  entry.count += 1
+  entry.total += ms
+  if (ms > entry.worst) entry.worst = ms
+  noteFrameEvent(`${id} ${ms}мс`)
+}
+
+// Отрезок синхронной работы вне рендера (эффекты плеера на смене трека).
+export function noteSpan(name, ms) {
+  if (!running || ms < RENDER_NOTE_MS) return
+  noteRender(name, 'span', ms)
 }
 
 export function noteFrameEvent(name) {
@@ -141,6 +191,7 @@ function loadReport() {
       stats = data.stats || {}
       worst = data.worst || []
       reactions = data.reactions || {}
+      renders = data.renders || {}
       startedAt = data.startedAt || Date.now()
       return
     }
@@ -150,12 +201,13 @@ function loadReport() {
   stats = {}
   worst = []
   reactions = {}
+  renders = {}
   startedAt = Date.now()
 }
 
 function saveReport() {
   try {
-    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, startedAt }))
+    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, renders, startedAt }))
   } catch {
     /* хранилище недоступно — отчёт живёт до перезапуска */
   }
@@ -249,6 +301,7 @@ function start() {
   document.addEventListener('touchend', onTouchEnd, { capture: true, passive: true })
   document.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true })
   document.addEventListener('click', onClick, { capture: true, passive: true })
+  window.addEventListener('click', onClickDone, { passive: true })
   document.addEventListener('visibilitychange', onHide)
   unsubscribeTrack = usePlayerStore.subscribe((state, prev) => {
     if (state.currentTrack?.id !== prev.currentTrack?.id) noteFrameEvent('трек')
@@ -266,11 +319,13 @@ function stop() {
   document.removeEventListener('touchend', onTouchEnd, { capture: true })
   document.removeEventListener('touchcancel', onTouchEnd, { capture: true })
   document.removeEventListener('click', onClick, { capture: true })
+  window.removeEventListener('click', onClickDone)
   document.removeEventListener('visibilitychange', onHide)
   unsubscribeTrack?.()
   unsubscribeTrack = null
   recentEvents = []
   probe = null
+  pendingTap = null
 }
 
 export function isFrameMeterEnabled() {
@@ -298,6 +353,7 @@ export function clearFrameMeter() {
   stats = {}
   worst = []
   reactions = {}
+  renders = {}
   startedAt = Date.now()
   try {
     localStorage.removeItem(REPORT_KEY)
@@ -321,13 +377,21 @@ function formatReactions() {
   return lines
 }
 
+function formatRenders() {
+  const rows = Object.entries(renders).sort((a, b) => b[1].total - a[1].total)
+  if (!rows.length) return []
+  const lines = ['', `Рендеры и работа дольше ${RENDER_NOTE_MS} мс:`, 'часть | раз | всего | худший']
+  rows.forEach(([id, r]) => lines.push(`${id} | ${r.count} | ${r.total}мс | ${r.worst}мс`))
+  return lines
+}
+
 const pct = (part, whole) => (whole ? `${((100 * part) / whole).toFixed(1)}%` : '—')
 
 export function formatFrameMeter() {
   if (running) saveReport()
   else loadReport()
   const rows = Object.entries(stats).filter(([, s]) => s.frames >= 30)
-  if (!rows.length) return formatReactions().join('\n').trim()
+  if (!rows.length) return [...formatReactions(), ...formatRenders()].join('\n').trim()
   const total = rows.reduce(
     (acc, [, s]) => ({ frames: acc.frames + s.frames, janky: acc.janky + s.janky, missed: acc.missed + s.missed }),
     { frames: 0, janky: 0, missed: 0 },
@@ -353,7 +417,7 @@ export function formatFrameMeter() {
         `${key} | ${s.frames} | ${pct(s.janky, s.frames)} | ${pct(s.missed, s.frames + s.missed)} | ${s.long} | ${s.worst}мс`,
       )
     })
-  lines.push(...formatReactions())
+  lines.push(...formatReactions(), ...formatRenders())
   if (worst.length) {
     lines.push('', 'Самые долгие кадры:')
     worst.forEach((w) => {

@@ -1,4 +1,4 @@
-import { memo, Suspense, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react'
+import { memo, Suspense, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
 import {
   UNSAFE_LocationContext as LocationContext,
   UNSAFE_RouteContext as RouteContext,
@@ -7,8 +7,17 @@ import {
 } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import Spinner from './Spinner'
+import MeterProfiler from './MeterProfiler'
 import { ScreenContext } from '../hooks/useScreen'
-import { TAB_ROOTS, entryAt, entryIndexOf, isTabRoot } from '../services/navigation'
+import {
+  TAB_ROOTS,
+  clearShownTab,
+  entryAt,
+  entryIndexOf,
+  getShownTab,
+  isTabRoot,
+  subscribeShownTab,
+} from '../services/navigation'
 
 // Стек экранов, как в Telegram: корни вкладок не размонтируются при уходе,
 // а прячутся. Свайп между вкладками или «Назад» к вкладке показывает под
@@ -162,7 +171,9 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
         <RouteContext.Provider value={ROOT_ROUTE_CONTEXT}>
           <LocationContext.Provider value={locationContext}>
             <ScreenContext.Provider value={context}>
-              <Suspense fallback={<Spinner page />}>{renderRoutes(location)}</Suspense>
+              <MeterProfiler id={`экран ${path.split('/')[1] || 'home'}${active ? '' : ' (скрыт)'}`}>
+                <Suspense fallback={<Spinner page />}>{renderRoutes(location)}</Suspense>
+              </MeterProfiler>
             </ScreenContext.Provider>
           </LocationContext.Provider>
         </RouteContext.Provider>
@@ -246,6 +257,27 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
     }
   }, [warmTabs])
 
+  // Вкладка, показанная по тапу до коммита роутера (см. showTabNow). Только
+  // уже смонтированная (несмонтированную рисовать нечем, её покажет коммит)
+  // и только с другой вкладки (переход с вложенного экрана — View Transition).
+  const shownTab = useSyncExternalStore(subscribeShownTab, getShownTab)
+  const early =
+    shownTab && currentIsTab && shownTab !== location.pathname && mountedTabsRef.current.has(shownTab)
+      ? shownTab
+      : null
+  const activePath = early ?? location.pathname
+
+  // Роутер догнал — дальше ведёт он. Не догнал за 2 с (переход отменён) —
+  // возвращаемся к его экрану, а не висим на чужой вкладке.
+  useEffect(() => {
+    if (shownTab && shownTab === location.pathname) clearShownTab()
+  }, [shownTab, location.pathname])
+  useEffect(() => {
+    if (!shownTab) return undefined
+    const timer = window.setTimeout(clearShownTab, 2000)
+    return () => window.clearTimeout(timer)
+  }, [shownTab])
+
   const tabLocation = (path) => {
     let saved = tabLocationsRef.current.get(path)
     if (!saved) {
@@ -264,7 +296,7 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
           key={path}
           id={tabScreenId(path)}
           location={tabLocation(path)}
-          active={location.pathname === path}
+          active={activePath === path}
           isMobile={isMobile}
           renderRoutes={renderRoutes}
           onBack={onBack}
@@ -275,7 +307,7 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
           key={id}
           id={id}
           location={entry.location}
-          active={id === currentId}
+          active={!early && id === currentId}
           isMobile={isMobile}
           renderRoutes={renderRoutes}
           onBack={onBack}

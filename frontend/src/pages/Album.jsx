@@ -44,7 +44,9 @@ function Album() {
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
-  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  // Только id: страница отмечает текущую строку, а подписка на весь объект
+  // перерисовывала её и тогда, когда трек тот же, а объект новый.
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
@@ -240,7 +242,7 @@ function Album() {
             </thead>
             <tbody>
               {visibleTracks.map((track, index) => {
-                const isCurrent = currentTrack?.id === track.id
+                const isCurrent = currentTrackId === track.id
                 const dbId = typeof track.db_id === 'number' ? track.db_id : null
                 const isLiked =
                   (dbId !== null && likedSet.has(dbId)) ||

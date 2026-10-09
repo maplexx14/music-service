@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
-import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf } from '../services/navigation'
+import MeterProfiler from './MeterProfiler'
+import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
@@ -226,6 +227,10 @@ function Layout({ renderRoutes }) {
         ?.scrollTo({ top: 0, behavior: 'smooth' })
     } else {
       setPendingNavIndex(navIndexOf(to))
+      // Экран вкладки — в этом же кадре, не дожидаясь коммита роутера.
+      // Только между вкладками: с вложенного экрана переход идёт через View
+      // Transition, и подмена до снимка «до» сломала бы его анимацию.
+      if (isTabRoot(location.pathname)) showTabNow(to)
     }
     haptic(HAPTIC.selection)
   }
@@ -342,7 +347,9 @@ function Layout({ renderRoutes }) {
       <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
         <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />
       </main>
-      <Player />
+      <MeterProfiler id="мини-плеер">
+        <Player />
+      </MeterProfiler>
       <ToastContainer />
       <AddToPlaylistDialog />
       <CensorOverrideDialog />
@@ -350,7 +357,9 @@ function Layout({ renderRoutes }) {
           отрисованного мини-плеера, спиннер здесь мигал бы зря. */}
       {isFullScreen && (
         <Suspense fallback={null}>
-          <FullScreenPlayer />
+          <MeterProfiler id="фуллскрин">
+            <FullScreenPlayer />
+          </MeterProfiler>
         </Suspense>
       )}
       {isMobile && (
