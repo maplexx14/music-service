@@ -1,19 +1,25 @@
-// Быстрый тап по строкам и карточкам треков на таче: действие — на отпускании
-// пальца, а не по клику WebKit. Замер на iPhone (utils/frameMeter) показал,
-// что внутри прокручиваемых списков WebKit отдаёт клик через ~50-60 мс после
-// touchend (вне списков ~30): он сначала разбирается, не начало ли это
-// прокрутки. Наши обработчики при этом занимают единицы миллисекунд.
+// Быстрый тап на таче: действие — на отпускании пальца, а не по клику WebKit.
+// Замер на iPhone (utils/frameMeter) показал, что клик WebKit отдаёт через
+// ~50-60 мс после touchend (вне списков ~30): он сначала разбирается, не
+// начало ли это прокрутки и не меню ли по наведению. Наши обработчики при
+// этом занимают единицы миллисекунд. Нативная кнопка срабатывает на
+// отпускании, в следующем же кадре.
 //
-// Элемент включается атрибутом data-fast-tap, его обычный onClick остаётся
-// единственным обработчиком: на pointerup мы сами зовём el.click(), а
-// настоящий клик WebKit, пришедший следом, гасим ещё до React. Мышь и
-// клавиатура идут штатным кликом.
+// Работает для кнопок, ссылок и всего с data-fast-tap (строки и карточки
+// треков). Их обычный onClick остаётся единственным обработчиком: на
+// pointerup мы сами зовём el.click(), а настоящий клик WebKit, пришедший
+// следом, гасим ещё до React. Вместе с ним гасим и совместимые mousedown/
+// mouseup, которые WebKit шлёт в ту же точку: если тап открыл диалог или
+// меню, они попали бы в его подложку и закрыли его (подложки закрываются по
+// mousedown). Действие по умолчанию у них остаётся — фокус уходит как обычно.
+// Мышь и клавиатура идут штатным кликом.
 //
 // Тапом не считается — и всё идёт обычным путём:
 // - палец сдвинулся (свайп между вкладками, прокрутка, протяжка) или
 //   система отменила касание (pointercancel);
 // - палец держали дольше LONG_PRESS_MS — это долгое нажатие с меню;
-// - касание внутри вложенной ссылки или кнопки (артист, лайк, «в плейлист»);
+// - поля ввода, подписи к ним, ползунки, ссылки в новое окно и на скачивание,
+//   а также всё с data-no-fast-tap;
 // - касание у левой кромки: там его забирает свайп «назад» и кликает сам
 //   (useSwipeNavigation, EDGE_PX).
 //
@@ -25,11 +31,15 @@ const SLOP_PX = 10
 // открылось, и тап поверх него был бы лишним.
 const LONG_PRESS_MS = 400
 const EDGE_PX = 20
-// Сколько ждать клика WebKit, который надо погасить. Он может и не прийти:
+// Сколько ждать событий WebKit, которые надо погасить. Они могут и не прийти:
 // если наше действие изменило экран, WebKit клик не отправляет.
 const SUPPRESS_MS = 700
 const SUPPRESS_RADIUS_PX = 30
-const NESTED = 'a[href], button, input, select, textarea, [role="button"], [role="slider"], [data-no-fast-tap]'
+const FAST = '[data-fast-tap], button, [role="button"], a[href]'
+const NEVER =
+  'input, select, textarea, label, [contenteditable="true"], [role="slider"], [data-no-fast-tap], a[target], a[download]'
+// Совместимые события мыши после тапа — в порядке, в каком их шлёт WebKit.
+const COMPAT_EVENTS = ['mousedown', 'mouseup', 'click']
 
 let installed = false
 let pending = null
@@ -41,11 +51,9 @@ let dispatching = false
 export const isFastTapClick = () => dispatching
 
 function fastTapTarget(target) {
-  if (!(target instanceof Element)) return null
-  const el = target.closest('[data-fast-tap]')
-  if (!el) return null
-  const nested = target.closest(NESTED)
-  if (nested && el.contains(nested) && nested !== el) return null
+  if (!(target instanceof Element) || target.closest(NEVER)) return null
+  const el = target.closest(FAST)
+  if (!el || el.matches(':disabled, [aria-disabled="true"]')) return null
   return el
 }
 
@@ -102,20 +110,23 @@ export function installFastTap() {
     { capture: true, passive: true },
   )
 
-  // Клик WebKit после быстрого тапа — дубль. Гасим на window в фазе захвата,
-  // до корня React, и по месту касания, а не по элементу: экран под пальцем
-  // уже мог смениться, и клик ушёл бы в чужую кнопку.
-  window.addEventListener(
-    'click',
-    (e) => {
-      const s = suppress
-      if (!s || !e.isTrusted) return
+  // События WebKit после быстрого тапа — дубли. Гасим на window в фазе
+  // захвата, до корня React, и по месту касания, а не по элементу: экран под
+  // пальцем уже мог смениться, и клик ушёл бы в чужую кнопку. Клику отменяем
+  // и действие по умолчанию, mousedown/mouseup — только доставку.
+  const swallow = (e) => {
+    const s = suppress
+    if (!s || !e.isTrusted) return
+    if (performance.now() > s.until) {
       suppress = null
-      if (performance.now() > s.until) return
-      if (Math.abs(e.clientX - s.x) > SUPPRESS_RADIUS_PX || Math.abs(e.clientY - s.y) > SUPPRESS_RADIUS_PX) return
+      return
+    }
+    if (Math.abs(e.clientX - s.x) > SUPPRESS_RADIUS_PX || Math.abs(e.clientY - s.y) > SUPPRESS_RADIUS_PX) return
+    if (e.type === 'click') {
+      suppress = null
       e.preventDefault()
-      e.stopPropagation()
-    },
-    { capture: true },
-  )
+    }
+    e.stopPropagation()
+  }
+  for (const type of COMPAT_EVENTS) window.addEventListener(type, swallow, { capture: true })
 }
