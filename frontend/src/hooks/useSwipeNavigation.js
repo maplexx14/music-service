@@ -62,7 +62,15 @@ const IGNORE = 'input, textarea, select, [contenteditable="true"], [role="slider
 // отпускания страница отрисовывалась заново — выглядело как перезагрузка.
 // Касание в полосе забираем (preventDefault на touchstart — единственное,
 // что этот жест отменяет), и дальше его ведёт наш свайп.
+//
+// Слушатель — на отдельном элементе-полосе (.swipe-edge-guard), а не на всём
+// контейнере. Непассивный touchstart WebKit учитывает по области элемента:
+// в ней он перед каждым жестом ждёт ответа главного потока, можно ли
+// прокручивать. Висел он на контейнере — и старт любой прокрутки экрана
+// ждал страницу, занятую рендером или событием медиаэлемента.
 const EDGE_PX = 20
+// Под полосой, а не на ней, лежит то, во что целился палец.
+const EDITABLE = 'input, textarea, select, [contenteditable="true"]'
 const TAP_SLOP_PX = 10
 const isStandalone = () =>
   window.navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches
@@ -410,17 +418,17 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     }
 
     // Касание у кромки, забранное у системы. preventDefault отменяет и
-    // синтетический click, поэтому тап (палец почти не сдвинулся) кликаем сами.
+    // синтетический click, поэтому тап (палец почти не сдвинулся) кликаем
+    // сами — по элементу под полосой.
     let edgeTap = null
+    let edgeGuard = null
+    const elementBelow = (x, y) => document.elementsFromPoint(x, y).find((el) => el !== edgeGuard) || null
     const onEdgeStart = (e) => {
       edgeTap = null
       if (e.touches.length !== 1) return
       const t = e.touches[0]
-      if (t.clientX > EDGE_PX) return
-      const target = e.target instanceof Element ? e.target : null
-      if (!target || target.closest(IGNORE)) return
       e.preventDefault()
-      edgeTap = { target, x: t.clientX, y: t.clientY }
+      edgeTap = { x: t.clientX, y: t.clientY }
     }
     const onEdgeEnd = (e) => {
       const tap = edgeTap
@@ -428,20 +436,28 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const t = e.changedTouches?.[0]
       if (!tap || !t) return
       if (Math.abs(t.clientX - tap.x) > TAP_SLOP_PX || Math.abs(t.clientY - tap.y) > TAP_SLOP_PX) return
-      tap.target.click()
+      const target = elementBelow(tap.x, tap.y)
+      if (!target) return
+      target.closest(EDITABLE)?.focus()
+      target.click()
     }
-    const guardEdge = isStandalone()
+    if (isStandalone()) {
+      edgeGuard = document.createElement('div')
+      edgeGuard.className = 'swipe-edge-guard'
+      edgeGuard.setAttribute('aria-hidden', 'true')
+      edgeGuard.style.width = `${EDGE_PX}px`
+      container.appendChild(edgeGuard)
+      // Касание всплывает с полосы в контейнер — свайп ведёт его как обычно.
+      edgeGuard.addEventListener('touchstart', onEdgeStart, { passive: false })
+      edgeGuard.addEventListener('touchend', onEdgeEnd, { passive: true })
+    }
 
-    // Обработчик кромки — до основного: тот должен увидеть то же касание.
-    if (guardEdge) container.addEventListener('touchstart', onEdgeStart, { passive: false })
     container.addEventListener('touchstart', onStart, { passive: true })
     container.addEventListener('touchmove', onMove, { passive: true })
     container.addEventListener('touchend', onEnd, { passive: true })
     container.addEventListener('touchcancel', onCancel, { passive: true })
-    if (guardEdge) container.addEventListener('touchend', onEdgeEnd, { passive: true })
     return () => {
-      container.removeEventListener('touchstart', onEdgeStart)
-      container.removeEventListener('touchend', onEdgeEnd)
+      edgeGuard?.remove()
       container.removeEventListener('touchstart', onStart)
       container.removeEventListener('touchmove', onMove)
       container.removeEventListener('touchend', onEnd)

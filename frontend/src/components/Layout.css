@@ -29,6 +29,18 @@
   visibility: hidden;
 }
 
+/* Полоса у левой кромки в установленной PWA (useSwipeNavigation): касание в
+   ней забирается у системного жеста «назад». Ширину ставит хук. Выше шапки
+   экрана (1003), ниже плеера во весь экран и диалогов; на нижнее меню не
+   заходит. */
+.swipe-edge-guard {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 70px);
+  z-index: 1004;
+}
+
 .screen-scroll {
   position: absolute;
   inset: 0;

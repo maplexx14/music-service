@@ -22,7 +22,44 @@ installFrameMeter()
 installTouchGuard()
 installFastTap()
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+// WebKit на iOS решает, ждать ли главный поток перед прокруткой, по
+// слушателям touch- и pointer-событий под пальцем: если среди них есть
+// непассивный (может вызвать preventDefault), жест прокрутки откладывается до
+// ответа страницы, и любая занятость главного потока — рендер, событие
+// медиаэлемента — задерживает старт прокрутки и клик. React вешает на корень
+// pointer-события и touchend непассивными (пассивны у него только touchstart,
+// touchmove и wheel), и синхронным становилось всё приложение. preventDefault
+// в pointer- и touchend-обработчиках у нас нигде не нужен — корневые
+// слушатели этих событий делаем пассивными. Где жесту правда нужен
+// preventDefault, слушатель вешается напрямую, на узкий элемент (см. полосу
+// у кромки в useSwipeNavigation).
+const PASSIVE_ROOT_EVENTS = new Set([
+  'pointerdown',
+  'pointermove',
+  'pointerup',
+  'pointerover',
+  'pointerout',
+  'pointerenter',
+  'pointerleave',
+  'touchend',
+])
+
+function createRootWithPassiveTouch(container) {
+  const add = container.addEventListener
+  container.addEventListener = function addRootListener(type, listener, options) {
+    if (!PASSIVE_ROOT_EVENTS.has(type)) return add.call(this, type, listener, options)
+    const capture = typeof options === 'boolean' ? options : Boolean(options?.capture)
+    return add.call(this, type, listener, { capture, passive: true })
+  }
+  // Слушатели корня React ставит синхронно, внутри createRoot.
+  try {
+    return ReactDOM.createRoot(container)
+  } finally {
+    delete container.addEventListener
+  }
+}
+
+createRootWithPassiveTouch(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
       <MeterProfiler id="всё приложение">
