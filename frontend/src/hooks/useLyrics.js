@@ -164,8 +164,14 @@ export function useLyrics(track) {
   return { syncedLines, plainText, loading, error }
 }
 
-// Строка загорается чуть раньше своей метки времени.
-export const LYRIC_LEAD_SEC = 0.1
+// Строка загорается раньше своей метки времени. Метки lrclib запаздывают за
+// голосом: сверка с распознанным вокалом (whisper, 8 треков из прослушанного,
+// 158 строк) дала медиану +0.14 с, p75 +0.41, p90 +0.81, а с прежним
+// опережением 0.1 с 15% строк загорались позже голоса больше чем на 0.5 с.
+// При 0.4 таких 8%, раньше голоса больше чем на 0.8 с — 4%. В караоке раньше
+// лучше, чем позже: строку успевают прочесть. Ещё ~0.1 с съедает проявление
+// цвета (transition в LyricsPanel.css).
+export const LYRIC_LEAD_SEC = 0.4
 
 // Find the active line index for a given time
 export function getActiveLyricIndex(syncedLines, currentTime) {

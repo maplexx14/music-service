@@ -54,6 +54,17 @@ function LyricsPanel({ showOnlyText = false }) {
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const isSynced = syncedLines.length > 0
 
+  // scroll приходит и от нашего же scrollTo: плавная доводка шлёт события
+  // ~полсекунды, и раньше каждая смена строки сама выключала автопрокрутку
+  // на 4 с. На частых строках подсвеченная уезжала вниз, к краю и за край, и
+  // текст «отставал» от музыки. Ручной считаем только прокрутку после
+  // касания, колеса, нажатия или клавиши; автопрокрутка этот флаг сбрасывает.
+  const userInputRef = useRef(false)
+  const markUserInput = () => {
+    userInputRef.current = true
+  }
+  const stopSwipe = showOnlyText ? (event) => event.stopPropagation() : undefined
+
   // Auto-scroll to active line
   useEffect(() => {
     if (isUserScrolling) return
@@ -63,6 +74,7 @@ function LyricsPanel({ showOnlyText = false }) {
       const containerRect = container.getBoundingClientRect()
       const elRect = el.getBoundingClientRect()
       const offset = elRect.top - containerRect.top - containerRect.height / 2 + elRect.height / 2
+      userInputRef.current = false
       container.scrollTo({
         top: container.scrollTop + offset,
         behavior: 'smooth',
@@ -72,6 +84,7 @@ function LyricsPanel({ showOnlyText = false }) {
 
   // Detect user scroll to disable auto-scroll temporarily
   const handleScroll = () => {
+    if (!userInputRef.current) return
     setIsUserScrolling(true)
     if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current)
     userScrollTimeoutRef.current = setTimeout(() => {
@@ -114,9 +127,18 @@ function LyricsPanel({ showOnlyText = false }) {
       className="lyrics-panel"
       ref={containerRef}
       onScroll={handleScroll}
-      onTouchStart={showOnlyText ? (event) => event.stopPropagation() : undefined}
-      onTouchMove={showOnlyText ? (event) => event.stopPropagation() : undefined}
-      onTouchEnd={showOnlyText ? (event) => event.stopPropagation() : undefined}
+      onWheel={markUserInput}
+      onPointerDown={markUserInput}
+      onKeyDown={markUserInput}
+      onTouchStart={(event) => {
+        markUserInput()
+        stopSwipe?.(event)
+      }}
+      onTouchMove={(event) => {
+        markUserInput()
+        stopSwipe?.(event)
+      }}
+      onTouchEnd={stopSwipe}
     >
       {isSynced ? (
         <div className="lyrics-synced">
