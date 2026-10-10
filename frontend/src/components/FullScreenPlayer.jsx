@@ -14,8 +14,8 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { settleStrip, SETTLE_MS } from '../utils/settleStrip'
-import { skipForward, switchTrackInFrame } from '../services/playerTransport'
+import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
+import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { holdHeavyAnimations, morphTransition } from '../services/navigation'
@@ -299,6 +299,10 @@ function FullScreenPlayer() {
   // её загрузка и декод (до 1000×1000) попадали прямо в анимацию, и
   // перелистывание подлагивало — на тех треках, чья обложка ещё не в кэше.
   // До тех пор слайд показывает ту же миниатюру, что была у него соседом.
+  // Трек, к которому едет карусель, пока он ещё не стал текущим: его название
+  // показываем сразу, не дожидаясь переключения (см. switchByCarousel).
+  const [pendingTrack, setPendingTrack] = useState(null)
+  const shownTrack = pendingTrack ?? currentTrack
   const [fullCoverId, setFullCoverId] = useState(currentTrack?.id)
   useEffect(() => {
     const id = currentTrack?.id
@@ -370,6 +374,9 @@ function FullScreenPlayer() {
 
   const handleTouchStart = (e) => {
     if (e.touches.length !== 1) return
+    // Новое касание посреди доезда к соседу — переключаем сразу, жест дальше
+    // идёт уже от нового трека.
+    flushCarouselSwitch()
     // Протяжка ползунка перемотки — не свайп карусели и не закрытие плеера.
     if (e.target.closest?.('[role="slider"]')) {
       gestureRef.current = null
@@ -435,23 +442,7 @@ function FullScreenPlayer() {
         return
       }
       haptic(HAPTIC.selection)
-      const releasedDx = g.dx || 0
-      // Переключение — в начале следующего кадра (см. switchTrackInFrame),
-      // до него обложка стоит там, где её отпустили.
-      switchTrackInFrame(() => {
-        const fromId = usePlayerStore.getState().currentTrack?.id
-        swipeDxRef.current = releasedDx
-        swipeVRef.current = velocity
-        if (dx < 0) skipNow()
-        else previousTrack()
-        // Переход могли отложить (следующий трек ещё грузится) — тогда
-        // обложка возвращается на место.
-        if (usePlayerStore.getState().currentTrack?.id === fromId) {
-          swipeDxRef.current = 0
-          swipeVRef.current = 0
-          if (strip) settleStrip(strip, releasedDx, { velocity })
-        }
-      })
+      switchByCarousel(dx < 0 ? 1 : -1, g.dx || 0, velocity)
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
       // Морф обложки меряет её на текущей, оттянутой позиции — поэтому сначала
@@ -488,11 +479,70 @@ function FullScreenPlayer() {
   // Переключение идёт через Player (services/playerTransport): только он умеет
   // подменить элемент на прогретый буфер следующего трека, а заодно дотягивает
   // хвост постраничной очереди (queuePager). Прямой nextTrack() — лишь фолбэк.
-  // Кнопки и дизлайк переключают в начале следующего кадра (см.
-  // switchTrackInFrame), свайп сам заворачивает skipNow туда же.
   const skipNow = () => skipForward(nextTrack)
-  const handleSkipForward = () => switchTrackInFrame(skipNow)
-  const handleSkipBack = () => switchTrackInFrame(previousTrack)
+
+  // Свайп, кнопки и дизлайк переключают через доезд карусели к соседу (см.
+  // CAROUSEL_SWITCH_DELAY_MS в utils/settleStrip): трек меняется, когда сосед
+  // уже стоит на месте. Название нового трека — сразу (pendingTrack). Без
+  // видимых соседей (десктоп, текст песни) или без соседа в очереди —
+  // переключение сразу, как раньше.
+  const carouselSwitchRef = useRef(null)
+  const flushCarouselSwitch = () => {
+    const pending = carouselSwitchRef.current
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pending.run()
+  }
+  // Плеер закрыли посреди доезда — переключение всё равно состоится.
+  useEffect(() => () => flushCarouselSwitch(), [])
+
+  const switchByCarousel = (dir, from = 0, velocity) => {
+    const strip = stripRef.current
+    const target = dir > 0 ? upNext : prevTrack
+    const doSwitch = () => (dir > 0 ? skipNow() : previousTrack())
+    // Повторное нажатие посреди доезда: прошлое переключение — сразу, это —
+    // тоже сразу, без доезда (соседи в этом рендере уже устарели).
+    const busy = Boolean(carouselSwitchRef.current)
+    flushCarouselSwitch()
+    const sideVisible = strip?.querySelector('.fullscreen-art-side')?.offsetWidth > 0
+    if (busy || !strip || !target || !sideVisible) {
+      // Как раньше: трек меняется сразу, эффект смены трека довозит обложку
+      // от точки отпускания.
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      swipeDxRef.current = from
+      swipeVRef.current = velocity ?? 0
+      doSwitch()
+      if (usePlayerStore.getState().currentTrack?.id === fromId) {
+        swipeDxRef.current = 0
+        swipeVRef.current = 0
+        if (strip && from) settleStrip(strip, from, { velocity })
+      }
+      return
+    }
+    const to = -dir * (strip.offsetWidth + ART_GAP)
+    setPendingTrack(target)
+    const duration = settleStrip(strip, from, { velocity, to })
+    const run = () => {
+      carouselSwitchRef.current = null
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      // Полоса уже стоит на соседе: эффект смены трека поставит её в ноль
+      // без анимации — на экране ничего не сдвинется.
+      swipeDxRef.current = to
+      swipeVRef.current = 0
+      doSwitch()
+      setPendingTrack(null)
+      // Переход могли отложить (следующий трек ещё грузится) — тогда
+      // обложка возвращается на место.
+      if (usePlayerStore.getState().currentTrack?.id === fromId) {
+        swipeDxRef.current = 0
+        settleStrip(strip, to)
+      }
+    }
+    carouselSwitchRef.current = { run, timer: setTimeout(run, duration + CAROUSEL_SWITCH_DELAY_MS) }
+  }
+
+  const handleSkipForward = () => switchByCarousel(1)
+  const handleSkipBack = () => switchByCarousel(-1)
 
   useEffect(() => {
     const checkLikedStatus = async () => {
@@ -717,9 +767,9 @@ function FullScreenPlayer() {
 
           <div className="fullscreen-info">
             <div>
-              <div className="fullscreen-track-name">{currentTrack.title}</div>
+              <div className="fullscreen-track-name">{shownTrack.title}</div>
               <ArtistLink
-                artist={currentTrack.artist}
+                artist={shownTrack.artist}
                 className="fullscreen-artist"
                 onNavigate={closeFullScreen}
               />

@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { settleStrip } from '../utils/settleStrip'
+import { CAROUSEL_SWITCH_DELAY_MS, settleStrip } from '../utils/settleStrip'
 import { holdHeavyAnimations } from '../services/navigation'
-import { switchTrackInFrame } from '../services/playerTransport'
 
 // Скорость отпускания считаем по последним ~80 мс касания, а не по всему
 // жесту: медленно тянул, а в конце швырнул — это флик.
@@ -72,7 +71,19 @@ export function useTrackCarousel({
     endMotion(strip, settleStrip(strip, from, { velocity }))
   }
 
+  // Переключение свайпом — через доезд к соседу (см. CAROUSEL_SWITCH_DELAY_MS
+  // в utils/settleStrip): трек меняется, когда соседняя капсула уже стоит на
+  // месте. Новое касание или размонтирование посреди доезда переключают сразу.
+  const switchRef = useRef(null)
+  const flushSwitch = () => {
+    const pending = switchRef.current
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pending.run()
+  }
+
   useEffect(() => () => {
+    flushSwitch()
     clearTimeout(motionRef.current.timer)
     motionRef.current.release?.()
   }, [])
@@ -98,6 +109,7 @@ export function useTrackCarousel({
   })
 
   const onTouchStart = (e) => {
+    flushSwitch()
     swipedRef.current = false
     if (!enabled || e.touches.length !== 1 || e.target.closest?.(ignore)) {
       gestureRef.current = null
@@ -164,20 +176,39 @@ export function useTrackCarousel({
       return
     }
     haptic(HAPTIC.selection)
-    // Переключение — в начале следующего кадра (см. switchTrackInFrame), до
-    // него полоса стоит там, где её отпустили.
-    switchTrackInFrame(() => {
+    const dir = dx < 0 ? 1 : -1
+    const doSwitch = dir > 0 ? onNext : onPrev
+    // Соседней капсулы нет (вперёд можно и без соседа, если очередь
+    // догружается) — как раньше: трек меняется сразу, эффект смены трека
+    // довозит полосу от точки отпускания.
+    if (!strip || !(dir > 0 ? nextId : prevId)) {
       const fromId = usePlayerStore.getState().currentTrack?.id
       swipeRef.current = { dx: g.dx, velocity }
-      if (dx < 0) onNext()
-      else onPrev()
+      doSwitch()
       // Переход могли отложить (следующий трек ещё грузится) — тогда
       // полоса возвращается на место.
       if (usePlayerStore.getState().currentTrack?.id === fromId) {
         swipeRef.current = null
         if (strip) settle(strip, g.dx, velocity)
       }
-    })
+      return
+    }
+    const to = -dir * (strip.offsetWidth + gap)
+    beginMotion(strip)
+    const duration = settleStrip(strip, g.dx, { velocity, to })
+    const run = () => {
+      switchRef.current = null
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      // Полоса уже стоит на соседе: эффект смены трека поставит её в ноль без
+      // анимации — на экране ничего не сдвинется.
+      swipeRef.current = { dx: to, velocity: 0 }
+      doSwitch()
+      if (usePlayerStore.getState().currentTrack?.id === fromId) {
+        swipeRef.current = null
+        settle(strip, to)
+      }
+    }
+    switchRef.current = { run, timer: setTimeout(run, duration + CAROUSEL_SWITCH_DELAY_MS) }
   }
 
   const onTouchCancel = () => {
