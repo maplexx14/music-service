@@ -28,20 +28,31 @@
   pointer-events: none;
 }
 
-/* Каждый слой — цельный фон: цвет, фирменная фактура сервиса (как у hero
-   потока) и затемнение книзу под кнопками. Проявляется новый слой целиком,
-   поверх прежнего — зерно и затемнение у обоих одинаковые и при смешивании
-   стоят на месте. Зерно — крошечная серая SVG-плитка с прозрачностью,
-   растеризуется один раз. Без background-blend-mode: смешивание во весь экран
-   WebKit пересчитывал на каждой перерисовке плеера, и отклик на нажатия
-   заметно проседал. */
+/* Слой цвета — только сплошной фон и всегда свой слой: такой WebKit
+   композитит как цвет слоя, без растра, поэтому смена цвета (проявление
+   нового слоя поверх) ничего не перерисовывает. Раньше в каждом слое была и
+   фактура — новый слой на каждом треке растрировался во весь экран. */
 .fullscreen-tint {
   position: absolute;
   inset: 0;
   background-color: var(--surface-2);
+  will-change: opacity;
+}
+
+/* Фирменная фактура сервиса (как у hero потока) поверх цвета: зерно и
+   затемнение книзу под кнопками. Свой постоянный слой — нарисован один раз
+   при открытии, проявление цвета под ним его не трогает. Зерно — крошечная
+   серая SVG-плитка с прозрачностью. Без background-blend-mode: смешивание во
+   весь экран WebKit пересчитывал на каждой перерисовке плеера, и отклик на
+   нажатия заметно проседал. */
+.fullscreen-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
     linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.42) 100%);
+  will-change: transform;
 }
 
 .fullscreen-tint.is-entering {
@@ -54,9 +65,14 @@
 }
 
 /* Без GPU полноэкранный слой на каждом кадре композитит процессор —
-   цвет меняется сразу. */
+   цвет меняется сразу, лишних слоёв не держим. */
 html.no-gpu .fullscreen-tint.is-entering {
   animation: none;
+}
+
+html.no-gpu .fullscreen-tint,
+html.no-gpu .fullscreen-backdrop::after {
+  will-change: auto;
 }
 
 @starting-style {
@@ -191,6 +207,19 @@ html.no-gpu .fullscreen-tint.is-entering {
   transform: translateX(calc(var(--slot) * (100% + var(--art-gap))));
 }
 
+/* Каждая обложка — свой слой. Иначе все три вместе с размытыми тенями
+   рисовались в слой полосы, и на смене трека (соседи переставляются,
+   приходит новый) он перерисовывался целиком, а доезд карусели стартовал
+   только после этой перерисовки. Со своими слоями смена трека рисует одну
+   новую обложку, остальные только сдвигаются. */
+.fullscreen-art-strip img {
+  will-change: transform;
+}
+
+html.no-gpu .fullscreen-art-strip img {
+  will-change: auto;
+}
+
 .fullscreen-player.has-lyrics .fullscreen-art-side,
 .fullscreen-player.karaoke-mode .fullscreen-art-side {
   display: none;
@@ -218,9 +247,26 @@ html.no-gpu .fullscreen-tint.is-entering {
 }
 
 .fullscreen-like-burst svg {
+  grid-area: 1 / 1;
   width: min(190px, 41vw, 23vh);
   height: auto;
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.3));
+  will-change: transform;
+}
+
+/* Тень сердца — статичная копия контура (тот же силуэт, что маска контура в
+   LikeHeart), размытая один раз. Раньше это был filter: drop-shadow на самом
+   SVG, а сердце анимирует себя из JS кадр за кадром — размытие 570×570 px
+   пересчитывалось на каждом кадре. Сердце — в своём слое, его перерисовки
+   тень не задевают. blur(9px) — то же размытие, что у drop-shadow 18px. */
+.fullscreen-like-burst::before {
+  content: '';
+  grid-area: 1 / 1;
+  width: min(190px, 41vw, 23vh);
+  aspect-ratio: 1;
+  background: url('../assets/like-heart-line.webp') center / contain no-repeat;
+  filter: brightness(0) blur(9px);
+  opacity: 0.3;
+  transform: translateY(6px);
 }
 
 @keyframes fs-like-burst {
