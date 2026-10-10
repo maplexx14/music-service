@@ -93,6 +93,7 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
     <div
       ref={cardRef}
       className="track-card"
+      data-fast-tap=""
       onClick={() => handlePlayTrack(track, queue)}
       {...trackIntentHandlers(track)}
     >

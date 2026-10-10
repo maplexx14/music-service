@@ -11,6 +11,7 @@
 
 import { usePlayerStore } from '../store/playerStore'
 import { PRESSABLE, SCROLLABLE } from '../services/pressFeedback'
+import { isFastTapClick } from '../services/fastTap'
 
 const ENABLED_KEY = 'bolt-frame-meter'
 const REPORT_KEY = 'bolt-frame-meter-report'
@@ -98,15 +99,23 @@ let pendingTap = null
 
 const onClick = (e) => {
   // Служебные клики (свитч тактильного отклика в haptics.js и т.п.) — не тап.
-  if (!e.isTrusted) return
+  // Быстрый тап (services/fastTap) — тап, хоть и не isTrusted.
+  const fast = isFastTapClick()
+  if (!e.isTrusted && !fast) return
   const now = performance.now()
   const fromTouch = now - lastTapAt < TAP_CLICK_WINDOW_MS
   const t0 = fromTouch ? lastTapAt : e.timeStamp
   // Тип цели — проверить, держит ли клик анимация нажатия (pressFeedback):
   // в списке она стартует с задержкой, вне списка — сразу на касании.
   const pressable = e.target instanceof Element ? e.target.closest(PRESSABLE) : null
-  const kind = !pressable ? 'не кнопка' : pressable.closest(SCROLLABLE) ? 'кнопка в списке' : 'кнопка вне списка'
-  const tap = { t0, dispatchAt: now, handledAt: 0, kind }
+  const kind = fast
+    ? 'быстрый тап'
+    : !pressable
+      ? 'не кнопка'
+      : pressable.closest(SCROLLABLE)
+        ? 'кнопка в списке'
+        : 'кнопка вне списка'
+  const tap = { t0, dispatchAt: now, handledAt: 0, kind, fast }
   pendingTap = tap
   // Итог пишем в кадре, а не в onClickDone: обработчик мог остановить
   // всплытие, и тогда до window клик не дойдёт — без разбивки, но тап учтём.
@@ -126,7 +135,7 @@ const onClick = (e) => {
 }
 
 const onClickDone = (e) => {
-  if (e.isTrusted && pendingTap) pendingTap.handledAt = performance.now()
+  if (pendingTap && (e.isTrusted || pendingTap.fast)) pendingTap.handledAt = performance.now()
 }
 
 function checkProbe(now) {

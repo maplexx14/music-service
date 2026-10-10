@@ -11,6 +11,7 @@ import { installImageFade } from './services/imageFade'
 import { installFrameMeter } from './utils/frameMeter'
 import { installPressFeedback } from './services/pressFeedback'
 import { installTouchGuard } from './services/touchGuard'
+import { installFastTap } from './services/fastTap'
 import { applyGpuClass } from './utils/gpu'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
@@ -19,6 +20,7 @@ installPressFeedback()
 installImageFade()
 installFrameMeter()
 installTouchGuard()
+installFastTap()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

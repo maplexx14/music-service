@@ -46,6 +46,9 @@ function TrackTableRow({
   return (
     <tr
       className={`track-row${isCurrent ? ' playing' : ''}`}
+      // Тап на таче срабатывает на отпускании, без задержки клика WebKit
+      // (services/fastTap).
+      data-fast-tap=""
       onClick={() => actionsRef.current.play(track, index)}
       {...trackIntentHandlers(track)}
     >

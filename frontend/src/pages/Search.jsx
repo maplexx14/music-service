@@ -217,6 +217,7 @@ function Search() {
             <div
               key={track.id}
               className="track-item"
+              data-fast-tap=""
               onClick={() => handlePlayExternalTrack(track, tracks)}
               {...trackIntentHandlers(track)}
               {...trackMenu.getProps(track)}
@@ -408,6 +409,7 @@ function Search() {
                   <div
                     key={track.id}
                     className="track-item"
+                    data-fast-tap=""
                     onClick={() => handlePlayTrack(track)}
                     {...trackIntentHandlers(track)}
                     {...trackMenu.getProps(track)}
