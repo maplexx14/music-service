@@ -413,7 +413,7 @@ function Artist() {
       <div className="artist-toolbar">
         <div className="playlist-actions artist-actions">
           <button
-            className="play-button-large artist-play"
+            className="btn btn--primary btn--lg play-button-large artist-play"
             onClick={handlePlayToggle}
             disabled={tracks.length === 0}
             aria-label={playLabel}
@@ -426,7 +426,7 @@ function Artist() {
             <span className="artist-action-label">{playLabel}</span>
           </button>
           <button
-            className="play-button-large secondary artist-save"
+            className="btn btn--secondary btn--lg play-button-large artist-save"
             onClick={handleSaveToLibrary}
             disabled={saving || tracks.length === 0}
             aria-label={saveLabel}

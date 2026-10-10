@@ -491,7 +491,9 @@ function Home() {
                 centerX={0}
                 centerY={0}
                 zoom={0.9}
-                rippleFrom=".hero-disc"
+                // Диск, а без него (ничего не играет) — кнопка потока:
+                // querySelector берёт первый по документу, диск идёт раньше.
+                rippleFrom=".hero-disc, .wave-title, .wave-gif-button"
                 rippleStrength={1}
                 rippleKey={currentTrackId != null ? 1 : 0}
                 active={isWavePlaying}

@@ -304,6 +304,8 @@
     border: 1px solid rgba(255, 255, 255, 0.3);
     border-radius: var(--radius-avatar);
     color: var(--text-primary);
+    /* У .btn--secondary обводка — inset-тенью; здесь она уже рамкой. */
+    box-shadow: none;
   }
 
   .artist-actions .action-button.liked {

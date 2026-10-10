@@ -76,7 +76,11 @@
 
 @media (max-width: 768px) {
   .hero-disc {
-    width: min(350px, 80vw, 60vh); 
+    width: min(350px, 80vw, 60vh);
+    /* Нижний паддинг hero больше верхнего — под нижнюю навигацию (Home.css).
+       Кнопка потока центрирована без него, диск — тоже, иначе они
+       разъезжаются. */
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
 }
 

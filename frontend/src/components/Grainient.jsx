@@ -392,9 +392,12 @@ const Grainient = ({
 
     // Центр и радиус колец в координатах шейдера: x/y в долях canvas (y
     // снизу вверх, как gl_FragCoord), радиус — в долях высоты. Источника нет
-    // (ничего не играет) — кольца идут из центра.
+    // — кольца идут из центра. Центр самого градиента едет за источником:
+    // источник не всегда посередине canvas (на телефоне hero уходит под
+    // нижнюю навигацию, и кнопка потока выше его середины).
     const measureRipple = () => {
       const center = program.uniforms.uRippleCenter.value;
+      const offset = program.uniforms.uCenterOffset.value;
       const el = rippleFrom ? document.querySelector(rippleFrom) : null;
       const box = container.getBoundingClientRect();
       if (!el || !(box.width > 0) || !(box.height > 0)) {
@@ -407,6 +410,8 @@ const Grainient = ({
         center[1] = 1 - (r.top + r.height / 2 - box.top) / box.height;
         program.uniforms.uRippleRadius.value = r.width / 2 / box.height;
       }
+      offset[0] = centerX + 0.5 - center[0];
+      offset[1] = centerY + 0.5 - center[1];
       if (!running) renderer.render({ scene: mesh });
     };
     measureRippleRef.current = measureRipple;
