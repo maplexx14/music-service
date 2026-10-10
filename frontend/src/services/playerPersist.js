@@ -1,6 +1,7 @@
 import api from './api'
 import { usePlayerStore } from '../store/playerStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
+import { noteSpan } from '../utils/frameMeter'
 
 // Сохранение очереди и позиции между запусками. iOS выгружает PWA из памяти
 // после долгой паузы или при нехватке памяти, и раньше следующее открытие
@@ -98,11 +99,13 @@ function saveNow() {
   const data = snapshot()
   if (!data) return
   localSavedAt = data.savedAt
+  const startedAt = performance.now()
   try {
     localStorage.setItem(PLAYER_PERSIST_KEY, JSON.stringify(data))
   } catch {
     // переполнение квоты / приватный режим — без сохранения, плеер работает
   }
+  noteSpan('плеер: сохранение очереди', performance.now() - startedAt)
   schedulePush()
 }
 

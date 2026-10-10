@@ -236,11 +236,15 @@ function loadReport() {
 }
 
 function saveReport() {
+  const startedAt_ = performance.now()
   try {
     localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, renders, jankAnims, startedAt }))
   } catch {
     /* хранилище недоступно — отчёт живёт до перезапуска */
   }
+  // Сравнение для записи журнала плеера (utils/playerDiag): тот же
+  // localStorage, но в тихий момент.
+  noteSpan('замер: запись отчёта', performance.now() - startedAt_)
 }
 
 function screenName() {

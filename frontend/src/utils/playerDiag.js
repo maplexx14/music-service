@@ -32,16 +32,46 @@ try {
   entries = []
 }
 
-// Пишем синхронно, без дебаунса: событие, ради которого всё затевалось,
-// случается ровно перед тем, как страницу заморозят или выгрузят, и
-// отложенная запись до диска не доедет. Записей мало (события media-элемента,
-// не timeupdate), так что стоимость незаметна.
-function persist() {
+// В фоне пишем синхронно, без дебаунса: событие, ради которого всё
+// затевалось, случается ровно перед тем, как страницу заморозят или выгрузят,
+// и отложенная запись до диска не доедет.
+//
+// Пока страница на экране — пачкой, раз в PERSIST_DELAY_MS. Каждая запись —
+// это весь журнал (до MAX_ENTRIES записей, десятки КБ) в localStorage, а на
+// смене трека и перемотке событий десяток подряд. Замер плавности ловил
+// после каждого медиасобытия блокировку главного потока на 60–100 мс, и
+// синхронная запись — главный подозреваемый (её время пишется в замер). На
+// экране страницу не заморозят без visibilitychange, а на нём отложенное
+// дописывается сразу. 2 с — длиннее таймеров, которых WebKit ждёт перед
+// кликом, если их поставили на касании (запись бывает и из тапа).
+const PERSIST_DELAY_MS = 2000
+let persistTimer = 0
+
+function persistNow() {
+  clearTimeout(persistTimer)
+  persistTimer = 0
+  const startedAt = performance.now()
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries))
   } catch {
     /* приватный режим / переполнение — диагностика не должна ничего ломать */
   }
+  noteSpan('диагностика: запись журнала', performance.now() - startedAt)
+}
+
+function persist() {
+  if (document.hidden) persistNow()
+  else if (!persistTimer) persistTimer = setTimeout(persistNow, PERSIST_DELAY_MS)
+}
+
+if (typeof document !== 'undefined') {
+  const flush = () => {
+    if (persistTimer) persistNow()
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flush()
+  })
+  window.addEventListener('pagehide', flush)
 }
 
 // Снимок состояния элемента: по нему видно, чем «зависший» старт отличается от
@@ -121,6 +151,8 @@ export function formatDiag() {
 }
 
 export function clearDiag() {
+  clearTimeout(persistTimer)
+  persistTimer = 0
   entries = []
   try {
     localStorage.removeItem(STORAGE_KEY)
