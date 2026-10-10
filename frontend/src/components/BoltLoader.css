@@ -35,7 +35,7 @@
   left: 50%;
   top: 50%;
   width: calc(var(--bl-size) * 0.42 * var(--k));
-  aspect-ratio: 76 / 116;
+  aspect-ratio: 76 / 136;
   background: center / contain no-repeat;
   opacity: 0;
   pointer-events: none;
