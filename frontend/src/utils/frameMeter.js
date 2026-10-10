@@ -13,6 +13,10 @@ import { usePlayerStore } from '../store/playerStore'
 import { PRESSABLE, SCROLLABLE } from '../services/pressFeedback'
 import { isFastTapClick } from '../services/fastTap'
 
+// id фоновых анимаций воспроизведения (полосы прогресса, диск): они идут в
+// каждом кадре, пока играет музыка, и в разбор рывков не попадают.
+export const PLAYBACK_ANIMATION_ID = 'playback'
+
 const ENABLED_KEY = 'bolt-frame-meter'
 const REPORT_KEY = 'bolt-frame-meter-report'
 const FRAME_MS = 1000 / 60
@@ -266,6 +270,9 @@ function runningAnimations() {
   const names = new Set()
   for (const anim of document.getAnimations()) {
     if (anim.playState !== 'running') continue
+    // Полосы прогресса и диск идут в каждом кадре, пока играет музыка, — их
+    // присутствие в кадре с рывком ничего не говорит (их ведёт композитор).
+    if (anim.id === PLAYBACK_ANIMATION_ID) continue
     const target = anim.effect?.target
     if (target instanceof Element && target.closest('.screen:not([data-active])')) continue
     let name = anim.animationName || (anim.transitionProperty && `transition:${anim.transitionProperty}`)

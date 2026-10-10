@@ -17,7 +17,7 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import { settleStrip, SETTLE_MS } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
-import { getActive } from '../services/audioEngine'
+import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { holdHeavyAnimations, morphTransition } from '../services/navigation'
 import LyricsPanel from './LyricsPanel'
 import ArtistLink from './ArtistLink'
@@ -68,45 +68,77 @@ function thumbTransform(ratio) {
   return `translateX(${(ratio - 1) * 100}%)`
 }
 
+// Фон плеера — приглушённый цвет обложки. Новый цвет проявляется слоем
+// поверх прежнего (opacity ведёт композитор), а не transition background-color:
+// тот перекрашивал весь экран на каждом кадре 0,6 с — ровно во время выезда
+// плеера и доезда карусели на смене трека. Слой под проявившимся убираем;
+// больше трёх не держим (без анимаций, в облегчённом режиме, конца проявления
+// не бывает).
+const MAX_TINT_LAYERS = 3
+
+function TintBackdrop({ color }) {
+  const [layers, setLayers] = useState(() => [{ key: 0, color, entering: false }])
+  const [shownColor, setShownColor] = useState(color)
+  if (color !== shownColor) {
+    setShownColor(color)
+    setLayers((prev) => [
+      ...prev.slice(1 - MAX_TINT_LAYERS),
+      { key: prev[prev.length - 1].key + 1, color, entering: true },
+    ])
+  }
+  const settle = (key) =>
+    setLayers((prev) => {
+      const index = prev.findIndex((layer) => layer.key === key)
+      return index > 0 ? prev.slice(index) : prev
+    })
+
+  return (
+    <div className="fullscreen-backdrop" aria-hidden="true">
+      {layers.map((layer) => (
+        <div
+          key={layer.key}
+          className={`fullscreen-tint${layer.entering ? ' is-entering' : ''}`}
+          style={layer.color ? { backgroundColor: layer.color } : undefined}
+          onAnimationEnd={layer.entering ? () => settle(layer.key) : undefined}
+        />
+      ))}
+    </div>
+  )
+}
+
+const fillTransform = (ratio) => `scaleX(${ratio})`
+
 // Прогресс-блок вынесен в отдельный компонент: только он подписан на
 // currentTime. Остальной полноэкранный плеер (обложка, кнопки, жесты) не
 // перерисовывается на каждом тике воспроизведения.
 //
 // Store тикает раз в секунду (троттлинг timeupdate в Player), и полоса,
-// нарисованная по нему, прыгала секундными шагами. Пока играет, двигаем её
-// каждый кадр прямо из <audio> (как мини-плеер) — через transform: scaleX,
-// это только композитинг, без раскладки и перерисовки.
+// нарисованная по нему, прыгала бы секундными шагами. Заливку и ползунок
+// ведёт композитор (hooks/usePlaybackProgress) — без rAF-цикла в главном
+// потоке, который раньше писал transform каждый кадр, пока играет.
+// Под пальцем полосу двигает жест: transform пишем напрямую, React его не
+// рисует — иначе его инлайновый style спорил бы с анимацией.
 function FullScreenProgress() {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
-  const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
   const fillRef = useRef(null)
   const thumbRef = useRef(null)
+  const progress = usePlaybackProgress([
+    { ref: fillRef, frame: fillTransform },
+    { ref: thumbRef, frame: thumbTransform },
+  ])
   // Протяжка ползунка: доля под пальцем, пока он не отпущен. Перематываем
   // один раз, на отпускании, — серия перемоток по потоку в WebKit залипает
   // в seeking (см. kickStalled в Player).
   const dragRef = useRef(null)
   const [dragRatio, setDragRatio] = useState(null)
 
-  const playedRatio = duration ? Math.min(1, currentTime / duration) : 0
-  const ratio = dragRatio ?? playedRatio
-
-  useEffect(() => {
-    if (!isPlaying || !(duration > 0)) return undefined
-    let raf
-    const tick = () => {
-      const audio = getActive()
-      if (audio && fillRef.current && !dragRef.current) {
-        const r = Math.min(1, audio.currentTime / duration)
-        fillRef.current.style.transform = `scaleX(${r})`
-        if (thumbRef.current) thumbRef.current.style.transform = thumbTransform(r)
-      }
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [isPlaying, duration])
+  const showDrag = (ratio) => {
+    if (fillRef.current) fillRef.current.style.transform = fillTransform(ratio)
+    if (thumbRef.current) thumbRef.current.style.transform = thumbTransform(ratio)
+    setDragRatio(ratio)
+  }
 
   const ratioAt = (e, rect) => Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
 
@@ -115,13 +147,14 @@ function FullScreenProgress() {
     e.currentTarget.setPointerCapture?.(e.pointerId)
     const rect = e.currentTarget.getBoundingClientRect()
     dragRef.current = { pointerId: e.pointerId, rect }
-    setDragRatio(ratioAt(e, rect))
+    progress.current.hold()
+    showDrag(ratioAt(e, rect))
   }
 
   const handlePointerMove = (e) => {
     const drag = dragRef.current
     if (!drag || e.pointerId !== drag.pointerId) return
-    setDragRatio(ratioAt(e, drag.rect))
+    showDrag(ratioAt(e, drag.rect))
   }
 
   const finishDrag = (e) => {
@@ -130,9 +163,10 @@ function FullScreenProgress() {
     dragRef.current = null
     const next = ratioAt(e, drag.rect)
     setDragRatio(null)
-    // Касание отобрала система — позицию не трогаем.
-    if (e.type === 'pointercancel' || !duration) return
-    seekTo(next * duration, 'fullscreen-bar')
+    // Касание отобрала система — позицию не трогаем. Перемотка — до release:
+    // полоса встаёт на заказанную позицию, а не откатывается к звуку.
+    if (e.type !== 'pointercancel' && duration) seekTo(next * duration, 'fullscreen-bar')
+    progress.current.release()
   }
 
   return (
@@ -150,9 +184,9 @@ function FullScreenProgress() {
         aria-valuenow={Math.floor(currentTime || 0)}
       >
         <div className="fullscreen-progress-track">
-          <div ref={fillRef} className="fullscreen-progress-fill" style={{ transform: `scaleX(${ratio})` }} />
+          <div ref={fillRef} className="fullscreen-progress-fill" />
         </div>
-        <div ref={thumbRef} className="fullscreen-progress-thumb" style={{ transform: thumbTransform(ratio) }} />
+        <div ref={thumbRef} className="fullscreen-progress-thumb" />
       </div>
       <div className="fullscreen-progress-time">
         <span>{formatTime(dragRatio != null ? dragRatio * duration : currentTime)}</span>
@@ -607,11 +641,9 @@ function FullScreenPlayer() {
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchCancel}
       ref={playerRef}
-      style={{
-        '--fs-tint': tint || undefined,
-        '--art-gap': `${ART_GAP}px`,
-      }}
+      style={{ '--art-gap': `${ART_GAP}px` }}
     >
+      <TintBackdrop color={tint} />
       <div className="fullscreen-header">
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />

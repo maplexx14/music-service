@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
   postRecommendationEvent,
@@ -13,6 +13,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
+import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { noteSpan } from '../utils/frameMeter'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
@@ -26,6 +27,7 @@ import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
+import { warmThemeColor } from '../hooks/useThemeColor'
 import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
@@ -223,83 +225,41 @@ function reloadAtPosition(audio) {
   )
 }
 
-// Шагов квантования позиции прогресс-бара (см. writeProgress).
-const PROGRESS_STEPS = 2000
+// Заливка капсулы и полоса сверху: сдвиг на (ratio − 1) собственной ширины
+// внутри обрезки — правый край приходится ровно на позицию. Сдвиг, а не
+// scaleX: у капсулы скругление, и сжатая заливка сплющила бы его.
+const progressShift = (ratio) => `translateX(${(ratio - 1) * 100}%)`
+// Без GPU (utils/gpu.js) композитинг каждого кадра — тоже процессор.
+const NO_GPU = typeof document !== 'undefined' && document.documentElement.classList.contains('no-gpu')
 
 // Прогресс-бар вынесен в отдельный компонент: ТОЛЬКО он подписан на
-// currentTime (тикает ~4 раза/сек через timeupdate). Остальной Player без
-// этой подписки не перерисовывается на каждом тике — обложка, кнопки,
-// лайки и панель плейлистов остаются статичными во время воспроизведения.
+// currentTime (стор тикает раз в секунду). Остальной Player без этой подписки
+// не перерисовывается на каждом тике — обложка, кнопки, лайки и панель
+// плейлистов остаются статичными во время воспроизведения.
+//
+// Саму позицию React не рисует: заливку капсулы, полосу и ползунок двигает
+// композитор (hooks/usePlaybackProgress). Прежде их вёл rAF-цикл всё время,
+// пока играет музыка, а запись переменной перекрашивала капсулу под
+// backdrop-filter ~10 раз в секунду.
 function PlayerProgress({ audioRef }) {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
-  // isPlaying меняется только по play/pause, не на каждом тике времени, так что
-  // подписка не возвращает перерисовки, от которых компонент был отделён.
-  const isPlaying = usePlayerStore((s) => s.isPlaying)
-  // Облегчённый режим: полоса шагает раз в секунду, без rAF-цикла. Каждая
-  // запись переменной — новый кадр окна, а на слабом железе (и на интеловском
-  // маке с Firefox, где кадр окна дорогой) ~10 кадров в секунду от одной
-  // полосы заметно грели процессор.
+  // Облегчённый режим: полоса шагает раз в секунду, по тикам стора, без
+  // анимации. На слабом железе (и на интеловском маке с Firefox, где кадр
+  // окна дорогой) каждый кадр полосы заметно грел процессор.
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const surfaceRef = useRef(null)
   const fillRef = useRef(null)
-
-  // Последнее записанное значение: запись переменной перекрашивает всю
-  // капсулу плеера (градиент surface) и двигает раскладку заливки. Позицию
-  // квантуем до 1/PROGRESS_STEPS длины — около пикселя даже на широкой
-  // полосе, — и пишем только при смене шага: на обычном треке это ~10 записей
-  // в секунду вместо 60. Без аппаратного ускорения каждая такая перерисовка
-  // идёт на CPU, и разница заметна.
-  const lastProgressRef = useRef(null)
-  const writeProgress = useCallback((force = false) => {
-    const audio = audioRef.current
-    if (!audio || !(duration > 0)) return
-    const step = Math.round(Math.min(1, audio.currentTime / duration) * PROGRESS_STEPS)
-    if (!force && step === lastProgressRef.current) return
-    lastProgressRef.current = step
-    const pct = `${(step * 100) / PROGRESS_STEPS}%`
-    surfaceRef.current?.style.setProperty('--player-progress', pct)
-    fillRef.current?.style.setProperty('--player-progress', pct)
-  }, [audioRef, duration])
-
-  // Ширину заливки двигаем на каждом кадре прямо в DOM, минуя store и React:
-  // store тикает раз в секунду (сознательный троттлинг timeupdate), от этого
-  // полоса дёргалась секундными шагами. rAF сам замирает в скрытой вкладке,
-  // так что фоновые кадры не жгут CPU.
-  //
-  // На паузе позиция не меняется — вместо вечного цикла пишем один кадр и
-  // останавливаемся. Прежде rAF крутился всё время, пока плеер смонтирован,
-  // и каждый кадр дёргал пересчёт стилей полосы даже на стоящем треке.
-  //
-  // Дальнейшие изменения позиции на паузе (seek, смена трека) доезжают сами:
-  // инлайновый style ниже пишет ту же переменную из store на каждом рендере.
-  // Этот единственный кадр нужен ровно затем, чтобы полоса встала на точную
-  // позицию из audio, а не на округлённую store-версию (троттлинг ~1 с).
-  useEffect(() => {
-    if (!isPlaying || liteMode) {
-      // force: инлайновый style из store мог перезаписать переменную
-      // округлённым значением, кэш шага тут не показатель. В облегчённом
-      // режиме дальше полосу ведёт инлайновый style по целым секундам.
-      writeProgress(true)
-      return
-    }
-    let raf
-    const tick = () => {
-      writeProgress()
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [isPlaying, liteMode, writeProgress])
-
-  // Рендер по тику store пишет инлайновый style с округлённой store-позицией,
-  // а rAF-цикл из-за квантования может не перезаписать её до следующего шага —
-  // полоса на долю секунды отскакивала бы назад. Возвращаем точную позицию
-  // до отрисовки.
-  useLayoutEffect(() => {
-    writeProgress(true)
-  })
+  const headRef = useRef(null)
+  usePlaybackProgress(
+    [
+      { ref: surfaceRef, frame: progressShift },
+      { ref: fillRef, frame: progressShift },
+      { ref: headRef, frame: progressShift },
+    ],
+    { stepped: liteMode || NO_GPU },
+  )
 
   const handleSeek = (e) => {
     const audio = audioRef.current
@@ -314,26 +274,17 @@ function PlayerProgress({ audioRef }) {
     setCurrentTime(newTime)
   }
 
-  // В облегчённом режиме — по целым секундам: store тикает ~4 раза в секунду,
-  // а значение меняется (и окно перерисовывается) только раз в секунду.
-  const shownTime = liteMode ? Math.floor(currentTime) : currentTime
-  const progressPercent = duration ? Math.min(100, (shownTime / duration) * 100) : 0
-
   return (
     <>
-      <div
-        ref={surfaceRef}
-        className="player-progress-surface"
-        style={{ '--player-progress': `${progressPercent}%` }}
-        aria-hidden="true"
-      />
+      <div className="player-progress-surface" aria-hidden="true">
+        <div ref={surfaceRef} className="player-progress-surface-fill" />
+      </div>
       <div className="player-progress-top" onClick={handleSeek}>
         <div className="player-progress-top-track">
-          <div
-            ref={fillRef}
-            className="player-progress-top-fill"
-            style={{ '--player-progress': `${progressPercent}%` }}
-          >
+          <div className="player-progress-top-clip">
+            <div ref={fillRef} className="player-progress-top-fill" />
+          </div>
+          <div ref={headRef} className="player-progress-top-head">
             <span className="player-progress-time-bubble">{formatTime(currentTime)}</span>
             <span className="player-progress-thumb" />
           </div>
@@ -671,6 +622,18 @@ function PlayerInner() {
     })
     return () => cancel(handle)
   }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed])
+
+  // Фон фуллскрина красится в цвет обложки (useThemeColor) по той же
+  // миниатюре, что уже показана в мини-плеере. Считаем его в простое, а не
+  // при открытии: иначе цвет приезжал посреди анимации выезда.
+  useEffect(() => {
+    const thumb = resolveCoverUrl(currentTrack?.cover_url, 'thumb')
+    if (!thumb || isFullScreen) return undefined
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const handle = idle(() => warmThemeColor(thumb))
+    return () => cancel(handle)
+  }, [currentTrack?.cover_url, isFullScreen])
 
   useEffect(() => {
     const audio = audioRef.current

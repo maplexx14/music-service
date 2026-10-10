@@ -4,18 +4,9 @@
   /* Динамическая высота вьюпорта: учитывает адресную строку/панели на мобильных. */
   height: 100dvh;
   --fs-pad-x: 24px;
-  /* Фон — приглушённый цвет обложки (--fs-tint ставит FullScreenPlayer из
-     useThemeColor), книзу чуть темнее под кнопками. Пока цвет не посчитан —
-     нейтральный тёмный. */
-  background-color: var(--fs-tint, var(--surface-2));
-  /* Фирменная фактура сервиса (как у hero потока): зерно поверх цвета
-     и затемнение книзу под кнопками. Зерно — крошечная серая SVG-плитка с
-     прозрачностью, растеризуется один раз. Без background-blend-mode:
-     смешивание во весь экран WebKit пересчитывал на каждой перерисовке
-     плеера, и отклик на нажатия заметно проседал. */
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
-    linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.42) 100%);
+  /* Цвет обложки — в слоях .fullscreen-backdrop под содержимым; здесь только
+     подложка на кадр до них. */
+  background-color: var(--surface-2);
   color: var(--text-primary);
   display: flex;
   flex-direction: column;
@@ -24,8 +15,48 @@
   overflow: hidden;
   transition:
     transform 0.4s var(--ease-drawer),
-    opacity 0.3s var(--ease-drawer),
-    background-color 0.6s ease;
+    opacity 0.3s var(--ease-drawer);
+}
+
+/* Фон — приглушённый цвет обложки (TintBackdrop, цвет из useThemeColor),
+   пока он не посчитан — нейтральный тёмный. Отрицательный z-index: слои
+   лежат под содержимым внутри плеера (он сам — контекст наложения). */
+.fullscreen-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Каждый слой — цельный фон: цвет, фирменная фактура сервиса (как у hero
+   потока) и затемнение книзу под кнопками. Проявляется новый слой целиком,
+   поверх прежнего — зерно и затемнение у обоих одинаковые и при смешивании
+   стоят на месте. Зерно — крошечная серая SVG-плитка с прозрачностью,
+   растеризуется один раз. Без background-blend-mode: смешивание во весь экран
+   WebKit пересчитывал на каждой перерисовке плеера, и отклик на нажатия
+   заметно проседал. */
+.fullscreen-tint {
+  position: absolute;
+  inset: 0;
+  background-color: var(--surface-2);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
+    linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.42) 100%);
+}
+
+.fullscreen-tint.is-entering {
+  animation: fs-tint-in 0.6s ease both;
+}
+
+@keyframes fs-tint-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Без GPU полноэкранный слой на каждом кадре композитит процессор —
+   цвет меняется сразу. */
+html.no-gpu .fullscreen-tint.is-entering {
+  animation: none;
 }
 
 @starting-style {
@@ -474,9 +505,10 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 .fullscreen-progress-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--brand-accent-active), var(--brand-accent-hover));
-  /* Длина — через scaleX (FullScreenProgress двигает её каждый кадр):
-     композитинг вместо раскладки. */
+  /* Длина — через scaleX, её ведёт анимация на композиторе
+     (usePlaybackProgress): ни раскладки, ни перерисовки. */
   transform-origin: left center;
+  transform: scaleX(0);
   will-change: transform;
 }
 
@@ -486,6 +518,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  transform: translateX(-100%);
   will-change: transform;
 }
 

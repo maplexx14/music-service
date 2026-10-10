@@ -66,23 +66,54 @@ async function extractDominantColor(src) {
   })
 }
 
+// Посчитанные цвета по URL обложки. Плеер открывают снова и снова на тех же
+// треках, а без кэша первый кадр всякий раз был нейтральным, и цвет обложки
+// (загрузка картинки, canvas) приезжал уже посреди анимации открытия.
+const COLOR_CACHE_MAX = 200
+const colorCache = new Map()
+
+function rememberColor(src, color) {
+  colorCache.delete(src)
+  colorCache.set(src, color)
+  if (colorCache.size > COLOR_CACHE_MAX) colorCache.delete(colorCache.keys().next().value)
+}
+
+// Цвет заранее, в простое после смены трека: тогда и первое открытие плеера
+// на этом треке сразу в цвет обложки.
+export function warmThemeColor(coverUrl) {
+  if (!coverUrl || colorCache.has(coverUrl)) return
+  extractDominantColor(coverUrl).then((color) => {
+    if (color) rememberColor(coverUrl, color)
+  })
+}
+
 // Пока полноэкранный плеер открыт, статус-бар Android (и заголовок окна
 // на десктопе) окрашивается в приглушённый цвет обложки — как это делают
 // нативные музыкальные приложения. При размонтировании цвет возвращается.
 // Тот же цвет хук возвращает (null — пока не посчитан): плеер красит им
-// свой фон, и статус-бар сливается с ним.
+// свой фон, и статус-бар сливается с ним. Уже посчитанный цвет возвращается
+// в том же рендере, что и новая обложка.
 export function useThemeColor(active, coverUrl) {
-  const [color, setColor] = useState(null)
+  const [color, setColor] = useState(() => colorCache.get(coverUrl) ?? null)
+  const known = coverUrl ? colorCache.get(coverUrl) : undefined
 
   useEffect(() => {
     if (!active) return undefined
     let cancelled = false
-
-    extractDominantColor(coverUrl).then((next) => {
-      if (cancelled || !next) return
+    const apply = (next) => {
       setColor(next)
       getThemeMeta()?.setAttribute('content', next)
-    })
+    }
+    const cached = colorCache.get(coverUrl)
+    if (cached) {
+      apply(cached)
+    } else {
+      extractDominantColor(coverUrl).then((next) => {
+        if (cancelled || !next) return
+        rememberColor(coverUrl, next)
+        apply(next)
+      })
+    }
 
     return () => {
       cancelled = true
@@ -90,5 +121,5 @@ export function useThemeColor(active, coverUrl) {
     }
   }, [active, coverUrl])
 
-  return color
+  return known ?? color
 }

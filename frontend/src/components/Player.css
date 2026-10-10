@@ -43,12 +43,30 @@
   background-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Заливку и ползунок двигает композитор (usePlaybackProgress): сдвиг на
+   (доля − 1) ширины полосы. Заливка — в обрезке, иначе сдвинутая влево она
+   торчала бы за начало полосы; голова с ползунком и временем — без обрезки,
+   её содержимое стоит на правом краю и выходит за полосу. */
+.player-progress-top-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.player-progress-top-fill,
+.player-progress-top-head {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+}
+
 .player-progress-top-fill {
-  position: relative;
-  height: 100%;
-  width: var(--player-progress, 0%);
   background-color: transparent;
   transition: background-color 0.15s ease;
+}
+
+.player-progress-top-head {
+  pointer-events: none;
 }
 
 .player-progress-top:hover .player-progress-top-fill {
@@ -577,20 +595,25 @@
   background: var(--brand-accent);
 }
 
-/* The mini player itself fills as the track progresses. */
+/* Капсула сама заполняется по ходу трека. Форма всегда равна капсуле
+   плеера, движется только граница заливки: заливка во всю ширину сдвинута
+   влево и обрезана скруглением (иначе при узкой заливке браузер сжимал бы её
+   радиусы и углы не совпадали). Сдвиг ведёт композитор — капсула под
+   backdrop-filter не перерисовывается. */
 .player-progress-surface {
   position: absolute;
   inset: 0;
-  /* Форма всегда равна капсуле плеера, движется только граница заливки —
-     иначе при узкой заливке браузер сжимает её радиусы и углы не совпадают. */
   border-radius: 999px;
+  overflow: hidden;
   pointer-events: none;
-  background: linear-gradient(
-    to right,
-    rgba(255, 255, 255, 0.13) var(--player-progress, 0%),
-    transparent var(--player-progress, 0%)
-  );
   z-index: 0;
+}
+
+.player-progress-surface-fill {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.13);
+  transform: translateX(-100%);
 }
 
 

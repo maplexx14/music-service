@@ -164,11 +164,14 @@ export function useLyrics(track) {
   return { syncedLines, plainText, loading, error }
 }
 
+// Строка загорается чуть раньше своей метки времени.
+export const LYRIC_LEAD_SEC = 0.1
+
 // Find the active line index for a given time
 export function getActiveLyricIndex(syncedLines, currentTime) {
   if (!syncedLines.length) return -1
   for (let i = syncedLines.length - 1; i >= 0; i--) {
-    if (currentTime >= syncedLines[i].time - 0.1) return i
+    if (currentTime >= syncedLines[i].time - LYRIC_LEAD_SEC) return i
   }
   return 0
 }

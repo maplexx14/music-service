@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScreen } from '../hooks/useScreen'
+import { PLAYBACK_ANIMATION_ID } from '../utils/frameMeter'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './HeroDisc.css'
@@ -105,6 +106,7 @@ function HeroDisc() {
         [{ transform: el.style.transform }, { transform: 'rotate(360deg)' }],
         { duration: remaining * 1000, easing: 'linear', fill: 'forwards' },
       )
+      anim.id = PLAYBACK_ANIMATION_ID
       if (!playing) anim.pause()
     }
 

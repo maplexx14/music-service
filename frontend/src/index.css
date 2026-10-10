@@ -627,6 +627,10 @@ body {
     -webkit-backdrop-filter: none !important;
     background: #0a0a0e !important;
   }
+
+  .fullscreen-backdrop {
+    display: none;
+  }
 }
 
 /* Иконки lucide кистью логотипа: фильтр #brush-icon лежит в index.html,

@@ -1,10 +1,15 @@
 import { useRef, useEffect, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { useLyrics, getActiveLyricIndex } from '../hooks/useLyrics'
+import { useLyrics, getActiveLyricIndex, LYRIC_LEAD_SEC } from '../hooks/useLyrics'
 import { AlignLeft } from 'lucide-react'
 import BoltLoader from './BoltLoader'
 import { getActive } from '../services/audioEngine'
 import './LyricsPanel.css'
+
+// Таймер смены строки: не реже раза в LYRIC_CHECK_MS (время звука могло
+// уйти), не чаще LYRIC_MIN_WAIT_MS (строки с одинаковым временем).
+const LYRIC_CHECK_MS = 1000
+const LYRIC_MIN_WAIT_MS = 16
 
 function LyricsPanel({ showOnlyText = false }) {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
@@ -19,22 +24,31 @@ function LyricsPanel({ showOnlyText = false }) {
 
   // Store тикает раз в секунду (троттлинг timeupdate в Player), и строка,
   // выбранная по нему, переключалась с опозданием до ~1,2 с. Пока играет,
-  // берём время прямо из <audio> каждый кадр, как прогресс-бар
-  // полноэкранного плеера. setState с тем же индексом React пропускает, так
-  // что перерисовка — только на смене строки. На паузе и после перемотки
-  // точен и store: он обновляется на seek.
+  // строку выбираем по времени прямо из <audio> и будим себя таймером ровно
+  // к началу следующей — раньше это делал rAF-цикл, 60 пробуждений главного
+  // потока в секунду ради смены строки раз в несколько секунд. Таймер не
+  // длиннее LYRIC_CHECK_MS: буферизация и перемотка сдвигают время звука.
+  // Эффект перезапускается и на тике стора (currentTime), так что перемотка
+  // подхватывается сразу. setState с тем же индексом React пропускает.
   const [liveIndex, setLiveIndex] = useState(-1)
   useEffect(() => {
     if (!isPlaying || !syncedLines.length) return undefined
-    let raf
+    let timer = 0
     const tick = () => {
       const audio = getActive()
-      if (audio) setLiveIndex(getActiveLyricIndex(syncedLines, audio.currentTime))
-      raf = requestAnimationFrame(tick)
+      if (!audio) return
+      const time = audio.currentTime
+      const index = getActiveLyricIndex(syncedLines, time)
+      setLiveIndex(index)
+      const next = syncedLines[index + 1]
+      const untilNext = next
+        ? ((next.time - LYRIC_LEAD_SEC - time) / (audio.playbackRate || 1)) * 1000
+        : LYRIC_CHECK_MS
+      timer = setTimeout(tick, Math.min(LYRIC_CHECK_MS, Math.max(LYRIC_MIN_WAIT_MS, untilNext)))
     }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [isPlaying, syncedLines])
+    tick()
+    return () => clearTimeout(timer)
+  }, [isPlaying, syncedLines, currentTime])
   const storeIndex = getActiveLyricIndex(syncedLines, currentTime)
   const activeIndex = isPlaying && liveIndex >= 0 ? liveIndex : storeIndex
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
