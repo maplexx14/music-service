@@ -357,7 +357,7 @@ def test_flow_gives_liked_tracks_their_share_next_to_unplayed_library(client, db
     liked = [
         Track(
             title=f"liked-{i}",
-            artist="KnownArtist",
+            artist="KnownArtist" if i == 0 else f"KnownArtist {i}",
             duration=100,
             source="local",
             file_path=f"minio://music/liked-{i}.mp3",
@@ -421,7 +421,7 @@ def test_flow_spreads_liked_tracks_across_the_page(client, db):
     liked = [
         Track(
             title=f"liked-{i}",
-            artist="KnownArtist",
+            artist="KnownArtist" if i == 0 else f"KnownArtist {i}",
             duration=100,
             source="local",
             file_path=f"minio://music/spread-liked-{i}.mp3",
@@ -493,7 +493,7 @@ def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
     liked = [
         Track(
             title=f"liked-{i}",
-            artist="KnownArtist",
+            artist="KnownArtist" if i == 0 else f"KnownArtist {i}",
             duration=100,
             source="local",
             file_path=f"minio://music/slider-liked-{i}.mp3",
@@ -641,6 +641,68 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
     assert titles == ["never-played", "skipped-long-ago", "cooled-down"], titles
 
 
+def _liked_playlist(db, user, tracks):
+    playlist = Playlist(name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id)
+    db.add(playlist)
+    db.add_all(tracks)
+    db.commit()
+    db.execute(playlist_tracks.insert(), [
+        {"playlist_id": playlist.id, "track_id": track.id, "position": i}
+        for i, track in enumerate(tracks)
+    ])
+    db.commit()
+
+
+def test_liked_window_caps_tracks_per_artist(db, monkeypatch):
+    """Прод, 2026-10-10: окно давно не звучавших лайков целиком занимал один
+    артист (Eminem), и квота отдавала его в каждой порции."""
+    monkeypatch.setattr("app.routers.flow._LIKED_WINDOW", 4)
+    user = create_user(db, username="liked-window-user")
+    tracks = [
+        Track(title=f"t{i}", artist="Same" if i < 6 else f"Other {i}", duration=100,
+              source="local", file_path=f"minio://music/w{i}.mp3")
+        for i in range(9)
+    ]
+    _liked_playlist(db, user, tracks)
+    # «Same» ни разу не играли — без потолка они заняли бы всё окно.
+    db.execute(user_track_plays.insert(), [
+        {"user_id": user.id, "track_id": track.id, "play_count": 1,
+         "last_played": datetime.now(timezone.utc) - timedelta(days=5)}
+        for track in tracks[6:]
+    ])
+    db.commit()
+
+    window = _liked_candidates(db, _taste_profile(db, user.id), 2)
+
+    assert len(window) == 4
+    assert sum(track.artist == "Same" for track in window) == 2
+
+
+def test_flow_liked_quota_takes_one_track_per_artist(client, db):
+    user = create_user(db, username="liked-one-per-artist")
+    _liked_playlist(db, user, [
+        Track(title=f"liked-{i}", artist="KnownArtist" if i < 10 else f"Other {i}",
+              duration=100, source="local", file_path=f"minio://music/l1-{i}.mp3")
+        for i in range(14)
+    ])
+    db.add_all([
+        Track(title=f"fresh-{i}", artist="KnownArtist", duration=100, source="local",
+              file_path=f"minio://music/f1-{i}.mp3")
+        for i in range(20)
+    ])
+    db.commit()
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="liked-one-per-artist"),
+    )
+    assert response.status_code == 200, response.text
+    liked_artists = [t["artist"] for t in response.json() if t["title"].startswith("liked-")]
+
+    assert len(liked_artists) == liked_slots(15, DEFAULT_DISCOVERY_RATIO), liked_artists
+    assert len(set(liked_artists)) == len(liked_artists), liked_artists
+
+
 def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
     """Остывший лайк возвращается в поток, даже если он весь в recent_ids.
 
@@ -665,7 +727,7 @@ def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
     liked = [
         Track(
             title=f"liked-{i}",
-            artist="KnownArtist",
+            artist="KnownArtist" if i == 0 else f"KnownArtist {i}",
             duration=100,
             source="local",
             file_path=f"minio://music/replay-liked-{i}.mp3",
@@ -1566,7 +1628,7 @@ def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     liked = [
         Track(
             title=f"liked-{index}",
-            artist="KnownArtist",
+            artist="KnownArtist" if index == 0 else f"KnownArtist {index}",
             duration=100,
             source="local",
             file_path=f"minio://music/liked-{index}.mp3",

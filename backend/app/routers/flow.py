@@ -320,6 +320,10 @@ _FAVORITE_ROTATION_FLOOR = 0.5
 # выбор, какой именно лайк уместен сейчас по жанру, акустике и контексту, —
 # иначе квота каждый раз заполнялась бы одними и теми же треками.
 _LIKED_WINDOW = 24
+# Потолок треков одного артиста в этом окне. Окно идёт от давно не звучавших,
+# и у владельца его целиком занимали старые лайки Eminem — квота из трёх мест
+# отдавала двух Eminem в каждой порции (прод, 2026-10-10).
+_LIKED_WINDOW_PER_ARTIST = 2
 # Сколько трек «остывает» после прослушивания или скипа, прежде чем квота
 # лайков может отдать его снова. Именно время, а не recent_ids: тот держит
 # последние 100 прослушиваний, то есть у юзера с короткой историей — вообще всё
@@ -1754,7 +1758,23 @@ def _liked_candidates(
             )
         )
     ordered.sort(key=lambda row: row[:3])
-    return [row[3] for row in ordered][: max(limit, _LIKED_WINDOW)]
+    window = max(limit, _LIKED_WINDOW)
+    picked: List[Track] = []
+    overflow: List[Track] = []
+    per_artist: Counter = Counter()
+    for row in ordered:
+        track = row[3]
+        key = primary_artist_key(effective_track_artist_title(track)[0])
+        if per_artist[key] >= _LIKED_WINDOW_PER_ARTIST:
+            overflow.append(track)
+            continue
+        per_artist[key] += 1
+        picked.append(track)
+        if len(picked) >= window:
+            break
+    # Лайков мало артистов — окно добирается их же треками: потолок про
+    # разнообразие, а не про то, чтобы оставить ранкер без выбора.
+    return (picked + overflow)[:window]
 
 
 def _familiar_candidates_on_bind(
@@ -3674,18 +3694,30 @@ async def get_flow(
     # Лайк — трек знакомого артиста, так что с novel_selection пересечений нет;
     # дедуп по id ниже всё равно на месте, чтобы порядок отбора не был неявным
     # условием корректности.
+    # Не больше одного лайка на артиста в порции, и сначала — артисты, которых
+    # не было в последних отданных треках: иначе квота держалась на паре
+    # имён из порции в порцию. Не хватило разных артистов — квота остаётся
+    # недобранной, место уходит добору, а не второму треку того же артиста.
     liked_selection: List = []
     if liked_target:
-        for candidate in ranked_candidates:
-            if _item_identity(candidate) not in liked_identities:
-                continue
-            if _in_fresh_cluster(candidate):
-                if fresh_used >= fresh_cap:
+        liked_artists: set[str] = set()
+        for allow_recent in (False, True):
+            for candidate in ranked_candidates:
+                if len(liked_selection) >= liked_target:
+                    break
+                if _item_identity(candidate) not in liked_identities:
                     continue
-                fresh_used += 1
-            liked_selection.append(candidate)
-            if len(liked_selection) >= liked_target:
-                break
+                key = primary_artist_key(_item_artist_title(candidate)[0])
+                if key in liked_artists:
+                    continue
+                if not allow_recent and recent_artist_counts[key]:
+                    continue
+                if _in_fresh_cluster(candidate):
+                    if fresh_used >= fresh_cap:
+                        continue
+                    fresh_used += 1
+                liked_artists.add(key)
+                liked_selection.append(candidate)
 
     reserved: List = []
     reserved_ids: set[int] = set()
