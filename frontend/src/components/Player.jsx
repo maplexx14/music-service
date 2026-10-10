@@ -10,7 +10,7 @@ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, ThumbsDo
 import LikeHeart from './LikeHeart'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
-import { resolveCoverUrl, handleCoverError, preloadCover } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, isCoverReady, preloadCover } from '../utils/media'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
@@ -34,8 +34,8 @@ import * as engine from '../services/audioEngine'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
 
-// Сколько тап по мини-плееру ждёт hi-res обложку перед открытием фуллскрина.
-const OPEN_COVER_WAIT_MS = 120
+// Сколько ждать фонового прогрева hi-res обложки (см. эффект прогрева).
+const COVER_WARM_TIMEOUT_MS = 10000
 // Зазор между капсулами в карусели мини-плеера, px. Тот же шаг задаёт CSS через
 // --strip-gap (ставится инлайном), чтобы JS и вёрстка не разъехались.
 const MINI_STRIP_GAP = 24
@@ -567,13 +567,9 @@ function PlayerInner() {
   // смонтировался сразу со скрытой обложкой. Сначала дожидаемся чанка
   // фуллскрин-плеера (тот же модуль, что лениво грузит Layout, — Vite
   // отдаст из кэша): без чанка Suspense-фолбэк мелькнул бы на секунду до
-  // плеера. Затем — hi-res обложку: фуллскрин показывает её в увеличенном
-  // виде, и без прогрева она ловилась бы ещё не декодированной (пустая
-  // заглушка → скачок после морфа). Ждём не дольше OPEN_COVER_WAIT_MS:
-  // прогретая обложка декодируется быстрее, а холодную (первые секунды
-  // трека, см. heavyCoverTrackId) ждать нельзя — штатные 450 мс были
-  // заметной паузой между тапом и началом слайда. Не успела — клон летит с
-  // мини-обложкой, а в плеере под картинкой лежит та же маленькая.
+  // плеера. Hi-res обложку не ждём (см. ниже): клон летит с полной, только
+  // если она уже прогрета и декодирована, иначе — с мини-обложкой, а в
+  // плеере под картинкой лежит та же маленькая.
   const openFullScreenWithTransition = async (karaoke) => {
     try {
       await import('./FullScreenPlayer')
@@ -581,10 +577,13 @@ function PlayerInner() {
       openFullScreen(karaoke)
       return
     }
+    // Обложку не ждём: открытие — ответ на тап, а ожидание (сеть плюс декод
+    // 800×800 даже из кэша) замер видел как 135 мс от тапа до плеера, p90 216.
+    // Прогретая в простое (эффект ниже) летит сразу в полном размере; нет —
+    // клон летит с мини-обложкой, мягче, но не пустой, а полная проявится в
+    // плеере, когда догрузится.
     const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
-    // Не успела прогреться — клон летит с мини-обложкой: мягче, но не пустой.
-    const hiResReady = hiRes ? await preloadCover(hiRes, OPEN_COVER_WAIT_MS) : false
-    beginOpenMorph(miniCoverRef.current, hiResReady ? hiRes : undefined)
+    beginOpenMorph(miniCoverRef.current, isCoverReady(hiRes) ? hiRes : undefined)
     openFullScreen(karaoke)
   }
 
@@ -608,17 +607,18 @@ function PlayerInner() {
   const heavyCoverAllowed = currentTrack?.id != null && heavyCoverTrackId === currentTrack.id
 
   // Hi-res обложка нужна фуллскрину при открытии (выезд поверх страницы) —
-  // качаем её заранее, чтобы открытие не ждало сети. Но не на смене трека, а
-  // после старта звука, и не на узком канале: там сотни КБ картинки стоят
-  // перебуферизации, а открытие фуллскрина и так ограничено таймаутом
-  // preloadCover. Таймаут же не даёт прогреву копить промисы.
+  // качаем и декодируем её заранее: открытие её не ждёт и берёт, только если
+  // она готова (isCoverReady). Но не на смене трека, а после старта звука, и
+  // не на узком канале: там сотни КБ картинки стоят перебуферизации, а
+  // фуллскрин откроется и с мини-обложкой. Таймаут длинный — готовность
+  // запомнится и на медленной сети, — но не даёт прогреву копить промисы.
   useEffect(() => {
     if (!currentTrack?.cover_url || isFullScreen || !heavyCoverAllowed) return undefined
     if (isLowQuality()) return undefined
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
     const cancel = window.cancelIdleCallback ?? clearTimeout
     const handle = idle(() => {
-      preloadCover(resolveCoverUrl(currentTrack.cover_url, true)).catch(() => {})
+      preloadCover(resolveCoverUrl(currentTrack.cover_url, true), COVER_WARM_TIMEOUT_MS).catch(() => {})
     })
     return () => cancel(handle)
   }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed])

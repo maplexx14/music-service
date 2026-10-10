@@ -97,6 +97,13 @@ export const handleCoverError = (e) => {
 // (холодная сеть не должна блокировать открытие плеера дольше предела).
 // Без crossOrigin: no-cors, как у обычного <img>, — та же ячейка кэша,
 // что у плеера (decode не «пачкает» canvas, чтение пикселей не нужно).
+// Обложки, которые preloadCover уже скачал и декодировал за эту сессию:
+// открытие фуллскрина берёт полную, только если она готова, и не ждёт её.
+const READY_COVERS_MAX = 300
+const readyCovers = new Set()
+
+export const isCoverReady = (url) => Boolean(url) && readyCovers.has(url)
+
 export const preloadCover = (url, timeoutMs = 450) => {
   if (!url) return Promise.resolve(false)
   return new Promise((resolve) => {
@@ -106,6 +113,10 @@ export const preloadCover = (url, timeoutMs = 450) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      if (ok) {
+        readyCovers.add(url)
+        if (readyCovers.size > READY_COVERS_MAX) readyCovers.delete(readyCovers.values().next().value)
+      }
       resolve(ok)
     }
     const timer = setTimeout(() => finish(false), timeoutMs)
