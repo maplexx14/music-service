@@ -501,6 +501,11 @@ button.settings-menu-item {
 
 .settings-prefs-actions {
   display: flex;
+  /* Кнопок в ряду бывает несколько (диагностика, почта, 2FA): без переноса
+     на узком экране они вылезали за карточку, а на телефоне каждая ещё и
+     растянута на всю ширину — с переносом встают друг под другом. */
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-end;
   margin-top: 24px;
 }
