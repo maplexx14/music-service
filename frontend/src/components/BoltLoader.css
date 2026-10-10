@@ -9,6 +9,8 @@
   width: var(--bl-frame);
   height: var(--bl-frame);
   overflow: hidden;
+  /* Пересчёт стилей и раскладки лоадера не выходит за его рамку. */
+  contain: strict;
 }
 
 .bolt-loader-heart {
@@ -18,6 +20,7 @@
   width: var(--bl-size);
   height: var(--bl-size);
   user-select: none;
+  will-change: transform;
   /* Отдача: сердце чуть подпрыгивает на каждый вылет. */
   animation: bolt-loader-recoil var(--bl-step) cubic-bezier(.165, .84, .44, 1) infinite;
 }
@@ -36,6 +39,11 @@
   background: center / contain no-repeat;
   opacity: 0;
   pointer-events: none;
+  /* Свой слой у каждой молнии: замер на iPhone (utils/frameMeter) находил
+     анимацию лоадера почти в каждом кадре с рывком. В keyframes — CSS-
+     переменные, и если WebKit гоняет такую анимацию на главном потоке, без
+     слоя SVG-спрайт ещё и перерисовывался бы каждый кадр. */
+  will-change: transform, opacity;
   animation: bolt-loader-fly var(--bl-cycle) calc(var(--i) * var(--bl-step) * -1) infinite;
 }
 

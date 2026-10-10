@@ -122,6 +122,9 @@ const onClick = (e) => {
   requestAnimationFrame((frame) => {
     if (pendingTap === tap) pendingTap = null
     noteReaction('тап', frame - t0)
+    // Быстрый тап (services/fastTap) отсчитывается от отпускания пальца, а
+    // доставки клика у него нет — её он и убирает.
+    if (fast) noteReaction('тап: быстрый, отпускание → кадр', frame - t0)
     if (!tap.handledAt) return
     if (fromTouch) {
       noteReaction('тап: доставка клика', tap.dispatchAt - t0)
