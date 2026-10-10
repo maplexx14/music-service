@@ -14,7 +14,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
-import { settleStrip } from '../utils/settleStrip'
+import { settleStrip, SETTLE_MS } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { getActive } from '../services/audioEngine'
@@ -35,6 +35,9 @@ function formatTime(seconds) {
 const ART_GAP = 24
 // Второй тап по обложке в пределах этого окна — лайк.
 const DOUBLE_TAP_MS = 300
+// Скорость отпускания — по последним ~80 мс касания (как в useTrackCarousel):
+// медленно тянул, а в конце швырнул — это флик.
+const VELOCITY_WINDOW_MS = 80
 
 // Сердце логотипа поверх обложки при лайке — тот же LikeHeart, что в
 // кнопке лайка, с той же анимацией (полоса по мазку, заливка, молния), только
@@ -198,6 +201,8 @@ function FullScreenPlayer() {
   // Смещение карусели в момент, когда свайп переключил трек: с него новая
   // обложка доезжает на место (см. эффект на смену трека).
   const swipeDxRef = useRef(0)
+  // Скорость пальца в тот же момент — доезд продолжает её (см. settleStrip).
+  const swipeVRef = useRef(0)
   const lastSlidesRef = useRef(null)
   const lastTapRef = useRef(0)
   const [burst, setBurst] = useState(0)
@@ -245,12 +250,28 @@ function FullScreenPlayer() {
     const strip = stripRef.current
     const last = lastSlidesRef.current
     const dx = swipeDxRef.current
+    const velocity = swipeVRef.current
     swipeDxRef.current = 0
+    swipeVRef.current = 0
     if (!strip || !last || last.id === currentTrack?.id) return
     const id = currentTrack?.id
     const dir = id === last.nextId ? 1 : id === last.prevId ? -1 : 0
-    settleStrip(strip, dir ? dx + dir * (strip.offsetWidth + ART_GAP) : 0)
+    settleStrip(strip, dir ? dx + dir * (strip.offsetWidth + ART_GAP) : 0, {
+      velocity: dx ? velocity : undefined,
+    })
   }, [currentTrack?.id])
+
+  // Полноразмерная обложка новому текущему слайду — после доезда карусели:
+  // её загрузка и декод (до 1000×1000) попадали прямо в анимацию, и
+  // перелистывание подлагивало — на тех треках, чья обложка ещё не в кэше.
+  // До тех пор слайд показывает ту же миниатюру, что была у него соседом.
+  const [fullCoverId, setFullCoverId] = useState(currentTrack?.id)
+  useEffect(() => {
+    const id = currentTrack?.id
+    if (id === fullCoverId) return undefined
+    const timer = setTimeout(() => setFullCoverId(id), SETTLE_MS + 60)
+    return () => clearTimeout(timer)
+  }, [currentTrack?.id, fullCoverId])
 
   // Соседи на момент последнего рендера — по ним эффект выше узнаёт
   // направление. Идёт после него: тот читает ещё прошлые значения.
@@ -321,7 +342,14 @@ function FullScreenPlayer() {
       return
     }
     const t = e.touches[0]
-    gestureRef.current = { x: t.clientX, y: t.clientY, axis: null, t0: performance.now() }
+    const now = performance.now()
+    gestureRef.current = {
+      x: t.clientX,
+      y: t.clientY,
+      axis: null,
+      t0: now,
+      samples: [{ t: now, x: t.clientX }],
+    }
   }
 
   const handleTouchMove = (e) => {
@@ -341,6 +369,9 @@ function FullScreenPlayer() {
     // Горизонтальный свайп тащит карусель за пальцем; если соседа в эту
     // сторону нет — с сопротивлением.
     if (g.axis === 'x' && stripRef.current) {
+      const now = performance.now()
+      g.samples.push({ t: now, x: t.clientX })
+      while (g.samples.length > 2 && now - g.samples[0].t > VELOCITY_WINDOW_MS) g.samples.shift()
       const hasNeighbor = dx < 0 ? upNext : prevTrack
       const x = hasNeighbor ? dx : dx * 0.3
       stripRef.current.style.transition = 'none'
@@ -359,22 +390,28 @@ function FullScreenPlayer() {
     gestureRef.current = null
     if (g.axis === 'x') {
       const strip = stripRef.current
-      const fast = Math.abs(dx) > 30 && Math.abs(dx) / elapsed > 0.5
+      const first = g.samples[0]
+      const now = performance.now()
+      const velocity = now > first.t ? (t.clientX - first.x) / (now - first.t) : 0
+      // Флик — быстрое движение в ту же сторону, куда тянули.
+      const fast = Math.abs(dx) > 30 && Math.abs(velocity) > 0.5 && Math.sign(velocity) === Math.sign(dx)
       const hasNeighbor = dx < 0 ? upNext : prevTrack
       if (!hasNeighbor || (Math.abs(dx) < 60 && !fast)) {
-        if (strip) settleStrip(strip, g.dx || 0)
+        if (strip) settleStrip(strip, g.dx || 0, { velocity: hasNeighbor ? velocity : velocity * 0.3 })
         return
       }
       haptic(HAPTIC.selection)
       const fromId = currentTrack.id
       swipeDxRef.current = g.dx || 0
+      swipeVRef.current = velocity
       if (dx < 0) handleSkipForward()
       else previousTrack()
       // Переход могли отложить (следующий трек ещё грузится) — тогда
       // обложка возвращается на место.
       if (usePlayerStore.getState().currentTrack?.id === fromId) {
         swipeDxRef.current = 0
-        if (strip) settleStrip(strip, g.dx || 0)
+        swipeVRef.current = 0
+        if (strip) settleStrip(strip, g.dx || 0, { velocity })
       }
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
@@ -610,8 +647,15 @@ function FullScreenPlayer() {
                     // Соседям хватает маленькой: они едва видны по краям, а
                     // полноразмерные качались бы при каждой смене трека вместе
                     // со стартом звука. Полную обложка получает, став текущей,
-                    // — до её загрузки браузер показывает прежнюю картинку.
-                    src={slot ? thumb || defaultCover : coverUrl}
+                    // и только после доезда карусели (fullCoverId) — до её
+                    // загрузки браузер показывает прежнюю картинку.
+                    src={
+                      slot
+                        ? thumb || defaultCover
+                        : track.id === fullCoverId
+                          ? coverUrl
+                          : thumb || coverUrl
+                    }
                     alt={slot ? '' : currentTrack.title}
                     aria-hidden={slot ? 'true' : undefined}
                     // Без проявления (services/imageFade): под картинкой уже
