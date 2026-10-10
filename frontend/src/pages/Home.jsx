@@ -31,25 +31,45 @@ import './Home.css'
 const Grainient = lazy(() => import('../components/Grainient'))
 const SOUNDCLOUD_PLAYLIST_LIMIT = 12
 const SOUNDCLOUD_SEED_LIMIT = 3
+// Главная живёт смонтированной, пока юзер ходит по вкладкам, — без этого
+// порога полка плейлистов не менялась бы, пока приложение не перезапустят.
+const SOUNDCLOUD_PLAYLIST_REFRESH_MS = 10 * 60 * 1000
 const homeRecommendationImpressions = new Set()
 
-function getSoundCloudPlaylistSeeds(user, tracks) {
-  const candidates = [
-    ...(user?.preferred_artists || []),
-    ...tracks.slice(0, 8).flatMap((track) => splitArtists(track.artist)),
-    ...(user?.preferred_genres || []),
-  ]
-  const seen = new Set()
+function shuffled(items) {
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
 
-  return candidates
-    .map((value) => String(value || '').trim())
-    .filter((value) => {
-      const key = value.toLocaleLowerCase()
-      if (!value || key === 'unknown artist' || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .slice(0, SOUNDCLOUD_SEED_LIMIT)
+// Сиды тянутся случайно из всего пула вкуса, а не первые три любимых артиста:
+// иначе поиск по одним и тем же запросам каждый раз отдавал одну и ту же
+// дюжину плейлистов. Один сид — всегда из preferred_artists (если есть),
+// чтобы полка не уезжала целиком в случайные жанры.
+function getSoundCloudPlaylistSeeds(user, tracks) {
+  const seen = new Set()
+  const clean = (values) =>
+    values
+      .map((value) => String(value || '').trim())
+      .filter((value) => {
+        const key = value.toLocaleLowerCase()
+        if (!value || key === 'unknown artist' || seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+  const preferred = shuffled(clean(user?.preferred_artists || []))
+  const rest = shuffled(
+    clean([
+      ...preferred.slice(1),
+      ...tracks.slice(0, 8).flatMap((track) => splitArtists(track.artist)),
+      ...(user?.preferred_genres || []),
+    ]),
+  )
+  return [...preferred.slice(0, 1), ...rest].slice(0, SOUNDCLOUD_SEED_LIMIT)
 }
 
 // Не зависит от состояния компонента — вынесено на уровень модуля, чтобы
@@ -214,6 +234,8 @@ function Home() {
   // поэтому запрос уходит параллельно с /recommendations. Если предпочтений
   // нет, ждём треки как раньше (см. fetchSoundCloudPlaylists).
   const scRequestedRef = useRef(false)
+  const scFetchedAtRef = useRef(0)
+  const lastTracksRef = useRef([])
   useEffect(() => {
     if (scRequestedRef.current) return
     if (!user?.preferred_artists?.length) return
@@ -221,7 +243,7 @@ function Home() {
     fetchSoundCloudPlaylists([])
   }, [user])
 
-  const fetchData = () => {
+  const fetchData = (refresh = false) => {
     api
       // Локальный час клиента — для контекста времени суток в рекомендациях
       // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
@@ -238,16 +260,19 @@ function Home() {
         // Если сиды из preferred_artists уже ушли параллельным эффектом —
         // второй раз не ходим: дедуп в api.get спасает только одновременные
         // запросы, а этот пришёл бы позже и стоил бы ещё раунд-трипа.
-        if (!scRequestedRef.current) {
+        // Pull-to-refresh обновляет и полку плейлистов — с новыми сидами.
+        if (refresh || !scRequestedRef.current) {
           scRequestedRef.current = true
           fetchSoundCloudPlaylists(data.tracks)
         }
+        lastTracksRef.current = data.tracks
       })
       .catch((error) => console.error('Error fetching recommendations:', error))
       .finally(() => setLoading(false))
   }
 
   const fetchSoundCloudPlaylists = async (tracks) => {
+    scFetchedAtRef.current = Date.now()
     const seeds = getSoundCloudPlaylistSeeds(user, tracks)
     if (seeds.length === 0) return
 
@@ -338,6 +363,23 @@ function Home() {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [screenActive])
+
+  // Полка плейлистов: при возврате на главную или в приложение, если с
+  // прошлой загрузки прошло больше SOUNDCLOUD_PLAYLIST_REFRESH_MS, берём
+  // новые сиды. Функция — через ref, чтобы не замкнуть устаревшего user.
+  const scFetchRef = useRef(fetchSoundCloudPlaylists)
+  scFetchRef.current = fetchSoundCloudPlaylists
+  useEffect(() => {
+    if (!screenActive) return undefined
+    const maybeRefresh = () => {
+      if (document.hidden || !scRequestedRef.current) return
+      if (Date.now() - scFetchedAtRef.current < SOUNDCLOUD_PLAYLIST_REFRESH_MS) return
+      scFetchRef.current(lastTracksRef.current)
+    }
+    maybeRefresh()
+    document.addEventListener('visibilitychange', maybeRefresh)
+    return () => document.removeEventListener('visibilitychange', maybeRefresh)
+  }, [screenActive])
   // Страховка на случай долгого пребывания на странице (TTL предзагрузки
   // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
   // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
@@ -389,7 +431,7 @@ function Home() {
   return (
     <div className="page-container">
       <PullToRefreshIndicator
-        onRefresh={fetchData}
+        onRefresh={() => fetchData(true)}
         reachTop={() => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0}
         root={() => scrollerRef?.current ?? null}
       />
