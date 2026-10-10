@@ -1,4 +1,5 @@
 import { createBrowserHistory } from '@remix-run/router'
+import { prefetchInFlight } from './pageCache'
 
 // Навигация «как в нативном приложении»: анимированные переходы экранов
 // (push — новый экран въезжает справа, back — уезжает вправо, вкладки —
@@ -233,6 +234,13 @@ export function markScreenLoading() {
   }
 }
 
+// Ждём, только если данные экрана правда могут успеть: летит прогрев,
+// запущенный касанием (pageCache.prefetchInFlight). Без него экран со
+// спиннером грузит данные с нуля, за READY_TIMEOUT_MS они не приходили
+// никогда, и замер видел на каждом таком переходе (пункты настроек, админка)
+// кадр 128 мс при свободном главном потоке — заморозку ради спиннера,
+// который въехал бы и так.
+//
 // Дольше не держим экран замороженным (кадр стоит, пока ждём): если чанк
 // или данные ещё грузятся, переход доиграет как есть, а контент появится сам.
 // Было 500 мс: замер на iPhone (utils/frameMeter) ловил после тапа по
@@ -259,7 +267,7 @@ function waitForCommit(key, waitReady = true) {
     }
     const timer = setTimeout(finish, READY_TIMEOUT_MS)
     commitWaiters.set(key, () => {
-      if (!waitReady || loadingScreens === 0) finish()
+      if (!waitReady || loadingScreens === 0 || !prefetchInFlight()) finish()
       else readyWaiters.add(finish)
     })
   })

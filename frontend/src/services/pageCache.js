@@ -66,6 +66,10 @@ export function prefetchCache(key, url, { params, select = (res) => res.data, ma
   inflight.set(key, request)
 }
 
+// Летит ли сейчас прогрев по намерению — тогда данные нового экрана могут
+// успеть к началу перехода (services/navigation, waitForCommit).
+export const prefetchInFlight = () => inflight.size > 0
+
 // Наведение мышью прогревает с задержкой: курсор, пролетающий над списком,
 // не должен рассылать запрос на каждую строку. Касание (pointerdown) — сразу.
 const HOVER_DELAY_MS = 150
