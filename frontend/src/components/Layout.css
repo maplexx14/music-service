@@ -64,8 +64,14 @@
     background-color: var(--bg-app-mobile);
   }
 
+  /* Сайдбара на телефоне нет. Отступ под него Layout ставит инлайном по
+     window.innerWidth, и стоило JS-проверке ширины хоть раз разойтись с этим
+     медиазапросом (запуск PWA, возврат из фона), отступ ехал transition'ом
+     margin-left — раскладка всего экрана на каждом кадре; замер плавности
+     ловил её в кадрах с рывком. Здесь отступ всегда 0 и без анимации. */
   .main-content {
-    margin-left: 0;
+    margin-left: 0 !important;
+    transition: none;
     background: transparent;
   }
 
