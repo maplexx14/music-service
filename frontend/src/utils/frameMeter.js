@@ -371,7 +371,9 @@ function loop() {
     last = now
     if (now - lastSavedAt > SAVE_EVERY_MS) {
       lastSavedAt = now
-      saveReport()
+      // Не в кадре: запись отчёта бывает до ~10 мс, и замер сам удлинял бы
+      // кадр, который меряет.
+      setTimeout(saveReport, 0)
     }
     requestAnimationFrame(tick)
     if (renderProbe) {
