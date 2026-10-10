@@ -615,6 +615,7 @@ function Settings() {
                   открытие плеера, — и отклик: сколько проходит от тапа до реакции
                   (смена вкладки, открытие плеера). Включите, пользуйтесь
                   приложением пару минут как обычно, затем скопируйте отчёт.
+                  Время рендеров экранов замер считает после перезапуска приложения.
                 </p>
                 <div className="settings-prefs-actions">
                   <button type="button" className="btn btn--secondary btn--sm settings-save-btn" onClick={handleToggleMeter}>
