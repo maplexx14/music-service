@@ -11,7 +11,7 @@
 
 import { usePlayerStore } from '../store/playerStore'
 import { PRESSABLE, SCROLLABLE } from '../services/pressFeedback'
-import { isFastTapClick } from '../services/fastTap'
+import { fastTapReleasedAt, isFastTapClick } from '../services/fastTap'
 
 // id фоновых анимаций воспроизведения (полосы прогресса, диск): они идут в
 // каждом кадре, пока играет музыка, и в разбор рывков не попадают.
@@ -107,8 +107,10 @@ const onClick = (e) => {
   const fast = isFastTapClick()
   if (!e.isTrusted && !fast) return
   const now = performance.now()
-  const fromTouch = now - lastTapAt < TAP_CLICK_WINDOW_MS
-  const t0 = fromTouch ? lastTapAt : e.timeStamp
+  // Быстрый тап считаем от его pointerup: touchend WebKit шлёт позже, и
+  // lastTapAt тут ещё от прошлого тапа — отклик выходил бы в сотни мс.
+  const fromTouch = !fast && now - lastTapAt < TAP_CLICK_WINDOW_MS
+  const t0 = fast ? fastTapReleasedAt() : fromTouch ? lastTapAt : e.timeStamp
   // Тип цели — проверить, держит ли клик анимация нажатия (pressFeedback):
   // в списке она стартует с задержкой, вне списка — сразу на касании.
   const pressable = e.target instanceof Element ? e.target.closest(PRESSABLE) : null
@@ -290,7 +292,39 @@ function noteJankAnimations() {
   for (const name of runningAnimations()) jankAnims[name] = (jankAnims[name] || 0) + 1
 }
 
-function record(delta, now) {
+// Отрисовка: сколько главный поток занят после rAF замера — остальные
+// rAF-колбэки, стили, раскладка, рисование и отправка кадра. Сообщение,
+// отправленное из rAF, выполняется следующей задачей, то есть после всей этой
+// работы. Долгий кадр с короткой отрисовкой — главный поток рисовать успел,
+// а следующий кадр не начинался: WebKit ждал другой процесс (медиа, GPU,
+// композитор) или главный поток был занят чем-то вне кадра (см. события).
+const renderProbe = typeof MessageChannel === 'function' ? new MessageChannel() : null
+let renderProbeAt = 0
+let lastRenderMs = null
+if (renderProbe) {
+  renderProbe.port1.onmessage = () => {
+    lastRenderMs = performance.now() - renderProbeAt
+  }
+}
+
+// Пульс главного потока: таймер раз в BEAT_MS, пока замер включён. Самый
+// длинный промежуток между ударами за долгий кадр — самая долгая занятость
+// главного потока в нём (задача, синхронный запрос WebKit к медиапроцессу,
+// отрисовка). Короткий при долгом кадре — поток был свободен, кадр не
+// начинался по причине вне страницы.
+const BEAT_MS = 10
+let beatTimer = 0
+let lastBeatAt = 0
+let longestBusyMs = 0
+
+function beat() {
+  const now = performance.now()
+  if (lastBeatAt) longestBusyMs = Math.max(longestBusyMs, now - lastBeatAt - BEAT_MS)
+  lastBeatAt = now
+  beatTimer = setTimeout(beat, BEAT_MS)
+}
+
+function record(delta, now, renderMs, busyMs) {
   const key = context(now)
   const entry = stats[key] || (stats[key] = { frames: 0, janky: 0, missed: 0, long: 0, worst: 0 })
   entry.frames += 1
@@ -301,7 +335,15 @@ function record(delta, now) {
   }
   if (delta > LONG_MS) {
     entry.long += 1
-    worst.push({ ms: Math.round(delta), at: Date.now(), ctx: key, ev: eventsBefore(now) })
+    worst.push({
+      ms: Math.round(delta),
+      render: renderMs == null ? null : Math.round(renderMs),
+      // Удар, которого ещё не было, — занятость продолжается и сейчас.
+      busy: Math.round(Math.max(busyMs, lastBeatAt ? now - lastBeatAt - BEAT_MS : 0)),
+      at: Date.now(),
+      ctx: key,
+      ev: eventsBefore(now),
+    })
     worst.sort((a, b) => b.ms - a.ms)
     if (worst.length > WORST_KEEP) worst.length = WORST_KEEP
   }
@@ -312,9 +354,14 @@ function loop() {
   let last = 0
   const tick = (now) => {
     if (!running) return
+    // Отрисовка кадра, с которого начался этот промежуток.
+    const renderMs = lastRenderMs
+    lastRenderMs = null
+    const busyMs = longestBusyMs
+    longestBusyMs = 0
     if (last && !document.hidden) {
       const delta = now - last
-      if (delta < GAP_MS) record(delta, now)
+      if (delta < GAP_MS) record(delta, now, renderMs, busyMs)
     }
     checkProbe(now)
     last = now
@@ -323,6 +370,10 @@ function loop() {
       saveReport()
     }
     requestAnimationFrame(tick)
+    if (renderProbe) {
+      renderProbeAt = performance.now()
+      renderProbe.port2.postMessage(0)
+    }
   }
   requestAnimationFrame(tick)
 }
@@ -345,6 +396,9 @@ const onScroll = () => {
   lastScrollAt = performance.now()
 }
 const onHide = () => {
+  // Скрытой странице таймеры режут — этот промежуток пульса не занятость.
+  lastBeatAt = 0
+  longestBusyMs = 0
   if (document.hidden) saveReport()
 }
 
@@ -365,12 +419,16 @@ function start() {
   unsubscribeTrack = usePlayerStore.subscribe((state, prev) => {
     if (state.currentTrack?.id !== prev.currentTrack?.id) noteFrameEvent('трек')
   })
+  lastBeatAt = 0
+  longestBusyMs = 0
+  beat()
   loop()
 }
 
 function stop() {
   if (!running) return
   running = false
+  clearTimeout(beatTimer)
   saveReport()
   document.removeEventListener('scroll', onScroll, { capture: true })
   document.removeEventListener('touchstart', onTouchStart, { capture: true })
@@ -490,7 +548,12 @@ export function formatFrameMeter() {
     lines.push('', 'Самые долгие кадры:')
     worst.forEach((w) => {
       const time = new Date(w.at).toTimeString().slice(0, 8)
-      lines.push(`${time} ${w.ms}мс ${w.ctx}${w.ev ? ` ← ${w.ev}` : ''}`)
+      const parts = [
+        w.render != null && `отрисовка ${w.render}мс`,
+        w.busy != null && `поток занят ${w.busy}мс`,
+      ].filter(Boolean)
+      const detail = parts.length ? ` (${parts.join(', ')})` : ''
+      lines.push(`${time} ${w.ms}мс${detail} ${w.ctx}${w.ev ? ` ← ${w.ev}` : ''}`)
     })
   }
   return lines.join('\n')

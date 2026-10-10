@@ -45,10 +45,14 @@ let installed = false
 let pending = null
 let suppress = null
 let dispatching = false
+let dispatchedFrom = 0
 
 // Клик, который сейчас отправляет быстрый тап (для замера в frameMeter: он
 // не isTrusted, но это настоящий тап пользователя).
 export const isFastTapClick = () => dispatching
+// Когда отпустили палец (timeStamp его pointerup) — начало отсчёта отклика.
+// touchend для замера не годится: WebKit шлёт его после pointerup.
+export const fastTapReleasedAt = () => dispatchedFrom
 
 function fastTapTarget(target) {
   if (!(target instanceof Element) || target.closest(NEVER)) return null
@@ -101,6 +105,7 @@ export function installFastTap() {
       if (!tap.el.isConnected || fastTapTarget(e.target) !== tap.el) return
       suppress = { x: e.clientX, y: e.clientY, until: performance.now() + SUPPRESS_MS }
       dispatching = true
+      dispatchedFrom = e.timeStamp
       try {
         tap.el.click()
       } finally {
