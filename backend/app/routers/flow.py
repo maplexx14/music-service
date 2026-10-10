@@ -320,11 +320,12 @@ _FAVORITE_ROTATION_FLOOR = 0.5
 # выбор, какой именно лайк уместен сейчас по жанру, акустике и контексту, —
 # иначе квота каждый раз заполнялась бы одними и теми же треками.
 _LIKED_WINDOW = 24
-# Сколько трек «остывает» после прослушивания, прежде чем квота лайков может
-# отдать его снова. Именно время, а не recent_ids: тот держит последние 100
-# прослушиваний, то есть у юзера с короткой историей — вообще всё сыгранное, и
-# ни один лайк сквозь него не проходил бы.
-_LIKED_REPLAY_COOLDOWN_DAYS = 3
+# Сколько трек «остывает» после прослушивания или скипа, прежде чем квота
+# лайков может отдать его снова. Именно время, а не recent_ids: тот держит
+# последние 100 прослушиваний, то есть у юзера с короткой историей — вообще всё
+# сыгранное, и ни один лайк сквозь него не проходил бы. 2 дня — выбор
+# владельца продукта, 2026-10-10.
+_LIKED_REPLAY_COOLDOWN_DAYS = 2
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
 # beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
 # засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
@@ -1394,9 +1395,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         "recent_ids": recent_ids,
         # Отдельно от recent_ids: тот склеивает скипы с «последними 100
-        # прослушиваниями», а квоте лайков нужны именно отрицательные сигналы —
-        # у юзера с историей короче окна в recent_ids лежат ВСЕ его сыгранные
-        # треки, и лайки не прошли бы вовсе (см. _liked_candidates).
+        # прослушиваниями». Квота лайков не применяет ни то, ни другое — скип
+        # лайка только сдвигает его кулдаун (см. _liked_candidates).
         "skipped_ids": skipped_ids,
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
@@ -1669,8 +1669,13 @@ def _liked_candidates(
     плейлисте «Понравившиеся» — под этими двумя условиями он не мог попасть в
     поток НИКОГДА, ни на каком положении ползунка. Здесь задача обратная:
     достать именно их, оставив в силе только те исключения, которые к лайкам
-    применимы, — скипы и дизлайки, очередь фронта, забаненные артисты и
-    кулдаун ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания.
+    применимы, — дизлайки, очередь фронта, забаненные артисты и кулдаун
+    ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания или скипа.
+
+    Скип лайка — «не сейчас», а не «никогда», поэтому ``skipped_ids`` (все
+    скипы за ``_SKIP_EXCLUDE_DAYS``) здесь не применяется. Прод, 2026-10-10:
+    владелец скипает сотни треков в день, и это исключение отсекало 282 лайка
+    из 300 — квота с 8 октября отдавала ноль, хотя лайки лучший источник волны.
 
     Кулдаун по времени, а НЕ ``recent_ids``: тот склеивает скипы с последними
     ``_RECENT_PLAYS_EXCLUDE`` прослушиваниями, и у юзера с историей короче этого
@@ -1684,17 +1689,29 @@ def _liked_candidates(
     liked_ids = profile.get("liked_track_ids") or []
     if not liked_ids:
         return []
-    exclude_ids = set(profile.get("skipped_ids") or ()) | (extra_exclude_ids or set())
+    exclude_ids = extra_exclude_ids or set()
     wanted = [track_id for track_id in liked_ids if track_id not in exclude_ids]
     if not wanted:
         return []
     rows = (
-        db.query(Track, user_track_plays.c.last_played)
+        db.query(
+            Track,
+            user_track_plays.c.last_played,
+            user_track_skips.c.last_skipped,
+            user_track_skips.c.disliked,
+        )
         .outerjoin(
             user_track_plays,
             and_(
                 user_track_plays.c.track_id == Track.id,
                 user_track_plays.c.user_id == profile["user_id"],
+            ),
+        )
+        .outerjoin(
+            user_track_skips,
+            and_(
+                user_track_skips.c.track_id == Track.id,
+                user_track_skips.c.user_id == profile["user_id"],
             ),
         )
         .filter(Track.id.in_(wanted))
@@ -1717,18 +1734,20 @@ def _liked_candidates(
     ).timestamp()
     banned = profile["banned_artists"]
     ordered: List[tuple] = []
-    for track, last_played in rows:
+    for track, last_played, last_skipped, disliked in rows:
+        if disliked:
+            continue
         effective_artist, _effective_title = effective_track_artist_title(track)
         if banned and artist_key(effective_artist) in banned:
             continue
         if not _media_available(track):
             continue
-        played_at = _played_seconds(last_played)
-        if played_at > cooldown_before:
+        touched_at = max(_played_seconds(last_played), _played_seconds(last_skipped))
+        if touched_at > cooldown_before:
             continue
         ordered.append(
             (
-                played_at,
+                touched_at,
                 stable_jitter(profile["user_id"], f"liked:{track.id}"),
                 track.id,
                 track,
@@ -2859,7 +2878,8 @@ async def get_flow(
     # значило бы «услышал однажды — не вернётся, пока его не вытеснит сотня
     # чужих прослушиваний», а у юзера с короткой историей — «не вернётся
     # никогда». Когда лайк можно услышать снова, решает кулдаун по времени
-    # (_LIKED_REPLAY_COOLDOWN_DAYS), скипы и дизлайки — profile["skipped_ids"].
+    # (_LIKED_REPLAY_COOLDOWN_DAYS) от прослушивания или скипа, дизлайк
+    # исключает навсегда — см. _liked_candidates.
     queued_ids = set(excl_ids)
     excl_ids |= profile["recent_ids"]
     excl_videos = (

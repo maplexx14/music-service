@@ -580,7 +580,10 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
             source="local",
             file_path=f"minio://music/{name}.mp3",
         )
-        for name in ("hated", "inside-cooldown", "cooled-down", "never-played")
+        for name in (
+            "hated", "inside-cooldown", "cooled-down", "never-played",
+            "skipped-recently", "skipped-long-ago",
+        )
     }
     db.add_all(tracks.values())
     db.commit()
@@ -593,13 +596,19 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
     )
     now = datetime.now(timezone.utc)
     db.execute(
-        user_track_skips.insert().values(
-            user_id=user.id,
-            track_id=tracks["hated"].id,
-            skip_count=1,
-            disliked=True,
-            last_skipped=now,
-        )
+        user_track_skips.insert(),
+        [
+            {"user_id": user.id, "track_id": tracks["hated"].id, "skip_count": 1,
+             "disliked": True, "last_skipped": now},
+            # Скип лайка — «не сейчас»: сдвигает кулдаун, но не исключает
+            # на _SKIP_EXCLUDE_DAYS, как обычный трек (прод, 2026-10-10).
+            {"user_id": user.id, "track_id": tracks["skipped-recently"].id,
+             "skip_count": 1, "disliked": False,
+             "last_skipped": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS - 1)},
+            {"user_id": user.id, "track_id": tracks["skipped-long-ago"].id,
+             "skip_count": 5, "disliked": False,
+             "last_skipped": now - timedelta(days=10)},
+        ],
     )
     db.execute(
         user_track_plays.insert(),
@@ -627,8 +636,9 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
     titles = [track.title for track in _liked_candidates(db, profile, 10)]
     assert "hated" not in titles, titles
     assert "inside-cooldown" not in titles, titles
-    # Ни разу не игранный лайк — впереди остывшего.
-    assert titles == ["never-played", "cooled-down"], titles
+    assert "skipped-recently" not in titles, titles
+    # Ни разу не игранный лайк — впереди, дальше от давно не звучавшего.
+    assert titles == ["never-played", "skipped-long-ago", "cooled-down"], titles
 
 
 def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
