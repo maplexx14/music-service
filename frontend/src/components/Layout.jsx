@@ -400,7 +400,7 @@ function Layout({ renderRoutes }) {
                 onClick={(event) => handleNavClick(event, to, isActive)}
               >
                 <span className="mobile-nav-global-icon">
-                  <Icon size={22} fill={isLit ? 'currentColor' : 'none'} />
+                  <Icon size={22} strokeWidth={2.25} />
                 </span>
               </Link>
             )

@@ -690,7 +690,6 @@ html.no-gpu *::after {
   html.no-gpu .mobile-topbar {
     background: rgba(0, 0, 0, 0.95);
   }
-  html.no-gpu .mobile-nav-global,
   html.no-gpu .player {
     background: rgba(18, 18, 22, 0.96);
   }

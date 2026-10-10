@@ -34,7 +34,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: -12px 0 28px;
   padding: 6px;
-  background: rgba(10, 10, 14, 0.55);
+  background: #0a0a0e;
   border-radius: var(--radius-pill);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
 }
@@ -249,9 +249,6 @@
   cursor: pointer;
   background: #55308a;
   border: none;
-  box-shadow:
-    0 14px 36px rgba(0, 0, 0, 0.35),
-    0 0 0 6px rgba(85, 48, 138, 0.35);
   transition: transform 0.2s ease, background 0.2s ease;
 }
 
@@ -353,8 +350,7 @@
   color: var(--text-inverse);
   font-size: 18px;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--wave-color) 60%, transparent);
+  transition: transform 0.2s ease;
   position: relative;
   z-index: 3;
 }
@@ -675,14 +671,18 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    padding: 32px 16px;
+    /* Снизу — место под нижнюю навигацию (72px, Layout.css): волна
+       центрируется в видимой над ней части экрана. */
+    padding: 32px 16px calc(32px + 72px + env(safe-area-inset-bottom, 0px));
     margin: 0 -16px 24px;
     width: calc(100% + 32px);
-    /* Контейнер потока занимает большую часть экрана и центрирован. */
-    min-height: 75vh;
-    /* svh — видимая высота при показанных панелях Safari: иначе hero был
-       выше экрана и волна уезжала под нижнюю навигацию. */
-    min-height: 75svh;
+    /* Поток — на весь первый экран, до самого низа (за вычетом шапки:
+       safe-area + 12 + логотип 48 + 8). Иначе при запуске прямо над нижней
+       навигацией торчал переключатель Главная ⇄ История — две одинаковые
+       капсулы подряд. Теперь он ниже края экрана и виден после прокрутки.
+       svh — видимая высота при показанных панелях Safari. */
+    min-height: calc(100vh - env(safe-area-inset-top, 0px) - 68px);
+    min-height: calc(100svh - env(safe-area-inset-top, 0px) - 68px);
     max-height: none;
     border-radius: 0;
     align-items: center;

@@ -173,14 +173,13 @@
     bottom: calc(env(safe-area-inset-bottom, 0px) - 2px);
     height: 72px;
     padding: 0;
-    background: rgba(10, 10, 14, 0.55);
+    /* Сплошной фон, без просвета: hero и обложки под панелью не видны.
+       Блюр подложки поэтому не нужен — и не пересчитывается каждый кадр
+       анимированного hero. */
+    background: #0a0a0e;
     border: none;
     border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
-    /* Как у .player: нижняя навигация висит поверх анимированного hero, блюр
-       пересчитывается каждый его кадр — радиус срезан с 20 до 12. */
-    backdrop-filter: blur(12px) saturate(160%);
-    -webkit-backdrop-filter: blur(12px) saturate(160%);
     display: flex;
     align-items: center;
     z-index: 1002;
@@ -224,7 +223,8 @@
     position: absolute;
     inset: 0 5px;
     border-radius: 999px;
-    background: rgba(168, 85, 247, 0.22);
+    /* Как подсветка переключателя Главная ⇄ История (.home-tabs в Home.css). */
+    background: #55308a;
   }
 
   /* Растяжение на ходу: в покое подсветка вписана в ячейку, в полёте
@@ -266,9 +266,10 @@
     height: 44px;
   }
 
-  /* Активный пункт: цвет иконки поверх плавающей подсветки. */
+  /* Активный пункт: белая иконка поверх плавающей подсветки, как текст
+     активной вкладки в .home-tabs. */
   .mobile-nav-global-item.active {
-    color: var(--brand-accent-text);
+    color: var(--text-primary);
   }
 
 }

@@ -82,7 +82,10 @@ html .btn--primary:active:not(:disabled) {
   box-shadow: 1px 1px 0 var(--promo-ink), 2px 2px 0 var(--promo-pink);
 }
 
-html .btn--primary:disabled {
+/* Кнопки «Играть» — без ступени. */
+html .btn--primary:disabled,
+html .btn--primary.play-button-large,
+html .btn--primary.play-button-large:active:not(:disabled) {
   box-shadow: none;
 }
 
