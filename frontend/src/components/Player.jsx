@@ -1276,13 +1276,13 @@ function PlayerInner() {
       // Активный элемент начинает загрузку с нуля — handoff прошлой подмены
       // (если он ещё идёт) больше не про этот элемент, см. dropHandoff.
       dropHandoff()
+      const startedAt = performance.now()
       audio.src = abs
       loadStartedAtRef.current = performance.now()
-    }
-    // iOS Safari: explicit load() is required to start downloading.
-    // Without it, iOS may not begin fetching the audio data.
-    if (srcChanged && isIOS) {
-      audio.load()
+      // iOS Safari: explicit load() is required to start downloading.
+      // Without it, iOS may not begin fetching the audio data.
+      if (isIOS) audio.load()
+      noteSpan('аудио: загрузка без прогрева (src + load)', performance.now() - startedAt)
     }
     // Восстановленная после выгрузки PWA позиция (services/playerPersist).
     // Только для локальных файлов: перемотка свежего потока внешнего трека

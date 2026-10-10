@@ -32,6 +32,7 @@
 // maybePreloadNext).
 
 import { diag, snapshotAudio } from '../utils/playerDiag'
+import { noteSpan } from '../utils/frameMeter'
 
 // Короткий зацикливаемый WAV с тишиной. Собираем байтами, а не base64-строкой:
 // строка была бы непрозрачным блобом, в котором не видно ни частоты, ни того,
@@ -366,6 +367,8 @@ export function bufferedAhead(el) {
 
 function release(el) {
   if (!el) return
+  // Замер плавности: снятие источника — синхронная работа медиаплеера WebKit.
+  const startedAt = performance.now()
   try {
     el.pause()
     el.removeAttribute('src')
@@ -373,6 +376,7 @@ function release(el) {
   } catch {
     /* noop */
   }
+  noteSpan('аудио: освобождение элемента', performance.now() - startedAt)
 }
 
 function watchPreload(el, abs) {
@@ -457,6 +461,7 @@ export function preload(url) {
     clearTimeout(preloadFailure.timer)
     preloadFailure = null
   }
+  const startedAt = performance.now()
   idle.preload = 'auto'
   idle.volume = sharedVolume
   idle.src = abs
@@ -467,6 +472,7 @@ export function preload(url) {
   } catch {
     /* noop */
   }
+  noteSpan('аудио: прогрев (src + load)', performance.now() - startedAt)
   diag('preload:start', { url: shortUrl(abs) })
   return true
 }
@@ -555,6 +561,7 @@ export function swapTo(url) {
   // waiting неотличим от тишины. Нужен запас вперёд.
   if (idle.readyState < idle.HAVE_FUTURE_DATA) return null
 
+  const swapStarted = performance.now()
   const previous = getActive()
   activeIndex = 1 - activeIndex
   detachPreloadWatch?.()
@@ -603,6 +610,7 @@ export function swapTo(url) {
       /* noop */
     }
   })
+  noteSpan('аудио: подмена элемента', performance.now() - swapStarted)
   return idle
 }
 

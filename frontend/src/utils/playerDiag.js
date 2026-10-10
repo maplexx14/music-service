@@ -19,7 +19,7 @@
 // Лог хранится в localStorage, поэтому переживает выгрузку PWA из памяти —
 // именно она и происходит, когда «пришлось открыть PWA заново».
 
-import { noteFrameEvent } from './frameMeter'
+import { noteFrameEvent, noteSpan } from './frameMeter'
 
 const STORAGE_KEY = 'player_diag_v1'
 const MAX_ENTRIES = 300
@@ -79,8 +79,12 @@ export function playWithDiag(audio, where) {
   if (!audio) return Promise.resolve()
   diag('play:call', { where, ...snapshotAudio(audio) })
   let promise
+  // Синхронная часть play() — WebKit на iPhone делает в ней работу медиаплеера
+  // на главном потоке; замер плавности видит её отдельной строкой.
+  const startedAt = performance.now()
   try {
     promise = audio.play()
+    noteSpan('аудио: play()', performance.now() - startedAt)
   } catch (error) {
     diag('play:throw', { where, name: error?.name, msg: String(error?.message || error) })
     return Promise.resolve()
