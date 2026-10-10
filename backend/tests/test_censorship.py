@@ -29,6 +29,7 @@ def _isolated(monkeypatch):
     monkeypatch.setattr(censorship, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(censorship, "get_cache_async", get_cache)
     monkeypatch.setattr(censorship, "set_cache_async", set_cache)
+    monkeypatch.setattr(censorship, "_deezer_indexed", {})
     censorship.invalidate()
     yield store
     censorship.invalidate()
@@ -134,6 +135,80 @@ def test_stream_falls_back_to_catalog_when_original_failed(db, monkeypatch):
     monkeypatch.setattr(ytdlp, "stream_cached_audio", cached_audio)
 
     assert asyncio.run(ytdlp.stream_ytmusic("CENSORED01", _request(b"scfallback=1"))) == "catalog"
+
+
+# skyline ryodan (shadowraze, jzxdx): аудиодорожка и Deezer зацензурены,
+# клип того же релиза — нет. Оригинал привязан к аудиодорожке, а клип с другим
+# написанием артиста в выдачу с подменой не попадал и играл цензурный Deezer.
+# Общее у них — трек Deezer.
+def _deezer_index(monkeypatch, matches):
+    """matches: id ytmusic → трек Deezer (найденный матч)."""
+    from app.routers import deezer
+
+    monkeypatch.setattr(deezer, "enabled", lambda: True)
+
+    async def await_match(video_id, timeout=3.0):
+        return matches.get(video_id)
+
+    async def cached_match(video_id):
+        return matches.get(video_id)
+
+    monkeypatch.setattr(deezer, "await_deezer_match", await_match)
+    monkeypatch.setattr(deezer, "deezer_match_for", cached_match)
+    asyncio.run(censorship._index_by_deezer(["CENSORED01"]))
+    return deezer
+
+
+def test_other_id_of_same_record_plays_original(db, monkeypatch, _isolated):
+    _override(db)
+    _deezer_index(monkeypatch, {"CENSORED01": "2299983955", "MUSICVIDEO": "2299983955"})
+    monkeypatch.setattr(ytdlp, "_ytmusic", object())
+
+    async def must_not_run(*_a, **_kw):
+        raise AssertionError("цензурную копию не смотрим, если есть оригинал")
+
+    monkeypatch.setattr(ytdlp, "_local_copy_path", must_not_run)
+
+    response = asyncio.run(ytdlp.stream_ytmusic("MUSICVIDEO", _request()))
+
+    assert response.status_code == 307
+    assert response.headers["location"].endswith("?vid=MUSICVIDEO")
+    # Матч Deezer живёт неделю — id запомнен как другой id той же записи.
+    assert _isolated["censor:alias:MUSICVIDEO"] == "CENSORED01"
+
+
+def test_other_record_in_deezer_is_not_redirected(db, monkeypatch):
+    _override(db)
+    _deezer_index(monkeypatch, {"CENSORED01": "2299983955", "UNRELATED1": "111"})
+
+    assert asyncio.run(censorship.override_for_video("UNRELATED1")) is None
+    assert asyncio.run(censorship.override_for_video("NOMATCH001")) is None
+
+
+def test_cold_id_turns_to_original_once_deezer_match_found(db, monkeypatch):
+    # На проверке в начале стрима матча ещё нет в кэше — он находится в шаге
+    # Deezer, и цензурный трек Deezer не играет.
+    _override(db)
+    deezer = _deezer_index(monkeypatch, {"CENSORED01": "2299983955"})
+
+    async def found(video_id, timeout=3.0):
+        return "2299983955"
+
+    async def no_edited(_video_id):
+        return False
+
+    async def download(video_id, sng_id, request, replace=False):
+        return "deezer"
+
+    monkeypatch.setattr(deezer, "await_deezer_match", found)
+    monkeypatch.setattr(deezer, "_prefer_soundcloud_over_edited", no_edited)
+    monkeypatch.setattr(deezer, "_stream_download", download)
+
+    response = asyncio.run(deezer.stream_for_ytmusic("MUSICVIDEO", _request()))
+    assert response.status_code == 307
+    assert response.headers["location"].endswith("?vid=MUSICVIDEO")
+    # Оригинал не отдался — играет что есть, без круга редиректов.
+    assert asyncio.run(deezer.stream_for_ytmusic("MUSICVIDEO", _request(b"scfallback=1"))) == "deezer"
 
 
 def _sc_item(title, uploader, duration, track_id=1, publisher=None):

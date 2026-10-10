@@ -32,7 +32,7 @@ from typing import Optional
 import httpx
 from Crypto.Cipher import Blowfish
 from fastapi import APIRouter, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
 from app.artist_utils import same_artist, to_latin
 from app.cache import delete_cache, get_cache_async, set_cache_async
@@ -862,6 +862,18 @@ async def stream_for_ytmusic(video_id: str, request: Request) -> Optional[Respon
     sng_id = await await_deezer_match(video_id)
     if not sng_id or await _prefer_soundcloud_over_edited(video_id):
         return None
+    # Матч, которого не было в кэше на проверке цензуры в начале стрима: трек
+    # Deezer может оказаться записью, зацензуренной по закону РФ, с оригиналом,
+    # привязанным к другому её id (см. app/censorship.py). scfallback=1 —
+    # оригинал уже не отдался, играет что есть.
+    if request.query_params.get("scfallback") != "1":
+        from app import censorship
+
+        override = await censorship.override_for_video(video_id, deezer_id=sng_id)
+        if override is not None:
+            return RedirectResponse(
+                censorship.soundcloud_stream_path(override, video_id), status_code=307
+            )
     return await _stream_download(video_id, sng_id, request)
 
 
@@ -884,6 +896,13 @@ async def replace_youtube_copy(video_id: str) -> Optional[str]:
         return None
     sng_id = await await_deezer_match(video_id, timeout=_REPLACE_MATCH_WAIT)
     if not sng_id or not await match_is_explicit(video_id):
+        return None
+    # Explicit-флаг у записей, зацензуренных по закону РФ, ничего не значит:
+    # у такой записи Deezer цензурный, а копия с YouTube (клип) бывает без
+    # цензуры — не затираем её.
+    from app import censorship
+
+    if await censorship.override_for_video(video_id, deezer_id=sng_id) is not None:
         return None
     logger.info("replacing youtube copy of %s with explicit deezer %s", video_id, sng_id)
     return await fetch_to_cache(video_id, sng_id, replace=True)
@@ -929,6 +948,18 @@ async def prefetch_for_ytmusic(video_id: str) -> bool:
     sng_id = await await_deezer_match(video_id, timeout=1.0)
     if not sng_id or await _prefer_soundcloud_over_edited(video_id):
         return False
+    # Играть будет привязанный оригинал (см. stream_for_ytmusic) — греем его:
+    # готовность прогрева проверяется уже по нему.
+    from app import censorship
+
+    override = await censorship.override_for_video(video_id, deezer_id=sng_id)
+    if override is not None:
+        from app.routers import soundcloud
+
+        await soundcloud.prefetch_soundcloud(
+            soundcloud._encode_token(override["original_id"], override["original_permalink"])
+        )
+        return True
 
     async def job():
         try:

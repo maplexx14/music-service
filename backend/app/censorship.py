@@ -16,7 +16,9 @@ SoundCloud залив того же артиста с близкой длите�
 названием — такой трек попадает в админку со статусом suggested.
 
 Подтверждённая привязка действует везде, где играет трек каталога:
-- звук — /api/ytdlp/stream/{id} отдаёт 307 на оригинал (ytdlp.stream_ytmusic);
+- звук — /api/ytdlp/stream/{id} отдаёт 307 на оригинал (ytdlp.stream_ytmusic),
+  и не только у привязанного id: у других id той же записи (клип и
+  аудиодорожка, сингл и альбом) тоже, их опознаёт общий трек Deezer;
 - выдача — поиск, поток, рекомендации, страницы артиста/альбома показывают
   название оригинала (apply_overrides);
 - библиотека — записи Track получают название оригинала при подтверждении.
@@ -51,6 +53,17 @@ _cache_lock = asyncio.Lock()
 # Другой id той же цензурной записи (сингл и альбом), опознанный по ключу
 # «артист|название» в выдаче: стрим знает только id, поэтому запоминаем.
 _ALIAS_TTL = 30 * 24 * 3600
+
+# Другой id той же записи ключ «артист|название» ловит не всегда: клип пишет
+# артистов иначе, чем аудиодорожка, а библиотека и очередь после рестарта
+# играют мимо выдачи с подменой. Общий у таких id — трек Deezer: матчер сводит
+# их к одной записи, и без привязки все они играли бы её цензурный звук
+# (skyline ryodan: аудиодорожка и Deezer зацензурены, клип нет — а клип
+# играл Deezer). Храним «трек Deezer → id привязки» и раз в час обновляем.
+_DEEZER_TTL = 30 * 24 * 3600
+_DEEZER_REINDEX = 3600
+_deezer_indexed: dict[str, float] = {}
+_deezer_index_task: Optional[asyncio.Task] = None
 
 # Автоподсказки: один трек проверяем не чаще раза в месяц и по одному за раз
 # (поиск SoundCloud идёт через платный прокси).
@@ -135,6 +148,7 @@ async def confirmed_overrides() -> tuple[dict, dict]:
                 logger.exception("censor overrides load failed")
                 by_id, by_key = _cache["by_id"], _cache["by_key"]
             _cache.update(at=time.monotonic(), by_id=by_id, by_key=by_key)
+            _schedule_deezer_index(by_id)
     return _cache["by_id"], _cache["by_key"]
 
 
@@ -142,8 +156,47 @@ def _alias_key(video_id: str) -> str:
     return f"censor:alias:{video_id}"
 
 
-async def override_for_video(video_id: str) -> Optional[dict]:
-    """Подтверждённый оригинал для ytmusic-трека или None."""
+def _deezer_key(sng_id: str) -> str:
+    return f"censor:deezer:{sng_id}"
+
+
+def _schedule_deezer_index(by_id: dict) -> None:
+    global _deezer_index_task
+    if _deezer_index_task is not None and not _deezer_index_task.done():
+        return
+    now = time.monotonic()
+    stale = [
+        video_id for video_id in by_id
+        if now - _deezer_indexed.get(video_id, -math.inf) >= _DEEZER_REINDEX
+    ]
+    if stale:
+        _deezer_index_task = asyncio.create_task(_index_by_deezer(stale))
+
+
+async def _index_by_deezer(video_ids: list[str]) -> None:
+    """Трек Deezer каждой привязанной записи → id привязки (см. _DEEZER_TTL)."""
+    from app.routers import deezer
+
+    if not deezer.enabled():
+        return
+    for video_id in video_ids:
+        _deezer_indexed[video_id] = time.monotonic()
+        try:
+            # Матч обычно уже в кэше; нет — метаданные из каталога и поиск,
+            # в фоне ждать можно дольше, чем стриму.
+            sng_id = await deezer.await_deezer_match(video_id, timeout=60.0)
+            if sng_id:
+                await set_cache_async(_deezer_key(sng_id), video_id, expire=_DEEZER_TTL)
+        except Exception:  # noqa: BLE001 — фон, повторим через _DEEZER_REINDEX
+            logger.warning("censor deezer index failed for %s", video_id, exc_info=True)
+
+
+async def override_for_video(video_id: str, deezer_id: Optional[str] = None) -> Optional[dict]:
+    """Подтверждённый оригинал для ytmusic-трека или None.
+
+    deezer_id — матч Deezer, если зовущий его уже дождался (стрим холодного
+    id); иначе берётся матч из кэша, без поиска.
+    """
     by_id, _by_key = await confirmed_overrides()
     if not by_id:
         return None
@@ -151,7 +204,17 @@ async def override_for_video(video_id: str) -> Optional[dict]:
     if override is not None:
         return override
     alias = await get_cache_async(_alias_key(video_id))
-    return by_id.get(alias) if alias else None
+    if alias in by_id:
+        return by_id[alias]
+    from app.routers import deezer
+
+    sng_id = deezer_id or await deezer.deezer_match_for(video_id)
+    censored_id = await get_cache_async(_deezer_key(sng_id)) if sng_id else None
+    override = by_id.get(censored_id) if censored_id else None
+    if override is not None:
+        # Матч Deezer живёт неделю, своя копия трека — дольше.
+        await set_cache_async(_alias_key(video_id), censored_id, expire=_ALIAS_TTL)
+    return override
 
 
 def soundcloud_stream_path(override: dict, video_id: str = "") -> str:
