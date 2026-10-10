@@ -4,7 +4,7 @@ import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import MeterProfiler from './MeterProfiler'
-import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow, clearShownTab } from '../services/navigation'
+import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
@@ -298,29 +298,9 @@ function Layout({ renderRoutes }) {
     pill.style.transform = ''
   }
 
-  // Экран вкладки — уже на касании, как в нативном таб-баре iOS: от касания
-  // до клика проходят время пальца на стекле и ~30 мс, пока WebKit доставит
-  // клик (замер utils/frameMeter). Сам переход роутера по-прежнему делает
-  // клик; протяжка по панели ранний показ отменяет. Только между вкладками —
-  // с вложенного экрана переход идёт через View Transition (см. showTabNow).
-  const cancelEarlyTab = (drag) => {
-    if (!drag?.early) return
-    drag.early = false
-    clearShownTab()
-    setPendingNavIndex(null)
-  }
-
   const handleNavPointerDown = (event) => {
     if (event.pointerType === 'mouse' || !event.isPrimary) return
-    const index = navIndexAt(event.clientX)
-    const drag = { id: event.pointerId, x: event.clientX, dragging: false, index, early: false }
-    navDragRef.current = drag
-    const { to } = MOBILE_NAV[index]
-    if (index !== activeNavIndex && isTabRoot(location.pathname)) {
-      drag.early = true
-      setPendingNavIndex(index)
-      showTabNow(to)
-    }
+    navDragRef.current = { id: event.pointerId, x: event.clientX, dragging: false, index: navIndexAt(event.clientX) }
   }
   const handleNavPointerMove = (event) => {
     const drag = navDragRef.current
@@ -328,7 +308,6 @@ function Layout({ renderRoutes }) {
     if (!drag.dragging) {
       if (Math.abs(event.clientX - drag.x) < 8) return
       drag.dragging = true
-      cancelEarlyTab(drag)
       navRef.current.setPointerCapture?.(event.pointerId)
       setNavHoverIndex(drag.index)
     }
@@ -350,9 +329,6 @@ function Layout({ renderRoutes }) {
     const drag = navDragRef.current
     if (!drag || drag.id !== event.pointerId) return
     navDragRef.current = null
-    // Касание сорвалось (система забрала жест) — клика не будет, и экран,
-    // показанный на касании, возвращается к текущей вкладке.
-    if (event.type === 'pointercancel') cancelEarlyTab(drag)
     if (!drag.dragging) return
     navSuppressClickUntil.current = performance.now() + 400
     setNavHoverIndex(null)
