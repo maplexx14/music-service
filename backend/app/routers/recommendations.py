@@ -1317,7 +1317,9 @@ def _compute_recommendations(
     # Любимые артисты — те же, что в волне (flow.deep_catalog_artist_keys).
     deep_catalog_keys = set(
         flow_router.deep_catalog_artist_keys(
-            flow_router._collection_rows(db, current_user.id), excluded_artist_keys
+            flow_router._collection_rows(db, current_user.id),
+            excluded_artist_keys,
+            preferred_artists,
         )
     )
     hits_anchor = deep_catalog_keys or {

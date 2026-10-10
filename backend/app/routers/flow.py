@@ -98,11 +98,7 @@ from app.recommendation_scoring import (
     score_track,
     stable_jitter,
 )
-from app.acoustic_features import (
-    MIN_RECOMMENDATION_SIMILARITY,
-    acoustic_similarity,
-    weighted_centroid,
-)
+from app.acoustic_features import weighted_centroid
 from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
@@ -515,12 +511,18 @@ def _collection_rows(db: Session, user_id: int) -> list:
     )
 
 
-def deep_catalog_artist_keys(collection_rows, excluded=()) -> List[str]:
+def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List[str]:
     """Любимые артисты: от _DEEP_CATALOG_MIN_TRACKS разных песен в коллекции.
 
     Им волна и лента отдают глубокий каталог, остальным — только хиты
     (app/mainstream.py). Считаются разные песни, а не строки: один трек в двух
     плейлистах — это один выбор. ``collection_rows`` — из ``_collection_rows``.
+
+    ``preferred`` — имена из User.preferred_artists: явный выбор в настройках
+    любимым считается сразу, без порога. Иначе андерграунд-артист, выбранный
+    вручную, но не набравший пяти песен и 50k слушателей Last.fm, терял в
+    мейнстрим-фильтре ВСЕ свои треки (прод, 2026-10-10: первый по весу артист
+    профиля не попал в волну ни разу).
     """
     songs_by_artist: dict[str, set] = {}
     for _track_id, artist, title, source, _external_id, album in collection_rows:
@@ -534,11 +536,13 @@ def deep_catalog_artist_keys(collection_rows, excluded=()) -> List[str]:
         if all(key):
             songs_by_artist.setdefault(primary_artist_key(effective_artist), set()).add(key)
     excluded = set(excluded)
-    return sorted(
+    deep = {
         artist
         for artist, songs in songs_by_artist.items()
-        if artist and len(songs) >= _DEEP_CATALOG_MIN_TRACKS and artist not in excluded
-    )
+        if artist and len(songs) >= _DEEP_CATALOG_MIN_TRACKS
+    }
+    deep.update(primary_artist_key(name) for name in preferred)
+    return sorted(artist for artist in deep if artist and artist not in excluded)
 
 
 def fresh_collection_artist_keys(db: Session, user_id: int, now=None) -> List[str]:
@@ -1346,7 +1350,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         # (см. app/mainstream.py). Считаются разные песни, а не строки: один
         # трек в двух плейлистах — это один выбор.
         "deep_catalog_artist_keys": deep_catalog_artist_keys(
-            collection_rows, excluded_artists
+            collection_rows, excluded_artists, pref_artists
         ),
         "fresh_cluster_artist_keys": fresh_collection_artist_keys(db, user_id),
         "curated_artist_keys": curated_artist_keys,
@@ -1606,52 +1610,14 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
         for track in pool:
             candidates_by_id.setdefault(track.id, track)
 
-    # Acoustic similarity is a content candidate source, not a quota.  It can
-    # introduce a new artist when the audio profile is a strong match while
-    # still respecting private-library isolation and all hard exclusions.
-    acoustic_profile = profile.get("acoustic_profile") or {}
-    if acoustic_profile:
-        other_owner_tracks = (
-            select(playlist_tracks.c.track_id)
-            .select_from(
-                playlist_tracks.join(
-                    Playlist, Playlist.id == playlist_tracks.c.playlist_id
-                )
-            )
-            .where(Playlist.owner_id != profile["user_id"])
-        )
-        acoustic_keep = track_check(
-            make_relevance_check(
-                trusted_artist_keys=set(),
-                user_genres=set(profile.get("genres") or []),
-                prefer_cyrillic=None,
-                provenance_trusted=True,
-            )
-        )
-        acoustic_rows = (
-            db.query(Track)
-            .filter(
-                Track.acoustic_features.isnot(None),
-                ~Track.id.in_(exclude_ids),
-                ~Track.id.in_(collection_track_ids),
-                ~Track.id.in_(played_ids),
-                ~Track.id.in_(other_owner_tracks),
-            )
-            .order_by(Track.id)
-            .limit(max(limit * 100, 500))
-            .all()
-        )
-        for track in acoustic_rows:
-            if (
-                track.id in candidates_by_id
-                or not _media_available(track)
-                or not acoustic_keep(track)
-                or acoustic_similarity(track.acoustic_features, acoustic_profile)
-                < MIN_RECOMMENDATION_SIMILARITY
-            ):
-                continue
-            candidates_by_id[track.id] = track
-
+    # Акустической ветки здесь больше нет. Она пускала любого артиста общего
+    # каталога с близким вектором, а порог 0.55 проходят ~90% треков с
+    # признаками — признаки же есть только у закэшированного в хранилище, то
+    # есть у того, что слушали ДРУГИЕ юзеры. Прод, 2026-10-10: у юзера с
+    # импортом андерграунд-рэпа 2340 из 2473 локальных кандидатов были такими
+    # чужими (Metallica, Taylor Swift, ДДТ), и они заняли всю волну; по
+    # телеметрии новые артисты этой ветки — good 0.9% / bad 88%. Новые имена —
+    # работа разведки (см. модульный docstring), а не локального пула.
     candidates = list(candidates_by_id.values())
     candidates.sort(key=_score)
 

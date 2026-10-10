@@ -31,6 +31,7 @@ from app.routers.flow import (
     _FRESH_CLUSTER_DAYS,
     _LIKED_REPLAY_COOLDOWN_DAYS,
     _liked_candidates,
+    _local_candidates,
     _persisted_flow_history,
     _pick_favorite_artists,
     _taste_profile,
@@ -2833,6 +2834,44 @@ def test_deep_catalog_artists_need_five_distinct_songs(db):
 
     assert "favartist" in profile["deep_catalog_artist_keys"]
     assert "casual" not in profile["deep_catalog_artist_keys"]
+
+
+def test_preferred_artist_is_favorite_without_five_songs(db):
+    """Явный выбор в настройках — любимый сразу: иначе мейнстрим-фильтр
+    отсекал все треки андерграунд-артиста, выбранного вручную."""
+    user = create_user(db, username="preferred-deep-user")
+    user.preferred_artists = ["Underground"]
+    db.commit()
+    _collection(db, user, "Underground", ["only song"])
+
+    profile = _taste_profile(db, user.id)
+
+    assert "underground" in profile["deep_catalog_artist_keys"]
+
+
+def test_local_candidates_skip_acoustically_close_stranger(db):
+    """Прод, 2026-10-10: акустическая ветка пускала в волну любого артиста
+    общего каталога, и чужое прослушанное заняло всю волну нового юзера."""
+    vector = {"vector": {"tempo": 0.2, "loudness": 0.8, "bass": 0.8, "brightness": 0.2}}
+    user = create_user(db, username="acoustic-stranger-user")
+    _collection(db, user, "MyArtist", [f"mine {i}" for i in range(3)])
+    db.query(Track).filter(Track.artist == "MyArtist").update(
+        {"acoustic_features": vector}
+    )
+    own = Track(title="unheard", artist="MyArtist", duration=100,
+                source="ytmusic", external_id="vid-own")
+    stranger = Track(title="hit", artist="Stranger", duration=100,
+                     source="ytmusic", external_id="vid-stranger",
+                     acoustic_features=vector, play_count=500)
+    db.add_all([own, stranger])
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert profile["acoustic_profile"]
+    artists = {track.artist for track in _local_candidates(db, profile, 15)}
+
+    assert "MyArtist" in artists
+    assert "Stranger" not in artists
 
 
 def test_flow_keeps_only_hits_of_non_favorite_artists(client, db, monkeypatch):

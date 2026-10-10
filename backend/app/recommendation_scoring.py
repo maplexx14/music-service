@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping, Optional
 from app.acoustic_features import acoustic_similarity
 from app.genre_keywords import internal_genre_key
 
-ALGORITHM_VERSION = "hybrid-v15"
+ALGORITHM_VERSION = "hybrid-v16"
 
 # Popularity must never overpower a user's explicit signal or a content match,
 # but it does have to separate a genuine hit from a no-name upload.  The weight
@@ -29,7 +29,16 @@ _POPULARITY_WEIGHT = 0.5
 _FRESHNESS_WEIGHT = 0.22
 _AFFINITY_WEIGHT = 2.4
 _CONTENT_WEIGHT = 1.15
-_ACOUSTIC_WEIGHT = 1.55
+# Acoustic fit is kept in the components but carries no weight.  Prod flow
+# telemetry, 30 days to 2026-10-10: within analyzed tracks a higher fit never
+# raised the good rate (bad grew 0.66 -> 0.72 by quartile), and new artists
+# that entered on acoustics alone went good 0.9% / bad 88% against 6.4% / 56%
+# for new artists from providers.  At 1.55 the term was worth +1.1..1.4 to any
+# track with features and 0 to one without — features exist only for tracks
+# cached in storage, i.e. what OTHER users had played — so it outweighed the
+# user's own artists (affinity rarely above 0.7) and filled a new user's flow
+# with the owner's listening history.
+_ACOUSTIC_WEIGHT = 0.0
 _SOURCE_WEIGHT = 0.18
 _NOVELTY_WEIGHT = 0.16
 _FATIGUE_WEIGHT = 0.55

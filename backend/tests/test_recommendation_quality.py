@@ -363,35 +363,39 @@ def test_acoustic_similarity_and_weighted_centroid():
     assert acoustic_similarity({}, centroid) == 0.0
 
 
-def test_score_track_rewards_acoustic_fit_for_a_new_artist():
+def test_acoustic_fit_does_not_outrank_users_own_artist():
+    # Prod 2026-10-10: features exist only for tracks other users had played,
+    # and the acoustic term let those strangers fill a new user's whole flow.
     profile = _features(tempo=0.25, brightness=0.2, bass=0.8)
-    close = {
-        "id": "close",
+    stranger = {
+        "id": "stranger",
         "artist": "New Artist",
         "source": "local",
-        "acoustic_features": _features(tempo=0.28, brightness=0.22, bass=0.78),
+        "acoustic_features": _features(tempo=0.25, brightness=0.2, bass=0.8),
     }
-    far = {
-        "id": "far",
+    own_unanalyzed = {
+        "id": "own",
         "artist": "Known Artist",
         "source": "local",
-        "acoustic_features": _features(tempo=0.9, brightness=0.9, bass=0.1),
     }
 
-    close_score = score_track(
-        close,
+    stranger_score = score_track(
+        stranger,
         artist_affinity=0.0,
         novelty=True,
         acoustic_profile=profile,
     )
-    far_score = score_track(
-        far,
+    own_score = score_track(
+        own_unanalyzed,
         artist_affinity=1.0,
         novelty=False,
         acoustic_profile=profile,
     )
 
-    assert close_score > far_score
+    assert own_score > stranger_score
+    assert score_track(stranger, acoustic_profile=profile) == score_track(
+        {**stranger, "acoustic_features": None}, acoustic_profile=profile
+    )
 
 
 def test_playlist_origin_aggregation_prefers_manual_and_detects_legacy(db):
