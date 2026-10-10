@@ -37,6 +37,9 @@ const OPEN_COVER_WAIT_MS = 120
 // Зазор между капсулами в карусели мини-плеера, px. Тот же шаг задаёт CSS через
 // --strip-gap (ставится инлайном), чтобы JS и вёрстка не разъехались.
 const MINI_STRIP_GAP = 24
+// На сколько откладывать пере-объявление Now Playing после смены трека, пока
+// приложение на экране: дольше доезда карусели (settleStrip, 340 мс).
+const REASSERT_DEFER_MS = 450
 
 // Внешний трек (YouTube Music/SoundCloud) резолвится на бэке лениво и иногда
 // спотыкается о временный сбой (таймаут/сеть/429 у источника) — бэк в этом
@@ -511,6 +514,8 @@ function PlayerInner() {
   // проверке мёртвого конвейера: она наступает раньше страховочного таймера, и
   // без отмены тот выстрелил бы позже и переобъявил «играю» поверх честной паузы.
   const swapReleaseNowRef = useRef(null)
+  // Отложенное пере-объявление «играю» после подмены (см. releasePrevious).
+  const reassertTimerRef = useRef(null)
   // Всегда актуальная ссылка на handleAudioError. Слушатель 'error' вешается
   // в эффекте (элемент больше не в JSX), а сам обработчик пересоздаётся на
   // каждом рендере — через ref эффект зовёт свежую версию, не переподписываясь.
@@ -1435,7 +1440,21 @@ function PlayerInner() {
         // системы они выглядят как «воспроизведение остановилось»: виджет уходит
         // в ▶ поверх честно звучащего трека (шкала при этом живая — её кормит
         // наш setPositionState). Возвращаем правду последним переходом.
-        reassertNowPlaying(primed, 'swap:reassertPlay')
+        //
+        // Когда приложение на экране — с отсрочкой: синхронная часть этого
+        // play() (WebKit публикует Now Playing) на iPhone занимала 76 мс и
+        // попадала ровно в анимацию смены трека (замер utils/frameMeter).
+        // Экран блокировки в это время никто не видит, а неверная ▶ на нём
+        // живёт лишь эту отсрочку. В фоне — сразу: там виджет как раз на виду.
+        if (document.hidden) {
+          reassertNowPlaying(primed, 'swap:reassertPlay')
+          return
+        }
+        clearTimeout(reassertTimerRef.current)
+        reassertTimerRef.current = setTimeout(() => {
+          reassertTimerRef.current = null
+          if (engine.getActive() === primed) reassertNowPlaying(primed, 'swap:reassertPlay')
+        }, REASSERT_DEFER_MS)
       }
       primed.addEventListener('playing', releasePrevious)
       primed.addEventListener('timeupdate', releaseOnProgress)
