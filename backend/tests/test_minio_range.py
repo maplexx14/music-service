@@ -46,7 +46,7 @@ def test_range_request_206_with_headers(monkeypatch):
     assert headers["content-range"] == "bytes 0-99/1000"
     assert headers["content-length"] == "100"
     assert headers["etag"] == '"etag1"'
-    assert "max-age=604800" in headers["cache-control"]
+    assert headers["cache-control"] == storage.AUDIO_CACHE_CONTROL
     assert headers["accept-ranges"] == "bytes"
 
 

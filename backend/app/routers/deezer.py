@@ -720,7 +720,9 @@ def _serve_growing(video_id: str, part: str, total: int, request: Request) -> Re
     has_range = bool(request.headers.get("range"))
     start, end = _parse_range(request.headers.get("range"), total)
     end = total - 1 if end is None else min(end, total - 1)
-    common = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"}
+    from app import storage
+
+    common = {"Accept-Ranges": "bytes", "Cache-Control": storage.AUDIO_CACHE_CONTROL}
     if start >= total:
         return Response(status_code=416, headers={**common, "Content-Range": f"bytes */{total}"})
     if start > end:

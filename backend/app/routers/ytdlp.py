@@ -1986,9 +1986,9 @@ async def _serve_file(
     etag = f'"{size:x}-{int(os.path.getmtime(path)):x}"'
     common = {
         "Accept-Ranges": "bytes",
-        # Кэш-файл неизменен для данного video_id — разрешаем браузеру кэшировать
-        # (повторное прослушивание не бьёт по бэку вовсе).
-        "Cache-Control": cache_control or "public, max-age=86400",
+        # Недолго: под адресом стрима со временем другие байты или 307 на
+        # оригинал без цензуры (см. storage.AUDIO_CACHE_CONTROL).
+        "Cache-Control": cache_control or storage.AUDIO_CACHE_CONTROL,
         "ETag": etag,
     }
     if storage.if_none_match_matches(request, etag):
@@ -2485,7 +2485,7 @@ async def stream_cached_audio(
     # качал те же байты дважды. private — кэш только в браузере слушателя.
     # Без известного total остаёмся на no-store: не хотим закэшированных
     # обрывков от стрима неизвестной длины.
-    cache_control = "private, max-age=3600" if total is not None else "no-store"
+    cache_control = storage.AUDIO_CACHE_CONTROL if total is not None else "no-store"
     headers = {"Accept-Ranges": "bytes", "Cache-Control": cache_control}
     if total is not None:
         if request.headers.get("range"):
