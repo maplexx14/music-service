@@ -275,6 +275,10 @@ _SKIP_EXCLUDE_DAYS = 60
 # времени. Осознанное «не нравится» должно убирать артиста из волны сразу,
 # а не растворяться в весах через две недели.
 _DISLIKE_ARTIST_PENALTY = 3.5
+# Ниже этого веса скипы не опускают любимого артиста (без дизлайка): он
+# остаётся знакомым и не попадает в banned_artists. Сродни весу одного
+# импортированного трека недельной давности — в ротации, но не в голове.
+_FAVORITE_SKIP_FLOOR = 0.5
 # Краткосрочная серверная история не даёт новому запуску волны сразу вернуть
 # тот же исчерпанный пул в другом порядке. Хвоста достаточно для нескольких
 # длинных сессий, TTL позже разрешает старым трекам естественно вернуться.
@@ -884,6 +888,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     skipped_ids: set = set()
     skipped_keys: set = set()
     skipped_video_ids: set = set()
+    disliked_artist_keys: set = set()
     for track, skip_count, last_skipped, disliked in skipped:
         effective_artist, effective_title = effective_track_artist_title(track)
         skipped_ids.add(track.id)
@@ -891,6 +896,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.external_id:
             skipped_video_ids.add(track.external_id)
         key = artist_key(effective_artist)
+        if disliked:
+            disliked_artist_keys.add(key)
         # Явный дизлайк весомее случайного скипа и не затухает: пользователь
         # сказал «не хочу» осознанно. Вес подобран так, чтобы один дизлайк
         # перебивал один лайк (+3.0) и уводил артиста в banned_artists.
@@ -1169,6 +1176,19 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # библиотека из одиночных импортов ни одного артиста до порога любимого
     # (_PLAYLIST_ARTIST_MIN_TRACKS) не дотягивает, но вкус у такого юзера есть —
     # чужой глобальный топ ему тем более противопоказан.
+    # Любимого артиста (см. deep_catalog_artist_keys) скипы не уводят в минус —
+    # это делает только явный дизлайк. Вес коллекции затухает как событие
+    # (импорт двухмесячной давности — 6% от исходного), а свежий скип штрафует
+    # в полную силу: прод, 2026-10-10, два быстрых скипа CUPSIZE посреди серии
+    # из ~100 скипов мусорной волны перевесили 9 его треков в плейлисте, и
+    # артист ушёл в banned_artists — пропал из волны целиком. Скипы по-прежнему
+    # снижают вес (ротация) и исключают сами треки.
+    deep_keys = deep_catalog_artist_keys(collection_rows, excluded_artists, pref_artists)
+    for key in deep_keys:
+        if key not in disliked_artist_keys and artist_weight.get(key, 0.0) < _FAVORITE_SKIP_FLOOR:
+            artist_weight[key] = _FAVORITE_SKIP_FLOOR
+            artist_display.setdefault(key, key)
+
     has_own_signal = any(w > 0 for w in artist_weight.values())
     if not seeds and not curated_artist_keys and not has_own_signal:
         popular_yt = (
@@ -1349,9 +1369,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         # Любимые — им можно давать глубокий каталог, остальным только хиты
         # (см. app/mainstream.py). Считаются разные песни, а не строки: один
         # трек в двух плейлистах — это один выбор.
-        "deep_catalog_artist_keys": deep_catalog_artist_keys(
-            collection_rows, excluded_artists, pref_artists
-        ),
+        "deep_catalog_artist_keys": deep_keys,
         "fresh_cluster_artist_keys": fresh_collection_artist_keys(db, user_id),
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists":[artist_display.get(k, k) for k in catalog_artist_keys],

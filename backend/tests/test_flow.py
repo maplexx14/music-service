@@ -2849,6 +2849,32 @@ def test_preferred_artist_is_favorite_without_five_songs(db):
     assert "underground" in profile["deep_catalog_artist_keys"]
 
 
+@pytest.mark.parametrize("disliked", [False, True])
+def test_skips_do_not_ban_favorite_artist_but_dislike_does(db, disliked):
+    """Прод, 2026-10-10: два быстрых скипа перевесили 9 треков импорта, и
+    любимый артист пропал из волны. Банит любимого только явный дизлайк."""
+    user = create_user(db, username=f"favorite-skips-{disliked}")
+    _collection(db, user, "FavArtist", [f"song {i}" for i in range(5)])
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    db.execute(playlist_tracks.update().values(added_at=old))
+    skipped = [Track(title=f"skipped {i}", artist="FavArtist", duration=100, source="local")
+               for i in range(3)]
+    db.add_all(skipped)
+    db.commit()
+    db.execute(user_track_skips.insert(), [
+        {"user_id": user.id, "track_id": track.id, "skip_count": 2,
+         "disliked": disliked and index == 0, "last_skipped": datetime.now(timezone.utc)}
+        for index, track in enumerate(skipped)
+    ])
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+
+    assert ("favartist" in profile["banned_artists"]) is disliked
+    assert ("favartist" in profile["artist_weight"]) is not disliked
+    assert {track.id for track in skipped} <= profile["skipped_ids"]
+
+
 def test_local_candidates_skip_acoustically_close_stranger(db):
     """Прод, 2026-10-10: акустическая ветка пускала в волну любого артиста
     общего каталога, и чужое прослушанное заняло всю волну нового юзера."""
