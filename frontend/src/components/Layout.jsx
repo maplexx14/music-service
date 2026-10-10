@@ -201,9 +201,25 @@ function Layout({ renderRoutes }) {
     const to = showMobileBack ? backPath : dir > 0 ? prevTab : nextTab
     if (to) setPendingNavIndex(navIndexOf(to))
   }
+  // Капсула меню едет вместе с экраном: сдвиг экрана на ширину — ровно одна
+  // ячейка, тем же переходом. Инлайн-сдвиг снимается в конце жеста, когда
+  // капсулу уже держит pendingNavIndex или маршрут — на том же месте.
+  const handleSwipePan = (x, width, transition) => {
+    const pill = navPillRef.current
+    if (!pill) return
+    if (x === null || tabIndex < 0) {
+      pill.style.transition = ''
+      pill.style.transform = ''
+      return
+    }
+    const pos = Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - x / width))
+    pill.style.transition = transition
+    pill.style.transform = `translateX(${pos * 100}%)`
+  }
   useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
     onCommit: handleSwipeCommit,
+    onPan: handleSwipePan,
     onBack: showMobileBack ? goBack : null,
     onPrev: prevTab ? () => navigate(prevTab) : null,
     onNext: nextTab ? () => navigate(nextTab) : null,

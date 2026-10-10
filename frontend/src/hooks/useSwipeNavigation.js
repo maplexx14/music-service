@@ -106,15 +106,19 @@ function insideHorizontalScroller(target, root) {
   return false
 }
 
-export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, onCommit, targets }) {
+export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, onCommit, onPan, targets }) {
   const actionsRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
   // сразу, не дожидаясь доезда экранов и коммита роутера.
+  // onPan(x, width, transition) — экран под пальцем сдвинут на x px тем же
+  // CSS-переходом (капсула нижнего меню едет синхронно с ним); onPan(null) —
+  // жест закончен, сдвиг снят.
   actionsRef.current = {
     right: onBack || onPrev || null,
     left: onNext || null,
     onCommit: onCommit || null,
+    onPan: onPan || null,
     targets: targets || {},
   }
 
@@ -167,6 +171,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
     const reset = () => {
       if (pan) {
+        actionsRef.current.onPan?.(null)
         clearScreen(pan.screen)
         if (pan.under) clearScreen(pan.under)
         if (pan.scroller) pan.scroller.style.overflowY = ''
@@ -202,6 +207,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const st = pan.screen.style
       st.transition = transition
       st.transform = x ? `translate3d(${x}px, 0, 0)` : ''
+      actionsRef.current.onPan?.(x, pan.width, transition)
       if (pan.under) {
         // Нижний экран едет с параллаксом: от сдвига на четверть ширины к нулю.
         const ux = -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
@@ -350,6 +356,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       }
 
       busy = true
+      actionsRef.current.onPan?.(dir * width, width, transitionFor(ms))
       // Под пальцем пусто — переход доигрывает View Transition: старый экран
       // (снапшот) уезжает от того места, где его отпустил палец, новый
       // одновременно въезжает из-под него.
