@@ -432,6 +432,78 @@ def test_audio_skips_reupload_of_censored_version(db, monkeypatch):
     assert compared == ["21", "22"]
 
 
+def test_replaced_words_link_only_artist_upload(db, monkeypatch):
+    # shadowraze «skyline ryodan»: слова заменены звуком той же громкости —
+    # какая версия цензурная, по звуку не сказать. Перезалив мог быть сделан с
+    # цензурной, оригинал — залив самого артиста.
+    from app.routers import deezer
+
+    monkeypatch.setattr(
+        deezer, "_ytmusic_meta_blocking", lambda vid: ("skyline ryodan", "shadowraze", 121)
+    )
+
+    async def candidates(title, artist, duration):
+        return [
+            censorship.score_candidate(_sc_item("shadowraze - skyline ryodan", "phonk_uploads", 124, 31), title, artist, duration),
+            censorship.score_candidate(_sc_item("skyline ryodan", "shadowraze", 124, 32), title, artist, duration),
+        ]
+
+    monkeypatch.setattr(censorship, "find_candidates", candidates)
+    _russian_lyrics(monkeypatch, True)
+    compared = _stub_audio(monkeypatch, {"31": "altered", "32": "altered"})
+    report = {}
+
+    assert asyncio.run(censorship.suggest_for_video("B5wofUHNaGg", report))["id"] == "32"
+    assert compared == ["31", "32"]
+    assert db.query(CensorOverride).one().status == "confirmed"
+    # Название и артист латиницей — русским трек узнан по тексту песни.
+    assert report["russian_by"] == "lyrics"
+
+
+def _russian_lyrics(monkeypatch, answer):
+    async def lyrics(title, artist, duration):
+        return answer
+
+    monkeypatch.setattr(censorship, "russian_lyrics", lyrics)
+
+
+@pytest.mark.parametrize("answer, outcome", [(False, "not_russian"), (None, "lyrics_failed")])
+def test_latin_track_without_russian_lyrics_is_not_checked(db, monkeypatch, answer, outcome):
+    from app.routers import deezer
+
+    monkeypatch.setattr(deezer, "_ytmusic_meta_blocking", lambda vid: ("Blinding Lights", "The Weeknd", 200))
+    _russian_lyrics(monkeypatch, answer)
+
+    async def must_not_search(*_a, **_kw):
+        raise AssertionError("нерусский трек на SoundCloud не ищем")
+
+    monkeypatch.setattr(censorship, "find_candidates", must_not_search)
+    report = {}
+
+    assert asyncio.run(censorship.suggest_for_video("J7p4bzqLvCw", report)) is None
+    assert report["outcome"] == outcome
+    # Сбой lrclib — не вердикт: проверка повторится скоро, а не через месяц.
+    assert (outcome in censorship.CONCLUSIVE_OUTCOMES) == (answer is False)
+
+
+def test_russian_lyrics_reads_same_length_entry(monkeypatch):
+    import httpx
+
+    entries = [
+        {"duration": 300, "plainLyrics": "Читаю словно на спидах"},  # другая версия
+        {"duration": 121, "plainLyrics": "Walk into your house"},
+    ]
+
+    async def get(self, url, params=None):
+        return httpx.Response(200, json=entries, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", get)
+    assert asyncio.run(censorship.russian_lyrics("skyline ryodan", "shadowraze", 121)) is False
+
+    entries[1]["plainLyrics"] = "Walk into your house\nМой куинке это Desolator"
+    assert asyncio.run(censorship.russian_lyrics("skyline ryodan", "shadowraze", 121)) is True
+
+
 def test_admin_check_reports_why_nothing_was_linked(client, db, monkeypatch):
     from app.routers import deezer
 
@@ -474,7 +546,7 @@ def test_inconclusive_background_check_is_retried_soon(db, monkeypatch, _isolate
 
     asyncio.run(run())
 
-    assert ttl == {"censor:checked:v2:KLEI000001": censorship._RETRY_CHECK_TTL}
+    assert ttl == {censorship._checked_key("KLEI000001"): censorship._RETRY_CHECK_TTL}
 
 
 def test_library_stream_schedules_censor_check(client, db, monkeypatch):

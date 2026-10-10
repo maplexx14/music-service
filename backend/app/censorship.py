@@ -623,8 +623,9 @@ async def compare_with_candidates(
 ) -> tuple[Optional[dict], Optional[Any]]:
     """Сравнивает звук трека каталога с лучшими кандидатами.
 
-    (кандидат, сравнение): verdict censored — найден оригинал; same — трек
-    каталога не цензурный (кандидат — та же запись без отличий); (None, None)
+    (кандидат, сравнение): verdict censored (или altered у залива самого
+    артиста) — найден оригинал; same — трек каталога не цензурный (кандидат —
+    та же запись без отличий); (None, None)
     — сравнить не получилось или ни один кандидат не той же записи.
     """
     from app import audio_compare
@@ -662,6 +663,12 @@ async def compare_with_candidates(
             )
             if result.verdict == "censored":
                 return candidate, result
+            # Слова заменены звуком той же громкости: в какой из двух версий,
+            # по звуку не сказать. Оригиналом считаем залив самого артиста —
+            # перезалив мог быть сделан с цензурной версии, а каталог (своя
+            # копия с YouTube-клипа) бывает и без цензуры.
+            if result.verdict == "altered" and candidate["official"]:
+                return candidate, result
             # Совпал залив самого артиста — значит, каталог и есть оригинал.
             # Совпавший перезалив мог быть залит уже с цензурной версии —
             # смотрим следующих кандидатов.
@@ -670,6 +677,45 @@ async def compare_with_candidates(
     finally:
         _remove(catalog_tmp)
     return None, None
+
+
+_LRCLIB_URL = "https://lrclib.net/api/search"
+# Та же запись — длительность в пределах этого (как у караоке на фронте,
+# hooks/useLyrics.js, только мягче: нужен язык, а не тайминги).
+_LYRICS_DURATION_SLACK = 10
+
+
+async def russian_lyrics(title: str, artist: str, duration: int) -> Optional[bool]:
+    """Текст песни на lrclib написан кириллицей. None — lrclib не ответил.
+
+    Русский рэп часто подписан латиницей (shadowraze — «skyline ryodan»,
+    kizaru, Big Baby Tape), и по метаданным такой трек не отличить от
+    английского — а цензура по закону РФ задевает именно его. Текста нет
+    (инструментал, редкий трек) — False: и цензуре в нём взяться неоткуда.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                _LRCLIB_URL, params={"track_name": title, "artist_name": artist}
+            )
+            response.raise_for_status()
+            entries = response.json()
+    except Exception:  # noqa: BLE001 — сбой сети: проверим позже
+        logger.info("censor check: lrclib lookup failed for %s — %s", artist, title)
+        return None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        length = entry.get("duration") or 0
+        if duration > 0 and length and abs(length - duration) > _LYRICS_DURATION_SLACK:
+            continue
+        if _CYRILLIC.search(entry.get("plainLyrics") or entry.get("syncedLyrics") or ""):
+            return True
+    return False
 
 
 async def suggest_for_video(video_id: str, report: Optional[dict] = None) -> Optional[dict]:
@@ -698,8 +744,14 @@ async def suggest_for_video(video_id: str, report: Optional[dict] = None) -> Opt
     title, artist, duration = meta
     report.update(title=title, artist=artist, duration=duration)
     if not _CYRILLIC.search(f"{title} {artist}"):
-        report["outcome"] = "not_russian"
-        return None
+        russian = await russian_lyrics(title, artist, duration)
+        if russian is None:
+            report["outcome"] = "lyrics_failed"
+            return None
+        if not russian:
+            report["outcome"] = "not_russian"
+            return None
+        report["russian_by"] = "lyrics"
     async with _suggest_sem:
         candidates = await find_candidates(title, artist, duration)
         report["candidates"] = len(candidates)
@@ -744,13 +796,15 @@ async def suggest_for_video(video_id: str, report: Optional[dict] = None) -> Opt
 
 # Версия проверки в ключе флага: улучшенная проверка (сравнение звука) должна
 # пересмотреть треки, которые старая уже пометила проверенными на месяц.
-_CHECK_VERSION = 2
+# 3 — замена слов звуком той же громкости и заливы в другом тоне (см.
+# app/audio_compare.py).
+_CHECK_VERSION = 3
 # Итоги, после которых трек не трогаем _SUGGEST_CHECK_TTL. Остальные (нет
 # кандидатов, звук не скачался) — сбои окружения: повтор через _RETRY_CHECK_TTL.
 CONCLUSIVE_OUTCOMES = {"already", "not_russian", "clean", "linked", "suggested", "not_found"}
 _RETRY_CHECK_TTL = 6 * 3600
 # Вердикты, при которых сравнение реально состоялось (см. audio_compare).
-_COMPARED = {"censored", "same", "different", "uncertain"}
+_COMPARED = {"censored", "altered", "same", "different", "uncertain"}
 
 
 def _checked_key(video_id: str) -> str:
