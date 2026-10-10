@@ -13,7 +13,7 @@
 """
 import pytest
 
-from app.artist_utils import query_names_artist, same_artist, split_artists
+from app.artist_utils import names_whole_artist, query_names_artist, same_artist, split_artists
 from app.routers.aggregate import dedup_sequential
 from app.routers.artists import _by_this_artist
 from app.schemas import ExternalTrackResponse
@@ -72,6 +72,18 @@ class TestQueryNamesArtist:
         assert query_names_artist("Zemfira", "Земфира")
         assert query_names_artist("Земфира", "Zemfira")
         assert not query_names_artist("Zemfira", "Земляне")
+
+
+class TestNamesWholeArtist:
+    def test_collection_name_is_not_completed_to_another_artist(self):
+        # Прод, 2026-10-10: ник SoundCloud «who» открывал каталог The Who.
+        assert not names_whole_artist("who", "The Who")
+        assert names_whole_artist("The Who", "The Who")
+
+    def test_featuring_and_spelling_still_match(self):
+        assert names_whole_artist("Bones", "Xavier Wulf, Bones")
+        assert names_whole_artist("фортуна⋆812", "FORTUNA 812")
+        assert names_whole_artist("madk1d + тёмный принц", "madk1d, тёмный принц")
 
 
 class TestSplitArtists:

@@ -103,9 +103,28 @@ def query_names_artist(q: str, artist: str) -> bool:
     Слова сводятся к translit_key: запрос «Zemfira» должен опознавать артиста
     «Земфира», иначе её каталог и треки достаются только одному написанию.
     """
-    query_words = {translit_key(w) for w in norm_artist_name(q).split()}
-    artist_words = {translit_key(w) for w in norm_artist_name(artist).split()}
-    return bool(query_words) and query_words <= artist_words
+    query_words = _name_words(q)
+    return bool(query_words) and query_words <= _name_words(artist)
+
+
+def _name_words(name: str) -> set[str]:
+    return {translit_key(w) for w in norm_artist_name(name).split()}
+
+
+def names_whole_artist(name: str, artist: str) -> bool:
+    """Имя — это исполнитель трека целиком или один из его участников?
+
+    Строже query_names_artist: тот для поисковой строки пропускает «who» к The
+    Who, а для имени из коллекции такое достраивание — подмена артиста (ник
+    SoundCloud «who» открывал волне каталог The Who). Фичеринг по-прежнему
+    засчитывается: «Bones» опознаёт трек «Xavier Wulf, Bones».
+    """
+    words = _name_words(name)
+    if not words:
+        return False
+    return words == _name_words(artist) or any(
+        words == _name_words(part) for part in split_artists(artist)
+    )
 
 
 # Разделители в строке исполнителя: «A, B», «A & B», «A feat. B», «A x B».

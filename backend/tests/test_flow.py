@@ -30,6 +30,7 @@ from app.models import (
 from app.routers.flow import (
     _FRESH_CLUSTER_DAYS,
     _LIKED_REPLAY_COOLDOWN_DAYS,
+    _favorite_artist_pool,
     _liked_candidates,
     _local_candidates,
     _persisted_flow_history,
@@ -2873,6 +2874,51 @@ def test_skips_do_not_ban_favorite_artist_but_dislike_does(db, disliked):
     assert ("favartist" in profile["banned_artists"]) is disliked
     assert ("favartist" in profile["artist_weight"]) is not disliked
     assert {track.id for track in skipped} <= profile["skipped_ids"]
+
+
+def test_favorite_pool_does_not_complete_collection_name(monkeypatch):
+    """Ник «who» из коллекции не открывает каталог The Who — и в том числе
+    из кэша, собранного прежней, мягкой сверкой."""
+    cached = [
+        _external("The Who", "Behind Blue Eyes", "vid-who").model_dump(),
+        _external("who", "ебаный псих", "vid-own").model_dump(),
+        _external("Xavier Wulf, who", "feat", "vid-feat").model_dump(),
+    ]
+
+    async def _cached(key):
+        return cached
+
+    # Модульный импорт — настоящая функция: _no_network подменяет её в модуле.
+    monkeypatch.setattr("app.routers.flow.get_cache_async", _cached)
+    pool = asyncio.run(_favorite_artist_pool(None, "who"))
+
+    assert [t.external_id for t in pool] == ["vid-own", "vid-feat"]
+
+
+def test_banned_artist_tracks_do_not_seed_radio(db):
+    """Прод, 2026-10-10: Oxxxymiron в preferred_artists, но в бане от
+    дизлайков — его треки всё равно были сидами радио."""
+    user = create_user(db, username="banned-seed-user")
+    user.preferred_artists = ["Banned", "Liked"]
+    db.commit()
+    disliked = [Track(title=f"bad {i}", artist="Banned", duration=100,
+                      source="ytmusic", external_id=f"vid-bad-{i}") for i in range(2)]
+    seeds = [Track(title=t, artist=a, duration=100, source="ytmusic", external_id=f"vid-{a}",
+                   play_count=10) for a, t in (("Banned", "hit"), ("Liked", "hit"))]
+    db.add_all([*disliked, *seeds])
+    db.commit()
+    db.execute(user_track_skips.insert(), [
+        {"user_id": user.id, "track_id": track.id, "skip_count": 1, "disliked": True,
+         "last_skipped": datetime.now(timezone.utc)}
+        for track in disliked
+    ])
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+
+    assert "banned" in profile["banned_artists"]
+    assert "vid-Banned" not in profile["seeds"]
+    assert "vid-Liked" in profile["seeds"]
 
 
 def test_local_candidates_skip_acoustically_close_stranger(db):

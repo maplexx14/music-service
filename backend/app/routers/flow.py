@@ -107,7 +107,7 @@ from app.artist_utils import (
     artist_key,
     effective_artist_title,
     effective_track_artist_title,
-    query_names_artist,
+    names_whole_artist,
     same_artist,
 )
 from app.models import (
@@ -742,6 +742,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     weighted_titles: list = []  # (title, decay_weight) — для build_title_tag_profile
     seeds: List[str] = []  # video_id ytmusic-треков, свежие первыми
     seen_seed = set()
+    seed_artist: dict = {}  # video_id сида -> ключ артиста, для фильтра banned
     # Плейлист-производные артисты используются как provider seeds, чтобы
     # SoundCloud-коллекция без YT videoId тоже расширяла общий пул. Отдельных
     # позиций они не получают; в список идут имена, набравшие порог доверия.
@@ -782,6 +783,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
+            seed_artist[track.external_id] = key
 
     # Ручной плейлист — сильный сигнал вкуса (вес выше лайка), импортированный
     # — почти такой же сильный сигнал. В обоих случаях артист получает статус
@@ -832,6 +834,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
+            seed_artist[track.external_id] = key
         if track.source == "ytmusic" and track.external_id:
             playlist_seeds.append(track.external_id)
 
@@ -882,6 +885,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if track.source == "ytmusic" and track.external_id and track.external_id not in seen_seed:
             seeds.append(track.external_id)
             seen_seed.add(track.external_id)
+            seed_artist[track.external_id] = key
 
     # Штраф за скипы: сам трек исключаем из волны совсем, артисту снижаем вес
     # (задолбавший артист вылетает из топа, а сид от его трека не выбирается).
@@ -1113,7 +1117,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         pref_keys = [k for k in (artist_key(n) for n in pref_artists) if k]
         if pref_keys:
             pref_seed_rows = (
-                db.query(Track.external_id)
+                db.query(Track.external_id, Track.artist)
                 .filter(
                     Track.source == "ytmusic",
                     Track.external_id.isnot(None),
@@ -1123,10 +1127,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
                 .limit(20)
                 .all()
             )
-            for (vid,) in pref_seed_rows:
+            for vid, seed_artist_name in pref_seed_rows:
                 if vid and vid not in seen_seed and vid not in skipped_video_ids:
                     seeds.append(vid)
                     seen_seed.add(vid)
+                    seed_artist[vid] = artist_key(seed_artist_name)
 
     # Сиды от скипнутых треков не годятся — радио от них тянет то же самое.
     seeds = [s for s in seeds if s not in skipped_video_ids]
@@ -1239,6 +1244,14 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     ]
     # Сиды-производные плейлистов (ytmusic) — исключаем скипнутые.
     playlist_seeds = [s for s in playlist_seeds if s not in skipped_video_ids]
+    # Радио от трека артиста, ушедшего в banned, — это тот же артист и его
+    # окружение, которых юзер отверг. Прод, 2026-10-10: Oxxxymiron стоял в
+    # preferred_artists, но был в бане от трёх дизлайков, а его треки всё
+    # равно были сидами — радио приносило Шнурова с Кипеловым, Триаду, ГРОТ.
+    seeds = [s for s in seeds if seed_artist.get(s) not in banned_artists]
+    playlist_seeds = [
+        s for s in playlist_seeds if seed_artist.get(s) not in banned_artists
+    ]
 
     # Сиды для похожести по НАЗВАНИЮ (beets_similar → Last.fm). В отличие от
     # radio-сидов это не videoId, а пара артист+название, поэтому годится любой
@@ -2342,7 +2355,11 @@ async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalT
     key = f"flow:favorite:{artist_key(artist)}"
     cached = await get_cache_async(key)
     if cached is not None:
-        return [ExternalTrackResponse(**t) for t in cached]
+        # Сверка и на чтении: пул общий и живёт до _SC_EXPLORE_TTL, а собранные
+        # прежней, мягкой сверкой записи иначе продолжали бы отдавать чужих.
+        return _own_catalog_tracks(
+            artist, [ExternalTrackResponse(**t) for t in cached]
+        )
     return await _pool_single_flight(
         key, lambda: _favorite_artist_pool_fetch(request, artist)
     )
@@ -2369,28 +2386,37 @@ async def _favorite_artist_pool_fetch(
         except Exception:  # noqa: BLE001
             logger.warning("flow favorite artist search failed for %s", artist)
             tracks = []
-    own = artist_key(artist)
-    # Сверяем имя ПО СЛОВАМ, а не подстрокой. Подстрока по нормализованному
-    # ключу склеивает разных артистов на коротких именах: "sky" совпадало с
-    # "skylar grey", "yung" — с "yungblud", и такой трек шёл в выдачу без
-    # вкусовой проверки вообще (favorite_explore её не проходит — это по замыслу
-    # точный каталог своего артиста). query_names_artist требует, чтобы каждое
-    # слово запроса было словом имени, и при этом снимает разницу алфавита и
-    # допускает фичеринг ("A, B") — ровно то, что нужно от поиска у провайдера.
-    tracks = [
-        t
-        for t in tracks
-        if own and query_names_artist(artist, effective_track_artist_title(t)[0])
-    ]
+    tracks = _own_catalog_tracks(artist, tracks)
     await set_cache_async(key, [t.model_dump() for t in tracks], expire=_SC_EXPLORE_TTL if tracks else 600)
     return tracks
+
+
+def _own_catalog_tracks(artist: str, tracks) -> list:
+    """Треки, где ``artist`` — исполнитель целиком или участник фичеринга.
+
+    Подстрока по ключу склеивала разных артистов на коротких именах ("sky" —
+    "skylar grey"), а сверка «каждое слово запроса есть в имени» оставляла
+    достраивание: ник SoundCloud «who» из коллекции открывал каталог The Who
+    (прод, 2026-10-10). Имя из коллекции — полное имя, достраивать его нельзя;
+    см. names_whole_artist. favorite_explore вкусовую проверку не проходит —
+    это по замыслу точный каталог своего артиста, — поэтому сверка тут строгая.
+    """
+    if not artist_key(artist):
+        return []
+    return [
+        t
+        for t in tracks
+        if names_whole_artist(artist, effective_track_artist_title(t)[0])
+    ]
 
 
 async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
     """videoId треков артиста в YT Music — сиды радио для юзера, у которого
     своих ytmusic-треков нет. Поиск полнотекстовый, поэтому оставляем только то,
     где артист реально фигурирует в поле artist (как в _soundcloud_pool)."""
-    key = f"flow:artist_seed:{artist_key(artist)}"
+    # v2: сверка подстрокой («who» в «the who») заменена на names_whole_artist,
+    # старые записи с чужими сидами кэша не переживают.
+    key = f"flow:artist_seed:v2:{artist_key(artist)}"
     cached = await get_cache_async(key)
     if cached is not None:
         return cached
@@ -2402,13 +2428,12 @@ async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
         await set_cache_async(key, [], expire=600)
         return []
 
-    own = artist_key(artist)
     videos = [
         t.external_id
         for t in found
         if (
             t.external_id
-            and own in artist_key(effective_track_artist_title(t)[0])
+            and names_whole_artist(artist, effective_track_artist_title(t)[0])
         )
     ][:_ARTIST_SEED_LIMIT]
     await set_cache_async(key, videos, expire=_SIMILAR_TTL if videos else 600)
