@@ -11,12 +11,12 @@
 // свойство `scale`, поэтому собственные transform'ы компонентов не
 // затираются, а через Web Animations — их transition'ы тоже.
 
-const PRESSABLE = 'button, a[href], [role="button"], .track-card, [data-press]'
+export const PRESSABLE = 'button, a[href], [role="button"], .track-card, [data-press]'
 const TOUCH_DELAY_MS = 70
 // Задержка нужна только там, где касание может оказаться началом прокрутки.
 // Нижнее меню, плеер, панель «Назад» лежат вне прокручиваемого контента —
 // там кнопка вдавливается сразу, как нативный контрол.
-const SCROLLABLE = '.screen-scroll, .lyrics-panel, .atp-body, [data-scrollable]'
+export const SCROLLABLE = '.screen-scroll, .lyrics-panel, .atp-body, [data-scrollable]'
 const MOVE_CANCEL_PX = 8
 
 let installed = false

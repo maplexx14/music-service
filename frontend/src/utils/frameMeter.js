@@ -10,6 +10,7 @@
 // не бесплатен, держать его у всех нельзя.
 
 import { usePlayerStore } from '../store/playerStore'
+import { PRESSABLE, SCROLLABLE } from '../services/pressFeedback'
 
 const ENABLED_KEY = 'bolt-frame-meter'
 const REPORT_KEY = 'bolt-frame-meter-report'
@@ -32,6 +33,8 @@ let worst = []
 let reactions = {}
 // Рендеры частей интерфейса (MeterProfiler): сколько раз и сколько времени.
 let renders = {}
+// Что анимировалось на видимом экране в кадрах с рывком: имя → число кадров.
+let jankAnims = {}
 let startedAt = 0
 let lastSavedAt = 0
 
@@ -99,7 +102,11 @@ const onClick = (e) => {
   const now = performance.now()
   const fromTouch = now - lastTapAt < TAP_CLICK_WINDOW_MS
   const t0 = fromTouch ? lastTapAt : e.timeStamp
-  const tap = { t0, dispatchAt: now, handledAt: 0 }
+  // Тип цели — проверить, держит ли клик анимация нажатия (pressFeedback):
+  // в списке она стартует с задержкой, вне списка — сразу на касании.
+  const pressable = e.target instanceof Element ? e.target.closest(PRESSABLE) : null
+  const kind = !pressable ? 'не кнопка' : pressable.closest(SCROLLABLE) ? 'кнопка в списке' : 'кнопка вне списка'
+  const tap = { t0, dispatchAt: now, handledAt: 0, kind }
   pendingTap = tap
   // Итог пишем в кадре, а не в onClickDone: обработчик мог остановить
   // всплытие, и тогда до window клик не дойдёт — без разбивки, но тап учтём.
@@ -107,7 +114,10 @@ const onClick = (e) => {
     if (pendingTap === tap) pendingTap = null
     noteReaction('тап', frame - t0)
     if (!tap.handledAt) return
-    if (fromTouch) noteReaction('тап: доставка клика', tap.dispatchAt - t0)
+    if (fromTouch) {
+      noteReaction('тап: доставка клика', tap.dispatchAt - t0)
+      noteReaction(`тап: доставка, ${tap.kind}`, tap.dispatchAt - t0)
+    }
     noteReaction('тап: обработчики', tap.handledAt - tap.dispatchAt)
     noteReaction('тап: ожидание кадра', frame - tap.handledAt)
   })
@@ -192,6 +202,7 @@ function loadReport() {
       worst = data.worst || []
       reactions = data.reactions || {}
       renders = data.renders || {}
+      jankAnims = data.jankAnims || {}
       startedAt = data.startedAt || Date.now()
       return
     }
@@ -202,12 +213,13 @@ function loadReport() {
   worst = []
   reactions = {}
   renders = {}
+  jankAnims = {}
   startedAt = Date.now()
 }
 
 function saveReport() {
   try {
-    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, renders, startedAt }))
+    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, renders, jankAnims, startedAt }))
   } catch {
     /* хранилище недоступно — отчёт живёт до перезапуска */
   }
@@ -232,6 +244,33 @@ function context(now) {
   return parts.join(' · ')
 }
 
+// Имена запущенных анимаций на видимом экране: CSS-анимации — по
+// animationName, переходы — по свойству, остальное (Web Animations, в т.ч.
+// pressFeedback) — по классу цели. Скрытые экраны стека пропускаем.
+const ANIMS_PER_FRAME = 8
+
+function runningAnimations() {
+  if (typeof document.getAnimations !== 'function') return []
+  const names = new Set()
+  for (const anim of document.getAnimations()) {
+    if (anim.playState !== 'running') continue
+    const target = anim.effect?.target
+    if (target instanceof Element && target.closest('.screen:not([data-active])')) continue
+    let name = anim.animationName || (anim.transitionProperty && `transition:${anim.transitionProperty}`)
+    if (!name) {
+      const cls = target instanceof Element && typeof target.className === 'string' ? target.className.split(' ')[0] : ''
+      name = `js:${cls || target?.tagName?.toLowerCase() || '?'}`
+    }
+    names.add(name)
+    if (names.size >= ANIMS_PER_FRAME) break
+  }
+  return [...names]
+}
+
+function noteJankAnimations() {
+  for (const name of runningAnimations()) jankAnims[name] = (jankAnims[name] || 0) + 1
+}
+
 function record(delta, now) {
   const key = context(now)
   const entry = stats[key] || (stats[key] = { frames: 0, janky: 0, missed: 0, long: 0, worst: 0 })
@@ -239,6 +278,7 @@ function record(delta, now) {
   if (delta > JANK_MS) {
     entry.janky += 1
     entry.missed += Math.max(1, Math.round(delta / FRAME_MS) - 1)
+    noteJankAnimations()
   }
   if (delta > LONG_MS) {
     entry.long += 1
@@ -354,6 +394,7 @@ export function clearFrameMeter() {
   worst = []
   reactions = {}
   renders = {}
+  jankAnims = {}
   startedAt = Date.now()
   try {
     localStorage.removeItem(REPORT_KEY)
@@ -385,13 +426,21 @@ function formatRenders() {
   return lines
 }
 
+function formatJankAnims() {
+  const rows = Object.entries(jankAnims).sort((a, b) => b[1] - a[1])
+  if (!rows.length) return []
+  const lines = ['', 'Что анимировалось в кадрах с рывком (видимый экран):', 'анимация | кадров с рывком']
+  rows.slice(0, 15).forEach(([name, n]) => lines.push(`${name} | ${n}`))
+  return lines
+}
+
 const pct = (part, whole) => (whole ? `${((100 * part) / whole).toFixed(1)}%` : '—')
 
 export function formatFrameMeter() {
   if (running) saveReport()
   else loadReport()
   const rows = Object.entries(stats).filter(([, s]) => s.frames >= 30)
-  if (!rows.length) return [...formatReactions(), ...formatRenders()].join('\n').trim()
+  if (!rows.length) return [...formatReactions(), ...formatRenders(), ...formatJankAnims()].join('\n').trim()
   const total = rows.reduce(
     (acc, [, s]) => ({ frames: acc.frames + s.frames, janky: acc.janky + s.janky, missed: acc.missed + s.missed }),
     { frames: 0, janky: 0, missed: 0 },
@@ -417,7 +466,7 @@ export function formatFrameMeter() {
         `${key} | ${s.frames} | ${pct(s.janky, s.frames)} | ${pct(s.missed, s.frames + s.missed)} | ${s.long} | ${s.worst}мс`,
       )
     })
-  lines.push(...formatReactions(), ...formatRenders())
+  lines.push(...formatReactions(), ...formatRenders(), ...formatJankAnims())
   if (worst.length) {
     lines.push('', 'Самые долгие кадры:')
     worst.forEach((w) => {
