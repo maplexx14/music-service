@@ -15,7 +15,7 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { settleStrip, SETTLE_MS } from '../utils/settleStrip'
-import { skipForward } from '../services/playerTransport'
+import { skipForward, switchTrackInFrame } from '../services/playerTransport'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { holdHeavyAnimations, morphTransition } from '../services/navigation'
@@ -435,18 +435,23 @@ function FullScreenPlayer() {
         return
       }
       haptic(HAPTIC.selection)
-      const fromId = currentTrack.id
-      swipeDxRef.current = g.dx || 0
-      swipeVRef.current = velocity
-      if (dx < 0) handleSkipForward()
-      else previousTrack()
-      // Переход могли отложить (следующий трек ещё грузится) — тогда
-      // обложка возвращается на место.
-      if (usePlayerStore.getState().currentTrack?.id === fromId) {
-        swipeDxRef.current = 0
-        swipeVRef.current = 0
-        if (strip) settleStrip(strip, g.dx || 0, { velocity })
-      }
+      const releasedDx = g.dx || 0
+      // Переключение — в начале следующего кадра (см. switchTrackInFrame),
+      // до него обложка стоит там, где её отпустили.
+      switchTrackInFrame(() => {
+        const fromId = usePlayerStore.getState().currentTrack?.id
+        swipeDxRef.current = releasedDx
+        swipeVRef.current = velocity
+        if (dx < 0) skipNow()
+        else previousTrack()
+        // Переход могли отложить (следующий трек ещё грузится) — тогда
+        // обложка возвращается на место.
+        if (usePlayerStore.getState().currentTrack?.id === fromId) {
+          swipeDxRef.current = 0
+          swipeVRef.current = 0
+          if (strip) settleStrip(strip, releasedDx, { velocity })
+        }
+      })
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
       // Морф обложки меряет её на текущей, оттянутой позиции — поэтому сначала
@@ -483,7 +488,11 @@ function FullScreenPlayer() {
   // Переключение идёт через Player (services/playerTransport): только он умеет
   // подменить элемент на прогретый буфер следующего трека, а заодно дотягивает
   // хвост постраничной очереди (queuePager). Прямой nextTrack() — лишь фолбэк.
-  const handleSkipForward = () => skipForward(nextTrack)
+  // Кнопки и дизлайк переключают в начале следующего кадра (см.
+  // switchTrackInFrame), свайп сам заворачивает skipNow туда же.
+  const skipNow = () => skipForward(nextTrack)
+  const handleSkipForward = () => switchTrackInFrame(skipNow)
+  const handleSkipBack = () => switchTrackInFrame(previousTrack)
 
   useEffect(() => {
     const checkLikedStatus = async () => {
@@ -748,7 +757,7 @@ function FullScreenPlayer() {
         </button>
         {/* Перемотка и плей — одна капсула, как мини-плеер. */}
         <div className="fullscreen-transport">
-          <button className="fullscreen-icon" onClick={previousTrack} aria-label="Назад">
+          <button className="fullscreen-icon" onClick={handleSkipBack} aria-label="Назад">
             <SkipBack size={26} fill="currentColor" />
           </button>
           <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>

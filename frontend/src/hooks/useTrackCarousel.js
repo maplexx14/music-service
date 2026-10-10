@@ -3,6 +3,7 @@ import { usePlayerStore } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { settleStrip } from '../utils/settleStrip'
 import { holdHeavyAnimations } from '../services/navigation'
+import { switchTrackInFrame } from '../services/playerTransport'
 
 // Скорость отпускания считаем по последним ~80 мс касания, а не по всему
 // жесту: медленно тянул, а в конце швырнул — это флик.
@@ -163,16 +164,20 @@ export function useTrackCarousel({
       return
     }
     haptic(HAPTIC.selection)
-    const fromId = usePlayerStore.getState().currentTrack?.id
-    swipeRef.current = { dx: g.dx, velocity }
-    if (dx < 0) onNext()
-    else onPrev()
-    // Переход могли отложить (следующий трек ещё грузится) — тогда
-    // полоса возвращается на место.
-    if (usePlayerStore.getState().currentTrack?.id === fromId) {
-      swipeRef.current = null
-      if (strip) settle(strip, g.dx, velocity)
-    }
+    // Переключение — в начале следующего кадра (см. switchTrackInFrame), до
+    // него полоса стоит там, где её отпустили.
+    switchTrackInFrame(() => {
+      const fromId = usePlayerStore.getState().currentTrack?.id
+      swipeRef.current = { dx: g.dx, velocity }
+      if (dx < 0) onNext()
+      else onPrev()
+      // Переход могли отложить (следующий трек ещё грузится) — тогда
+      // полоса возвращается на место.
+      if (usePlayerStore.getState().currentTrack?.id === fromId) {
+        swipeRef.current = null
+        if (strip) settle(strip, g.dx, velocity)
+      }
+    })
   }
 
   const onTouchCancel = () => {
