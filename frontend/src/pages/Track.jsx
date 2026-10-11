@@ -105,7 +105,7 @@ function Track() {
               </>
             )}
           </div>
-          <div className="playlist-actions">
+          <div className="playlist-actions shuffle-actions">
             <button className="play-button-large" onClick={handlePlay}>
               {isCurrent && isPlaying ? (
                 <Pause size={24} fill="currentColor" />
