@@ -395,11 +395,6 @@
   max-width: 100%;
 }
 
-.artist-card-meta {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
 @media (max-width: 768px) {
   .artists-section .carousel {
     --carousel-item-width: 156px;

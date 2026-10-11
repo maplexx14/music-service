@@ -328,9 +328,6 @@ function Search() {
                       onError={handleCoverError}
                     />
                     <div className="artist-card-name">{item.name}</div>
-                    <div className="artist-card-meta">
-                      {item.in_library ? 'В медиатеке' : 'Исполнитель'}
-                    </div>
                   </Link>
                 )}
               />
