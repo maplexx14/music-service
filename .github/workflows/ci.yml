@@ -12,20 +12,6 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    services:
-      # Официальные образы с зеркала ECR Public, а не Docker Hub: тот режет
-      # анонимные pull'ы по IP, и с общих IP раннеров GitHub контейнеры
-      # сервисов не скачивались («Docker pull failed») — CI падал, CD пропускал
-      # деплой.
-      redis:
-        image: public.ecr.aws/docker/library/redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     env:
       REDIS_HOST: 127.0.0.1
       REDIS_PORT: 6379
@@ -34,6 +20,17 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      # Не `services:`: см. комментарий в start-service.sh про лимиты pull'ов.
+      - name: Start Redis
+        working-directory: .
+        run: |
+          .github/scripts/start-service.sh redis redis:7-alpine -p 6379:6379 \
+            --health-cmd "redis-cli ping" --health-interval 2s --health-retries 15
+          for _ in $(seq 1 30); do
+            [ "$(docker exec redis redis-cli ping 2>/dev/null)" = "PONG" ] && exit 0
+            sleep 1
+          done
+          echo "::error::Redis не поднялся"; exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -50,20 +47,6 @@ jobs:
   # мажорной версии, что в прод-компоузе.
   migrations:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:15-alpine
-        env:
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci-password
-          POSTGRES_DB: ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U ci -d ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       DATABASE_URL: postgresql://ci:ci-password@127.0.0.1:5432/ci
       SECRET_KEY: ci-only-secret-key
@@ -76,6 +59,16 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      - name: Start Postgres 15
+        working-directory: .
+        run: |
+          .github/scripts/start-service.sh postgres postgres:15-alpine -p 5432:5432 \
+            -e POSTGRES_USER=ci -e POSTGRES_PASSWORD=ci-password -e POSTGRES_DB=ci
+          for _ in $(seq 1 60); do
+            docker exec postgres pg_isready -U ci -d ci && exit 0
+            sleep 1
+          done
+          echo "::error::Postgres не поднялся"; exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
