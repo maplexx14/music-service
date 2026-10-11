@@ -183,7 +183,7 @@ function ExternalPlaylist() {
               </>
             )}
           </div>
-          <div className="playlist-actions">
+          <div className="playlist-actions shuffle-actions">
             <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
               <Play size={24} fill="currentColor" />
               Воспроизвести
