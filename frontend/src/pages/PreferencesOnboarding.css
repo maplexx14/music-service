@@ -221,4 +221,21 @@
   .onboarding-header h1 {
     font-size: 22px;
   }
+
+  /* Три кнопки в ряд на 390 px не помещаются: основная уходит за край
+     карточки. Основная — на всю ширину сверху, «Назад»/«Пропустить» под ней. */
+  .onboarding-actions {
+    flex-wrap: wrap;
+  }
+
+  .onboarding-save {
+    order: -1;
+    flex: 1 1 100%;
+  }
+
+  .onboarding-back,
+  .onboarding-skip {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
