@@ -19,14 +19,6 @@ import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
 import './Artist.css'
 
-// Лейбл источника для внешних треков (у сохранённых в библиотеке его не
-// показываем — там и так всё своё).
-const SOURCE_LABEL = {
-  ytmusic: 'YouTube Music',
-  soundcloud: 'SoundCloud',
-  soulseek: 'FLAC',
-}
-
 // Тип релиза от провайдера — по-русски, для подписи под обложкой.
 const ALBUM_TYPE_LABEL = {
   album: 'Альбом',
@@ -499,7 +491,6 @@ function Artist() {
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
                     isLiked={isLiked}
-                    sourceLabel={SOURCE_LABEL[track.source]}
                     showBadges
                     showInlineMeta
                     actionsRef={rowActions}
