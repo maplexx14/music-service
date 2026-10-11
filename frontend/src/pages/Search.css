@@ -348,26 +348,27 @@
   pointer-events: none;
 }
 
-/* Секция «Исполнители»: карточки-переходы на страницу артиста. Компактнее
-   плейлистов — это навигация, а не результат, и занимать пол-экрана она не
-   должна. */
-.artists-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 16px;
+/* Секция «Исполнители»: карточки-переходы на страницу артиста в карусели.
+   Ширину карточки задаёт лента через --carousel-item-width (Carousel.css),
+   обложка тянется по карточке, поэтому круг растёт вместе с ней. Свои
+   значения ширины нужны, потому что у .artists-section .carousel
+   специфичность выше, чем у базовых правил ленты. */
+.artists-section .carousel {
+  --carousel-item-width: 184px;
 }
 
 .artist-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 16px 12px;
+  gap: 10px;
+  padding: 18px 14px;
   background-color: var(--surface-1);
   border-radius: 8px;
   text-align: center;
   text-decoration: none;
   color: inherit;
+  min-width: 0;
   transition: background-color var(--duration-base) var(--ease-out),
               transform var(--duration-fast) var(--ease-out);
 }
@@ -377,15 +378,15 @@
 }
 
 .artist-card-cover {
-  width: 96px;
-  height: 96px;
+  width: 100%;
+  aspect-ratio: 1;
   border-radius: 50%;
   object-fit: cover;
   background-color: var(--surface-4);
 }
 
 .artist-card-name {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
@@ -395,19 +396,27 @@
 }
 
 .artist-card-meta {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {
-  .artists-list {
-    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-    gap: 12px;
+  .artists-section .carousel {
+    --carousel-item-width: 156px;
   }
 
-  .artist-card-cover {
-    width: 72px;
-    height: 72px;
+  .artist-card {
+    padding: 14px 12px;
+  }
+
+  .artist-card-name {
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 380px) {
+  .artists-section .carousel {
+    --carousel-item-width: 144px;
   }
 }
 

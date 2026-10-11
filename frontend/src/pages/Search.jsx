@@ -89,7 +89,7 @@ function Search() {
     // страницу артиста и не должна ждать медленную выдачу треков.
     const artistsRequest = api
       .get('/artists/search', {
-        params: { q: searchQuery, limit: 6 },
+        params: { q: searchQuery, limit: 12 },
         skipErrorToast: true,
         signal,
       })
@@ -306,10 +306,12 @@ function Search() {
       {!loading && query && (
         <div className="search-results">
           {artists.length > 0 && (
-            <div className="results-section">
+            <div className="results-section artists-section">
               <h2 className="results-title">Исполнители</h2>
-              <div className="artists-list">
-                {artists.map((item) => (
+              <Carousel
+                items={artists}
+                label="Исполнители"
+                renderItem={(item) => (
                   <Link
                     key={item.name}
                     to={artistPath(item.name)}
@@ -330,8 +332,8 @@ function Search() {
                       {item.in_library ? 'В медиатеке' : 'Исполнитель'}
                     </div>
                   </Link>
-                ))}
-              </div>
+                )}
+              />
             </div>
           )}
 
