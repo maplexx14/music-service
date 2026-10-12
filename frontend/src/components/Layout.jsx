@@ -10,6 +10,7 @@ import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
 import PlayerView from './Player'
 import ToastView from './Toast'
+import InstallPrompt from './InstallPrompt'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
@@ -367,6 +368,7 @@ function Layout({ renderRoutes }) {
         <Player />
       </MeterProfiler>
       <ToastContainer />
+      {isMobile && <InstallPrompt />}
       <AddToPlaylistDialog />
       <CensorOverrideDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже
