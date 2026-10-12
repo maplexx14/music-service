@@ -128,6 +128,10 @@
   background-color: var(--surface-1);
 }
 
+.nav-item-contact {
+  margin-bottom: 12px;
+}
+
 .sidebar-footer {
   padding-top: 16px;
   border-top: 1px solid var(--border-subtle);

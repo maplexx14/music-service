@@ -346,3 +346,21 @@ class UserPlayerState(Base):
     # запись со своей локальной и берёт свежую.
     saved_at = Column(Float, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DeveloperMessage(Base):
+    """Сообщение разработчику из настроек («Связь с разработчиком»).
+
+    Читает админ в админке. Вместе с текстом клиент шлёт контекст — версию
+    сборки, устройство, экран: без них «не играет музыка» не разобрать.
+    """
+    __tablename__ = "developer_messages"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    context = Column(JSON, nullable=True)
+    is_read = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    user = relationship("User")

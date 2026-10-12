@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut } from 'lucide-react'
+import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from 'lucide-react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -11,6 +11,7 @@ import api from '../services/api'
 import EmailChangeSettings from '../components/EmailChangeSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
+import ContactDeveloper from '../components/ContactDeveloper'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import {
   clearFrameMeter,
@@ -44,6 +45,7 @@ const SECTIONS = [
   // нужен: лог событий воспроизведения имеет смысл только при разборе багов,
   // о которых сообщили админам.
   { id: 'diag', label: 'Диагностика', hint: 'Журнал плеера', icon: Bug, adminOnly: true },
+  { id: 'contact', label: 'Связь с разработчиком', hint: 'Ошибка, идея или вопрос', icon: MessageCircle },
 ]
 
 // Граница мобильной раскладки — та же, что у Layout (768px).
@@ -575,6 +577,12 @@ function Settings() {
               <EmailChangeSettings />
               <EmailTwoFactorSettings />
               <TrustedDevices />
+            </div>
+          )}
+
+          {activeTab === 'contact' && (
+            <div {...panelProps('contact')}>
+              <ContactDeveloper />
             </div>
           )}
 

@@ -162,6 +162,72 @@ function formatLastSeen(value) {
   })
 }
 
+// Сообщения из «Связь с разработчиком» (настройки). Новые подсвечены, пока
+// админ не отметит прочитанным.
+function DeveloperMessages() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState(null)
+
+  useEffect(() => {
+    api.get('/feedback', { skipErrorToast: true, dedupe: false })
+      .then((response) => setItems(response.data || []))
+      .catch((error) => console.error('Error loading developer messages:', error))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const markRead = async (item) => {
+    setBusyId(item.id)
+    try {
+      const response = await api.post(`/feedback/${item.id}/read`)
+      setItems((prev) => prev.map((row) => (row.id === item.id ? response.data : row)))
+    } catch (error) {
+      console.error('Error marking developer message read:', error)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const unread = items.filter((item) => !item.is_read).length
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">Сообщения{unread > 0 ? ` (${unread})` : ''}</div>
+      <div className="admin-section-subtitle">Из «Связь с разработчиком» в настройках</div>
+      {loading ? (
+        <Spinner />
+      ) : items.length === 0 ? (
+        <div className="admin-empty">Сообщений пока нет</div>
+      ) : (
+        <div className="admin-censor-list">
+          {items.map((item) => (
+            <div key={item.id} className={`admin-censor admin-message${item.is_read ? ' is-read' : ' is-unread'}`}>
+              <div className="admin-censor-info">
+                <div className="admin-message-text">{item.message}</div>
+                <div className="admin-censor-meta">
+                  {item.user ? `${item.user.username}${item.user.email ? ` · ${item.user.email}` : ''}` : 'удалённый пользователь'}
+                  {' · '}{formatLastSeen(item.created_at)}
+                  {item.context?.build ? ` · сборка ${item.context.build}` : ''}
+                </div>
+                {item.context?.userAgent && (
+                  <div className="admin-censor-meta">{item.context.userAgent}</div>
+                )}
+              </div>
+              {!item.is_read && (
+                <div className="admin-censor-actions">
+                  <button type="button" className="admin-refresh" disabled={busyId === item.id} onClick={() => markRead(item)}>
+                    Прочитано
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Admin() {
   const { active: screenActive } = useScreen()
   const screenActiveRef = useRef(screenActive)
@@ -365,6 +431,8 @@ function Admin() {
           </button>
         )}
       </div>
+
+      <DeveloperMessages />
 
       <CensorOverrides />
 

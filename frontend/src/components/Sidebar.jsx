@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settings2 } from 'lucide-react'
+import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settings2, MessageCircle } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import './Sidebar.css'
@@ -62,12 +62,25 @@ function Sidebar() {
         })}
       </nav>
 
+      {/* Связь с разработчиком — раздел настроек; здесь ссылка на виду, чтобы
+          не искать её в меню. */}
+      <Link
+        to="/settings/contact"
+        className={`nav-item nav-item-contact${location.pathname === '/settings/contact' ? ' active' : ''}`}
+        title={isCollapsed ? 'Связь с разработчиком' : ''}
+        onPointerEnter={() => prefetchRouteChunk('/settings')}
+        onPointerDown={() => prefetchRouteChunk('/settings')}
+      >
+        <MessageCircle size={24} />
+        {!isCollapsed && <span>Связь с разработчиком</span>}
+      </Link>
+
       {/* Профиль ведёт сразу в настройки: там же выход и админка. Раньше по
           нажатию открывалось меню из двух пунктов — лишний шаг до того же. */}
       <div className="sidebar-footer">
         <Link
           to="/settings"
-          className={`profile-trigger${location.pathname.startsWith('/settings') ? ' active' : ''}`}
+          className={`profile-trigger${location.pathname.startsWith('/settings') && location.pathname !== '/settings/contact' ? ' active' : ''}`}
           title={isCollapsed ? 'Профиль и настройки' : undefined}
           aria-label="Профиль и настройки"
           onPointerEnter={() => prefetchRouteChunk('/settings')}
