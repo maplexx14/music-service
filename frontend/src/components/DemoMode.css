@@ -1,0 +1,600 @@
+/* Демо-режим: клип для записи экрана. Стиль промо-ролика (токены --promo-*):
+   фиолетовый фон с растром, глитч циан/розовый, молнии, жёсткая тень-сдвиг.
+   Всё движение — transform/opacity, его ведёт композитор: запись экрана на
+   телефоне сама отъедает кадры, лишний главный поток в ролике видно. */
+
+.demo-mode {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  overflow: hidden;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  background: var(--promo-violet-deep);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+  cursor: none;
+  padding:
+    calc(env(safe-area-inset-top, 0px) + 20px)
+    calc(env(safe-area-inset-right, 0px) + 20px)
+    calc(env(safe-area-inset-bottom, 0px) + 20px)
+    calc(env(safe-area-inset-left, 0px) + 20px);
+  animation: demo-enter 0.5s var(--ease-out) both;
+}
+
+/* Пауза останавливает всё, что идёт в темп музыки. */
+.demo-mode.is-paused .demo-word,
+.demo-mode.is-paused .demo-break i,
+.demo-mode.is-paused .demo-hero-art {
+  animation-play-state: paused;
+}
+
+/* ── Фон ─────────────────────────────────────────────────────────────── */
+
+.demo-bg,
+.demo-bg > * {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.demo-bg {
+  z-index: -2;
+}
+
+/* Обложка, размытая в цветное пятно. Миниатюры хватает: после blur разницы
+   нет, а размывать 1000×1000 дороже. Медленно дышит и плывёт. */
+.demo-bg .demo-bg-cover {
+  inset: -25%;
+  width: 150%;
+  height: 150%;
+  object-fit: cover;
+  filter: blur(48px) saturate(1.7) brightness(0.7);
+  opacity: 0.85;
+  animation: demo-drift 22s ease-in-out infinite alternate;
+}
+
+.demo-bg-tint {
+  background:
+    radial-gradient(70% 50% at 50% 110%, rgba(162, 98, 220, 0.55), transparent 70%),
+    linear-gradient(170deg, rgba(47, 8, 109, 0.82) 0%, rgba(102, 38, 182, 0.45) 55%, rgba(13, 4, 32, 0.88) 100%);
+}
+
+.demo-bg .demo-blob {
+  inset: auto;
+  width: 90vmax;
+  height: 90vmax;
+  border-radius: 50%;
+  opacity: 0.32;
+  mix-blend-mode: screen;
+}
+
+.demo-bg .demo-blob--pink {
+  top: -45vmax;
+  right: -40vmax;
+  background: radial-gradient(closest-side, var(--promo-pink), transparent);
+  animation: demo-blob-a 14s ease-in-out infinite alternate;
+}
+
+.demo-bg .demo-blob--cyan {
+  bottom: -50vmax;
+  left: -45vmax;
+  background: radial-gradient(closest-side, var(--promo-cyan), transparent);
+  opacity: 0.2;
+  animation: demo-blob-b 17s ease-in-out infinite alternate;
+}
+
+/* Растр точек, как в ролике (тот же, что --promo-dots в styles/promo.css —
+   тот файл сейчас не подключён). */
+.demo-dots {
+  background: radial-gradient(rgba(255, 255, 255, 0.09) 1px, transparent 1.4px) 0 0 / 8px 8px;
+  -webkit-mask-image: radial-gradient(80% 60% at 50% 45%, transparent 30%, #000 100%);
+  mask-image: radial-gradient(80% 60% at 50% 45%, transparent 30%, #000 100%);
+  opacity: 0.9;
+}
+
+/* Вспышка на смене строки — фиолетовый свет из центра. */
+.demo-flash {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(60% 45% at 50% 50%, rgba(207, 166, 255, 0.5), transparent 70%);
+  opacity: 0;
+  animation: demo-flash 0.7s ease-out;
+}
+
+/* ── Молнии ──────────────────────────────────────────────────────────── */
+
+.demo-bolts {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.demo-bolt {
+  position: absolute;
+  width: calc(clamp(48px, 13vmin, 120px) * var(--s, 1));
+  aspect-ratio: 2 / 3;
+  opacity: 0.55;
+  rotate: var(--r);
+  animation: demo-bolt-float 6s ease-in-out var(--d, 0s) infinite alternate;
+}
+
+.demo-bolt.is-strike {
+  animation:
+    demo-bolt-strike 0.9s var(--ease-out),
+    demo-bolt-float 6s ease-in-out var(--d, 0s) infinite alternate;
+}
+
+/* ── Шапка ───────────────────────────────────────────────────────────── */
+
+.demo-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  opacity: 0;
+  transform: translateY(-12px);
+  transition: opacity 0.5s var(--ease-out), transform 0.5s var(--ease-out);
+}
+
+/* Шапка появляется с первой строкой — до неё обложка крупно в центре. */
+.demo-mode.has-line .demo-header {
+  opacity: 1;
+  transform: none;
+}
+
+.demo-header-cover {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  box-shadow: var(--shadow-pop-sm);
+}
+
+.demo-header-text {
+  min-width: 0;
+}
+
+.demo-header-title {
+  font-size: var(--text-md);
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: var(--promo-glitch);
+}
+
+.demo-header-artist {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Сцена ───────────────────────────────────────────────────────────── */
+
+.demo-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Заставка: до первой строки и у треков без синхронного текста. */
+.demo-hero {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  transition: opacity 0.45s var(--ease-out), transform 0.45s var(--ease-out);
+}
+
+.demo-mode.has-line .demo-hero {
+  opacity: 0;
+  transform: scale(0.85) translateY(-6%);
+}
+
+.demo-hero-art {
+  width: min(68vw, 42vh, 420px);
+  aspect-ratio: 1;
+  margin-bottom: 28px;
+  animation:
+    demo-pop-in 0.7s var(--ease-out) both,
+    demo-breathe 4s ease-in-out 0.7s infinite alternate;
+}
+
+.demo-hero-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 8px 8px 0 var(--promo-ink),
+    13px 13px 0 var(--promo-pink);
+}
+
+.demo-hero-title {
+  position: relative;
+  max-width: 100%;
+  font-size: clamp(26px, min(8vw, 5vh), 56px);
+  font-weight: 800;
+  line-height: 1.1;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  text-shadow: var(--promo-glitch);
+  animation: demo-glitch-in 0.8s steps(1, end) 0.25s both;
+}
+
+.demo-hero-artist {
+  font-size: clamp(14px, 4vw, 22px);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.78);
+  animation: demo-rise 0.6s var(--ease-out) 0.45s both;
+}
+
+/* Текст: три слота — ушедшая строка вверху, текущая по центру, следующая
+   внизу. Строка переезжает между слотами одним и тем же узлом (ключ —
+   индекс), поэтому смена строки — плавный переезд, а не скачок. */
+.demo-lines {
+  position: absolute;
+  inset: 0;
+}
+
+.demo-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  text-align: center;
+  font-size: min(clamp(28px, min(9.5vw, 6vh), 76px), var(--fit, 999px));
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  transform-origin: 50% 50%;
+  transition:
+    top 0.55s var(--ease-out),
+    transform 0.55s var(--ease-out),
+    opacity 0.45s var(--ease-out);
+}
+
+.demo-line.is-short {
+  font-size: min(clamp(34px, min(13vw, 8vh), 96px), var(--fit, 999px));
+}
+
+.demo-line.is-long {
+  font-size: min(clamp(22px, min(7.4vw, 4.6vh), 58px), var(--fit, 999px));
+}
+
+.demo-line.is-prev {
+  top: 0;
+  transform: translateY(-40%) scale(0.5);
+  opacity: 0;
+}
+
+.demo-line.is-current {
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 1;
+}
+
+.demo-line.is-next {
+  top: 100%;
+  transform: translateY(-100%) scale(0.55);
+  opacity: 0.38;
+}
+
+/* Текущая строка влетает с глитчем: сдвиг и разрыв по горизонтальным
+   полосам. Внутренний элемент — transform самой строки занят переездом. */
+.demo-line.is-current .demo-line-text {
+  display: inline-block;
+  animation: demo-glitch-in 0.45s steps(1, end) both;
+}
+
+.demo-word {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.demo-line.is-prev .demo-word {
+  color: var(--text-primary);
+}
+
+/* Слово загорается в свой момент: подскок, белый цвет, глитч-тень. */
+.demo-line.is-current .demo-word {
+  animation: demo-word-fire 0.5s var(--ease-out) var(--delay, 0s) both;
+}
+
+.demo-line.is-next .demo-word {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Проигрыш (пустая строка в LRC) — три точки в темпе. */
+.demo-break {
+  display: inline-flex;
+  gap: 0.35em;
+  padding: 0.2em 0;
+}
+
+.demo-break i {
+  width: 0.32em;
+  height: 0.32em;
+  border-radius: 50%;
+  background: var(--text-primary);
+  box-shadow: -0.05em 0 0 var(--promo-cyan), 0.05em 0 0 var(--promo-pink);
+  animation: demo-dot 1.2s ease-in-out infinite;
+}
+
+.demo-break i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.demo-break i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* ── Подвал ──────────────────────────────────────────────────────────── */
+
+.demo-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.demo-progress {
+  width: 100%;
+  max-width: 560px;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.demo-progress-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, var(--promo-cyan), var(--brand-accent) 50%, var(--promo-pink));
+}
+
+.demo-logo {
+  height: 26px;
+  width: auto;
+  opacity: 0.92;
+}
+
+.demo-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(13, 4, 32, 0.7);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  transition: opacity 0.4s var(--ease-out);
+}
+
+.demo-hint.is-hidden {
+  opacity: 0;
+}
+
+/* Альбомная ориентация (десктоп): кадр по центру, текст не во всю ширину. */
+@media (min-aspect-ratio: 1/1) {
+  .demo-stage {
+    width: min(100%, 1100px);
+    margin: 0 auto;
+  }
+}
+
+/* ── Анимации ────────────────────────────────────────────────────────── */
+
+@keyframes demo-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-drift {
+  from {
+    transform: scale(1) rotate(0deg) translate(0, 0);
+  }
+  to {
+    transform: scale(1.18) rotate(8deg) translate(3%, -2%);
+  }
+}
+
+@keyframes demo-blob-a {
+  to {
+    transform: translate(-18vmax, 22vmax) scale(1.15);
+  }
+}
+
+@keyframes demo-blob-b {
+  to {
+    transform: translate(20vmax, -16vmax) scale(1.1);
+  }
+}
+
+@keyframes demo-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-bolt-float {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(-14px) scale(1.04);
+  }
+}
+
+/* Молния вспыхивает: резкий всплеск с мерцанием и возврат. Идёт через
+   scale/opacity — rotate и transform у элемента независимы. */
+@keyframes demo-bolt-strike {
+  0% {
+    opacity: 0.55;
+    scale: 1;
+    filter: none;
+  }
+  12% {
+    opacity: 1;
+    scale: 1.45;
+    filter: drop-shadow(0 0 18px rgba(255, 47, 160, 0.9));
+  }
+  22% {
+    opacity: 0.6;
+  }
+  32% {
+    opacity: 1;
+    scale: 1.25;
+  }
+  100% {
+    opacity: 0.55;
+    scale: 1;
+    filter: none;
+  }
+}
+
+@keyframes demo-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7) rotate(-6deg);
+  }
+}
+
+@keyframes demo-breathe {
+  to {
+    transform: scale(1.035) rotate(1deg);
+  }
+}
+
+@keyframes demo-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+/* Глитч: несколько кадров со сдвигом и срезом по полосам, затем на место.
+   steps(1) — без плавности между кадрами, как у битого сигнала. */
+@keyframes demo-glitch-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-6%) skewX(-12deg);
+    clip-path: inset(0 0 60% 0);
+  }
+  12% {
+    opacity: 1;
+    transform: translateX(5%);
+    clip-path: inset(40% 0 20% 0);
+    text-shadow: -0.12em 0 0 var(--promo-cyan), 0.12em 0 0 var(--promo-pink);
+  }
+  24% {
+    transform: translateX(-3%) skewX(8deg);
+    clip-path: inset(10% 0 55% 0);
+  }
+  36% {
+    transform: translateX(2%);
+    clip-path: inset(65% 0 0 0);
+    text-shadow: 0.08em 0 0 var(--promo-cyan), -0.08em 0 0 var(--promo-pink);
+  }
+  50% {
+    transform: translateX(-1%);
+    clip-path: inset(0 0 0 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes demo-word-fire {
+  0% {
+    color: rgba(255, 255, 255, 0.3);
+    transform: translateY(0) scale(1);
+    text-shadow: none;
+  }
+  35% {
+    color: #fff;
+    transform: translateY(-0.12em) scale(1.16);
+    text-shadow: -0.09em 0.02em 0 var(--promo-cyan), 0.09em 0.02em 0 var(--promo-pink);
+  }
+  100% {
+    color: #fff;
+    transform: none;
+    text-shadow: var(--promo-glitch);
+  }
+}
+
+@keyframes demo-dot {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(-0.3em);
+    opacity: 1;
+  }
+}
+
+/* «Уменьшение движения»: без дрейфа, подскоков и глитча — остаётся смена
+   строк и подсветка слов цветом. */
+@media (prefers-reduced-motion: reduce) {
+  .demo-mode,
+  .demo-bg .demo-bg-cover,
+  .demo-bg .demo-blob,
+  .demo-bolt,
+  .demo-bolt.is-strike,
+  .demo-flash,
+  .demo-hero-art,
+  .demo-hero-title,
+  .demo-hero-artist,
+  .demo-line.is-current .demo-line-text,
+  .demo-break i {
+    animation: none;
+  }
+
+  .demo-line.is-current .demo-word {
+    animation-name: demo-word-color;
+  }
+}
+
+@keyframes demo-word-color {
+  to {
+    color: #fff;
+    text-shadow: var(--promo-glitch);
+  }
+}

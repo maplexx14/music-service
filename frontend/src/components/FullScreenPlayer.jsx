@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share } from 'lucide-react'
+import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard } from 'lucide-react'
 import LikeHeart from './LikeHeart'
 import {
   invalidateFlowPreload,
@@ -20,6 +20,7 @@ import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../uti
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { holdHeavyAnimations, morphTransition } from '../services/navigation'
 import LyricsPanel from './LyricsPanel'
+import DemoMode, { enterDemoFullscreen } from './DemoMode'
 import ArtistLink from './ArtistLink'
 import './FullScreenPlayer.css'
 
@@ -230,6 +231,8 @@ function FullScreenPlayer() {
   // иначе под клоном была бы вторая картинка.
   const [coverHidden, setCoverHidden] = useState(isCoverMorphActive)
   const [lyricsMode, setLyricsMode] = useState(false)
+  // Демо-режим: караоке для записи экрана, поверх плеера (см. DemoMode).
+  const [demoMode, setDemoMode] = useState(false)
   const gestureRef = useRef(null)
   const stripRef = useRef(null)
   // Смещение карусели в момент, когда свайп переключил трек: с него новая
@@ -850,6 +853,19 @@ function FullScreenPlayer() {
         >
           <AlignLeft size={22} />
         </button>
+        <button
+          type="button"
+          className="fullscreen-tool"
+          onClick={() => {
+            enterDemoFullscreen()
+            setDemoMode(true)
+          }}
+          disabled={!syncedLines.length}
+          aria-label="Демо-режим"
+          title={syncedLines.length ? 'Демо-режим для видео' : 'Нужен синхронный текст'}
+        >
+          <Clapperboard size={22} />
+        </button>
         {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
           <a
             className="fullscreen-tool"
@@ -872,6 +888,7 @@ function FullScreenPlayer() {
         </button>
       </div>
 
+      {demoMode && <DemoMode onExit={() => setDemoMode(false)} />}
     </div>
   )
 }

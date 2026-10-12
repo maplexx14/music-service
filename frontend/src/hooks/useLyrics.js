@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { getActive } from '../services/audioEngine'
 
 // Parse LRC timestamp line: [mm:ss.xx] text
 function parseLrcLine(line) {
@@ -173,11 +174,50 @@ export function useLyrics(track) {
 // цвета (transition в LyricsPanel.css).
 export const LYRIC_LEAD_SEC = 0.4
 
-// Find the active line index for a given time
-export function getActiveLyricIndex(syncedLines, currentTime) {
+// Find the active line index for a given time. До первой строки — beforeFirst:
+// обычный текст сразу подсвечивает первую, демо-режим держит заставку (-1).
+export function getActiveLyricIndex(syncedLines, currentTime, beforeFirst = 0) {
   if (!syncedLines.length) return -1
   for (let i = syncedLines.length - 1; i >= 0; i--) {
     if (currentTime >= syncedLines[i].time - LYRIC_LEAD_SEC) return i
   }
-  return 0
+  return beforeFirst
+}
+
+// Таймер смены строки: не реже раза в LYRIC_CHECK_MS (время звука могло
+// уйти), не чаще LYRIC_MIN_WAIT_MS (строки с одинаковым временем).
+const LYRIC_CHECK_MS = 1000
+const LYRIC_MIN_WAIT_MS = 16
+
+// Активная строка с точностью до кадра. Store тикает раз в секунду
+// (троттлинг timeupdate в Player), и строка, выбранная по нему, переключалась
+// с опозданием до ~1,2 с. Пока играет, строку выбираем по времени прямо из
+// <audio> и будим себя таймером ровно к началу следующей — раньше это делал
+// rAF-цикл, 60 пробуждений главного потока в секунду ради смены строки раз в
+// несколько секунд. Таймер не длиннее LYRIC_CHECK_MS: буферизация и перемотка
+// сдвигают время звука. Эффект перезапускается и на тике стора
+// (currentTime), так что перемотка подхватывается сразу. setState с тем же
+// индексом React пропускает.
+export function useActiveLyricIndex(syncedLines, currentTime, isPlaying, { beforeFirst = 0 } = {}) {
+  const [liveIndex, setLiveIndex] = useState(null)
+  useEffect(() => {
+    if (!isPlaying || !syncedLines.length) return undefined
+    let timer = 0
+    const tick = () => {
+      const audio = getActive()
+      if (!audio) return
+      const time = audio.currentTime
+      const index = getActiveLyricIndex(syncedLines, time, beforeFirst)
+      setLiveIndex(index)
+      const next = syncedLines[index + 1]
+      const untilNext = next
+        ? ((next.time - LYRIC_LEAD_SEC - time) / (audio.playbackRate || 1)) * 1000
+        : LYRIC_CHECK_MS
+      timer = setTimeout(tick, Math.min(LYRIC_CHECK_MS, Math.max(LYRIC_MIN_WAIT_MS, untilNext)))
+    }
+    tick()
+    return () => clearTimeout(timer)
+  }, [isPlaying, syncedLines, currentTime, beforeFirst])
+  const storeIndex = getActiveLyricIndex(syncedLines, currentTime, beforeFirst)
+  return isPlaying && liveIndex !== null ? liveIndex : storeIndex
 }
