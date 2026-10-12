@@ -250,6 +250,53 @@ export function releaseSession() {
   }
 }
 
+// Звуковой вывод без media-элемента — для мягкой паузы в Player.jsx.
+//
+// Мост (holdSession) удерживает iOS от заморозки, но он сам media-элемент:
+// Now Playing уходит к нему, и виджет через несколько секунд показывает ⏸ и
+// бегущее время поверх паузы. Web Audio в Now Playing не участвует, поэтому
+// виджет остаётся за треком на паузе. Генератор на −80 дБ, а не на нулевой
+// громкости: нулевой вывод система может счесть тишиной.
+//
+// Вызывать в жесте (кнопка виджета): resume() вне жеста iOS отклонит.
+// Результат приходит промисом: false — держать вывод не вышло.
+let outputCtx = null
+let outputOsc = null
+
+export function holdOutput() {
+  const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)
+  if (!Ctx) return Promise.resolve(false)
+  try {
+    if (!outputCtx) outputCtx = new Ctx()
+    if (!outputOsc) {
+      const gain = outputCtx.createGain()
+      gain.gain.value = 0.0001
+      gain.connect(outputCtx.destination)
+      outputOsc = outputCtx.createOscillator()
+      outputOsc.connect(gain)
+      outputOsc.start()
+    }
+    return outputCtx.resume().then(
+      () => {
+        diag('output:hold', { state: outputCtx.state })
+        return outputCtx.state === 'running'
+      },
+      (error) => {
+        diag('output:fail', { name: error?.name })
+        return false
+      },
+    )
+  } catch (error) {
+    diag('output:fail', { name: error?.name })
+    return Promise.resolve(false)
+  }
+}
+
+export function releaseOutput() {
+  if (!outputCtx || outputCtx.state !== 'running') return
+  outputCtx.suspend().then(() => diag('output:release', {}), () => {})
+}
+
 // Разблокировка жестом. На iOS право играть выдаётся КАЖДОМУ media-элементу
 // отдельно и только в контексте пользовательского жеста. Активный элемент
 // получает его сам — первым настоящим play() по нажатию ▶. А вот тот, на который

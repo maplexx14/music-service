@@ -230,7 +230,7 @@ function reloadAtPosition(audio) {
 }
 
 // Выход из «мягкой паузы» (см. handlers.pause): вернуть элементу скорость,
-// отпустить мост тишины и, если нужно, поставить на настоящую паузу. Сначала
+// отпустить звуковой вывод (Web Audio либо мост тишины) и, если нужно, поставить на настоящую паузу. Сначала
 // pause(), потом скорость — иначе между ними проскочил бы звук. true — мягкая
 // пауза была.
 function endSoftPause(ref, { pause }) {
@@ -239,6 +239,7 @@ function endSoftPause(ref, { pause }) {
   ref.current = null
   if (pause) el.pause()
   el.playbackRate = 1
+  engine.releaseOutput()
   engine.releaseSession()
   return true
 }
@@ -2187,7 +2188,9 @@ function PlayerInner() {
         //
         // Одной скорости 0 хватает лишь на 5–10 с: дальше iOS, видимо, замечает,
         // что звук не выводится, и замораживает так же. Поэтому на время паузы
-        // включаем мост тишины — настоящий звуковой вывод.
+        // держим настоящий звуковой вывод — Web Audio (engine.holdOutput). Мост
+        // тишины только запасной вариант: он media-элемент, Now Playing уходит
+        // к нему, и виджет показывает ⏸ с бегущим временем поверх паузы.
         //
         // Пауза по кнопке — явный отказ от воспроизведения: отложенный переход
         // отменяем, иначе догрузившийся буфер сам запустил бы трек поверх паузы.
@@ -2198,7 +2201,9 @@ function PlayerInner() {
           softPausedElRef.current = audio
           softPausedAtRef.current = Date.now()
           audio.playbackRate = 0
-          engine.holdSession()
+          engine.holdOutput().then((held) => {
+            if (!held && softPausedElRef.current === audio) engine.holdSession()
+          })
           if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
           diag('widget:pause:soft', snapshotAudio(audio))
           // Под мостом виджет показывал 0:00: Now Playing переходит к мосту, а
