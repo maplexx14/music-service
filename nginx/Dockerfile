@@ -72,7 +72,8 @@ RUN sed -i 's/^worker_processes .*/worker_processes auto;/' /etc/nginx/nginx.con
 # Каталог disk-кэша обложек (proxy_cache_path в conf.d/00-upstreams.conf и
 # nginx.conf). nginx сам создаёт только подуровни levels=1:2, базовый каталог
 # должен существовать; воркер (пользователь nginx) пишет в него файлы.
-RUN mkdir -p /var/cache/nginx/covers && chown -R nginx:nginx /var/cache/nginx/covers
+RUN mkdir -p /var/cache/nginx/covers /var/cache/nginx/search \
+    && chown -R nginx:nginx /var/cache/nginx/covers /var/cache/nginx/search
 
 
 # ─────────────────────────── prod ───────────────────────────
