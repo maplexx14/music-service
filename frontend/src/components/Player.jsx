@@ -225,6 +225,18 @@ function reloadAtPosition(audio) {
   )
 }
 
+// Выход из «мягкой паузы» (см. handlers.pause): вернуть элементу скорость и,
+// если нужно, поставить на настоящую паузу. Сначала pause(), потом скорость —
+// иначе между ними проскочил бы звук. true — мягкая пауза была.
+function endSoftPause(ref, { pause }) {
+  const el = ref.current
+  if (!el) return false
+  ref.current = null
+  if (pause) el.pause()
+  el.playbackRate = 1
+  return true
+}
+
 // Заливка капсулы и полоса сверху: сдвиг на (ratio − 1) собственной ширины
 // внутри обрезки — правый край приходится ровно на позицию. Сдвиг, а не
 // scaleX: у капсулы скругление, и сжатая заливка сплющила бы его.
@@ -490,6 +502,9 @@ function PlayerInner() {
   // его таймеры не нужны.
   const pendingSkipRef = useRef(0)
   const resumeSkipRef = useRef(null)
+  // Элемент на «мягкой паузе»: ⏸ виджета в фоне ставит скорость 0 вместо
+  // pause() (см. handlers.pause). null — мягкой паузы нет.
+  const softPausedElRef = useRef(null)
   // На сколько треков вперёд целится отложенный переход: растёт, когда
   // следующий признан незагружаемым (engine.onIdleFailed).
   const deferredOffsetRef = useRef(1)
@@ -817,6 +832,8 @@ function PlayerInner() {
         // всё равно стартовал поверх текущего при возврате из фона, поэтому
         // до любого play() ниже глушим всё, кроме активного слота.
         engine.pauseInactive()
+        // На экране мягкая пауза не нужна — переводим в настоящую.
+        endSoftPause(softPausedElRef, { pause: true })
         // Вернулись на видимый экран с отложенным переходом (трек кончился в
         // фоне, буфера не было). Здесь старт с нуля уже безопасен — доигрываем.
         if (pendingAdvanceRef.current) {
@@ -1698,6 +1715,7 @@ function PlayerInner() {
     // мост аудиосессии, иначе тишина осталась бы играть вечно.
     pendingAdvanceRef.current = false
     pendingSkipRef.current = 0
+    endSoftPause(softPausedElRef, { pause: false })
     engine.releaseSession()
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current)
@@ -1833,7 +1851,8 @@ function PlayerInner() {
         playWithDiag(audio, 'effect:isPlaying')
       }
     } else {
-      audio.pause()
+      // Мягкую паузу (см. handlers.pause) настоящей не заменяем.
+      if (softPausedElRef.current !== audio) audio.pause()
       // Пауза из интерфейса — такой же явный отказ, как ⏸ на виджете (см.
       // handlers.pause): глушим недоигравший handoff, снимаем отложенный переход
       // и мост тишины. Иначе догрузившийся буфер (onIdleReady) или возврат на
@@ -2046,10 +2065,29 @@ function PlayerInner() {
       pendingSkipRef.current = offset
       diag('widget:skip:deferred', { offset })
     }
+    // ⏭/⏮ из мягкой паузы: переход идёт фоновым путём (элемент для системы
+    // всё ещё играет), и после него играем дальше, а не стоим на паузе.
+    const leaveSoftPauseForSkip = () => {
+      if (!endSoftPause(softPausedElRef, { pause: false })) return
+      if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+    }
     const handlers = {
       play: async () => {
         const audio = audioRef.current
         if (!audio) return
+        if (softPausedElRef.current) {
+          const same = softPausedElRef.current === audio
+          endSoftPause(softPausedElRef, { pause: !same })
+          if (same) {
+            diag('widget:play:soft', snapshotAudio(audio))
+            if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+            const startedAt = audio.currentTime
+            setTimeout(() => {
+              diag(audio.currentTime > startedAt ? 'widget:play:moving' : 'widget:play:frozen', snapshotAudio(audio))
+            }, 2000)
+            return
+          }
+        }
         // Отложенный переход (трек кончился в фоне, следующий не был загружен):
         // нажатие ▶ — самый явный запрос «продолжай». Играем следующий, если
         // его буфер уже доехал. Если ещё нет — не стартуем с нуля (в фоне это
@@ -2069,15 +2107,14 @@ function PlayerInner() {
           // play() вернёт тот же висящий промис. С данными в буфере лечит
           // микро-seek (как ручной тык в прогресс-бар), без данных — load()
           // в жестовом контексте (см. kickStalled в эффекте плеера).
-          // В фоне (iOS PWA, экран заблокирован) хватает и секундной паузы:
-          // на устройстве play() резолвился, приходило 'playing', а
-          // currentTime стоял на месте — та же тишина, что после долгой паузы,
-          // при rs=4 и полностью скачанном буфере. Поэтому в фоне
-          // перезагружаем после любой паузы.
+          //
+          // Перезагрузку в фоне после КОРОТКОЙ паузы пробовали — хуже: после
+          // load() перемотка на позицию висела в seeking до возврата на экран.
+          // Короткую паузу в фоне лечит мягкая пауза (см. handlers.pause).
           const longPause =
             audio.paused &&
             pausedAtRef.current > 0 &&
-            (document.hidden || Date.now() - pausedAtRef.current > LONG_PAUSE_RELOAD_MS)
+            Date.now() - pausedAtRef.current > LONG_PAUSE_RELOAD_MS
           if (needsFreshLoad(audio) || longPause) {
             // Долгая пауза (особенно в фоне): iOS освобождает буфер и сам
             // медиа-ресурс, элемент остаётся с src, но пустой. play() на пустом
@@ -2119,8 +2156,28 @@ function PlayerInner() {
         }
       },
       pause: () => {
-        diag('widget:pause', snapshotAudio(audioRef.current))
-        audioRef.current?.pause()
+        const audio = audioRef.current
+        diag('widget:pause', snapshotAudio(audio))
+        // Если iOS и на мягкой паузе показывает ⏸ (элемент для него играет),
+        // повторное нажатие — это «продолжить», иначе из паузы не выйти.
+        if (audio && softPausedElRef.current === audio) {
+          handlers.play()
+          return
+        }
+        // «Мягкая пауза». На iOS PWA с заблокированным экраном замолчавшая
+        // страница теряет право на звук: после pause() следующий play() с
+        // виджета резолвится, приходит 'playing', но позиция стоит до возврата
+        // на экран (как и перемотка после load()). Поэтому в фоне элемент не
+        // останавливаем, а ставим скорость 0: для системы он играет, звука нет,
+        // ▶ просто возвращает скорость. На экране — обычная пауза.
+        if (isIOS && document.hidden && audio && !audio.paused) {
+          softPausedElRef.current = audio
+          audio.playbackRate = 0
+          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
+          diag('widget:pause:soft', snapshotAudio(audio))
+        } else {
+          audio?.pause()
+        }
         // Пауза по кнопке — явный отказ от воспроизведения: отложенный переход
         // отменяем и сессию отпускаем, иначе тишина продолжила бы играть, а
         // догрузившийся буфер сам запустил бы трек поверх паузы.
@@ -2135,6 +2192,7 @@ function PlayerInner() {
       // «переключался», но не играл.
       previoustrack: () => {
         diag('widget:previoustrack', snapshotAudio(audioRef.current))
+        leaveSoftPauseForSkip()
         // Очередь двигаем только вслед за реально начавшимся звуком: в фоне без
         // загруженного буфера playAdjacentNow откажет и запустит прогрев, а
         // текущий трек продолжит играть. Переход доиграет onIdleReady.
@@ -2147,6 +2205,7 @@ function PlayerInner() {
       },
       nexttrack: () => {
         diag('widget:nexttrack', snapshotAudio(audioRef.current))
+        leaveSoftPauseForSkip()
         // Очередь кончилась, но плейлист загружен не весь (см. queuePager):
         // дотягиваем хвост. Синхронно тут ничего не сделать — запрос
         // асинхронный, а жестовый контекст до его конца не доживёт.
@@ -2196,6 +2255,7 @@ function PlayerInner() {
       },
       stop: () => {
         diag('widget:stop', snapshotAudio(audioRef.current))
+        endSoftPause(softPausedElRef, { pause: true })
         audioRef.current?.pause()
         pendingAdvanceRef.current = false
         pendingSkipRef.current = 0
