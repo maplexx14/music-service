@@ -365,7 +365,7 @@ function Search() {
 
   return (
     <div className="page-container">
-      <div className="search-header">
+      <div className={`search-header${query ? ' has-filters' : ''}`}>
         {/* type=search + enterKeyHint: клавиатура телефона показывает «Найти»,
             а Enter её прячет — результаты ищутся по мере ввода, и нажатие
             означает «хватит, покажи». Автоисправление и заглавная буква в
@@ -385,23 +385,26 @@ function Search() {
           className="search-input"
           autoFocus
         />
-        {query && (
-          <div className="search-filters" role="radiogroup" aria-label="Источник">
-            {SEARCH_FILTERS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="radio"
-                aria-checked={filter === item.id}
-                className={`search-filter${filter === item.id ? ' active' : ''}`}
-                onClick={() => setFilter(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
+
+      {/* Фильтры вне липкой шапки: прилипшие, они закрывали вторую строку
+          экрана, а меняют их редко — достаточно отлистать наверх. */}
+      {query && (
+        <div className="search-filters" role="radiogroup" aria-label="Источник">
+          {SEARCH_FILTERS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="radio"
+              aria-checked={filter === item.id}
+              className={`search-filter${filter === item.id ? ' active' : ''}`}
+              onClick={() => setFilter(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading && (
         <Spinner label="Поиск..." />

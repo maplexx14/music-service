@@ -38,11 +38,15 @@
 }
 
 /* Фильтр источника: лента пилюль под полем. На узком экране не переносится,
-   а листается вбок — пять кнопок в две строки съедали бы липкую шапку. */
+   а листается вбок — пять кнопок в две строки занимали бы пол-экрана. */
+.search-header.has-filters {
+  margin-bottom: 12px;
+}
+
 .search-filters {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  margin-bottom: 28px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -345,7 +349,22 @@
     z-index: 5;
     margin: 0 -16px 20px;
     padding: 8px 16px 12px;
-    background: linear-gradient(180deg, var(--bg-app-mobile) 75%, rgba(5, 5, 5, 0));
+    /* Сплошной фон: полупрозрачный хвост градиента пускал строки выдачи
+       прямо под поле. Тень вверх закрывает полосу между подложкой
+       статус-бара и шапкой — в ней тоже просвечивала выдача. */
+    background: var(--bg-app-mobile);
+    box-shadow: 0 -64px 0 var(--bg-app-mobile);
+  }
+
+  .search-header.has-filters {
+    margin-bottom: 4px;
+  }
+
+  /* Лента до краёв экрана: обрезка на полях выглядела как сломанная вёрстка,
+     а так видно, что её можно листать. */
+  .search-filters {
+    margin: 0 -16px 20px;
+    padding: 0 16px;
   }
 
   .search-input {
