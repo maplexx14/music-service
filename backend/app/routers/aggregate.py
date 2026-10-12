@@ -261,8 +261,9 @@ def _relevance(track: ExternalTrackResponse, q_norm: str, tokens: List[str]) -> 
     title, artist = norm(clean_title(track.title or "")), norm(track.artist)
     if q_norm in (title, f"{artist} {title}", f"{title} {artist}"):
         return 3
-    haystack = f"{artist} {title}"
-    return 2 if all(t in haystack for t in tokens) else 0
+    # По целым словам: подстрока дала бы совпадение «q» с «quiet».
+    words = set(f"{artist} {title}".split())
+    return 2 if all(t in words for t in tokens) else 0
 
 
 def split_top(

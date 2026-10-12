@@ -118,7 +118,7 @@ def test_grouped_prefers_explicit_version_of_same_track(monkeypatch):
         songs=[_ext("ytmusic", "Song", explicit=False), _ext("ytmusic", "Song", explicit=True)],
     )
 
-    grouped = asyncio.run(aggregate.search_external_grouped(None, "song", 30))
+    grouped = asyncio.run(aggregate.search_external_grouped(None, "q", 30))
 
     assert len(grouped.ytmusic) == 1
     assert grouped.ytmusic[0].is_explicit is True
