@@ -2011,10 +2011,15 @@ function PlayerInner() {
           // play() вернёт тот же висящий промис. С данными в буфере лечит
           // микро-seek (как ручной тык в прогресс-бар), без данных — load()
           // в жестовом контексте (см. kickStalled в эффекте плеера).
+          // В фоне (iOS PWA, экран заблокирован) хватает и секундной паузы:
+          // на устройстве play() резолвился, приходило 'playing', а
+          // currentTime стоял на месте — та же тишина, что после долгой паузы,
+          // при rs=4 и полностью скачанном буфере. Поэтому в фоне
+          // перезагружаем после любой паузы.
           const longPause =
             audio.paused &&
             pausedAtRef.current > 0 &&
-            Date.now() - pausedAtRef.current > LONG_PAUSE_RELOAD_MS
+            (document.hidden || Date.now() - pausedAtRef.current > LONG_PAUSE_RELOAD_MS)
           if (needsFreshLoad(audio) || longPause) {
             // Долгая пауза (особенно в фоне): iOS освобождает буфер и сам
             // медиа-ресурс, элемент остаётся с src, но пустой. play() на пустом
@@ -2046,6 +2051,11 @@ function PlayerInner() {
           }
           await playWithDiag(audio, 'widget:play')
           if (!usePlayerStore.getState().isPlaying) togglePlayPause()
+          // play:ok не значит «звук пошёл»: проверяем, что позиция сдвинулась.
+          const startedAt = audio.currentTime
+          setTimeout(() => {
+            diag(audio.currentTime > startedAt ? 'widget:play:moving' : 'widget:play:frozen', snapshotAudio(audio))
+          }, 2000)
         } catch (error) {
           console.error('System play action failed:', error)
         }
