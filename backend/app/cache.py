@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 import threading
+import weakref
 
 # Таймауты обязательны: без socket_timeout зависший/перегруженный Redis
 # блокирует вызывающий тред НАВСЕГДА. Все sync-эндпоинты живут в anyio
@@ -105,8 +106,64 @@ def set_cache(key: str, value: Any, expire: int = 3600):
 # вызов get/set_cache из корутины блокирует event loop на сетевом round-trip —
 # под нагрузкой это стопорит ВСЕ async-эндпоинты, а не только вызывающий.
 # Sync-эндпоинты (def) работают в threadpool — им обёртки не нужны.
+# Микро-батчинг чтений: корутины, которые в одном тике event loop просят
+# разные ключи (gather пулов во flow — два десятка get_cache_async на запрос),
+# сливаются в ОДИН MGET и один переход в поток вместо десятков. Одиночный
+# вызов по цене прежнего: тот же один переход в поток, один round-trip.
+class _ReadBatch:
+    __slots__ = ("items", "scheduled")
+
+    def __init__(self):
+        self.items: list = []
+        self.scheduled = False
+
+
+_read_batches: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _mget_cache(keys: list) -> list:
+    """MGET + json.loads с той же семантикой, что у get_cache: сбой — None."""
+    try:
+        values = redis_client.mget(keys)
+    except Exception:
+        return [None] * len(keys)
+    out = []
+    for value in values:
+        try:
+            out.append(json.loads(value) if value else None)
+        except Exception:
+            out.append(None)
+    return out
+
+
+async def _flush_reads(batch: _ReadBatch) -> None:
+    items, batch.items, batch.scheduled = batch.items, [], False
+    keys = list(dict.fromkeys(key for key, _ in items))
+    try:
+        values = await asyncio.to_thread(_mget_cache, keys)
+    except Exception as exc:
+        for _key, fut in items:
+            if not fut.done():
+                fut.set_exception(exc)
+        return
+    by_key = dict(zip(keys, values))
+    for key, fut in items:
+        if not fut.done():
+            fut.set_result(by_key.get(key))
+
+
 async def get_cache_async(key: str) -> Optional[Any]:
-    return await asyncio.to_thread(get_cache, key)
+    loop = asyncio.get_running_loop()
+    batch = _read_batches.get(loop)
+    if batch is None:
+        batch = _read_batches[loop] = _ReadBatch()
+    fut = loop.create_future()
+    batch.items.append((key, fut))
+    if not batch.scheduled:
+        batch.scheduled = True
+        # call_soon: все корутины, готовые в этом тике, успеют встать в очередь.
+        loop.call_soon(lambda: loop.create_task(_flush_reads(batch)))
+    return await fut
 
 
 async def set_cache_async(key: str, value: Any, expire: int = 3600):

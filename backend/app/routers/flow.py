@@ -44,6 +44,7 @@ playback_count у SoundCloud), а не наши внутренние счётч�
 """
 
 import asyncio
+import functools
 import logging
 import math
 import os
@@ -408,17 +409,20 @@ def _mix_fresh_seeds(fresh, rest, total: int, context: str, salt: str) -> list:
     return picked
 
 
+@functools.lru_cache(maxsize=32768)
+def _norm_text(s: str) -> str:
+    # Чистая функция строки: на одном запросе flow _norm_key зовётся ~16 тысяч
+    # раз по нескольким тысячам уникальных строк.
+    s = clean_title(s or "").lower()
+    s = re.sub(r"\bfeat\.?\b.*$", "", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _norm_key(artist: str, title: str) -> tuple:
     """Нормализованный ключ (артист, название) для дедупа между источниками."""
-
-    def norm(s: str) -> str:
-        s = clean_title(s or "").lower()
-        s = re.sub(r"\bfeat\.?\b.*$", "", s)
-        s = re.sub(r"[^\w\s]", "", s)
-        s = re.sub(r"\s+", " ", s).strip()
-        return s
-
-    return (norm(artist), norm(title))
+    return (_norm_text(artist), _norm_text(title))
 
 
 def _external_population_stats_on_bind(bind, items, now=None) -> dict:

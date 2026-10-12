@@ -28,3 +28,47 @@ def test_rate_slot_returns_remaining_delay(monkeypatch):
     monkeypatch.setattr(cache, "redis_client", redis)
 
     assert cache.acquire_rate_slot("youtube:rate", 1.5) == 0.725
+
+
+def test_get_cache_async_batches_concurrent_reads_into_one_mget(monkeypatch):
+    import asyncio
+    import json
+
+    from app import cache
+
+    calls = []
+
+    class FakeRedis:
+        def mget(self, keys):
+            calls.append(list(keys))
+            return [json.dumps({"k": k}) if k != "missing" else None for k in keys]
+
+    monkeypatch.setattr(cache, "redis_client", FakeRedis())
+
+    async def main():
+        return await asyncio.gather(
+            cache.get_cache_async("a"),
+            cache.get_cache_async("b"),
+            cache.get_cache_async("a"),
+            cache.get_cache_async("missing"),
+        )
+
+    assert asyncio.run(main()) == [{"k": "a"}, {"k": "b"}, {"k": "a"}, None]
+    assert calls == [["a", "b", "missing"]]
+
+
+def test_get_cache_async_redis_failure_returns_none(monkeypatch):
+    import asyncio
+
+    from app import cache
+
+    class Broken:
+        def mget(self, keys):
+            raise ConnectionError("down")
+
+    monkeypatch.setattr(cache, "redis_client", Broken())
+
+    async def main():
+        return await asyncio.gather(cache.get_cache_async("a"), cache.get_cache_async("b"))
+
+    assert asyncio.run(main()) == [None, None]
