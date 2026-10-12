@@ -535,6 +535,9 @@ class ExternalSearchGrouped(BaseModel):
     Поиск рисует источники отдельными секциями в фиксированном порядке, так что
     склеивать их на бэке незачем — фронту пришлось бы разбирать список обратно.
     """
+    # Самые релевантные запросу треки обоих источников — показываются первыми,
+    # из ytmusic/soundcloud они уже вычтены.
+    top: List[ExternalTrackResponse] = []
     ytmusic: List[ExternalTrackResponse] = []
     soundcloud: List[ExternalTrackResponse] = []
 

@@ -114,6 +114,7 @@ function Search() {
       .then((response) => {
         if (signal.aborted) return
         const grouped = {
+          top: response.data?.top || [],
           ytmusic: response.data?.ytmusic || [],
           soundcloud: response.data?.soundcloud || [],
         }
@@ -125,8 +126,14 @@ function Search() {
         // ytmusic — только первый: каждый прогрев это резолв в YouTube, а
         // объём резолвов с нашего IP и вызывает bot-check. Остальное греет
         // hover/pointerdown (prefetchOnIntent) перед реальным кликом.
-        usePlayerStore.getState().prefetchTracks(grouped.ytmusic, 1)
-        usePlayerStore.getState().prefetchTracks(grouped.soundcloud, 2)
+        // Есть блок «Лучшие совпадения» — греем только его: туда уходят самые
+        // вероятные клики, а остальные секции греет intent-префетч.
+        if (grouped.top.length > 0) {
+          usePlayerStore.getState().prefetchTracks(grouped.top, 1)
+        } else {
+          usePlayerStore.getState().prefetchTracks(grouped.ytmusic, 1)
+          usePlayerStore.getState().prefetchTracks(grouped.soundcloud, 2)
+        }
       })
       .catch((error) => {
         if (!signal.aborted) console.error('External search error:', error)
@@ -195,6 +202,7 @@ function Search() {
 
   const hasResults =
     results.tracks.length > 0 ||
+    externalTracks.top.length > 0 ||
     externalTracks.ytmusic.length > 0 ||
     externalTracks.soundcloud.length > 0 ||
     results.playlists.length > 0 ||
@@ -300,7 +308,7 @@ function Search() {
       )}
 
       {/* Порядок секций фиксирован: исполнители → плейлисты → треки из
-          медиатеки → YouTube Music → SoundCloud → пользователи. Исполнители
+          медиатеки → лучшие совпадения → YouTube Music → SoundCloud → пользователи. Исполнители
           сверху — это не результат, а переход: одно нажатие вместо
           выискивания артиста среди его же треков. */}
       {!loading && query && (
@@ -439,6 +447,7 @@ function Search() {
           {externalLoading && (
             <Spinner label="Ищем в YouTube Music и SoundCloud..." />
           )}
+          {renderExternalSection('Лучшие совпадения', externalTracks.top)}
           {renderExternalSection('YouTube Music', externalTracks.ytmusic)}
           {renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 

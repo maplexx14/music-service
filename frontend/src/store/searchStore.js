@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 const emptyResults = { tracks: [], playlists: [], users: [] }
-const emptyExternalTracks = { ytmusic: [], soundcloud: [] }
+const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
 
 // Выдача поиска живёт в сторе, а не в состоянии страницы: роутер размонтирует
 // /search при уходе на другую вкладку, и локальный useState терял и запрос, и

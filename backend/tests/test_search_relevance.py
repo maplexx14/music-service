@@ -186,3 +186,27 @@ def test_local_search_survives_null_play_count(client, db):
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["tracks"][0]["play_count"] == 0
+
+
+def test_split_top_pulls_best_matches_out_of_sources():
+    """Точные совпадения уходят в top и не дублируются в секциях источников."""
+    from app.routers.aggregate import split_top
+
+    yt = [_ext("ytmusic", "Numb Remix cover", "Someone"), _ext("ytmusic", "Numb", "Linkin Park")]
+    sc = [_ext("soundcloud", "Numb", "Linkin Park"), _ext("soundcloud", "Other", "X")]
+
+    top, yt_rest, sc_rest = split_top(yt, sc, "linkin park numb")
+
+    assert [(t.source, t.title) for t in top] == [("ytmusic", "Numb"), ("soundcloud", "Numb")]
+    assert _titles(yt_rest) == ["Numb Remix cover"]
+    assert _titles(sc_rest) == ["Other"]
+
+
+def test_split_top_empty_when_nothing_matches():
+    from app.routers.aggregate import split_top
+
+    yt = [_ext("ytmusic", "Foo", "Bar")]
+    top, yt_rest, _ = split_top(yt, [], "zzz")
+
+    assert top == []
+    assert yt_rest == yt

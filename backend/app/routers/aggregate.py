@@ -249,6 +249,55 @@ def dedup_sequential(
     return out
 
 
+_TOP_LIMIT = 5
+
+
+def _relevance(track: ExternalTrackResponse, q_norm: str, tokens: List[str]) -> int:
+    """Насколько трек совпал с запросом: 3 — точно название или «артист название»,
+    2 — все слова запроса есть в артисте/названии, 0 — совпало лишь частично."""
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (s or "").lower())).strip()
+
+    title, artist = norm(clean_title(track.title or "")), norm(track.artist)
+    if q_norm in (title, f"{artist} {title}", f"{title} {artist}"):
+        return 3
+    haystack = f"{artist} {title}"
+    return 2 if all(t in haystack for t in tokens) else 0
+
+
+def split_top(
+    ytmusic: List[ExternalTrackResponse],
+    soundcloud: List[ExternalTrackResponse],
+    q: str,
+    limit: int = _TOP_LIMIT,
+) -> Tuple[List[ExternalTrackResponse], List[ExternalTrackResponse], List[ExternalTrackResponse]]:
+    """Выносит самые релевантные треки в отдельный блок над секциями источников.
+
+    Берём только реальные совпадения с запросом (score >= 2), лучшие первыми;
+    при равном счёте порядок прежний (YouTube Music раньше SoundCloud, внутри
+    источника — как выдал провайдер). Вынесенное из секций убирается, чтобы не
+    дублироваться. Возвращает (top, ytmusic, soundcloud).
+    """
+    q_norm = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", q.lower())).strip()
+    tokens = q_norm.split()
+    if not tokens:
+        return [], ytmusic, soundcloud
+
+    scored = [
+        (_relevance(t, q_norm, tokens), t) for t in [*ytmusic, *soundcloud]
+    ]
+    best = sorted(
+        (item for item in scored if item[0] >= 2), key=lambda item: -item[0]
+    )[:limit]
+    top = [t for _, t in best]
+    ids = {id(t) for t in top}
+    return (
+        top,
+        [t for t in ytmusic if id(t) not in ids],
+        [t for t in soundcloud if id(t) not in ids],
+    )
+
+
 @router.get("/external", response_model=List[ExternalTrackResponse])
 async def search_external(
     request: Request,
@@ -339,7 +388,9 @@ async def search_external_grouped(
     ytmusic = sorted(ytmusic, key=lambda t: t.is_clean)
     soundcloud_tracks = dedup_sequential(sc_rest, limit)
 
-    return ExternalSearchGrouped(ytmusic=ytmusic, soundcloud=soundcloud_tracks)
+    top, ytmusic, soundcloud_tracks = split_top(ytmusic, soundcloud_tracks, q)
+
+    return ExternalSearchGrouped(top=top, ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 
 
 @router.get("/external/playlists", response_model=List[ExternalPlaylistResponse])
