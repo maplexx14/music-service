@@ -251,6 +251,13 @@ def dedup_sequential(
 
 _TOP_LIMIT = 5
 
+# Каталог артиста — три последовательных вызова YouTube Music (2–5 с холодный),
+# самый медленный источник выдачи. Ждём его не дольше, чем остальные два плюс
+# небольшой запас (и не меньше минимального окна): опоздавший каталог доходит в
+# фоне до кэша, и следующий такой же запрос получает его целиком.
+_CATALOG_MIN_WAIT = 1.2
+_CATALOG_GRACE = 0.25
+
 
 def _relevance(track: ExternalTrackResponse, q_norm: str, tokens: List[str]) -> int:
     """Насколько трек совпал с запросом: 3 — точно название или «артист название»,
@@ -340,6 +347,25 @@ async def search_external(
     return _merge_sources(sources, limit)
 
 
+async def _await_catalog(task: asyncio.Future, started: float, loop) -> list | Exception:
+    """Результат каталога артиста, если он успел к дедлайну (см. _CATALOG_MIN_WAIT).
+
+    Не успел — пустой список, а сама задача доживает в фоне (shield) и кладёт
+    результат в кэш внутри ytmusic_artist_catalog.
+    """
+    timeout = max(_CATALOG_MIN_WAIT - (loop.time() - started), _CATALOG_GRACE)
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout)
+    except asyncio.TimeoutError:
+        logger.info("artist catalog late (>%.2fs), answering without it", loop.time() - started)
+        # Исключение фоновой задачи некому забрать — гасим, чтобы asyncio не
+        # ругался «Task exception was never retrieved».
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return []
+    except Exception as exc:  # noqa: BLE001 — провайдер, агрегатор падать не должен
+        return exc
+
+
 @router.get("/external/grouped", response_model=ExternalSearchGrouped)
 async def search_external_grouped(
     request: Request,
@@ -358,12 +384,17 @@ async def search_external_grouped(
     """
     per_source = max(10, limit)
 
-    catalog, songs, sc = await asyncio.gather(
-        ytdlp.ytmusic_artist_catalog(request, q, limit=per_source),
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    catalog_task = asyncio.ensure_future(
+        ytdlp.ytmusic_artist_catalog(request, q, limit=per_source)
+    )
+    songs, sc = await asyncio.gather(
         ytdlp.search_ytmusic(request, q, limit=per_source),
         soundcloud.search_soundcloud(request, q, limit=per_source),
         return_exceptions=True,
     )
+    catalog = await _await_catalog(catalog_task, started, loop)
 
     def ok(res) -> List[ExternalTrackResponse]:
         if isinstance(res, Exception):

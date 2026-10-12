@@ -9,6 +9,9 @@ const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
 const useSearchStore = create((set) => ({
   query: '',
   results: emptyResults,
+  // Строка, по которой получена results: пока идёт набор, query уже новая, а
+  // выдача старая — топ медиатеки считается по её собственному запросу.
+  resultsQuery: '',
   externalTracks: emptyExternalTracks,
   externalPlaylists: [],
   artists: [],
@@ -34,7 +37,7 @@ const useSearchStore = create((set) => ({
       cachedQuery: '',
     }),
 
-  setResults: (results) => set({ results }),
+  setResults: (results, resultsQuery = '') => set({ results, resultsQuery }),
   setExternalTracks: (externalTracks) => set({ externalTracks }),
   setExternalPlaylists: (externalPlaylists) => set({ externalPlaylists }),
   setArtists: (artists) => set({ artists }),
@@ -45,6 +48,7 @@ const useSearchStore = create((set) => ({
   clearSearch: () =>
     set({
       results: emptyResults,
+      resultsQuery: '',
       externalTracks: emptyExternalTracks,
       externalPlaylists: [],
       artists: [],
@@ -58,6 +62,7 @@ const useSearchStore = create((set) => ({
       query: '',
       filter: 'all',
       results: emptyResults,
+      resultsQuery: '',
       externalTracks: emptyExternalTracks,
       externalPlaylists: [],
       artists: [],

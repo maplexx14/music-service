@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
@@ -29,6 +29,58 @@ const SEARCH_FILTERS = [
   { id: 'soundcloud', label: 'SoundCloud' },
 ]
 
+// «Лучшие совпадения» из своей медиатеки: локальный поиск отвечает за доли
+// секунды, внешний — за секунды, и точное совпадение из базы не должно ждать
+// YouTube. Скоринг повторяет aggregate._relevance на бэке: 3 — название или
+// «артист название» целиком, 2 — все слова запроса есть в артисте/названии.
+const LIBRARY_TOP_LIMIT = 3
+
+const normalizeText = (s) =>
+  (s || '').toLowerCase().replace(/[^\p{L}\p{N}_\s]/gu, ' ').replace(/\s+/g, ' ').trim()
+
+const relevance = (track, qNorm, tokens) => {
+  const title = normalizeText(track.title)
+  const artist = normalizeText(track.artist)
+  if ([title, `${artist} ${title}`, `${title} ${artist}`].includes(qNorm)) return 3
+  const words = new Set(`${artist} ${title}`.split(' '))
+  return tokens.every((token) => words.has(token)) ? 2 : 0
+}
+
+// Тот же трек в медиатеке и во внешней выдаче — как aggregate.dedup_key.
+const sameTrackKey = (track) =>
+  `${normalizeText(track.artist)}|${normalizeText((track.title || '').replace(/\bfeat\.?\b.*$/i, ''))}`
+
+// Медиатека + внешний топ одним списком, лучшие первыми; при равном счёте
+// медиатека раньше (она играет сразу из нашего хранилища). Внешний топ бэк
+// уже вырезал из секций источников, поэтому его не обрезаем — иначе треки
+// пропали бы из выдачи совсем; выкидываем только дубли медиатеки.
+const mergeTopTracks = (query, libraryTracks, externalTop) => {
+  const qNorm = normalizeText(query)
+  const tokens = qNorm.split(' ').filter(Boolean)
+  if (tokens.length === 0) return externalTop
+  const library = libraryTracks
+    .map((track) => ({ track, score: relevance(track, qNorm, tokens) }))
+    .filter((item) => item.score >= 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, LIBRARY_TOP_LIMIT)
+  // Внешний топ бэк отобрал со счётом не ниже 2; заново считаем, только чтобы
+  // поднять точные совпадения (clean_title бэка тут нет — отсюда max).
+  const external = externalTop.map((track) => ({
+    track,
+    score: Math.max(2, relevance(track, qNorm, tokens)),
+  }))
+  const seen = new Set()
+  return [...library, ...external]
+    .sort((a, b) => b.score - a.score)
+    .filter(({ track }) => {
+      const key = sameTrackKey(track)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .map(({ track }) => track)
+}
+
 // Формат записи совпадает с тем, что кладёт в кэш страница ExternalPlaylist.
 const prefetchExternalPlaylist = (id) =>
   prefetchCache(`external-playlist:${id}`, `/soundcloud/playlists/${id}`, {
@@ -43,6 +95,7 @@ function Search() {
   const query = useSearchStore((state) => state.query)
   const setQuery = useSearchStore((state) => state.setQuery)
   const results = useSearchStore((state) => state.results)
+  const resultsQuery = useSearchStore((state) => state.resultsQuery)
   // Внешние источники держим раздельно: выдача показывает их отдельными
   // секциями в фиксированном порядке (см. рендер ниже).
   const externalTracks = useSearchStore((state) => state.externalTracks)
@@ -177,7 +230,7 @@ function Search() {
         signal,
       })
       if (signal.aborted) return
-      setResults(response.data)
+      setResults(response.data, searchQuery)
       localSucceeded = true
     } catch (error) {
       if (signal.aborted) return
@@ -195,9 +248,21 @@ function Search() {
     if (!signal.aborted && localSucceeded) finishSearch(searchQuery)
   }
 
+  const topTracks = useMemo(
+    () => mergeTopTracks(resultsQuery, results.tracks, externalTracks.top),
+    [resultsQuery, results.tracks, externalTracks.top],
+  )
+  // Поднятые в «Лучшие» треки медиатеки из её секции убираем — кроме фильтра
+  // «Медиатека», где она показывается целиком.
+  const libraryTracks = useMemo(() => {
+    if (filter === 'library') return results.tracks
+    const lifted = new Set(topTracks.map((track) => track.id))
+    return results.tracks.filter((track) => !lifted.has(track.id))
+  }, [filter, results.tracks, topTracks])
+
   const handlePlayTrack = (track) => {
     const { playTrack } = usePlayerStore.getState()
-    playTrack(track, results.tracks)
+    playTrack(track, libraryTracks)
   }
 
   // Очередь — список своей секции: клик по треку из YouTube Music продолжает
@@ -219,14 +284,19 @@ function Search() {
 
   const hasResults = showAll
     ? results.tracks.length > 0 ||
-      externalTracks.top.length > 0 ||
+      topTracks.length > 0 ||
       externalTracks.ytmusic.length > 0 ||
       externalTracks.soundcloud.length > 0 ||
       results.playlists.length > 0 ||
       externalPlaylists.length > 0 ||
       artists.length > 0 ||
       results.users.length > 0
-    : (filter === 'library' ? results.tracks : externalTracks[filter]).length > 0
+    : {
+        top: topTracks,
+        library: results.tracks,
+        ytmusic: externalTracks.ytmusic,
+        soundcloud: externalTracks.soundcloud,
+      }[filter].length > 0
 
   // Секция внешних треков: разметка одна на оба источника, отличаются только
   // заголовком и списком.
@@ -345,8 +415,9 @@ function Search() {
           из медиатеки → YouTube Music → SoundCloud → плейлисты → пользователи.
           Исполнители сверху — это не результат, а переход: одно нажатие вместо
           выискивания артиста среди его же треков. Спиннер внешнего поиска
-          стоит на месте «Лучших совпадений»: они приходят вместе с внешней
-          выдачей, позже треков медиатеки. С фильтром видна одна секция. */}
+          стоит под «Лучшими совпадениями»: совпадения из медиатеки видны
+          сразу, внешние дорисовываются к ним позже. С фильтром видна одна
+          секция. */}
       {!loading && query && (
         <div className="search-results">
           {showAll && artists.length > 0 && (
@@ -378,16 +449,16 @@ function Search() {
             </div>
           )}
 
+          {shows('top') && renderExternalSection('Лучшие совпадения', topTracks)}
           {waitingExternal && (
             <Spinner label="Ищем в YouTube Music и SoundCloud..." />
           )}
-          {shows('top') && renderExternalSection('Лучшие совпадения', externalTracks.top)}
 
-          {shows('library') && results.tracks.length > 0 && (
+          {shows('library') && libraryTracks.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Треки</h2>
               <div className="tracks-list">
-                {results.tracks.map((track) => (
+                {libraryTracks.map((track) => (
                   <div
                     key={track.id}
                     className="track-item"
