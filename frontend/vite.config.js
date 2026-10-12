@@ -9,6 +9,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // Время сборки — пишется в журнал диагностики плеера при старте, чтобы по
+    // логу с телефона было видно, какая сборка на нём работает (PWA может
+    // держать старую).
+    define: {
+      'import.meta.env.VITE_BUILD_TIME': JSON.stringify(new Date().toISOString().slice(0, 16)),
+    },
     build: {
       target: 'es2020',
       cssCodeSplit: true,
