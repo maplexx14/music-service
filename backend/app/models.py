@@ -234,6 +234,11 @@ class Track(Base):
     liked_by_users = relationship("User", secondary=user_liked_tracks, back_populates="liked_tracks")
     played_by_users = relationship("User", secondary=user_track_plays, back_populates="track_plays")
 
+# Flow/рекомендации ищут треки по lower(artist) = ANY(список вкуса): без
+# индекса это Seq Scan с lower() на каждой строке (~20 мс на запрос при 9 тыс.
+# треков, растёт линейно; см. миграцию 0029).
+Index("ix_tracks_lower_artist", func.lower(Track.artist))
+
 
 class Playlist(Base):
     __tablename__ = "playlists"
