@@ -7,6 +7,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -2180,6 +2181,39 @@ def _compute_recommendations(
     return response
 
 
+# Single-flight холодного расчёта: несколько одновременных запросов одного
+# юзера с одним ключом выдачи (две вкладки, PWA + десктоп, ретрай после 499)
+# раньше считали одну и ту же выдачу параллельно, по ~1 с CPU каждый. Теперь
+# первый считает, остальные ждут его лок и берут результат из кэша (и тот же
+# request_id через claim_delivery). Лок на воркер: между воркерами дубли
+# остаются, но их не больше числа воркеров, а не числа запросов.
+_SINGLE_FLIGHT_WAIT = float(os.getenv("RECS_SINGLE_FLIGHT_WAIT", "15"))
+_compute_locks: dict[str, list] = {}
+
+
+@contextlib.asynccontextmanager
+async def _single_flight(key: str):
+    """Один расчёт на ключ на воркер. По таймауту ожидания считаем сами."""
+    entry = _compute_locks.get(key)
+    if entry is None:
+        entry = _compute_locks[key] = [asyncio.Lock(), 0]
+    entry[1] += 1
+    held = False
+    try:
+        try:
+            await asyncio.wait_for(entry[0].acquire(), _SINGLE_FLIGHT_WAIT)
+            held = True
+        except asyncio.TimeoutError:
+            logger.warning("recs single-flight wait timed out: %s", key)
+        yield
+    finally:
+        if held:
+            entry[0].release()
+        entry[1] -= 1
+        if entry[1] == 0 and _compute_locks.get(key) is entry:
+            del _compute_locks[key]
+
+
 @router.get("/", response_model=RecommendationResponse)
 @censorship.overrides_in_response("tracks")
 async def get_recommendations(
@@ -2212,22 +2246,23 @@ async def get_recommendations(
         )
         return future.result()
 
-    return await loop.run_in_executor(
-        _COMPUTE_EXECUTOR,
-        partial(
-            _compute_recommendations,
-            request,
-            current_user,
-            db,
-            limit=limit,
-            request_id=request_id,
-            ranking_now=ranking_now,
-            bucket=bucket,
-            cache_key=cache_key,
-            pool_fetch=pool_fetch,
-            hits_fetch=hits_fetch,
-        ),
-    )
+    async with _single_flight(cache_key):
+        return await loop.run_in_executor(
+            _COMPUTE_EXECUTOR,
+            partial(
+                _compute_recommendations,
+                request,
+                current_user,
+                db,
+                limit=limit,
+                request_id=request_id,
+                ranking_now=ranking_now,
+                bucket=bucket,
+                cache_key=cache_key,
+                pool_fetch=pool_fetch,
+                hits_fetch=hits_fetch,
+            ),
+        )
 
 
 @router.post("/events", status_code=204)

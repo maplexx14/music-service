@@ -72,3 +72,58 @@ def test_cache_key_changes_with_algorithm_version():
     assert previous_key != current_key
     assert previous_key == "recs:library:hybrid-v3:42:20:evening"
     assert current_key == "recs:library:hybrid-v4:42:20:evening"
+
+
+def test_single_flight_serializes_same_key_and_cleans_up():
+    import asyncio
+
+    from app.routers import recommendations
+
+    running = 0
+    peak = 0
+
+    async def worker(key):
+        nonlocal running, peak
+        async with recommendations._single_flight(key):
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.01)
+            running -= 1
+
+    async def main():
+        await asyncio.gather(*[worker("k1") for _ in range(5)])
+        assert peak == 1
+        assert recommendations._compute_locks == {}
+        # разные ключи не блокируют друг друга
+        await asyncio.gather(worker("a"), worker("b"))
+        assert peak == 2
+        assert recommendations._compute_locks == {}
+
+    asyncio.run(main())
+
+
+def test_single_flight_timeout_falls_through(monkeypatch):
+    import asyncio
+
+    from app.routers import recommendations
+
+    monkeypatch.setattr(recommendations, "_SINGLE_FLIGHT_WAIT", 0.05)
+    entered = []
+
+    async def holder():
+        async with recommendations._single_flight("k"):
+            await asyncio.sleep(0.3)
+
+    async def waiter():
+        async with recommendations._single_flight("k"):
+            entered.append(True)
+
+    async def main():
+        t = asyncio.create_task(holder())
+        await asyncio.sleep(0.01)
+        await waiter()
+        assert entered == [True]
+        await t
+        assert recommendations._compute_locks == {}
+
+    asyncio.run(main())
