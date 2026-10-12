@@ -428,20 +428,12 @@ function PlayerInner() {
     })
     const offIdleReady = engine.onIdleReady(() => {
       // Буфер следующего трека доехал — если переход был отложен (кончился трек
-      // в фоне, играть было нечего), доигрываем его прямо сейчас. Так же
-      // доигрываем отказанное нажатие ⏭/⏮ виджета.
-      if (pendingSkipRef.current) {
-        resumeSkipRef.current?.()
-        return
-      }
+      // в фоне, играть было нечего), доигрываем его прямо сейчас.
       resumeDeferredRef.current?.()
     })
     const offIdleFailed = engine.onIdleFailed(() => {
       // Следующий трек не грузится и после повторов — отложенный переход
       // целится дальше по очереди (primeDeferred пропускает незагружаемые).
-      // Отказанный ⏭/⏮ на незагружаемый трек не доигрываем — иначе он
-      // навсегда занял бы прогрев (см. maybePreloadNext).
-      pendingSkipRef.current = 0
       if (pendingAdvanceRef.current) primeDeferredRef.current?.()
     })
     return () => {
@@ -503,12 +495,6 @@ function PlayerInner() {
   // движок по факту догрузки буфера.
   const pendingAdvanceRef = useRef(false)
   const resumeDeferredRef = useRef(null)
-  // ⏭/⏮ виджета, отказанные в фоне из-за незагруженного буфера: смещение,
-  // которое доиграет onIdleReady, как только движок догрузит трек. 0 — ничего
-  // не ждём. Отдельно от pendingAdvance: тут текущий трек играет, мост тишины и
-  // его таймеры не нужны.
-  const pendingSkipRef = useRef(0)
-  const resumeSkipRef = useRef(null)
   // Элемент на «мягкой паузе»: ⏸ виджета в фоне ставит скорость 0 вместо
   // pause() (см. handlers.pause). null — мягкой паузы нет.
   const softPausedElRef = useRef(null)
@@ -730,26 +716,17 @@ function PlayerInner() {
     // запас PRELOAD_MIN_BUFFER_SEC вперёд) либо когда до конца осталось меньше
     // PRELOAD_LEAD_SEC — там прогрев важнее возможной запинки в последние
     // секунды: без него фоновый переход просто не состоится.
-    const isNearEnd = (el) => {
-      const trackDuration = resolveTrackDuration(el, usePlayerStore.getState().currentTrack)
-      return trackDuration > 0 && trackDuration - el.currentTime <= PRELOAD_LEAD_SEC
-    }
     const maybePreloadNext = (el) => {
       const state = usePlayerStore.getState()
       if (!state.isPlaying) return
       // На повторе одного трека переход никуда не ведёт — качать следующий
       // значит зря отнимать полосу у того, что играет по кругу.
       if (state.isRepeatOne) return
-      // Движок греет трек отказанного ⏭/⏮ — не перебиваем его своим.
-      if (pendingSkipRef.current) return
       const url = nextTrackUrl(1)
       if (!url || engine.hasPrimedSrc(url)) return
-      const nearEnd = isNearEnd(el)
-      // iOS: заряженный idle-элемент на паузе забирает Now Playing, и виджет на
-      // экране блокировки показывает ▶ поверх играющего трека (на устройстве —
-      // сразу после preload:start). В фоне поэтому греем только у конца
-      // трека: окно с неверной кнопкой сжимается до PRELOAD_LEAD_SEC.
-      if (isIOS && document.hidden && !nearEnd) return
+      const trackDuration = resolveTrackDuration(el, state.currentTrack)
+      const nearEnd =
+        trackDuration > 0 && trackDuration - el.currentTime <= PRELOAD_LEAD_SEC
       const comfortable =
         engine.isFullyBuffered(el) || engine.bufferedAhead(el) >= PRELOAD_MIN_BUFFER_SEC
       if (!nearEnd && !comfortable) return
@@ -871,18 +848,6 @@ function PlayerInner() {
             /* noop */
           }
         }
-      } else if (
-        isIOS &&
-        !pendingAdvanceRef.current &&
-        !pendingSkipRef.current &&
-        !audio.paused &&
-        !isNearEnd(audio)
-      ) {
-        // Ушли в фон с прогревом, заряженным на экране: он сделал бы ▶ на
-        // экране блокировки (см. maybePreloadNext). Снимаем — у конца трека
-        // maybePreloadNext зарядит заново. Отложенный переход не трогаем:
-        // ему прогрев и нужен.
-        engine.clearStalePreload(null)
       }
     }
     const updateDuration = () => {
@@ -1587,20 +1552,6 @@ function PlayerInner() {
   // доигрывается автоматически, как только движок догрузит буфер.
   //
   // Возвращает true, если переход состоялся.
-  resumeSkipRef.current = () => {
-    const offset = pendingSkipRef.current
-    if (!offset) return
-    if (!usePlayerStore.getState().isPlaying) {
-      pendingSkipRef.current = 0
-      return
-    }
-    diag('widget:skip:resume', { offset })
-    if (!playAdjacentNow(offset)) return
-    pendingSkipRef.current = 0
-    if (offset > 0) usePlayerStore.getState().nextTrack()
-    else usePlayerStore.getState().previousTrack()
-  }
-
   resumeDeferredRef.current = () => {
     if (!pendingAdvanceRef.current) return false
     const offset = deferredOffsetRef.current
@@ -1726,7 +1677,6 @@ function PlayerInner() {
     // он относился к предыдущей позиции в очереди. Вместе с ним отпускаем и
     // мост аудиосессии, иначе тишина осталась бы играть вечно.
     pendingAdvanceRef.current = false
-    pendingSkipRef.current = 0
     endSoftPause(softPausedElRef, { pause: false })
     engine.releaseSession()
     if (retryTimeoutRef.current) {
@@ -1872,7 +1822,6 @@ function PlayerInner() {
       dropHandoff()
       engine.pauseInactive()
       pendingAdvanceRef.current = false
-      pendingSkipRef.current = 0
       if (softPausedElRef.current !== audio) engine.releaseSession()
     }
 
@@ -2070,13 +2019,6 @@ function PlayerInner() {
       setCurrentTime(nextTime)
       syncPositionState(audio)
     }
-    // Отказ playAdjacentNow в фоне — ждём буфер. Вне фона либо без соседнего
-    // трека ждать нечего.
-    const deferSkip = (offset) => {
-      if (!document.hidden || !usePlayerStore.getState().getNextTrack(offset)) return
-      pendingSkipRef.current = offset
-      diag('widget:skip:deferred', { offset })
-    }
     // ⏭/⏮ из мягкой паузы: переход идёт фоновым путём (элемент для системы
     // всё ещё играет), и после него играем дальше, а не стоим на паузе.
     const leaveSoftPauseForSkip = () => {
@@ -2195,7 +2137,6 @@ function PlayerInner() {
         // Пауза по кнопке — явный отказ от воспроизведения: отложенный переход
         // отменяем, иначе догрузившийся буфер сам запустил бы трек поверх паузы.
         pendingAdvanceRef.current = false
-        pendingSkipRef.current = 0
         engine.releaseSession()
         if (isIOS && document.hidden && audio && !audio.paused) {
           softPausedElRef.current = audio
@@ -2231,12 +2172,8 @@ function PlayerInner() {
         leaveSoftPauseForSkip()
         // Очередь двигаем только вслед за реально начавшимся звуком: в фоне без
         // загруженного буфера playAdjacentNow откажет и запустит прогрев, а
-        // текущий трек продолжит играть. Переход доиграет onIdleReady.
-        if (!playAdjacentNow(-1)) {
-          deferSkip(-1)
-          return
-        }
-        pendingSkipRef.current = 0
+        // текущий трек продолжит играть. Повторное нажатие пройдёт быстро.
+        if (!playAdjacentNow(-1)) return
         usePlayerStore.getState().previousTrack()
       },
       nexttrack: () => {
@@ -2264,12 +2201,7 @@ function PlayerInner() {
         }
         // Фоновое правило («стартуем только на загруженном буфере») живёт внутри
         // playAdjacentNow — там же, где выбирается подмена или загрузка с нуля.
-        // Отказ запоминаем: переход доиграет onIdleReady по готовности буфера.
-        if (!playAdjacentNow(1)) {
-          deferSkip(1)
-          return
-        }
-        pendingSkipRef.current = 0
+        if (!playAdjacentNow(1)) return
         usePlayerStore.getState().nextTrack()
       },
       seekto: (details) => {
@@ -2294,7 +2226,6 @@ function PlayerInner() {
         endSoftPause(softPausedElRef, { pause: true })
         audioRef.current?.pause()
         pendingAdvanceRef.current = false
-        pendingSkipRef.current = 0
         engine.releaseSession()
         if (usePlayerStore.getState().isPlaying) togglePlayPause()
       },
