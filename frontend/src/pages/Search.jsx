@@ -19,6 +19,16 @@ import './Search.css'
 // выдача отвечает из кэша бэка за десятки мс, ждать дольше незачем.
 const SEARCH_DEBOUNCE_MS = 350
 
+// Фильтр выдачи: «Все» или один источник треков. С фильтром страница
+// показывает только его секцию — без исполнителей, плейлистов и пользователей.
+const SEARCH_FILTERS = [
+  { id: 'all', label: 'Все' },
+  { id: 'top', label: 'Лучшие' },
+  { id: 'library', label: 'Медиатека' },
+  { id: 'ytmusic', label: 'YouTube Music' },
+  { id: 'soundcloud', label: 'SoundCloud' },
+]
+
 // Формат записи совпадает с тем, что кладёт в кэш страница ExternalPlaylist.
 const prefetchExternalPlaylist = (id) =>
   prefetchCache(`external-playlist:${id}`, `/soundcloud/playlists/${id}`, {
@@ -39,6 +49,8 @@ function Search() {
   const externalPlaylists = useSearchStore((state) => state.externalPlaylists)
   const artists = useSearchStore((state) => state.artists)
   const searchError = useSearchStore((state) => state.searchError)
+  const filter = useSearchStore((state) => state.filter)
+  const setFilter = useSearchStore((state) => state.setFilter)
   const [loading, setLoading] = useState(false)
   // Внешний каталог отвечает за 2–5 с — дольше локальной выдачи, после
   // которой гаснет основной спиннер. Без своего индикатора страница успевала
@@ -200,15 +212,21 @@ function Search() {
     navigate(`/external/soundcloud/playlists/${playlist.external_id}`)
   }
 
-  const hasResults =
-    results.tracks.length > 0 ||
-    externalTracks.top.length > 0 ||
-    externalTracks.ytmusic.length > 0 ||
-    externalTracks.soundcloud.length > 0 ||
-    results.playlists.length > 0 ||
-    externalPlaylists.length > 0 ||
-    artists.length > 0 ||
-    results.users.length > 0
+  const showAll = filter === 'all'
+  const shows = (id) => showAll || filter === id
+  // Спиннер внешнего поиска нужен, только если его секции вообще видны.
+  const waitingExternal = externalLoading && filter !== 'library'
+
+  const hasResults = showAll
+    ? results.tracks.length > 0 ||
+      externalTracks.top.length > 0 ||
+      externalTracks.ytmusic.length > 0 ||
+      externalTracks.soundcloud.length > 0 ||
+      results.playlists.length > 0 ||
+      externalPlaylists.length > 0 ||
+      artists.length > 0 ||
+      results.users.length > 0
+    : (filter === 'library' ? results.tracks : externalTracks[filter]).length > 0
 
   // Секция внешних треков: разметка одна на оба источника, отличаются только
   // заголовком и списком.
@@ -297,6 +315,22 @@ function Search() {
           className="search-input"
           autoFocus
         />
+        {query && (
+          <div className="search-filters" role="radiogroup" aria-label="Источник">
+            {SEARCH_FILTERS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={filter === item.id}
+                className={`search-filter${filter === item.id ? ' active' : ''}`}
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading && (
@@ -307,13 +341,15 @@ function Search() {
         <div className="search-error">{searchError}</div>
       )}
 
-      {/* Порядок секций фиксирован: исполнители → плейлисты → треки из
-          медиатеки → лучшие совпадения → YouTube Music → SoundCloud → пользователи. Исполнители
-          сверху — это не результат, а переход: одно нажатие вместо
-          выискивания артиста среди его же треков. */}
+      {/* Порядок секций фиксирован: исполнители → лучшие совпадения → треки
+          из медиатеки → YouTube Music → SoundCloud → плейлисты → пользователи.
+          Исполнители сверху — это не результат, а переход: одно нажатие вместо
+          выискивания артиста среди его же треков. Спиннер внешнего поиска
+          стоит на месте «Лучших совпадений»: они приходят вместе с внешней
+          выдачей, позже треков медиатеки. С фильтром видна одна секция. */}
       {!loading && query && (
         <div className="search-results">
-          {artists.length > 0 && (
+          {showAll && artists.length > 0 && (
             <div className="results-section artists-section">
               <h2 className="results-title">Исполнители</h2>
               <Carousel
@@ -342,73 +378,12 @@ function Search() {
             </div>
           )}
 
-          {results.playlists.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Плейлисты</h2>
-              <Carousel
-                items={results.playlists}
-                label="Плейлисты"
-                renderItem={(playlist) => (
-                  <div
-                    key={playlist.id}
-                    className="playlist-item"
-                    onClick={() => navigate(`/playlists/${playlist.id}`)}
-                  >
-                    <img
-                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                      alt={playlist.name}
-                      className="playlist-item-cover"
-                      loading="lazy"
-                      decoding="async"
-                      onError={handleCoverError}
-                    />
-                    <div className="playlist-item-info">
-                      <div className="playlist-item-name">{playlist.name}</div>
-                      {playlist.description && (
-                        <div className="playlist-item-description">{playlist.description}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              />
-            </div>
+          {waitingExternal && (
+            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
           )}
+          {shows('top') && renderExternalSection('Лучшие совпадения', externalTracks.top)}
 
-          {externalPlaylists.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Плейлисты SoundCloud</h2>
-              <Carousel
-                items={externalPlaylists}
-                label="Плейлисты SoundCloud"
-                renderItem={(playlist) => (
-                  <div
-                    key={playlist.id}
-                    className="playlist-item"
-                    onClick={() => handleImportExternalPlaylist(playlist)}
-                    {...intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))}
-                    title="Открыть плейлист"
-                  >
-                    <img
-                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                      alt={playlist.title}
-                      className="playlist-item-cover"
-                      loading="lazy"
-                      decoding="async"
-                      onError={handleCoverError}
-                    />
-                    <div className="playlist-item-info">
-                      <div className="playlist-item-name">{playlist.title}</div>
-                      <div className="playlist-item-description">
-                        {`${playlist.owner ? playlist.owner + ' · ' : ''}${playlist.track_count} треков · SoundCloud`}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              />
-            </div>
-          )}
-
-          {results.tracks.length > 0 && (
+          {shows('library') && results.tracks.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Треки</h2>
               <div className="tracks-list">
@@ -444,14 +419,76 @@ function Search() {
             </div>
           )}
 
-          {externalLoading && (
-            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
-          )}
-          {renderExternalSection('Лучшие совпадения', externalTracks.top)}
-          {renderExternalSection('YouTube Music', externalTracks.ytmusic)}
-          {renderExternalSection('SoundCloud', externalTracks.soundcloud)}
+          {shows('ytmusic') && renderExternalSection('YouTube Music', externalTracks.ytmusic)}
+          {shows('soundcloud') && renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
-          {results.users.length > 0 && (
+          {showAll && results.playlists.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Плейлисты</h2>
+              <Carousel
+                items={results.playlists}
+                label="Плейлисты"
+                renderItem={(playlist) => (
+                  <div
+                    key={playlist.id}
+                    className="playlist-item"
+                    onClick={() => navigate(`/playlists/${playlist.id}`)}
+                  >
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.name}
+                      className="playlist-item-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-item-info">
+                      <div className="playlist-item-name">{playlist.name}</div>
+                      {playlist.description && (
+                        <div className="playlist-item-description">{playlist.description}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              />
+            </div>
+          )}
+
+          {showAll && externalPlaylists.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Плейлисты SoundCloud</h2>
+              <Carousel
+                items={externalPlaylists}
+                label="Плейлисты SoundCloud"
+                renderItem={(playlist) => (
+                  <div
+                    key={playlist.id}
+                    className="playlist-item"
+                    onClick={() => handleImportExternalPlaylist(playlist)}
+                    {...intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))}
+                    title="Открыть плейлист"
+                  >
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.title}
+                      className="playlist-item-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-item-info">
+                      <div className="playlist-item-name">{playlist.title}</div>
+                      <div className="playlist-item-description">
+                        {`${playlist.owner ? playlist.owner + ' · ' : ''}${playlist.track_count} треков · SoundCloud`}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              />
+            </div>
+          )}
+
+          {showAll && results.users.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Пользователи</h2>
               <div className="users-list">
@@ -472,7 +509,7 @@ function Search() {
             </div>
           )}
 
-          {!loading && !externalLoading && query && !hasResults && (
+          {!loading && !waitingExternal && query && !hasResults && (
             <div className="no-results">
               <p>Ничего не найдено</p>
             </div>

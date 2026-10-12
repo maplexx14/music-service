@@ -16,8 +16,12 @@ const useSearchStore = create((set) => ({
   // Запрос, чья выдача дособрана целиком. Только по нему возврат на страницу
   // считает результаты готовыми; оборванный на середине запрос ищется заново.
   cachedQuery: '',
+  // Фильтр выдачи: 'all' или один источник (см. SEARCH_FILTERS в Search.jsx).
+  // В сторе, чтобы пережить уход на другую вкладку вместе с выдачей.
+  filter: 'all',
 
   setQuery: (query) => set({ query }),
+  setFilter: (filter) => set({ filter }),
 
   // Старт нового запроса: внешние секции дорисовываются позже и не должны
   // миксоваться с новой выдачей, а полустарая выдача — считаться закешированной.
@@ -52,6 +56,7 @@ const useSearchStore = create((set) => ({
   resetSearch: () =>
     set({
       query: '',
+      filter: 'all',
       results: emptyResults,
       externalTracks: emptyExternalTracks,
       externalPlaylists: [],
