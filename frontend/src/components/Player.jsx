@@ -2201,6 +2201,17 @@ function PlayerInner() {
           engine.holdSession()
           if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
           diag('widget:pause:soft', snapshotAudio(audio))
+          // Под мостом виджет показывал 0:00: Now Playing переходит к мосту, а
+          // его позиция — начало 0.25-секундной закольцованной тишины.
+          // Держим на виджете позицию трека, пока мягкая пауза не кончится.
+          syncPositionState(audio)
+          const keepPosition = setInterval(() => {
+            if (softPausedElRef.current !== audio) {
+              clearInterval(keepPosition)
+              return
+            }
+            syncPositionState(audio)
+          }, 1000)
         } else {
           audio?.pause()
         }
