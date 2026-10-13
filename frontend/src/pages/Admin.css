@@ -93,6 +93,11 @@
   padding: 0 16px 16px;
 }
 
+/* display: flex выше перебивает атрибут hidden — без этого раздел не сворачивается. */
+.admin-panel-body[hidden] {
+  display: none;
+}
+
 .admin-panel-search {
   max-width: none;
 }
