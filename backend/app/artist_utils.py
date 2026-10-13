@@ -5,14 +5,23 @@ artists.py для единообразного сравнения имён ар�
 (SoundCloud/YT Music отдают одно имя в разном регистре/формате).
 """
 import re
+from functools import lru_cache
 from typing import Optional
 
+# Мемоизация: функции ниже чистые (строка → строка), а поток рекомендаций
+# зовёт их десятки тысяч раз на порцию для одних и тех же имён — замер
+# 2026-10-13: транслитерация в _own_catalog_tracks одна стоила ~0.4 с CPU на
+# расчёт порции (180 тыс. re.sub). Потолок — чтобы кэш не рос без границ.
+_NAME_CACHE = 65536
 
+
+@lru_cache(maxsize=_NAME_CACHE)
 def artist_key(name: str) -> str:
     """Нормализованный ключ артиста: lowercase, trim, одинарные пробелы."""
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
 
+@lru_cache(maxsize=_NAME_CACHE)
 def norm_artist_name(name: str) -> str:
     """Имя артиста в сравнимый вид: регистр, пунктуация, лишние пробелы."""
     s = re.sub(r"[^\w\s]", " ", (name or "").lower())
@@ -68,6 +77,7 @@ _FOLD_TAIL = (
 _GLIDE_RE = re.compile(r"[yi]+(?=[aeou])")
 
 
+@lru_cache(maxsize=_NAME_CACHE)
 def translit_key(name: str) -> str:
     """Ключ «тот же артист» вне зависимости от алфавита и схемы романизации.
 
@@ -107,10 +117,13 @@ def query_names_artist(q: str, artist: str) -> bool:
     return bool(query_words) and query_words <= _name_words(artist)
 
 
-def _name_words(name: str) -> set[str]:
-    return {translit_key(w) for w in norm_artist_name(name).split()}
+@lru_cache(maxsize=_NAME_CACHE)
+def _name_words(name: str) -> frozenset[str]:
+    # frozenset: результат общий для всех вызывающих через кэш.
+    return frozenset(translit_key(w) for w in norm_artist_name(name).split())
 
 
+@lru_cache(maxsize=_NAME_CACHE)
 def names_whole_artist(name: str, artist: str) -> bool:
     """Имя — это исполнитель трека целиком или один из его участников?
 
@@ -285,11 +298,23 @@ def effective_artist_title(
     The parser is deliberately scoped to SoundCloud: on other providers a
     hyphen in a title is much more likely to be part of the actual title.
     """
-    artist = str(artist or "").strip()
-    title = str(title or "").strip()
-    if str(source or "").strip().lower() != "soundcloud":
+    # К строкам ДО кэша: провайдер может прислать что угодно, а lru_cache
+    # требует хешируемых аргументов.
+    return _effective_artist_title(
+        str(title or "").strip(),
+        str(artist or "").strip(),
+        str(source or "").strip().lower(),
+        str(album or ""),
+    )
+
+
+@lru_cache(maxsize=_NAME_CACHE)
+def _effective_artist_title(
+    title: str, artist: str, source: str, album: str
+) -> tuple[str, str]:
+    if source != "soundcloud":
         return artist, title
-    return resolve_track_artist(title, uploader=artist, album=str(album or ""))
+    return resolve_track_artist(title, uploader=artist, album=album)
 
 
 def effective_track_artist_title(track) -> tuple[str, str]:

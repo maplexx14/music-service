@@ -347,3 +347,50 @@ def test_soft_artist_rerank_limit_is_prefix_of_full_order():
     )
     assert head == full[:12]
     assert soft_artist_rerank(items, lambda i: i["score"], limit=100, artist_of=lambda i: i["artist"]) == full
+
+
+def _soft_artist_rerank_reference(items, score_of, *, artist_of, repeat_penalties, limit=None):
+    """Прежний жадный O(n²) проход — эталон для эквивалентности."""
+    from app.diversity import primary_artist_key
+
+    remaining = [
+        (float(score_of(item)), primary_artist_key(artist_of(item)), item)
+        for item in items
+    ]
+    wanted = len(remaining) if limit is None else min(limit, len(remaining))
+    last_penalty = len(repeat_penalties) - 1
+    result, counts = [], {}
+    while len(result) < wanted:
+        best_index, best_value = 0, None
+        for index, (score, key, _item) in enumerate(remaining):
+            value = score - repeat_penalties[min(counts.get(key, 0), last_penalty)]
+            if best_value is None or value > best_value:
+                best_index, best_value = index, value
+        _score, key, picked = remaining.pop(best_index)
+        counts[key] = counts.get(key, 0) + 1
+        result.append(picked)
+    return result
+
+
+def test_soft_artist_rerank_matches_greedy_reference():
+    import random
+
+    from app.diversity import soft_artist_rerank
+
+    rng = random.Random(1013)
+    penalties = (0.0, 0.18, 0.48, 1.0, 1.7, 2.6)
+    for trial in range(300):
+        n = rng.randint(0, 60)
+        artists = [f"Artist{rng.randint(0, rng.randint(1, 12))}" for _ in range(n)]
+        # Грубая сетка скоров — много равенств, в том числе между артистами.
+        items = [
+            {"id": i, "artist": artists[i], "score": rng.choice([0.0, 0.1, 0.2, 0.3, 0.48, 0.5, 1.0])}
+            for i in range(n)
+        ]
+        limit = rng.choice([None, 1, 5, 15, n])
+        kwargs = dict(
+            artist_of=lambda t: t["artist"], repeat_penalties=penalties, limit=limit
+        )
+        expected = _soft_artist_rerank_reference(items, lambda t: t["score"], **kwargs)
+        got = soft_artist_rerank(items, lambda t: t["score"], **kwargs)
+        assert [t["id"] for t in got] == [t["id"] for t in expected], trial

@@ -242,6 +242,7 @@ def reset_cache() -> None:
     _load_failed = False
     canonical.cache_clear()
     to_internal.cache_clear()
+    detect.cache_clear()
 
 
 @lru_cache(maxsize=4096)
@@ -300,6 +301,11 @@ def to_internal(genre: str) -> Optional[str]:
     return None
 
 
+# Мемоизация обязательна: phrase_re — альтернация из всех составных имён
+# beets, и /flow гоняет её по каждому кандидату на каждый запрос (taste.keep →
+# infer_genre_from_text) прямо в event loop. Замер 2026-10-13: ~15% CPU loop
+# под нагрузкой. Кандидаты между запросами в основном одни и те же треки.
+@lru_cache(maxsize=16384)
 def detect(text: str) -> Optional[str]:
     """Самое специфичное СОСТАВНОЕ имя жанра beets, упомянутое в тексте.
 
