@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Plus } from 'lucide-react'
+import { Play, Plus, Shuffle } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
@@ -41,9 +41,11 @@ function Album() {
   const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
   const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [saving, setSaving] = useState(false)
+  const [shuffling, setShuffling] = useState(false)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const shufflePlaylist = usePlayerStore((s) => s.shufflePlaylist)
   // Только id: страница отмечает текущую строку, а подписка на весь объект
   // перерисовывала её и тогда, когда трек тот же, а объект новый.
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
@@ -103,6 +105,16 @@ function Album() {
 
   const handlePlay = () => {
     if (tracks.length > 0) playPlaylist(tracks, 0, 'album')
+  }
+
+  const handleShuffle = async () => {
+    if (shuffling || tracks.length === 0) return
+    setShuffling(true)
+    try {
+      await shufflePlaylist(tracks, 'album')
+    } finally {
+      setShuffling(false)
+    }
   }
 
   const handlePlayTrack = (index) => {
@@ -218,12 +230,21 @@ function Album() {
             </button>
             <button
               className="btn btn--secondary btn--lg play-button-large"
+              onClick={handleShuffle}
+              disabled={shuffling || tracks.length === 0}
+              title="Перемешать и воспроизвести"
+            >
+              <Shuffle size={20} />
+              {shuffling ? 'Загрузка…' : 'Перемешать'}
+            </button>
+            <button
+              className="btn btn--secondary btn--lg playlist-action-icon"
               onClick={handleSaveToLibrary}
               disabled={saving || tracks.length === 0}
-              title="Сохранить альбом плейлистом в медиатеку"
+              title="Добавить в медиатеку"
+              aria-label="Добавить в медиатеку"
             >
               <Plus size={20} />
-              {saving ? 'Добавление...' : 'Добавить в медиатеку'}
             </button>
           </div>
         </div>

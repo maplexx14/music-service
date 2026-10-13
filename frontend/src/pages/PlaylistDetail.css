@@ -71,6 +71,14 @@
   gap: 16px;
 }
 
+/* Круглая кнопка в ряду действий шапки (альбом: «Добавить в медиатеку»). */
+.playlist-action-icon {
+  width: var(--control-h-lg);
+  padding: 0;
+  flex: none;
+  border-radius: 50%;
+}
+
 .action-button {
   background: none;
   border: none;

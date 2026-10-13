@@ -28,6 +28,12 @@
   z-index: 2;
 }
 
+/* На мобильном полоса только показывает прогресс: тап и свайп по ней
+   проходят к капсуле (открыть плеер, листать карусель), перемотки нет. */
+.player-progress-top.is-readonly {
+  pointer-events: none;
+}
+
 .player-progress-top-track {
   position: absolute;
   top: 16px;

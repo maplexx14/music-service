@@ -260,7 +260,7 @@ const NO_GPU = typeof document !== 'undefined' && document.documentElement.class
 // композитор (hooks/usePlaybackProgress). Прежде их вёл rAF-цикл всё время,
 // пока играет музыка, а запись переменной перекрашивала капсулу под
 // backdrop-filter ~10 раз в секунду.
-function PlayerProgress({ audioRef }) {
+function PlayerProgress({ audioRef, seekable }) {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const duration = usePlayerStore((s) => s.duration)
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
@@ -298,7 +298,10 @@ function PlayerProgress({ audioRef }) {
       <div className="player-progress-surface" aria-hidden="true">
         <div ref={surfaceRef} className="player-progress-surface-fill" />
       </div>
-      <div className="player-progress-top" onClick={handleSeek}>
+      <div
+        className={`player-progress-top${seekable ? '' : ' is-readonly'}`}
+        onClick={seekable ? handleSeek : undefined}
+      >
         <div className="player-progress-top-track">
           <div className="player-progress-top-clip">
             <div ref={fillRef} className="player-progress-top-fill" />
@@ -2514,7 +2517,7 @@ function PlayerInner() {
           на мобильном — на десктопе жеста нет. */}
       {isMobile && prevTrack && <MiniGhost track={prevTrack} slot={-1} />}
       {isMobile && upNext && <MiniGhost track={upNext} slot={1} />}
-      <PlayerProgress audioRef={audioRef} />
+      <PlayerProgress audioRef={audioRef} seekable={!isMobile} />
       {/* <audio> здесь больше нет: оба элемента живут в services/audioEngine,
           вне дерева React. Причина — не эстетика, а фон: React волен
           перемонтировать поддерево и перекоммитить атрибуты в любой момент, а

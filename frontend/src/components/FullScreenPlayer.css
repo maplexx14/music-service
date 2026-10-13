@@ -509,7 +509,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 }
 
 .fullscreen-progress {
-  margin-top: 22px;
+  margin-top: 34px;
 }
 
 .fullscreen-progress-bar {
@@ -730,7 +730,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-progress {
-    margin-top: 16px;
+    margin-top: 28px;
   }
 
   .fullscreen-controls {
@@ -815,7 +815,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-progress {
-    margin-top: 16px;
+    margin-top: 28px;
   }
 
   .fullscreen-controls {
