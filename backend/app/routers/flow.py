@@ -45,7 +45,10 @@ playback_count у SoundCloud), а не наши внутренние счётч�
 
 import asyncio
 import functools
+import json
 import logging
+import time
+from contextvars import ContextVar
 import math
 import os
 import re
@@ -54,12 +57,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
+import requests
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app import artist_probe, beets_genre, beets_similar, censorship, storage
-from app.cache import get_cache_async, set_cache_async
+from app.cache import delete_cache, get_cache_async, redis_client, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.discovery import (
@@ -103,6 +108,7 @@ from app.acoustic_features import weighted_centroid
 from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
+from app.recommendation_cache import negative_signal_key
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import (
     artist_key,
@@ -1877,9 +1883,21 @@ async def _radio_pool(seed_video_id: str) -> List[ExternalTrackResponse]:
     cached = await get_cache_async(key)
     if cached is not None:
         return [ExternalTrackResponse(**t) for t in cached]
+    # Single-flight, как у остальных пулов: прогрев следующей порции
+    # (flow-warmer) и живой запрос часто просят один и тот же сид.
+    return await _pool_single_flight(key, lambda: _radio_pool_fetch(seed_video_id))
 
+
+async def _radio_pool_fetch(seed_video_id: str) -> List[ExternalTrackResponse]:
+    """Сетевая часть _radio_pool — без проверки кэша, под single-flight."""
+    key = f"flow:radio:{seed_video_id}"
     try:
         raw = await asyncio.to_thread(_fetch_radio, seed_video_id)
+    except requests.exceptions.Timeout:
+        # Таймаут — это медленный YouTube, а не сид без радио: в негативный
+        # кэш не кладём, иначе сид выпал бы из потока на 10 минут.
+        logger.warning("flow radio timed out for seed %s", seed_video_id)
+        return []
     except Exception:  # noqa: BLE001
         logger.warning("flow radio failed for seed %s", seed_video_id)
         await set_cache_async(key, [], expire=600)  # негативный кэш — сид без радио
@@ -1970,7 +1988,7 @@ async def _resolve_similar(
     """
     query = f"{artist} {title}"
     yt_results, sc_results = await asyncio.gather(
-        ytdlp.search_ytmusic(request, query, limit=3),
+        ytdlp.search_ytmusic(request, query, limit=3, schedule_matches=False),
         soundcloud.search_soundcloud(request, query, limit=3),
         return_exceptions=True,
     )
@@ -1997,6 +2015,12 @@ _inflight_pools: dict = {}
 
 def _pool_single_flight(key: str, factory):
     task = _inflight_pools.get(key)
+    if task is None and _pool_cache_only.get():
+        # Живой запрос под нагрузкой: сеть не трогаем вовсе. Пул прогреет
+        # flow-warmer, когда будет считать следующую порцию этого юзера.
+        empty = asyncio.get_running_loop().create_future()
+        empty.set_result([])
+        return empty
     if task is None:
         task = asyncio.ensure_future(factory())
         _inflight_pools[key] = task
@@ -2235,7 +2259,7 @@ async def _artist_songs_pool(browse_id: str) -> List[ExternalTrackResponse]:
 
 async def _artist_songs_pool_fetch(browse_id: str) -> List[ExternalTrackResponse]:
     key = f"flow:artist_songs:{browse_id}"
-    songs = await ytdlp.ytmusic_artist_songs(browse_id)
+    songs = await ytdlp.ytmusic_artist_songs(browse_id, schedule_matches=False)
     await set_cache_async(
         key,
         [t.model_dump() for t in songs],
@@ -2418,14 +2442,16 @@ async def _favorite_artist_pool_fetch(
     # может не быть вовсе (ремиксеры, локальные ники), а каталог тогда пуст.
     try:
         tracks = await ytdlp.ytmusic_artist_catalog(
-            request, artist, limit=_FAVORITE_CATALOG_LIMIT
+            request, artist, limit=_FAVORITE_CATALOG_LIMIT, schedule_matches=False
         )
     except Exception:  # noqa: BLE001
         logger.warning("flow favorite artist catalog failed for %s", artist)
         tracks = []
     if not tracks:
         try:
-            tracks = await ytdlp.search_ytmusic(request, artist, limit=_FAVORITE_ARTIST_LIMIT)
+            tracks = await ytdlp.search_ytmusic(
+                request, artist, limit=_FAVORITE_ARTIST_LIMIT, schedule_matches=False
+            )
         except Exception:  # noqa: BLE001
             logger.warning("flow favorite artist search failed for %s", artist)
             tracks = []
@@ -2463,9 +2489,13 @@ async def _artist_seed_videos(request: Request, artist: str) -> List[str]:
     cached = await get_cache_async(key)
     if cached is not None:
         return cached
+    if _pool_cache_only.get():
+        return []
 
     try:
-        found = await ytdlp.search_ytmusic(request, artist, limit=_ARTIST_SEED_LIMIT * 3)
+        found = await ytdlp.search_ytmusic(
+            request, artist, limit=_ARTIST_SEED_LIMIT * 3, schedule_matches=False
+        )
     except Exception:  # noqa: BLE001
         logger.warning("flow artist seed search failed for %s", artist)
         await set_cache_async(key, [], expire=600)
@@ -2497,6 +2527,8 @@ async def _soundcloud_pool(
         return _drop_service_unpopular(
             [ExternalTrackResponse(**t) for t in cached]
         )
+    if _pool_cache_only.get():
+        return []
 
     try:
         pool = await soundcloud.search_soundcloud(
@@ -2546,7 +2578,9 @@ async def _tag_pool_fetch(request: Request, tag: str) -> List[ExternalTrackRespo
     key = f"flow:tag:{tag.lower()}"
     sc_results, yt_results = await asyncio.gather(
         soundcloud.search_soundcloud(request, tag, limit=_TAG_EXPLORE_LIMIT),
-        ytdlp.search_ytmusic(request, tag, limit=_TAG_EXPLORE_LIMIT),
+        ytdlp.search_ytmusic(
+            request, tag, limit=_TAG_EXPLORE_LIMIT, schedule_matches=False
+        ),
         return_exceptions=True,
     )
 
@@ -2559,6 +2593,631 @@ async def _tag_pool_fetch(request: Request, tag: str) -> List[ExternalTrackRespo
 
     await set_cache_async(key, [t.model_dump() for t in pool], expire=_TAG_EXPLORE_TTL)
     return _drop_service_unpopular(pool)
+
+
+def _external_plan(
+    profile: dict,
+    ranking_context: str,
+    *,
+    limit: int,
+    last_picked: dict,
+    recent_artist_counts: Counter,
+    now_ts: float,
+) -> dict:
+    """Что именно спрашивать у внешних провайдеров для одной порции потока.
+
+    Чистая функция профиля и ranking_context (хэш последних 50 id истории):
+    сиды радио, артисты графа, любимые артисты, сиды Last.fm, хиты похожих,
+    SoundCloud-артисты и теговый запрос. Зависит только от профиля и контекста
+    порции, поэтому одинаков в живом запросе и в предрасчёте flow-warmer.
+    """
+    banned = profile.get("banned_artists") or set()
+    # Сиды всегда берём из подтверждённого профиля пользователя. Переходы от
+    # рекомендованного трека к его radio создавали жанровый дрейф на каждом
+    # следующем hop. Случайная ротация по широкому набору профильных сидов даёт
+    # новые пулы без ухода от русского рэпа к поп/техно/ретро.
+    # Плейлистные сиды идут первыми, потому что сохраняют явный контекст
+    # коллекции; их кандидаты всё равно конкурируют с остальными общим score.
+    profile_seeds = list(dict.fromkeys(profile["playlist_seeds"]))
+    if not profile_seeds:
+        profile_seeds = list(dict.fromkeys(profile["seeds"]))
+    seeds = _mix_fresh_seeds(
+        profile.get("fresh_seeds") or [],
+        profile_seeds,
+        _PROFILE_SEEDS,
+        ranking_context,
+        "profile-seed",
+    )
+
+    # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
+    # profile["artists"] здесь ротируется хэшем текущей history, поэтому это
+    # не фиксированный top.
+    trusted_artist_keys = set(profile.get("trusted_artist_keys") or [])
+    similar_artists = sorted(
+        [
+            artist
+            for artist in profile["artists"]
+            if artist_key(artist) in trusted_artist_keys
+        ],
+        key=lambda value: stable_jitter(ranking_context, f"similar-artist:{value}"),
+        reverse=True,
+    )[:_SIMILAR_SEED_ARTISTS]
+
+    # Каталог запрашиваем для любого артиста из СОБСТВЕННОЙ коллекции юзера —
+    # лайки, свои плейлисты, импорт, явные предпочтения. Это не разведка: пул
+    # возвращает треки именно запрошенного артиста (_favorite_artist_pool
+    # сверяет имя), поэтому «чужого» в поток он привести не может, а вот без
+    # него импортированный артист не попадал в выдачу ни одним путём.
+    catalog_artists = list(
+        dict.fromkeys(
+            (profile.get("liked_artists") or [])
+            + (profile.get("playlist_artists") or [])
+            + list(dict.fromkeys(profile.get("catalog_artists") or []))
+        )
+    )
+    # Здесь ограничивается только стоимость сетевой генерации. Сколько треков
+    # выбранного артиста дойдёт до ранкера, решает accept_limit (считая уже
+    # прошедшие исключения), а места в ответе по-прежнему не закреплены ни за
+    # одним источником: каталог каждого артиста конкурирует со всеми остальными
+    # кандидатами в общей модели.
+    favorite_artists = _pick_favorite_artists(
+        catalog_artists,
+        profile.get("artist_weight") or {},
+        last_picked,
+        recent_artist_counts,
+        now_ts=now_ts,
+        context=ranking_context,
+        limit=max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), limit)),
+    )
+
+    # Похожие по ТРЕКУ (Last.fm) держим отдельным списком только до общей
+    # фильтрации и статистики качества. Сиды перемешиваем, чтобы каждая
+    # подгрузка не ходила к одному и тому же самому свежему лайку.
+    seed_tracks = _mix_fresh_seeds(
+        [tuple(pair) for pair in profile.get("fresh_seed_tracks") or []],
+        [tuple(pair) for pair in profile.get("seed_tracks") or []],
+        _LASTFM_SEED_TRACKS,
+        ranking_context,
+        "lastfm-seed",
+    )
+
+    # Сиды хитов похожих: один артист из свежих позитивов и остальные из
+    # любимых (у кого нет любимых — из доверенных артистов вкуса), с ротацией.
+    hits_seed_artists: List[str] = []
+    if mainstream.available():
+        def _rotated(values, salt):
+            return sorted(
+                dict.fromkeys(v for v in values if v),
+                key=lambda value: stable_jitter(ranking_context, f"{salt}:{value}"),
+                reverse=True,
+            )
+
+        fresh_artists = _rotated(
+            (primary_artist_key(pair[0]) for pair in profile.get("fresh_seed_tracks") or []),
+            "hits-fresh",
+        )
+        anchor_artists = _rotated(
+            profile.get("deep_catalog_artist_keys")
+            or profile.get("trusted_artist_keys")
+            or [],
+            "hits-anchor",
+        )
+        for artist in [*fresh_artists[:1], *anchor_artists]:
+            if len(hits_seed_artists) >= _SIMILAR_HITS_SEEDS:
+                break
+            if artist not in hits_seed_artists and artist not in banned:
+                hits_seed_artists.append(artist)
+
+    # SoundCloud-разведка: ищем по нескольким любимым артистам. Плейлистные
+    # артисты идут первыми среди SC-запросов, но полученные треки затем
+    # ранжируются вместе со всеми остальными источниками.
+    sc_artists = list(
+        dict.fromkeys(
+            profile["playlist_artists"]
+            + [
+                artist
+                for artist in profile["artists"]
+                if artist_key(artist) in trusted_artist_keys
+            ]
+        )
+    )[:_SC_EXPLORE_ARTISTS]
+
+    # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
+    # авторов). НЕ ищем по одиночному неоднозначному слову ("гей") — провайдеры
+    # отдают серьёзные/иностранные треки на тему. Ищем комбинацию top-тегов
+    # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
+    tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
+    if not tag_words:
+        # Своих слов у юзера нет — остаются жанры, но наши 12 ключей это общие
+        # слова, и склейка двух ("phonk hip-hop") как поисковый запрос у
+        # провайдера возвращает мусор. Дерево жанров beets разворачивает вкус в
+        # НАСТОЯЩИЕ имена поджанров ("memphis rap", "witch house", "dark wave"),
+        # по которым у SoundCloud и YT Music есть каталог. Берём одно контекстно
+        # за подгрузку — это ротация разведки, а не фиксированный запрос.
+        pool = beets_genre.subgenres(profile.get("genres") or [])
+        if pool:
+            tag_words = [
+                max(
+                    pool,
+                    key=lambda value: stable_jitter(
+                        ranking_context, f"subgenre:{value}"
+                    ),
+                )
+            ]
+        else:
+            tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
+
+    return {
+        "seeds": seeds,
+        "similar_artists": similar_artists,
+        "favorite_artists": favorite_artists,
+        "seed_tracks": seed_tracks,
+        "hits_seed_artists": hits_seed_artists,
+        "sc_artists": sc_artists,
+        "tag_query": " ".join(tag_words[:2]) if tag_words else "",
+    }
+
+
+# Готовые порции. Веер провайдеров и ранжирование стоят секунды CPU на порцию:
+# замер 2026-10-13 — 100 одновременных холодных /flow на 4 воркерах дали 80
+# обрывов и WORKER TIMEOUT. Поэтому следующую порцию заранее считает отдельный
+# процесс flow-warmer (app/flow_warmer.py) тем же конвейером _compute_flow —
+# сразу после выдачи и периодически для активных юзеров — и кладёт её в
+# flow:ready:{user} вместе с ranking_context, для которого она посчитана.
+# Запрос с совпавшим контекстом лишь отфильтровывает очередь клиента и свежие
+# скипы/дизлайки и пишет историю с телеметрией: десятки миллисекунд вместо
+# секунд. Иначе — живой расчёт, под нагрузкой без сети (_pool_cache_only).
+_FLOW_PRECOMPUTE = os.getenv("FLOW_PRECOMPUTE", "1").lower() not in ("0", "false", "no")
+# Предрасчёт никто не ждёт — провайдерам можно дать больше, чем живому клику.
+_FLOW_PRECOMPUTE_BUDGET = 8.0
+# Живых расчётов с походом в сеть на воркер одновременно; сверх — только кэш.
+# Веер одного холодного юзера стоит секунды CPU, и под пиком он отнимал их у
+# всех остальных запросов воркера (GIL), вплоть до WORKER TIMEOUT.
+_FLOW_LIVE_NETWORK_SLOTS = int(os.getenv("FLOW_LIVE_NETWORK_SLOTS", "2"))
+_READY_TTL = 2 * 60 * 60
+# Старше — считаем заново: вкус и час суток успели уехать.
+_READY_MAX_AGE = 90 * 60
+# Сколько от готовой порции должно остаться после фильтра (очередь клиента,
+# свежие скипы и дизлайки), чтобы отдать её. Оставшиеся треки не хуже — их
+# просто меньше, и фронт попросит следующую порцию раньше; а живой пересчёт
+# стоит ~1 CPU-с и под пиком дороже сотни готовых выдач.
+_READY_MIN_SHARE = 0.5
+_PC_QUEUE = "flow:pc:queue"
+_PC_QUEUED = "flow:pc:queued"
+# Последний публичный адрес, с которого приходили за потоком: flow-warmer
+# собирает по нему stream_url, когда у юзера нет своей меты (вернулся после
+# перерыва, Redis пересоздан).
+_PC_BASE_URL = "flow:pc:base_url"
+_PC_META_TTL = 24 * 60 * 60
+# Живых расчётов порции на воркер одновременно. Расчёт — около секунды CPU и
+# соединение БД на всё время сборки профиля; без потолка 100 одновременных
+# холодных /flow (замер 2026-10-13: Redis без готовых порций) забирали весь пул
+# (QueuePool timeout) и CPU, event loop голодал до WORKER TIMEOUT. Лишние ждут
+# очереди, не занимая ни того, ни другого, а готовые порции идут мимо неё.
+_FLOW_LIVE_CONCURRENCY = int(os.getenv("FLOW_LIVE_CONCURRENCY", "2"))
+# Только кэш: пулы не запускают сетевых задач (см. _pool_single_flight).
+_pool_cache_only: ContextVar[bool] = ContextVar("flow_pool_cache_only", default=False)
+_live_network_inflight = 0
+_live_waiting = 0
+_live_semaphores: dict = {}
+
+
+def _live_semaphore() -> asyncio.Semaphore:
+    # По loop: тесты гоняют каждый TestClient в своём (как mainstream._semaphores).
+    loop_id = id(asyncio.get_running_loop())
+    semaphore = _live_semaphores.get(loop_id)
+    if semaphore is None:
+        semaphore = _live_semaphores[loop_id] = asyncio.Semaphore(_FLOW_LIVE_CONCURRENCY)
+    return semaphore
+
+
+def _history_key(user_id: int) -> str:
+    return f"flow:history:v2:{user_id}"
+
+
+def _ready_key(user_id: int) -> str:
+    return f"flow:ready:{user_id}"
+
+
+def _pc_meta_key(user_id: int) -> str:
+    return f"flow:pc:meta:{user_id}"
+
+
+def _ranking_context(user_id: int, history: dict) -> str:
+    return f"flow:{user_id}:" + "|".join(
+        str(value) for value in list(history.get("ids") or [])[-50:]
+    )
+
+
+async def _load_flow_history(db: Session, user_id: int) -> dict:
+    history = await get_cache_async(_history_key(user_id)) or {}
+    if not any(history.get(name) for name in ("ids", "keys", "artists")):
+        history = await asyncio.to_thread(_persisted_history_released, db, user_id)
+    return history
+
+
+def _persisted_history_released(db: Session, user_id: int) -> dict:
+    try:
+        return _persisted_flow_history(db, user_id, _FLOW_HISTORY_LIMIT)
+    finally:
+        # Читающая транзакция закончена — соединение обратно в пул (см. get_flow).
+        db.rollback()
+
+
+# Фронт присылает в exclude последние 100 треков очереди (playerStore.js).
+_CLIENT_QUEUE_LIMIT = 100
+
+
+def _exclude_from_history(history: dict, limit: int = _CLIENT_QUEUE_LIMIT) -> str:
+    """exclude, каким его прислал бы фронт: очередь — это отданные порции.
+
+    Фронт шлёт item.id: число у трека из локального каталога (даже если у него
+    есть provider id), source:external_id у внешнего. История ids хранит
+    provider id, и по ней лайк из каталога не узнавался как стоящий в очереди —
+    предрасчёт выбирал его снова, а выдача отбрасывала (2026-10-13: до трети
+    готовых порций уходили в живой расчёт). Поэтому очередь пишется отдельно.
+    """
+    queue = history.get("queue")
+    if isinstance(queue, list) and queue:
+        return ",".join(str(item_id) for item_id in queue[-limit:])
+    parts = []
+    for item_id in list(history.get("ids") or [])[-limit:]:
+        item_id = str(item_id)
+        parts.append(item_id.split(":", 1)[1] if item_id.startswith("local:") else item_id)
+    return ",".join(parts)
+
+
+def _precompute_exclude(db: Session, history: dict) -> str:
+    """exclude для предрасчёта: очередь клиента плюс числовые id каталога.
+
+    Трек из локального каталога фронт присылает числом, а в истории (особенно
+    восстановленной из БД или записанной до появления history["queue"]) он
+    лежит provider id — переводим одним SELECT, иначе предрасчёт возьмёт уже
+    стоящий в очереди лайк и выдача отбросит порцию.
+    """
+    parts = [p for p in _exclude_from_history(history).split(",") if p]
+    pairs = {
+        tuple(str(item_id).split(":", 1))
+        for item_id in list(history.get("ids") or [])[-_CLIENT_QUEUE_LIMIT:]
+        if ":" in str(item_id) and not str(item_id).startswith("local:")
+    }
+    if pairs:
+        try:
+            rows = db.execute(
+                select(Track.id).where(tuple_(Track.source, Track.external_id).in_(pairs))
+            ).scalars().all()
+        finally:
+            db.rollback()
+        parts.extend(str(track_id) for track_id in rows)
+    return ",".join(dict.fromkeys(parts))
+
+
+def _enqueue_precompute_blocking(user_id: int, meta: dict) -> None:
+    pipe = redis_client.pipeline()
+    pipe.sadd(_PC_QUEUED, user_id)
+    pipe.set(_pc_meta_key(user_id), json.dumps(meta), ex=_PC_META_TTL)
+    if meta.get("base_url"):
+        pipe.set(_PC_BASE_URL, json.dumps(meta["base_url"]), ex=_PC_META_TTL * 7)
+    added = pipe.execute()[0]
+    # Юзер уже в очереди — второй раз не ставим: воркер посчитает порцию по
+    # той истории, что будет на момент расчёта, то есть самой свежей.
+    if added:
+        redis_client.rpush(_PC_QUEUE, user_id)
+
+
+async def _enqueue_precompute(user_id: int, meta: dict) -> None:
+    if not _FLOW_PRECOMPUTE:
+        return
+    try:
+        await asyncio.to_thread(_enqueue_precompute_blocking, user_id, meta)
+    except Exception:  # noqa: BLE001 — без предрасчёта поток работает живым путём
+        logger.warning("flow precompute enqueue failed user=%s", user_id, exc_info=True)
+
+
+def _fresh_negatives(db: Session, user_id: int, since: datetime) -> tuple[set, set]:
+    """Скипы и дизлайки после since: (идентичности треков, ключи артистов).
+
+    Готовая порция посчитана до них — то, что юзер успел отвергнуть, пока
+    слушал прошлую, отфильтровываем при выдаче. Артист отпадает целиком и за
+    скип, не только за дизлайк: живой расчёт сразу штрафует артиста скипнутого
+    трека, а сравнение 2026-10-13 показало, что без этого готовые порции чаще
+    возвращали только что скипнутых артистов (3.3% треков против 0.8%).
+    """
+    try:
+        return _fresh_negatives_query(db, user_id, since)
+    finally:
+        db.rollback()
+
+
+def _fresh_negatives_query(db: Session, user_id: int, since: datetime) -> tuple[set, set]:
+    identities: set = set()
+    artists: set = set()
+    rows = db.execute(
+        select(
+            Track.id,
+            Track.source,
+            Track.external_id,
+            Track.artist,
+            user_track_skips.c.disliked,
+        )
+        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
+        .where(
+            user_track_skips.c.user_id == user_id,
+            user_track_skips.c.last_skipped > since,
+        )
+    ).all()
+    for track_id, source, external_id, artist, _disliked in rows:
+        identities.add(f"local:{track_id}")
+        if source and external_id:
+            identities.add(f"{source}:{external_id}")
+        if artist:
+            artists.update(artist_key(a) for a in artist.split(","))
+    events = db.execute(
+        select(
+            recommendation_events.c.track_id,
+            recommendation_events.c.source,
+            recommendation_events.c.external_id,
+            recommendation_events.c.artist,
+            recommendation_events.c.event_type,
+        ).where(
+            recommendation_events.c.user_id == user_id,
+            recommendation_events.c.occurred_at > since,
+            recommendation_events.c.event_type.in_(("skip", "dislike")),
+        )
+    ).all()
+    for track_id, source, external_id, artist, event_type in events:
+        if track_id:
+            identities.add(f"local:{track_id}")
+        if source and external_id:
+            identities.add(f"{source}:{external_id}")
+        if artist:
+            artists.update(artist_key(a) for a in artist.split(","))
+    artists.discard("")
+    return identities, artists
+
+
+async def _take_ready_portion(
+    db: Session,
+    user_id: int,
+    excluded_artists: list,
+    history: dict,
+    limit: int,
+    exclude: str,
+    base_url: str = "",
+) -> tuple[Optional[tuple[list, dict, dict]], str]:
+    """Готовая порция для этого запроса: ((items, scores, features), "hit") или
+    (None, причина промаха) — причина уходит в Server-Timing."""
+    key = _ready_key(user_id)
+    # Одним пакетом (get_cache_async склеивает одновременные чтения в MGET).
+    payload, negative_at = await asyncio.gather(
+        get_cache_async(key), get_cache_async(negative_signal_key(user_id))
+    )
+    if not isinstance(payload, dict):
+        return None, "none"
+    # Одноразовая: и отданная, и отвергнутая ниже порция больше не нужна.
+    await asyncio.to_thread(delete_cache, key)
+    if payload.get("context") != _ranking_context(user_id, history):
+        return None, "context"
+    if payload.get("limit") != limit:
+        return None, "limit"
+    created = float(payload.get("created") or 0)
+    if time.time() - created > _READY_MAX_AGE:
+        return None, "stale"
+
+    excl_numeric, _videos, excl_external = _parse_exclude(exclude)
+    queued = {f"local:{item_id}" for item_id in excl_numeric} | excl_external
+    # Метку ставят скип/дизлайк после коммита (recommendation_cache.
+    # mark_negative_signal). Нет её или она старше порции — в БД идти незачем.
+    if isinstance(negative_at, (int, float)) and negative_at >= created:
+        negatives, bad_artists = await asyncio.to_thread(
+            _fresh_negatives, db, user_id, datetime.fromtimestamp(created, timezone.utc)
+        )
+    else:
+        negatives, bad_artists = set(), set()
+    bad_artists |= {artist_key(a) for a in excluded_artists if a}
+    # stream_url собраны под адрес, с которым считалась порция; отдаём под тот,
+    # с которого пришёл этот запрос (другой домен, туннель, нет меты у воркера).
+    built_for = str(payload.get("base_url") or "")
+    rebase = bool(base_url and built_for and built_for != base_url)
+    kept = []
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if rebase:
+            item = dict(item)
+            for field in ("stream_url", "download_url"):
+                value = item.get(field)
+                if isinstance(value, str) and value.startswith(built_for):
+                    item[field] = base_url + value[len(built_for):]
+        identities = {_flow_item_identity(item)}
+        if isinstance(item.get("id"), int):
+            identities.add(f"local:{item['id']}")
+        if identities & queued or identities & negatives:
+            continue
+        artist, _title = _flow_item_artist_title(item)
+        if bad_artists and any(artist_key(a) in bad_artists for a in artist.split(",")):
+            continue
+        kept.append(dict(item))
+    if len(kept) < max(1, math.ceil(limit * _READY_MIN_SHARE)):
+        return None, "drops"
+    return (kept, payload.get("scores") or {}, payload.get("features") or {}), "hit"
+
+
+def _record_flow_delivery(
+    telemetry_bind, user_id: int, mix: list, request_id: str, scores: dict, features: dict
+) -> None:
+    # Своя короткая сессия: запрос не держит соединение из пула, пока ждёт
+    # провайдеров, а телеметрии нужна одна транзакция.
+    telemetry_db = Session(bind=telemetry_bind)
+    try:
+        record_delivery(
+            telemetry_db,
+            user_id=user_id,
+            items=mix,
+            surface="flow",
+            request_id=request_id,
+            scores=scores,
+            features=features,
+            algorithm_version=ALGORITHM_VERSION,
+        )
+        telemetry_db.commit()
+    except Exception:
+        telemetry_db.rollback()
+        logger.exception("flow delivery telemetry failed user=%s", user_id)
+    finally:
+        telemetry_db.close()
+
+
+async def _deliver_portion(
+    *,
+    request: Request,
+    user_id: int,
+    limit: int,
+    hour: Optional[int],
+    exclude: str,
+    mix: list,
+    scores: dict,
+    features: dict,
+    history: dict,
+    telemetry_bind,
+    request_id: str,
+    timings: Optional[list] = None,
+    schedule_matches: bool = True,
+) -> list:
+    """Выдача посчитанной порции: конверт атрибуции, история, телеметрия и
+    постановка следующей порции в предрасчёт. Общая для живого и готового пути."""
+    # Первая порция (очередь пуста, exclude не пришёл) — это клик по «потоку»:
+    # открываем её треком, который заиграет без резолва. Подгрузки не трогаем —
+    # их треки прогреваются задолго до того, как до них дойдёт очередь.
+    if not exclude:
+        mix = await _front_instant_start(mix)
+
+    # Attach one stable attribution envelope to every delivered item. It is
+    # written before the response so the client can confirm a real impression
+    # and later feedback without materialising provider tracks first.
+    delivery_scores = {}
+    delivery_features = {}
+    for position, item in enumerate(mix):
+        identity = _flow_item_identity(item)
+        score = scores.get(identity, 0.0)
+        item.update(
+            {
+                "recommendation_id": request_id,
+                "recommendation_surface": "flow",
+                "recommendation_position": position,
+                "recommendation_score": score,
+                "recommendation_model_version": ALGORITHM_VERSION,
+            }
+        )
+        delivery_scores[item.get("id")] = score
+        if identity in features:
+            delivery_features[item.get("id")] = features[identity]
+
+    # Запоминаем только реально отданные элементы. Нормализованные ключи режут
+    # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
+    returned_ids = []
+    returned_keys = []
+    for item in mix:
+        source = item.get("source")
+        external_id = item.get("external_id")
+        if source and external_id:
+            returned_ids.append(f"{source}:{external_id}")
+        elif item.get("id") is not None:
+            returned_ids.append(f"local:{item['id']}")
+        returned_keys.append(list(_norm_key(*_flow_item_artist_title(item))))
+
+    stage = time.perf_counter()
+    old_ids = list(history.get("ids") or [])
+    old_keys = list(history.get("keys") or [])
+    await set_cache_async(
+        _history_key(user_id),
+        {
+            "ids": list(dict.fromkeys(old_ids + returned_ids))[-_FLOW_HISTORY_LIMIT:],
+            "keys": [list(k) for k in dict.fromkeys(
+                tuple(k) for k in old_keys + returned_keys
+                if isinstance(k, (list, tuple)) and len(k) == 2
+            )][-_FLOW_HISTORY_LIMIT:],
+            # Артисты последних отданных треков нужны только для разноса на
+            # стыке подгрузок; source/familiarity budgets здесь больше нет.
+            "artists": (
+                [a for a in (history.get("artists") or []) if isinstance(a, str)]
+                + [primary_artist_key(_flow_item_artist_title(item)[0]) for item in mix]
+            )[-_ARTIST_HISTORY:],
+            # Очередь в формате клиентского exclude — для предрасчёта.
+            "queue": (
+                [str(q) for q in (history.get("queue") or [])]
+                + [str(item.get("id")) for item in mix if item.get("id") is not None]
+            )[-_CLIENT_QUEUE_LIMIT:],
+        },
+        expire=_FLOW_HISTORY_TTL,
+    )
+    # Показы пишутся ДО ответа: клиент ссылается на них в обратной связи. Но в
+    # треде — синхронный INSERT с коммитом прямо в event loop выстраивал все
+    # одновременные /flow воркера в очередь за коммитами друг друга (замер
+    # 2026-10-13: 100 одновременных готовых порций — 4 с при простаивающем CPU).
+    if timings is not None:
+        timings.append(("history", time.perf_counter() - stage))
+    stage = time.perf_counter()
+    await asyncio.to_thread(
+        _record_flow_delivery,
+        telemetry_bind,
+        user_id,
+        mix,
+        request_id,
+        delivery_scores,
+        delivery_features,
+    )
+    if timings is not None:
+        timings.append(("telemetry", time.perf_counter() - stage))
+    # ytmusic в потоке — только метаданные: фоновой ищем soundcloud-эквиваленты
+    # треков отданной порции, чтобы /api/ytdlp/stream/{id} успевал уйти на
+    # SoundCloud, а не качать аудио с YouTube. Мисс — фолбэк на YouTube.
+    # У готовой порции матчи уже поставил flow-warmer при предрасчёте, а здесь
+    # это до 45 задач с чтением кэша на каждую выдачу.
+    if schedule_matches:
+        ytdlp._schedule_audio_matches(mix)
+    # Следующую порцию — в предрасчёт. Час клиента храним сдвигом от UTC:
+    # воркер считает порцию позже и должен знать, который час будет у юзера.
+    hour_offset = (
+        (hour - datetime.now(timezone.utc).hour) % 24 if hour is not None else None
+    )
+    await _enqueue_precompute(
+        user_id,
+        {
+            "base_url": str(request.base_url).rstrip("/"),
+            "limit": limit,
+            "hour_offset": hour_offset,
+        },
+    )
+    return mix
+
+
+def _flow_item_artist_title(item) -> tuple[str, str]:
+    if isinstance(item, dict):
+        return effective_artist_title(
+            item.get("title", ""),
+            item.get("artist", ""),
+            source=item.get("source", ""),
+            album=item.get("album", ""),
+        )
+    return effective_track_artist_title(item)
+
+
+def _flow_item_identity(item) -> str:
+    """Стабильный id кандидата: source:external_id, local:id или artist:title."""
+    source = item.get("source") if isinstance(item, dict) else getattr(item, "source", None)
+    external_id = (
+        item.get("external_id")
+        if isinstance(item, dict)
+        else getattr(item, "external_id", None)
+    )
+    item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+    if source and external_id:
+        return f"{source}:{external_id}"
+    if item_id is not None:
+        return f"local:{item_id}"
+    artist, title = _flow_item_artist_title(item)
+    return ":".join(_norm_key(artist, title))
 
 
 def _parse_exclude(exclude: str) -> tuple:
@@ -2646,18 +3305,27 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
     return {"ids": ids, "keys": keys, "artists": artists}
 
 
-@router.get("/flow")
-@censorship.overrides_in_response()
-async def get_flow(
+async def _compute_flow(
     request: Request,
     response: Response,
-    limit: int = Query(8, ge=5, le=50),
-    exclude: str = Query("", max_length=4000),
-    hour: Optional[int] = Query(None, ge=0, le=23),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    limit: int,
+    exclude: str,
+    hour: Optional[int],
+    current_user: User,
+    db: Session,
+    *,
+    mode: str = "live",
+    history: Optional[dict] = None,
 ):
-    """Порция персонального потока. exclude — id уже находящихся в очереди."""
+    """Расчёт порции потока.
+
+    mode="live" — ответ пользователю (история, телеметрия, следующая порция в
+    предрасчёт). mode="precompute" — тот же конвейер без побочных эффектов для
+    flow-warmer: возвращает payload для flow:ready. Ротация любимых пишется в
+    обоих режимах — она описывает ту порцию, что уйдёт следующей.
+    """
+    precompute = mode == "precompute"
+    cache_only = _pool_cache_only.get()
     request_id = new_request_id()
     ranking_now = datetime.now(timezone.utc)
     user_id = current_user.id
@@ -2678,12 +3346,8 @@ async def get_flow(
     continuation_seeds = client_yt_videos[-_CONTINUATION_SEEDS:]
     # v2 сбрасывает чрезмерно строгую историю прошлой версии, из-за которой
     # после нескольких запусков весь небольшой локальный пул оказывался исключён.
-    history_key = f"flow:history:v2:{user_id}"
-    history = await get_cache_async(history_key) or {}
-    if not any(history.get(name) for name in ("ids", "keys", "artists")):
-        history = await asyncio.to_thread(
-            _persisted_flow_history, db, user_id, _FLOW_HISTORY_LIMIT
-        )
+    if history is None:
+        history = await _load_flow_history(db, user_id)
     history_ids = set(history.get("ids") or [])
     history_keys = {
         tuple(key) for key in (history.get("keys") or [])
@@ -2692,10 +3356,7 @@ async def get_flow(
     recent_artist_counts = Counter(
         a for a in (history.get("artists") or []) if isinstance(a, str)
     )
-    ranking_context = (
-        f"flow:{user_id}:"
-        + "|".join(str(value) for value in list(history.get("ids") or [])[-50:])
-    )
+    ranking_context = _ranking_context(user_id, history)
 
     requested_ratio = discovery_ratio(current_user)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
@@ -2738,30 +3399,8 @@ async def get_flow(
     content_bonus_by_identity: dict[str, float] = {}
     external_population: dict[str, dict] = {}
 
-    def _item_artist_title(item) -> tuple[str, str]:
-        if isinstance(item, dict):
-            return effective_artist_title(
-                item.get("title", ""),
-                item.get("artist", ""),
-                source=item.get("source", ""),
-                album=item.get("album", ""),
-            )
-        return effective_track_artist_title(item)
-
-    def _item_identity(item) -> str:
-        source = item.get("source") if isinstance(item, dict) else getattr(item, "source", None)
-        external_id = (
-            item.get("external_id")
-            if isinstance(item, dict)
-            else getattr(item, "external_id", None)
-        )
-        item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
-        if source and external_id:
-            return f"{source}:{external_id}"
-        if item_id is not None:
-            return f"local:{item_id}"
-        artist, title = _item_artist_title(item)
-        return ":".join(_norm_key(artist, title))
+    _item_artist_title = _flow_item_artist_title
+    _item_identity = _flow_item_identity
 
     def _flow_score(item, *, content_bonus: Optional[float] = None) -> float:
         identity = _item_identity(item)
@@ -3029,7 +3668,15 @@ async def get_flow(
     # запроса; нет посчитанного пика — поток работает ровно как раньше.
     loop = asyncio.get_running_loop()
     network_started = loop.time()
-    network_deadline = network_started + _FLOW_NETWORK_BUDGET
+    # Предрасчёт никто не ждёт; под нагрузкой (cache_only) сеть не ждём вовсе —
+    # _gather_within всё равно даёт этапу _FLOW_STAGE_GRACE на чтения из Redis.
+    if precompute:
+        network_budget = _FLOW_PRECOMPUTE_BUDGET
+    elif cache_only:
+        network_budget = 0.0
+    else:
+        network_budget = _FLOW_NETWORK_BUDGET
+    network_deadline = network_started + network_budget
     # Длительность этапов разведки уходит в Server-Timing: видно в DevTools,
     # какой провайдер съел время клика.
     stage_timings: list = []
@@ -3078,36 +3725,22 @@ async def get_flow(
         )
     )
 
-    # Сиды всегда берём из подтверждённого профиля пользователя. Переходы от
-    # рекомендованного трека к его radio создавали жанровый дрейф на каждом
-    # следующем hop. Случайная ротация по широкому набору профильных сидов даёт
-    # новые пулы без ухода от русского рэпа к поп/техно/ретро.
-    # Плейлистные сиды идут первыми, потому что сохраняют явный контекст
-    # коллекции; их кандидаты всё равно конкурируют с остальными общим score.
-    profile_seeds = list(dict.fromkeys(profile["playlist_seeds"]))
-    if not profile_seeds:
-        profile_seeds = list(dict.fromkeys(profile["seeds"]))
-    seeds = _mix_fresh_seeds(
-        profile.get("fresh_seeds") or [],
-        profile_seeds,
-        _PROFILE_SEEDS,
+    # Что спрашивать у провайдеров — план порции (см. _external_plan).
+    rotation_key = f"flow:favorite-rotation:{user_id}"
+    last_picked = await get_cache_async(rotation_key) or {}
+    if not isinstance(last_picked, dict):
+        last_picked = {}
+    now_ts = ranking_now.timestamp()
+    plan = _external_plan(
+        profile,
         ranking_context,
-        "profile-seed",
+        limit=limit,
+        last_picked=last_picked,
+        recent_artist_counts=recent_artist_counts,
+        now_ts=now_ts,
     )
-
-    # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
-    # profile["artists"] здесь ротируется хэшем текущей history, поэтому это
-    # не фиксированный top.
-    trusted_artist_keys = set(profile.get("trusted_artist_keys") or [])
-    similar_artists = sorted(
-        [
-            artist
-            for artist in profile["artists"]
-            if artist_key(artist) in trusted_artist_keys
-        ],
-        key=lambda value: stable_jitter(ranking_context, f"similar-artist:{value}"),
-        reverse=True,
-    )[:_SIMILAR_SEED_ARTISTS]
+    seeds = plan["seeds"]
+    similar_artists = plan["similar_artists"]
 
     # Своих ytmusic-сидов может не быть вовсе — вся коллекция в SoundCloud.
     # Резолвим сид по ИМЕНИ курированного артиста: глобально популярное здесь
@@ -3132,43 +3765,8 @@ async def get_flow(
     # Похожие артисты и радио — оба про НОВОЕ, поэтому запускаем их одной
     # пачкой. Раньше здесь было только радио: когда оно молчит (у юзера нет
     # ytmusic-сидов или провайдер отдал ошибку), разведка обнулялась целиком.
-    # Каталог запрашиваем для любого артиста из СОБСТВЕННОЙ коллекции юзера —
-    # лайки, свои плейлисты, импорт, явные предпочтения. Это не разведка: пул
-    # возвращает треки именно запрошенного артиста (_favorite_artist_pool
-    # сверяет имя), поэтому «чужого» в поток он привести не может, а вот без
-    # него импортированный артист не попадал в выдачу ни одним путём.
-    catalog_artists = list(dict.fromkeys(profile.get("catalog_artists") or []))
-    catalog_artists = list(
-        dict.fromkeys(
-            (profile.get("liked_artists") or [])
-            + (profile.get("playlist_artists") or [])
-            + catalog_artists
-        )
-    )
-    # Здесь ограничивается только стоимость сетевой генерации. Сколько треков
-    # выбранного артиста дойдёт до ранкера, решает accept_limit ниже (считая уже
-    # прошедшие исключения), а места в ответе по-прежнему не закреплены ни за
-    # одним источником: каталог каждого артиста конкурирует со всеми остальными
-    # кандидатами в общей модели.
-    favorite_explore_artists = max(
-        _FAVORITE_EXPLORE_ARTISTS,
-        min(len(catalog_artists), limit),
-    )
     artist_weights = profile.get("artist_weight") or {}
-    rotation_key = f"flow:favorite-rotation:{user_id}"
-    last_picked = await get_cache_async(rotation_key) or {}
-    if not isinstance(last_picked, dict):
-        last_picked = {}
-    now_ts = ranking_now.timestamp()
-    favorite_artists = _pick_favorite_artists(
-        catalog_artists,
-        artist_weights,
-        last_picked,
-        recent_artist_counts,
-        now_ts=now_ts,
-        context=ranking_context,
-        limit=favorite_explore_artists,
-    )
+    favorite_artists = plan["favorite_artists"]
     if favorite_artists:
         last_picked.update({artist_key(a): now_ts for a in favorite_artists})
         await set_cache_async(
@@ -3241,13 +3839,7 @@ async def get_flow(
     # фильтрации и статистики качества. Никакого отдельного места в выдаче этот
     # пул не получает. Сиды перемешиваем, чтобы каждая подгрузка не ходила к
     # одному и тому же самому свежему лайку.
-    seed_tracks = _mix_fresh_seeds(
-        [tuple(pair) for pair in profile.get("fresh_seed_tracks") or []],
-        [tuple(pair) for pair in profile.get("seed_tracks") or []],
-        _LASTFM_SEED_TRACKS,
-        ranking_context,
-        "lastfm-seed",
-    )
+    seed_tracks = plan["seed_tracks"]
     lastfm_jobs = [_lastfm_pool(request, pair[0], pair[1]) for pair in seed_tracks]
 
     # Все ограниченные radio-запросы запускаем одновременно. Раньше они шли
@@ -3255,32 +3847,7 @@ async def get_flow(
     # сетевой таймаут, поэтому быстрый пользователь успевал исчерпать очередь.
     discovery = [_radio_pool(seed) for seed in seeds]
 
-    # Сиды хитов похожих: один артист из свежих позитивов и остальные из
-    # любимых (у кого нет любимых — из доверенных артистов вкуса), с ротацией.
-    hits_seed_artists: List[str] = []
-    if mainstream.available():
-        def _rotated(values, salt):
-            return sorted(
-                dict.fromkeys(v for v in values if v),
-                key=lambda value: stable_jitter(ranking_context, f"{salt}:{value}"),
-                reverse=True,
-            )
-
-        fresh_artists = _rotated(
-            (primary_artist_key(pair[0]) for pair in profile.get("fresh_seed_tracks") or []),
-            "hits-fresh",
-        )
-        anchor_artists = _rotated(
-            profile.get("deep_catalog_artist_keys")
-            or profile.get("trusted_artist_keys")
-            or [],
-            "hits-anchor",
-        )
-        for artist in [*fresh_artists[:1], *anchor_artists]:
-            if len(hits_seed_artists) >= _SIMILAR_HITS_SEEDS:
-                break
-            if artist not in hits_seed_artists and artist not in banned:
-                hits_seed_artists.append(artist)
+    hits_seed_artists = plan["hits_seed_artists"]
     hits_jobs = [_similar_hits_pool(request, artist) for artist in hits_seed_artists]
 
     if favorite_jobs or lastfm_jobs or hits_jobs or discovery:
@@ -3353,16 +3920,7 @@ async def get_flow(
     # заголовке.
     # Плейлистные артисты идут первыми среди SC-запросов, но полученные треки
     # затем ранжируются вместе со всеми остальными источниками.
-    sc_artists = list(
-        dict.fromkeys(
-            profile["playlist_artists"]
-            + [
-                artist
-                for artist in profile["artists"]
-                if artist_key(artist) in trusted_artist_keys
-            ]
-        )
-    )[:_SC_EXPLORE_ARTISTS]
+    sc_artists = plan["sc_artists"]
     # SoundCloud — резервный источник. Не ждём его сетевые поиски, если YT уже
     # дал достаточно широкий свежий пул.
     if sc_artists and _needs_more_pools():
@@ -3376,35 +3934,10 @@ async def get_flow(
             origin="soundcloud",
         )
 
-    # Разведка по тегам вкуса: реально новые треки (в т.ч. от незнакомых
-    # авторов). НЕ ищем по одиночному неоднозначному слову ("гей") — провайдеры
-    # отдают серьёзные/иностранные треки на тему. Ищем комбинацию top-тегов
-    # ("сво гей", "гей порно") — это специфичный русский мем, а не firehose.
-    # Нужно минимум 2 значимых тега, иначе разведку по тегам пропускаем.
-    tag_words = list(profile.get("title_tags") or [])[:_TAG_EXPLORE_TAGS]
-    if not tag_words:
-        # Своих слов у юзера нет — остаются жанры, но наши 12 ключей это общие
-        # слова, и склейка двух ("phonk hip-hop") как поисковый запрос у
-        # провайдера возвращает мусор. Дерево жанров beets разворачивает вкус в
-        # НАСТОЯЩИЕ имена поджанров ("memphis rap", "witch house", "dark wave"),
-        # по которым у SoundCloud и YT Music есть каталог. Берём одно контекстно
-        # за подгрузку — это ротация разведки, а не фиксированный запрос.
-        pool = beets_genre.subgenres(profile.get("genres") or [])
-        if pool:
-            tag_words = [
-                max(
-                    pool,
-                    key=lambda value: stable_jitter(
-                        ranking_context, f"subgenre:{value}"
-                    ),
-                )
-            ]
-        else:
-            tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
-    if tag_words and _needs_more_pools():
-        query = " ".join(tag_words[:2])
+    query = plan["tag_query"]
+    if query and _needs_more_pools():
         # Это ЕДИНСТВЕННЫЙ генератор без родословной: сырой полнотекстовый поиск
         # у провайдера, который на запрос из пары слов охотно отдаёт что угодно.
         # Требуем, чтобы кандидат сам называл искомые слова, и намеренно НЕ
@@ -3578,7 +4111,9 @@ async def get_flow(
             and _gate_artist(c) not in deep_ok
         ]
         hits = await mainstream.artist_hits(
-            {_gate_artist(c) for c in gated}, timeout=_MAINSTREAM_WAIT
+            {_gate_artist(c) for c in gated},
+            timeout=_MAINSTREAM_WAIT,
+            fetch_missing=not cache_only,
         )
         gated_ids = {_item_identity(c) for c in gated}
         before = len(unified_candidates)
@@ -3788,92 +4323,20 @@ async def get_flow(
         min_gap=_MIN_ARTIST_GAP,
     )
 
-    # Первая порция (очередь пуста, exclude не пришёл) — это клик по «потоку»:
-    # открываем её треком, который заиграет без резолва. Подгрузки не трогаем —
-    # их треки прогреваются задолго до того, как до них дойдёт очередь.
-    if not exclude:
-        mix = await _front_instant_start(mix)
-
-    # Attach one stable attribution envelope to every delivered item. It is
-    # written before the response so the client can confirm a real impression
-    # and later feedback without materialising provider tracks first.
-    delivery_scores = {}
-    delivery_features = {}
-    for position, item in enumerate(mix):
+    scores_by_identity: dict = {}
+    features_by_identity: dict = {}
+    for item in mix:
         identity = _item_identity(item)
-        score = selected_scores.get(identity, _flow_score(item))
-        item.update(
-            {
-                "recommendation_id": request_id,
-                "recommendation_surface": "flow",
-                "recommendation_position": position,
-                "recommendation_score": score,
-                "recommendation_model_version": ALGORITHM_VERSION,
-            }
-        )
-        delivery_scores[item.get("id")] = score
+        scores_by_identity[identity] = selected_scores.get(identity, _flow_score(item))
         try:
-            delivery_features[item.get("id")] = _score_features(item)
+            features_by_identity[identity] = _score_features(item)
         except Exception:  # noqa: BLE001 — телеметрия не должна ронять выдачу
             logger.exception("flow score features failed user=%s", user_id)
-
-    # Запоминаем только реально отданные элементы. Нормализованные ключи режут
-    # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
-    returned_ids = []
-    returned_keys = []
-    for item in mix:
-        source = item.get("source")
-        external_id = item.get("external_id")
-        if source and external_id:
-            returned_ids.append(f"{source}:{external_id}")
-        elif item.get("id") is not None:
-            returned_ids.append(f"local:{item['id']}")
-        returned_keys.append(list(_norm_key(*_item_artist_title(item))))
-
-    old_ids = list(history.get("ids") or [])
-    old_keys = list(history.get("keys") or [])
-    await set_cache_async(
-        history_key,
-        {
-            "ids": list(dict.fromkeys(old_ids + returned_ids))[-_FLOW_HISTORY_LIMIT:],
-            "keys": [list(k) for k in dict.fromkeys(
-                tuple(k) for k in old_keys + returned_keys
-                if isinstance(k, (list, tuple)) and len(k) == 2
-            )][-_FLOW_HISTORY_LIMIT:],
-            # Артисты последних отданных треков нужны только для разноса на
-            # стыке подгрузок; source/familiarity budgets здесь больше нет.
-            "artists": (
-                [a for a in (history.get("artists") or []) if isinstance(a, str)]
-                + [primary_artist_key(_item_artist_title(item)[0]) for item in mix]
-            )[-_ARTIST_HISTORY:],
-        },
-        expire=_FLOW_HISTORY_TTL,
-    )
-    # Network exploration is complete at this point. Use a fresh short-lived
-    # session for telemetry so the request never holds a DB connection while
-    # waiting on YT Music/SoundCloud.
-    telemetry_db = Session(bind=telemetry_bind)
-    try:
-        record_delivery(
-            telemetry_db,
-            user_id=user_id,
-            items=mix,
-            surface="flow",
-            request_id=request_id,
-            scores=delivery_scores,
-            features=delivery_features,
-            algorithm_version=ALGORITHM_VERSION,
-        )
-        telemetry_db.commit()
-    except Exception:
-        telemetry_db.rollback()
-        logger.exception("flow delivery telemetry failed user=%s", user_id)
-    finally:
-        telemetry_db.close()
     probe_identities_delivered = {_item_identity(t) for t in probe_explore}
     logger.debug(
-        "flow result user=%s explore=%d exploit=%d liked=%d/%d probe=%d returned=%d",
+        "flow result user=%s mode=%s explore=%d exploit=%d liked=%d/%d probe=%d returned=%d",
         user_id,
+        mode,
         n_explore,
         n_exploit,
         len(liked_selection),
@@ -3881,11 +4344,170 @@ async def get_flow(
         sum(1 for item in mix if _item_identity(item) in probe_identities_delivered),
         len(mix),
     )
-    # ytmusic в потоке — только метаданные: фоновой ищем soundcloud-эквиваленты
-    # треков отданной порции, чтобы /api/ytdlp/stream/{id} успевал уйти на
-    # SoundCloud, а не качать аудио с YouTube. Пулы (радио, дискографии)
-    # кэшируются в Redis, поэтому матчить надо именно здесь, по итоговой
-    # выдаче — на момент сборки пула этих треков могло ещё не быть в кэше.
-    # Мисс — фолбэк на YouTube (см. ytdlp.stream_ytmusic).
-    ytdlp._schedule_audio_matches(mix)
-    return mix
+    if precompute:
+        # Матчи источников аудио ставим уже сейчас: к выдаче они будут готовы.
+        ytdlp._schedule_audio_matches(mix)
+        return {
+            "context": ranking_context,
+            "limit": limit,
+            "created": time.time(),
+            "base_url": base_url,
+            "items": jsonable_encoder(mix),
+            "scores": scores_by_identity,
+            "features": jsonable_encoder(features_by_identity),
+        }
+    return await _deliver_portion(
+        request=request,
+        user_id=user_id,
+        limit=limit,
+        hour=hour,
+        exclude=exclude,
+        mix=mix,
+        scores=scores_by_identity,
+        features=features_by_identity,
+        history=history,
+        telemetry_bind=telemetry_bind,
+        request_id=request_id,
+    )
+
+
+def _release_request_session(db: Session, user: User) -> None:
+    """Отпустить соединение сессии запроса, сохранив юзера пригодным к чтению.
+
+    Поля дочитываем здесь (после коммита last_seen они могли истечь), затем
+    отсоединяем юзера: rollback иначе снова пометил бы их истёкшими, и первое
+    же чтение в async-коде сходило бы в БД синхронно, из event loop. rollback,
+    а не close: сессия остаётся рабочей для живого пути.
+    """
+    for name in ("id", "username", "is_active", "excluded_artists", "discovery_ratio"):
+        getattr(user, name, None)
+    if user in db:
+        db.expunge(user)
+    db.rollback()
+
+
+async def _flow_response(mix: list, response: Response, *, encoded: bool) -> Response:
+    """JSON-ответ потока с названиями оригиналов (censorship.apply_overrides).
+
+    Ответ собирается здесь, а не сериализацией FastAPI: jsonable_encoder
+    обходил каждое поле каждого трека и был самой дорогой частью выдачи
+    готовой порции (~14 из ~50 мс CPU, замер 2026-10-13). Готовая порция уже
+    чистый JSON (пришла из Redis) — её сразу в json.dumps; живую сначала через
+    jsonable_encoder, как раньше.
+    """
+    try:
+        mix = await censorship.apply_overrides(mix)
+    except Exception:  # noqa: BLE001 — выдача важнее подмены названий
+        logger.exception("censor overrides in get_flow failed")
+    content = mix if encoded else jsonable_encoder(mix)
+    headers = {
+        name: value
+        for name, value in response.headers.items()
+        if name in ("cache-control", "server-timing")
+    }
+    return Response(
+        content=json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+        media_type="application/json",
+        headers=headers,
+    )
+
+
+@router.get("/flow")
+async def get_flow(
+    request: Request,
+    response: Response,
+    limit: int = Query(8, ge=5, le=50),
+    exclude: str = Query("", max_length=4000),
+    hour: Optional[int] = Query(None, ge=0, le=23),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Порция персонального потока. exclude — id уже находящихся в очереди."""
+    global _live_network_inflight, _live_waiting
+    # Ответ уникален для каждого запроса — кэшировать нельзя ни на секунду
+    # (подробно — в _compute_flow).
+    response.headers["Cache-Control"] = "no-store"
+    # Соединение, взятое авторизацией (SELECT юзера), отпускаем сразу: дальше
+    # каждое обращение к БД берёт своё в треде и тут же возвращает. Иначе под
+    # пиком запрос держал одно соединение и ждал второе (телеметрия), и при
+    # 25 одновременных /flow на воркер пул (15+15) вставал до таймаута 30 с.
+    await asyncio.to_thread(_release_request_session, db, current_user)
+    user_id = current_user.id
+    excluded_artists = list(current_user.excluded_artists or [])
+    history = None
+    if _FLOW_PRECOMPUTE:
+        timings: list = []
+        stage = time.perf_counter()
+        history = await _load_flow_history(db, user_id)
+        timings.append(("load", time.perf_counter() - stage))
+        stage = time.perf_counter()
+        ready, ready_state = await _take_ready_portion(
+            db,
+            user_id,
+            excluded_artists,
+            history,
+            limit,
+            exclude,
+            base_url=str(request.base_url).rstrip("/"),
+        )
+        timings.append(("take", time.perf_counter() - stage))
+        if ready is not None:
+            items, scores, features = ready
+            telemetry_bind = db.get_bind()
+            db.close()
+            mix = await _deliver_portion(
+                request=request,
+                user_id=user_id,
+                limit=limit,
+                hour=hour,
+                exclude=exclude,
+                mix=items,
+                scores=scores,
+                features=features,
+                history=history,
+                telemetry_bind=telemetry_bind,
+                request_id=new_request_id(),
+                timings=timings,
+                schedule_matches=False,
+            )
+            response.headers["Server-Timing"] = ", ".join(
+                [f"{name};dur={seconds * 1000:.0f}" for name, seconds in timings]
+                + ["flow;desc=ready"]
+            )
+            return await _flow_response(mix, response, encoded=True)
+    else:
+        ready_state = "off"
+    # Живой расчёт — в очередь _live_semaphore. Сеть — только когда очереди
+    # нет и сетевых расчётов меньше _FLOW_LIVE_NETWORK_SLOTS: под пиком веер
+    # провайдеров одного юзера отнимал бы секунды CPU у всех остальных.
+    # Порцию из одного кэша потом всё равно улучшит предрасчёт.
+    _live_waiting += 1
+    try:
+        await _live_semaphore().acquire()
+    finally:
+        _live_waiting -= 1
+    cache_only = _live_waiting > 0 or _live_network_inflight >= _FLOW_LIVE_NETWORK_SLOTS
+    token = _pool_cache_only.set(cache_only)
+    if not cache_only:
+        _live_network_inflight += 1
+    try:
+        mix = await _compute_flow(
+            request, response, limit, exclude, hour, current_user, db,
+            mode="live", history=history,
+        )
+    finally:
+        _pool_cache_only.reset(token)
+        if not cache_only:
+            _live_network_inflight -= 1
+        _live_semaphore().release()
+    timing = response.headers.get("Server-Timing")
+    response.headers["Server-Timing"] = ", ".join(
+        part
+        for part in (
+            timing,
+            f"flow;desc={'cache' if cache_only else 'live'}",
+            f"ready;desc={ready_state}",
+        )
+        if part
+    )
+    return await _flow_response(mix, response, encoded=False)

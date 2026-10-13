@@ -27,6 +27,7 @@ from app.models import (
     user_track_plays,
     user_track_skips,
 )
+from app.routers import flow as flow_router
 from app.routers.flow import (
     _FRESH_CLUSTER_DAYS,
     _LIKED_REPLAY_COOLDOWN_DAYS,
@@ -3036,7 +3037,7 @@ def test_flow_keeps_only_hits_of_non_favorite_artists(client, db, monkeypatch):
     async def _similar(artist):
         return pool
 
-    async def _hits(artists, timeout):
+    async def _hits(artists, timeout, **_kwargs):
         info = {
             "famous": {"listeners": 2_000_000, "top": [f"Hit {i}" for i in range(6)]},
             "nobody": {"listeners": 300, "top": ["Garage demo"]},
@@ -3067,7 +3068,7 @@ def test_similar_hits_pool_takes_top_tracks_of_famous_neighbours(monkeypatch):
         assert artist == "seed"
         return ["Seed", "Famous A", "Tiny", "Famous B"]
 
-    async def _hits(artists, timeout):
+    async def _hits(artists, timeout, **_kwargs):
         info = {
             "famous a": {"listeners": 900_000, "top": ["A1", "A2", "A3"]},
             "tiny": {"listeners": 900, "top": ["T1"]},
@@ -3105,7 +3106,7 @@ def test_flow_brings_hits_of_similar_artists(client, db, monkeypatch):
         seen_seeds.append(artist)
         return [_external("Neighbour", f"Big hit {i}", f"nb{i}") for i in range(3)]
 
-    async def _hits(artists, timeout):
+    async def _hits(artists, timeout, **_kwargs):
         return {key: {"listeners": 10**6, "top": [f"Big hit {i}" for i in range(3)]}
                 for key in artists}
 
@@ -3117,3 +3118,290 @@ def test_flow_brings_hits_of_similar_artists(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert "favartist" in seen_seeds
     assert any(t["artist"] == "Neighbour" for t in resp.json()), resp.json()
+
+
+def _ready_setup(client, db, monkeypatch, username):
+    """Юзер с лайком и каталогом любимого артиста; первая порция — живая."""
+    from app.cache import redis_client
+
+    user = create_user(db, username=username)
+    _liked(db, user, artist="LovedArtist")
+
+    async def _favorite(request, artist):
+        return [
+            _external(artist, f"catalog-{i}", f"{username}-{i}")
+            for i in range(30)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    redis_client.delete(flow_router._PC_QUEUE, flow_router._PC_QUEUED)
+    headers = auth_headers(client, username=username)
+    first = client.get("/api/recommendations/flow?limit=5", headers=headers)
+    assert first.status_code == 200, first.text
+    assert "flow;desc=live" in first.headers["Server-Timing"]
+    return user, headers, first.json()
+
+
+def _queue_ids(items):
+    return ",".join(
+        str(t["id"]) if t.get("source") == "local" else f'{t["source"]}:{t["external_id"]}'
+        for t in items
+    )
+
+
+def _precompute(user_id):
+    from app import flow_warmer
+    from tests.conftest import TestingSessionLocal
+
+    return asyncio.run(
+        flow_warmer.precompute_user(user_id, session_factory=TestingSessionLocal)
+    )
+
+
+def test_ready_portion_is_precomputed_and_served(client, db, monkeypatch):
+    """Выдача ставит юзера в очередь flow-warmer, следующая порция — готовая."""
+    from app.cache import get_cache, redis_client
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-user")
+    assert redis_client.lrange(flow_router._PC_QUEUE, 0, -1) == [str(user.id)]
+    meta = get_cache(f"flow:pc:meta:{user.id}")
+    assert meta["limit"] == 5 and meta["base_url"].startswith("http")
+
+    assert _precompute(user.id) is True
+    ready = get_cache(f"flow:ready:{user.id}")
+    assert ready and len(ready["items"]) == 5
+
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}", headers=headers
+    )
+    assert second.status_code == 200, second.text
+    assert "flow;desc=ready" in second.headers["Server-Timing"]
+    served = second.json()
+    assert [t["external_id"] for t in served] == [
+        t["external_id"] for t in ready["items"]
+    ]
+    # Конверт атрибуции — от этого запроса, а не от предрасчёта.
+    assert {t["recommendation_position"] for t in served} == set(range(len(served)))
+    assert len({t["recommendation_id"] for t in served}) == 1
+    # Порция одноразовая, а история сдвинулась — третья снова живая.
+    assert get_cache(f"flow:ready:{user.id}") is None
+    third = client.get("/api/recommendations/flow?limit=5", headers=headers)
+    assert "flow;desc=live" in third.headers["Server-Timing"]
+    assert not {t["external_id"] for t in third.json()} & {
+        t["external_id"] for t in first + served
+    }
+
+
+def test_ready_portion_drops_fresh_skips_and_queue(client, db, monkeypatch):
+    """После предрасчёта скипнули трек — уходит и он, и весь его артист;
+    уже стоящее в очереди тоже не отдаём."""
+    from app.cache import get_cache, set_cache
+    from app.recommendation_cache import mark_negative_signal
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-skip")
+    assert _precompute(user.id) is True
+    payload = get_cache(f"flow:ready:{user.id}")
+    # Управляемая порция: три артиста по четыре трека.
+    payload["items"] = [
+        dict(_external(f"Artist{a}", f"song-{a}-{i}", f"rs-{a}-{i}").model_dump())
+        for a in range(3)
+        for i in range(4)
+    ]
+    payload["limit"] = 5
+    set_cache(f"flow:ready:{user.id}", payload, expire=600)
+    skipped, queued = payload["items"][0], payload["items"][5]
+    db.execute(
+        recommendation_events.insert().values(
+            user_id=user.id,
+            source=skipped["source"],
+            external_id=skipped["external_id"],
+            title=skipped["title"],
+            artist=skipped["artist"],
+            event_type="skip",
+            surface="flow",
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    # Так делает эндпоинт событий после коммита скипа.
+    mark_negative_signal(user.id)
+
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first + [queued])}",
+        headers=headers,
+    )
+    assert "flow;desc=ready" in second.headers["Server-Timing"]
+    served = second.json()
+    assert not {t["artist"] for t in served} & {"Artist0"}
+    assert queued["external_id"] not in {t["external_id"] for t in served}
+    assert len(served) == 12 - 4 - 1
+
+
+def test_ready_portion_falls_back_when_skip_empties_it(client, db, monkeypatch):
+    """Скипнутый артист — вся готовая порция: считаем заново живым путём."""
+    from app.cache import get_cache
+    from app.recommendation_cache import mark_negative_signal
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-skip-all")
+    assert _precompute(user.id) is True
+    skipped = get_cache(f"flow:ready:{user.id}")["items"][0]
+    db.execute(
+        recommendation_events.insert().values(
+            user_id=user.id,
+            source=skipped["source"],
+            external_id=skipped["external_id"],
+            artist=skipped["artist"],
+            event_type="skip",
+            surface="flow",
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    mark_negative_signal(user.id)
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}", headers=headers
+    )
+    assert "ready;desc=drops" in second.headers["Server-Timing"]
+
+
+def test_ready_portion_ignored_when_history_moved(client, db, monkeypatch):
+    """Порция посчитана под другой контекст (была выдача мимо неё) — живой путь."""
+    from app.cache import get_cache, set_cache
+
+    user, headers, _first = _ready_setup(client, db, monkeypatch, "ready-stale")
+    assert _precompute(user.id) is True
+    payload = get_cache(f"flow:ready:{user.id}")
+    payload["context"] = "flow:other"
+    set_cache(f"flow:ready:{user.id}", payload, expire=600)
+    resp = client.get("/api/recommendations/flow?limit=5", headers=headers)
+    assert "flow;desc=live" in resp.headers["Server-Timing"]
+
+
+def test_live_flow_goes_cache_only_under_load(client, db, monkeypatch):
+    """Сверх _FLOW_LIVE_NETWORK_SLOTS живой расчёт не ходит в сеть."""
+    user = create_user(db, username="busy-user")
+    _liked(db, user, artist="LovedArtist")
+    monkeypatch.setattr(flow_router, "_live_network_inflight", 10**6)
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="busy-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert "flow;desc=cache" in resp.headers["Server-Timing"]
+
+    called = []
+
+    async def _factory():
+        called.append(1)
+        return ["network"]
+
+    async def _pool():
+        token = flow_router._pool_cache_only.set(True)
+        try:
+            return await flow_router._pool_single_flight("flow:test:key", _factory)
+        finally:
+            flow_router._pool_cache_only.reset(token)
+
+    assert asyncio.run(_pool()) == []
+    assert called == []
+
+
+def test_precompute_exclude_matches_client_queue(client, db, monkeypatch):
+    """Предрасчёт исключает очередь в том же формате, что шлёт фронт (item.id).
+
+    История ids хранит provider id, а фронт для трека из каталога шлёт число:
+    по ids лайк из каталога с provider id не узнавался как стоящий в очереди,
+    предрасчёт брал его снова, а выдача отбрасывала порцию.
+    """
+    from app.cache import get_cache
+
+    user = create_user(db, username="ready-queue")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _favorite(request, artist):
+        return [_external(artist, f"catalog-{i}", f"rq-{i}") for i in range(30)]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    first = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username="ready-queue"),
+    ).json()
+    history = get_cache(f"flow:history:v2:{user.id}")
+    assert history["queue"] == [str(t["id"]) for t in first]
+    assert flow_router._exclude_from_history(history) == ",".join(
+        str(t["id"]) for t in first
+    )
+    # Без очереди (история из БД) — прежняя сборка из ids.
+    assert flow_router._exclude_from_history(
+        {"ids": ["local:7", "ytmusic:abc", "soundcloud:9"]}
+    ) == "7,ytmusic:abc,soundcloud:9"
+
+
+def test_precompute_exclude_maps_provider_ids_to_catalog(db):
+    """Provider id из истории → числовой id трека каталога (так шлёт фронт)."""
+    track = Track(title="t", artist="a", duration=100, source="soundcloud", external_id="sc-77")
+    db.add(track)
+    db.commit()
+    exclude = flow_router._precompute_exclude(
+        db, {"ids": ["soundcloud:sc-77", "ytmusic:zzz", "local:5"]}
+    )
+    assert set(exclude.split(",")) == {"5", "soundcloud:sc-77", "ytmusic:zzz", str(track.id)}
+
+
+def test_flow_response_applies_censorship_overrides(client, db, monkeypatch):
+    """Названия оригиналов подменяются в ответе /flow (раньше — декоратором)."""
+    from app import censorship
+
+    user = create_user(db, username="censor-flow")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _favorite(request, artist):
+        return [_external(artist, f"catalog-{i}", f"cf-{i}") for i in range(30)]
+
+    async def _overrides(tracks):
+        return [dict(t, title=f"orig:{t['title']}") for t in tracks]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr(censorship, "apply_overrides", _overrides)
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="censor-flow"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.headers["cache-control"] == "no-store"
+    assert all(t["title"].startswith("orig:") for t in resp.json())
+
+
+def test_ready_portion_stream_urls_follow_request_host(client, db, monkeypatch):
+    """stream_url готовой порции переписываются под адрес текущего запроса."""
+    from app.cache import get_cache, set_cache
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-host")
+    assert _precompute(user.id) is True
+    payload = get_cache(f"flow:ready:{user.id}")
+    built_for = payload["base_url"]
+    for item in payload["items"]:
+        item["stream_url"] = item["stream_url"].replace(built_for, "https://old.example")
+    payload["base_url"] = "https://old.example"
+    set_cache(f"flow:ready:{user.id}", payload, expire=600)
+
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}", headers=headers
+    )
+    assert "flow;desc=ready" in second.headers["Server-Timing"]
+    urls = [t["stream_url"] for t in second.json() if t.get("source") == "ytmusic"]
+    assert urls and all(u.startswith("http://testserver/api/ytdlp/stream/") for u in urls)
+
+
+def test_warmer_refreshes_recent_flow_users_without_ready(client, db, monkeypatch):
+    """Пересчёт берёт активных в потоке по показам в БД, а не только по мете."""
+    from app import flow_warmer
+    from tests.conftest import TestingSessionLocal
+
+    user, _headers, _first = _ready_setup(client, db, monkeypatch, "ready-refresh")
+    clear_pattern("flow:pc:meta:*")
+    clear_pattern("flow:ready:*")
+    assert user.id in flow_warmer._stale_active_users(TestingSessionLocal)
+    assert _precompute(user.id) is True
+    assert user.id not in flow_warmer._stale_active_users(TestingSessionLocal)

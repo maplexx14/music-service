@@ -125,23 +125,31 @@ def _task(artist: str) -> asyncio.Task:
     return task
 
 
-async def artist_hits(artists: Iterable[str], timeout: float) -> dict[str, Optional[dict]]:
+async def artist_hits(
+    artists: Iterable[str], timeout: float, *, fetch_missing: bool = True
+) -> dict[str, Optional[dict]]:
     """{artist_key: {"listeners", "top"} | None} для имён; None — ответа нет.
 
     Кэш читается сразу, остальное спрашивается параллельно не дольше
     ``timeout`` секунд. Неуспевшие запросы НЕ отменяются: они дописывают кэш,
-    и следующая подгрузка волны уже их видит.
+    и следующая подгрузка волны уже их видит. fetch_missing=False — только
+    кэш, без сети (живой /flow под нагрузкой, см. flow._pool_cache_only).
     """
     names = {artist_key(a): a for a in artists if artist_key(a)}
     result: dict[str, Optional[dict]] = {}
     missing = {}
-    for key, name in names.items():
-        cached = await get_cache_async(_CACHE_KEY.format(key))
+    # Одним пакетом: get_cache_async склеивает одновременные чтения в MGET, а
+    # последовательный await делал по round-trip'у на артиста.
+    keys = list(names)
+    values = await asyncio.gather(
+        *(get_cache_async(_CACHE_KEY.format(key)) for key in keys)
+    )
+    for key, cached in zip(keys, values):
         if isinstance(cached, dict):
             result[key] = cached
         else:
-            missing[key] = name
-    if not missing or not available():
+            missing[key] = names[key]
+    if not missing or not available() or not fetch_missing:
         return {**{key: None for key in missing}, **result}
     tasks = {key: _task(name) for key, name in missing.items()}
     if timeout > 0:

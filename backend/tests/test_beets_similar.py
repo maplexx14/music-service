@@ -205,7 +205,7 @@ def test_same_track_check_rejects_full_text_junk():
 
 
 def _resolver(monkeypatch, yt=None, sc=None):
-    async def _yt(request, query, limit=10):
+    async def _yt(request, query, limit=10, **_kwargs):
         return list(yt or [])
 
     async def _sc(request, query, limit=10):
@@ -305,7 +305,7 @@ def test_lastfm_pool_survives_provider_errors(monkeypatch):
     async def _names(artist, title, limit=20):
         return [("Jay-Z", "Encore")]
 
-    async def _boom(request, query, limit=10):
+    async def _boom(request, query, limit=10, **_kwargs):
         raise RuntimeError("provider down")
 
     monkeypatch.setattr(beets_similar, "similar_tracks_async", _names)

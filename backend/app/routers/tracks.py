@@ -19,7 +19,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import SessionLocal, get_db
 from app.cache import get_cache, get_cache_async, set_cache, set_cache_async
-from app.recommendation_cache import invalidate_recommendation_cache
+from app.recommendation_cache import invalidate_recommendation_cache, mark_negative_signal
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips, user_play_events, rec_impressions
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
@@ -1304,6 +1304,7 @@ def record_track_skip(
     db.commit()
     # Скип — явный негативный сигнал: кэш рекомендаций сбрасываем сразу.
     invalidate_recommendation_cache(current_user.id)
+    mark_negative_signal(current_user.id)
     return {"message": "Skip recorded"}
 
 
@@ -1350,6 +1351,7 @@ def dislike_track(
     ))
     db.commit()
     invalidate_recommendation_cache(current_user.id)
+    mark_negative_signal(current_user.id)
     return {"message": "Track disliked"}
 
 

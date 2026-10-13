@@ -57,6 +57,7 @@ from app.discovery_feedback import discovery_acceptance
 from app.recommendation_cache import (
     claim_delivery,
     invalidate_recommendation_cache,
+    mark_negative_signal,
     recommendation_cache_key,
     remember_delivery,
     store_recommendations,
@@ -2329,6 +2330,8 @@ def record_recommendation_event(
     db.commit()
     if payload.event_type != "impression":
         invalidate_recommendation_cache(current_user.id)
+    if payload.event_type in ("skip", "dislike"):
+        mark_negative_signal(current_user.id)
     return None
 
 

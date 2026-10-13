@@ -82,7 +82,7 @@ services:
       dockerfile: Dockerfile
     container_name: music_backend
     restart: unless-stopped
-    environment:
+    environment: &backend-env
       DATABASE_URL: postgresql://${POSTGRES_USER:-music_user}:${POSTGRES_PASSWORD:-music_password}@postgres:5432/${POSTGRES_DB:-music_db}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -206,10 +206,20 @@ services:
       # больше, чем DB-пула: GUNICORN_WORKERS(8) × 70 = 560 конкурентных стримов —
       # запас над таргетом 500 одновременных слушателей.
       THREADPOOL_TOKENS: ${THREADPOOL_TOKENS:-70}
+      ASYNCIO_THREADS: ${ASYNCIO_THREADS:-32}
+      YTMUSIC_TIMEOUT: ${YTMUSIC_TIMEOUT:-10}
+      # Поток рекомендаций: готовые порции считает сервис flow-warmer
+      # (app/flow_warmer.py), веб-воркеры их только отдают.
+      FLOW_PRECOMPUTE: ${FLOW_PRECOMPUTE:-1}
+      FLOW_LIVE_CONCURRENCY: ${FLOW_LIVE_CONCURRENCY:-2}
+      FLOW_LIVE_NETWORK_SLOTS: ${FLOW_LIVE_NETWORK_SLOTS:-2}
+      FLOW_WARMER_CONCURRENCY: ${FLOW_WARMER_CONCURRENCY:-3}
+      FLOW_WARMER_ACTIVE_HOURS: ${FLOW_WARMER_ACTIVE_HOURS:-72}
+      FLOW_PUBLIC_BASE_URL: ${FLOW_PUBLIC_BASE_URL:-}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-8}
     ports:
       - "8000:8000"
-    volumes:
+    volumes: &backend-volumes
       - ./backend:/app
       - music_files:/app/music_files
       - ytdlp_cache:/app/ytdlp_cache
@@ -235,7 +245,29 @@ services:
     # --forwarded-allow-ips='*' разрешает доверять X-Forwarded-Proto от nginx,
     # иначе FastAPI строит редиректы (trailing slash) с http и ломает https через ngrok
     # (mixed active content).
-    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --forwarded-allow-ips='*'"
+    command: sh -c "alembic upgrade head && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${GUNICORN_WORKERS:-8} -b 0.0.0.0:8000 --timeout ${GUNICORN_TIMEOUT:-120} --forwarded-allow-ips='*'"
+
+  # Предрасчёт порций потока рекомендаций (app/flow_warmer.py). Отдельный
+  # процесс, а не фон веб-воркера: расчёт порции — секунды CPU под GIL, и в
+  # gunicorn-воркере он отнимал их у всех запросов. /flow ставит юзера в
+  # очередь после каждой выдачи и отдаёт готовую порцию из Redis.
+  flow-warmer:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: music_flow_warmer
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Миграции гоняет backend при старте.
+      backend:
+        condition: service_started
+    command: python -m app.flow_warmer
 
   # PO-token-провайдер для yt-dlp (плагин bgutil-ytdlp-pot-provider в
   # backend/requirements.txt). Версия образа обязана совпадать с плагином.

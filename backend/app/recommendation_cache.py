@@ -1,3 +1,4 @@
+import time
 from typing import Any, Optional
 
 from app.cache import redis_client, set_cache
@@ -107,6 +108,27 @@ def store_recommendations(user_id: int, cache_key: str, payload: Any, expire: in
     """
     set_cache(cache_key, payload, expire=expire)
     _add_to_index(user_id, cache_key)
+
+
+# Метка последнего негативного сигнала (скип/дизлайк) — для готовых порций
+# потока: если после предрасчёта ничего не отвергнуто, выдача не ходит в БД за
+# свежими скипами (см. flow._take_ready_portion). Только негатив: listen/like
+# приходят на каждый трек, и с ними метка была бы свежее любой порции.
+_NEGATIVE_SIGNAL_TTL = 2 * 60 * 60
+
+
+def negative_signal_key(user_id: int) -> str:
+    return f"flow:negative:{user_id}"
+
+
+def mark_negative_signal(user_id: int) -> None:
+    """Звать ПОСЛЕ коммита скипа/дизлайка: читающий видит метку — увидит и строку."""
+    try:
+        redis_client.set(
+            negative_signal_key(user_id), str(time.time()), ex=_NEGATIVE_SIGNAL_TTL
+        )
+    except Exception:
+        pass
 
 
 def invalidate_recommendation_cache(user_id: int) -> None:
