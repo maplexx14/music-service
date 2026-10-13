@@ -77,7 +77,7 @@ function Playlists() {
 
     setCreating(true)
     try {
-      const response = await api.post('/playlists', {
+      const response = await api.post('/playlists/', {
         name: newPlaylistName,
         is_public: true,
       })

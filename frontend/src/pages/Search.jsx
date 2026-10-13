@@ -221,7 +221,9 @@ function Search() {
 
     let localSucceeded = false
     try {
-      const response = await api.get('/search', {
+      // Слэш в конце: без него FastAPI отвечает 307, и каждый поиск платил
+      // лишний раунд-трип до первой выдачи.
+      const response = await api.get('/search/', {
         // 50, а не 20: при поиске по имени артиста выдача — это его треки,
         // и на двадцати позициях дискография обрывается на середине.
         params: { q: searchQuery, limit: 50 },

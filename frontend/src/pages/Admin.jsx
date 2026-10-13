@@ -388,7 +388,7 @@ function Admin() {
   const fetchTracks = async () => {
     setTracksLoading(true)
     try {
-      const response = await api.get('/tracks?limit=200')
+      const response = await api.get('/tracks/?limit=200')
       setTracks(response.data || [])
     } catch (error) {
       console.error('Error fetching admin tracks:', error)

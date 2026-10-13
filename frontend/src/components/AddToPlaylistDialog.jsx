@@ -160,7 +160,7 @@ function Dialog({ request, leaving, onClose }) {
     if (!name || submittingNew) return
     setSubmittingNew(true)
     try {
-      const { data: created } = await api.post('/playlists', { name, is_public: true })
+      const { data: created } = await api.post('/playlists/', { name, is_public: true })
       const summary = { ...created, track_count: 0 }
       setPlaylists((prev) => {
         const next = [...(prev ?? []), summary]

@@ -119,7 +119,7 @@ const useImportStore = create((set, get) => {
       try {
         // Без таймаута: большой плейлист импортируется минутами, ход виден в
         // окне прогресса, ограничивает только nginx (1 ч).
-        const { data } = await api.post('/import', body, { timeout: 0, skipErrorToast: true })
+        const { data } = await api.post('/import/', body, { timeout: 0, skipErrorToast: true })
         const entry = get().imports[id]
         if (entry) {
           patch(id, {
