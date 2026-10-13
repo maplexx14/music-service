@@ -195,3 +195,35 @@ def test_artist_proximity_ranks_neighbours_of_favorites(monkeypatch):
     assert proximity["near"] == 1.0
     assert proximity["far"] < proximity["near"]
     assert "x35" not in proximity  # дальше _PROXIMITY_NEIGHBOURS
+
+
+def test_delivery_cap_replaces_extra_genre_hits():
+    pool = _pool(["g1", "g2", "g3", "a", "b", "c"])
+    features = {i: {"origin": "genre" if i < 3 else "radio"} for i in range(6)}
+    for arm in ("control", "session"):
+        rng = random.Random(0)
+        rng.random = lambda: 0.99
+        chosen, _extra = _select(
+            pool, features, flow_session.SessionState([], {}.get), arm=arm, rng=rng, limit=4,
+            capped=lambda item: features[item["id"]]["origin"] == "genre", capped_max=2,
+        )
+        assert sum(1 for item in chosen if item["artist"].startswith("g")) == 2
+        assert len(chosen) == 4
+
+
+def test_delivery_cap_is_soft_when_nothing_else():
+    pool = _pool(["g1", "g2", "g3", "g4"])
+    chosen, _extra = _select(
+        pool, {}, arm="control", limit=4, capped=lambda item: True, capped_max=1,
+    )
+    assert len(chosen) == 4
+
+
+def test_collab_with_a_familiar_member_is_familiar():
+    from app.routers.flow import _artist_affinity
+
+    weights = {"gigi d'agostino": 4.0, "journey": 2.0}
+    assert _artist_affinity("Dynoro, Gigi D'Agostino", weights) == 4.0
+    assert _artist_affinity("Journey feat. Steve Perry", weights) == 2.0
+    assert _artist_affinity("Journey", weights) == 2.0
+    assert _artist_affinity("Muse", weights) is None

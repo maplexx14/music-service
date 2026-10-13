@@ -70,6 +70,11 @@ def primary_artist_key(name: str) -> str:
     return artist_key(_COLLAB_SPLIT.split((name or "").strip(), 1)[0])
 
 
+def artist_part_keys(name: str) -> list:
+    """Ключи всех участников строки артиста: "A, B feat. C" -> [a, b, c]."""
+    return [key for key in (artist_key(part) for part in _COLLAB_SPLIT.split(name or "")) if key]
+
+
 def _gap_weight(gap: int, min_gap: int) -> float:
     """Насколько артист «остыл» с прошлого появления: множитель веса 0..1.
 

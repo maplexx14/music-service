@@ -104,6 +104,7 @@ from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.flow_slate import SlateRules, compose_slate
 from app.diversity import (
+    artist_part_keys,
     interleave_artists,
     primary_artist_key,
     soft_artist_rerank,
@@ -219,6 +220,17 @@ _GENRE_SLICE = 6
 _GENRE_PARTS = 4
 _GENRE_HITS_PER_ARTIST = 2
 _GENRE_TTL = 24 * 60 * 60
+# Потолок доли жанрового источника в порции. Прод, 2026-10-14: в первые сутки
+# хиты выбранного жанра заняли 29% видимой волны владельца при 0 хороших из 25
+# исходов — популярные новинки выигрывали места новизны у всех источников.
+# Потолок мягкий (flow_slate.compose_slate, flow_session.select): лишнее
+# уходит в хвост, поэтому юзер, которому кроме жанра предложить нечего,
+# по-прежнему получает полную порцию жанра.
+_GENRE_SHARE = 0.25
+
+
+def _genre_cap(limit: int) -> int:
+    return max(1, round(limit * _GENRE_SHARE))
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -409,6 +421,24 @@ _FRESH_SEED_SHARE = 2
 # ниже явного лайка (0.15) — измерение всё-таки не подтверждение от юзера.
 # Места в порции бонус не даёт: пик идёт в общий пул и конкурирует ранжированием.
 _PROBE_BONUS = 0.14
+
+
+def _artist_affinity(artist: str, weights: dict) -> Optional[float]:
+    """Вес вкуса строки артиста; None — артист незнакомый.
+
+    Коллаб «A, B» / «A feat. B» знаком, если знаком хоть один участник, и
+    берёт вес лучшего из них. Прод, 2026-10-14: по полной строке «Dynoro, Gigi
+    D'Agostino» шёл как новый артист — таких 337 «новых» за 14 дней с good 12%
+    / bad 47% (лучше знакомых), а цель новизны заполнялась знакомыми именами.
+    """
+    full = artist_key(artist)
+    if full in weights:
+        return weights[full]
+    best = None
+    for key in artist_part_keys(artist):
+        if key in weights and (best is None or weights[key] > best):
+            best = weights[key]
+    return best
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -3261,9 +3291,14 @@ async def _deliver_portion(
     request_id: str,
     timings: Optional[list] = None,
     schedule_matches: bool = True,
+    after_history=None,
 ) -> list:
     """Выдача посчитанной порции: конверт атрибуции, история, телеметрия и
-    постановка следующей порции в предрасчёт. Общая для живого и готового пути."""
+    постановка следующей порции в предрасчёт. Общая для живого и готового пути.
+
+    after_history(mix) — корутина сразу после записи истории и ДО постановки
+    в предрасчёт: остаток пула должен лечь раньше, чем flow-warmer проверит,
+    есть ли готовое (иначе он пересчитывал пул после каждой выдачи)."""
     # Первая порция (очередь пуста, exclude не пришёл) — это клик по «потоку»:
     # открываем её треком, который заиграет без резолва. Подгрузки не трогаем —
     # их треки прогреваются задолго до того, как до них дойдёт очередь.
@@ -3349,6 +3384,8 @@ async def _deliver_portion(
     # треде — синхронный INSERT с коммитом прямо в event loop выстраивал все
     # одновременные /flow воркера в очередь за коммитами друг друга (замер
     # 2026-10-13: 100 одновременных готовых порций — 4 с при простаивающем CPU).
+    if after_history is not None:
+        await after_history(mix)
     if timings is not None:
         timings.append(("history", time.perf_counter() - stage))
     stage = time.perf_counter()
@@ -3648,7 +3685,6 @@ async def _compute_flow(
         if score_key in score_by_item:
             return score_by_item[score_key]
         artist, title = _item_artist_title(item)
-        key = artist_key(artist)
         population = external_population.get(identity) or {}
         item_play_count = (
             item.get("play_count", 0)
@@ -3687,9 +3723,9 @@ async def _compute_flow(
                 )
         score_inputs = dict(
             user_id=user_id,
-            artist_affinity=(profile.get("artist_weight") or {}).get(key, 0.0),
+            artist_affinity=_artist_affinity(artist, profile.get("artist_weight") or {}) or 0.0,
             genres=profile.get("genres") or (),
-            novelty=key not in (profile.get("artist_weight") or {}),
+            novelty=_artist_affinity(artist, profile.get("artist_weight") or {}) is None,
             source=item.get("source") if isinstance(item, dict) else getattr(item, "source", None),
             popularity=max(local_popularity, service_popularity),
             content_bonus=content_bonus,
@@ -3699,7 +3735,7 @@ async def _compute_flow(
             now=ranking_now,
         )
         score = score_track(item, **score_inputs)
-        is_novel_artist = key not in (profile.get("artist_weight") or {})
+        is_novel_artist = _artist_affinity(artist, profile.get("artist_weight") or {}) is None
         # Keep the score itself continuous. A higher discovery target is
         # enforced after ranking, so relevance still decides which new tracks
         # fill the requested new-artist portion.
@@ -3734,7 +3770,7 @@ async def _compute_flow(
                 if identity in hit_by_identity
                 else {}
             ),
-            "novel": artist_key(artist) not in (profile.get("artist_weight") or {}),
+            "novel": _artist_affinity(artist, profile.get("artist_weight") or {}) is None,
             **(
                 {"fresh_cluster": True}
                 if primary_artist_key(artist)
@@ -4068,12 +4104,13 @@ async def _compute_flow(
         if not discovery_target:
             return False
 
-        familiar_artists = set(profile.get("artist_weight") or {})
+        familiar_artists = profile.get("artist_weight") or {}
         novel_tracks = []
         novel_artists = set()
         for candidate in (*similar_explore, *probe_explore, *explore):
-            key = artist_key(effective_track_artist_title(candidate)[0])
-            if key in familiar_artists:
+            name = effective_track_artist_title(candidate)[0]
+            key = artist_key(name)
+            if _artist_affinity(name, familiar_artists) is not None:
                 continue
             novel_tracks.append(candidate)
             novel_artists.add(key)
@@ -4453,11 +4490,11 @@ async def _compute_flow(
         artist_of=lambda item: _item_artist_title(item)[0],
         repeat_penalties=(0.0, 0.18, 0.48, 1.0, 1.7, 2.6),
     )
-    familiar_artists = set(profile.get("artist_weight") or {})
+    familiar_artists = profile.get("artist_weight") or {}
 
     def _is_novel(candidate) -> bool:
         artist, _title = _item_artist_title(candidate)
-        return artist_key(artist) not in familiar_artists
+        return _artist_affinity(artist, familiar_artists) is None
 
     # Какому источнику достаётся место — решает его приём у юзера (сэмпл
     # Томпсона, discovery_feedback.thompson_source_order), а не общий рейтинг:
@@ -4497,6 +4534,7 @@ async def _compute_flow(
             discovery_target=discovery_target,
             liked_target=liked_target,
             fresh_cap=max(1, math.floor(limit * _FRESH_CLUSTER_SHARE)),
+            capped_max=_genre_cap(limit),
         ),
         is_novel=_is_novel,
         is_liked=lambda candidate: _item_identity(candidate) in liked_identities,
@@ -4506,6 +4544,7 @@ async def _compute_flow(
         in_fresh_cluster=lambda candidate: (
             primary_artist_key(_item_artist_title(candidate)[0]) in fresh_cluster
         ),
+        capped=lambda candidate: _item_identity(candidate) in genre_identities,
         is_probe=(
             (lambda candidate: _item_identity(candidate) in probe_identities)
             if probe_identities
@@ -4524,8 +4563,8 @@ async def _compute_flow(
     n_explore = sum(
         1
         for item in mix
-        if artist_key(_item_artist_title(item)[0])
-        not in (profile.get("artist_weight") or {})
+        if _artist_affinity(_item_artist_title(item)[0], profile.get("artist_weight") or {})
+        is None
     )
     n_exploit = len(mix) - n_explore
     # Хвост артистов прошлых порций — иначе разнос работал только внутри одной
@@ -4721,6 +4760,8 @@ async def _session_select(
         learned=learned,
         neighbours=neighbours,
         previous_artists=history.get("artists") or [],
+        capped=lambda item: (features.get(_flow_item_identity(item)) or {}).get("origin") == "genre",
+        capped_max=_genre_cap(limit),
     )
     merged = dict(features)
     for identity, row in extra.items():
@@ -4932,15 +4973,17 @@ async def get_flow(
                 request_id=new_request_id(),
                 timings=timings,
                 schedule_matches=False,
+                # Порядок mix — уже окончательный (мгновенный старт сделан
+                # до записи истории), под него и считается контекст остатка.
+                after_history=lambda delivered: _store_leftover(
+                    user_id, history, delivered, leftover, ready_payload, limit
+                ),
             )
             # Предрасчёт поставил матчи только голове пула (matched_ids).
             already = set(ready_payload.get("matched_ids") or []) if matched else set()
             unmatched = [item for item in mix if _flow_item_identity(item) not in already]
             if unmatched:
                 ytdlp._schedule_audio_matches(unmatched)
-            # После выдачи: её порядок (первый трек мог смениться на мгновенный
-            # старт) и есть порядок истории, под которую считается контекст.
-            await _store_leftover(user_id, history, mix, leftover, ready_payload, limit)
             response.headers["Server-Timing"] = ", ".join(
                 [f"{name};dur={seconds * 1000:.0f}" for name, seconds in timings]
                 + ["flow;desc=ready"]
