@@ -236,8 +236,10 @@ def test_recommendations_ignore_other_users_library(client, db):
     )
 
 
-def test_recommendations_include_acoustically_close_new_artist(client, db):
-    """Акустически близкий новый артист конкурирует в общем endpoint-score."""
+def test_recommendations_do_not_bring_new_artists_by_acoustics_alone(client, db):
+    """Акустическая близость сама по себе нового артиста не приводит: признаки
+    есть только у прослушанного другими, и по телеметрии такие новинки —
+    good 0.9% / bad 88% (ветка выключена и в волне, hybrid-v16)."""
     user = create_user(db, username="acoustic-endpoint-user")
     liked_pl = Playlist(
         name="Понравившиеся",
@@ -287,7 +289,7 @@ def test_recommendations_include_acoustically_close_new_artist(client, db):
 
     assert response.status_code == 200, response.text
     ids = {track["id"] for track in response.json()["tracks"]}
-    assert close.id in ids
+    assert close.id not in ids
     assert far.id not in ids
 
 
@@ -627,93 +629,6 @@ def _external(external_id, *, title=None, artist="ExternalArtist", play_count=0)
         stream_url="",
         play_count=play_count,
     )
-
-
-def test_acoustic_candidates_respect_excluded_artists(client, db):
-    """Акустический путь не обходит исключённых юзером артистов.
-
-    Регрессия: акустический кандидат проходил в выдачу мимо keep_track, а
-    вместе с ним — мимо проверки excluded_artists.
-    """
-    user = create_user(db, username="acoustic-excluded-user")
-    user.excluded_artists = ["BannedArtist"]
-    liked_pl = _liked_playlist(db, user)
-    seed = Track(
-        title="seed", artist="KnownArtist", duration=100, source="local",
-        file_path="minio://music/ex-seed.mp3",
-        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
-    )
-    banned = Track(
-        title="banned close", artist="BannedArtist", duration=100, source="local",
-        file_path="minio://music/ex-banned.mp3",
-        acoustic_features=_features(tempo=0.21, brightness=0.2, bass=0.8),
-    )
-    allowed = Track(
-        title="allowed close", artist="NewArtist", duration=100, source="local",
-        file_path="minio://music/ex-allowed.mp3",
-        acoustic_features=_features(tempo=0.22, brightness=0.21, bass=0.79),
-    )
-    db.add_all([seed, banned, allowed])
-    db.commit()
-    db.execute(playlist_tracks.insert().values(
-        playlist_id=liked_pl.id, track_id=seed.id, position=0))
-    db.commit()
-
-    response = client.get(
-        "/api/recommendations/",
-        headers=auth_headers(client, username="acoustic-excluded-user"),
-    )
-
-    assert response.status_code == 200, response.text
-    ids = {track["id"] for track in response.json()["tracks"]}
-    assert allowed.id in ids
-    assert banned.id not in ids
-
-
-def test_acoustic_pool_skips_only_private_foreign_collections(client, db):
-    """Трек из чужого ПУБЛИЧНОГО плейлиста — не приватная коллекция.
-
-    Раньше акустический путь исключал любой трек из любого чужого плейлиста,
-    и кандидатов почти не оставалось.
-    """
-    user = create_user(db, username="acoustic-privacy-user")
-    other = create_user(db, username="acoustic-privacy-other")
-    liked_pl = _liked_playlist(db, user)
-    public_pl = Playlist(name="Public", is_public=True, owner_id=other.id)
-    private_pl = Playlist(name="Private", is_public=False, owner_id=other.id)
-    seed = Track(
-        title="seed", artist="KnownArtist", duration=100, source="local",
-        file_path="minio://music/pr-seed.mp3",
-        acoustic_features=_features(tempo=0.2, brightness=0.2, bass=0.8),
-    )
-    in_public = Track(
-        title="in public", artist="PublicArtist", duration=100, source="local",
-        file_path="minio://music/pr-public.mp3",
-        acoustic_features=_features(tempo=0.21, brightness=0.2, bass=0.8),
-    )
-    in_private = Track(
-        title="in private", artist="PrivateArtist", duration=100, source="local",
-        file_path="minio://music/pr-private.mp3",
-        acoustic_features=_features(tempo=0.22, brightness=0.21, bass=0.79),
-    )
-    db.add_all([public_pl, private_pl, seed, in_public, in_private])
-    db.commit()
-    db.execute(playlist_tracks.insert(), [
-        {"playlist_id": liked_pl.id, "track_id": seed.id, "position": 0},
-        {"playlist_id": public_pl.id, "track_id": in_public.id, "position": 0},
-        {"playlist_id": private_pl.id, "track_id": in_private.id, "position": 0},
-    ])
-    db.commit()
-
-    response = client.get(
-        "/api/recommendations/",
-        headers=auth_headers(client, username="acoustic-privacy-user"),
-    )
-
-    assert response.status_code == 200, response.text
-    ids = {track["id"] for track in response.json()["tracks"]}
-    assert in_public.id in ids
-    assert in_private.id not in ids
 
 
 def test_candidate_window_is_not_frozen_on_oldest_rows(client, db, monkeypatch):

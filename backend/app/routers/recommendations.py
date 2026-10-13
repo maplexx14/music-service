@@ -77,8 +77,6 @@ from app.recommendation_scoring import (
     stable_jitter,
 )
 from app.acoustic_features import (
-    MIN_RECOMMENDATION_SIMILARITY,
-    acoustic_similarity,
     weighted_centroid,
 )
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
@@ -976,31 +974,6 @@ def _scoped_window(
     return db.query(Track).filter(Track.id.in_(ids)).order_by(Track.id).all()
 
 
-def _acoustic_window(db: Session, query, profile, *, window: int) -> list:
-    """Самые близкие к профилю треки, а не первые ``window`` id с признаками.
-
-    Вектор признаков — несколько чисел, поэтому похожесть дешевле посчитать по
-    всему скану, чем брать произвольное окно и надеяться, что близкое в него
-    попало.
-    """
-    rows = (
-        query.with_entities(Track.id, Track.acoustic_features)
-        .order_by(desc(Track.id))
-        .limit(_CANDIDATE_SCAN_LIMIT)
-        .all()
-    )
-    scored = []
-    for track_id, features in rows:
-        similarity = acoustic_similarity(features, profile)
-        if similarity >= MIN_RECOMMENDATION_SIMILARITY:
-            scored.append((similarity, track_id))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    ids = [track_id for _similarity, track_id in scored[:window]]
-    if not ids:
-        return []
-    return db.query(Track).filter(Track.id.in_(ids)).order_by(Track.id).all()
-
-
 def _compute_recommendations(
     request: Request,
     current_user: User,
@@ -1831,74 +1804,14 @@ def _compute_recommendations(
             for track in pool:
                 candidate_pool[track.id] = track
 
-        # Acoustic content is an independent candidate source.  Unlike the
-        # artist/genre pool it is intentionally not restricted to the user's
-        # known artists: a close signal in the audio vector is itself evidence
-        # of relevance.  Keep tracks from another user's private collection
-        # out of this global content pool; unowned catalog rows and the current
-        # user's own playlists remain eligible.
-        acoustic_candidate_ids: set[int] = set()
-        if acoustic_profile:
-            acoustic_keep = track_check(
-                make_relevance_check(
-                    trusted_artist_keys=set(),
-                    user_genres=set(genres),
-                    prefer_cyrillic=None,
-                    provenance_trusted=True,
-                )
-            )
-            # Приватная коллекция — это ЗАКРЫТЫЕ плейлисты других юзеров
-            # (включая их «Понравившиеся»). Раньше исключался любой трек из
-            # любого чужого плейлиста, в том числе публичного, и акустический
-            # путь оставался почти пустым. Трек, который есть и в публичном
-            # плейлисте, приватным не считается.
-            private_other_tracks = (
-                select(playlist_tracks.c.track_id)
-                .select_from(
-                    playlist_tracks.join(
-                        Playlist, Playlist.id == playlist_tracks.c.playlist_id
-                    )
-                )
-                .where(
-                    Playlist.owner_id != current_user.id,
-                    Playlist.is_public.is_not(True),
-                )
-            )
-            public_tracks = (
-                select(playlist_tracks.c.track_id)
-                .select_from(
-                    playlist_tracks.join(
-                        Playlist, Playlist.id == playlist_tracks.c.playlist_id
-                    )
-                )
-                .where(Playlist.is_public.is_(True))
-            )
-            acoustic_query = (
-                db.query(Track)
-                .filter(
-                    Track.acoustic_features.isnot(None),
-                    ~Track.id.in_(exclude_select),
-                    or_(
-                        ~Track.id.in_(private_other_tracks),
-                        Track.id.in_(public_tracks),
-                    ),
-                )
-            )
-            acoustic_pool = _acoustic_window(
-                db, acoustic_query, acoustic_profile, window=max(limit * 100, 500)
-            )
-            for track in acoustic_pool:
-                if (
-                    track.id in candidate_pool
-                    or _is_excluded_artist(track)
-                    or not acoustic_keep(track)
-                ):
-                    continue
-                candidate_pool[track.id] = track
-                acoustic_candidate_ids.add(track.id)
+        # Акустической ветки здесь больше нет — как и в волне (hybrid-v16):
+        # она пускала любого артиста общего каталога с близким вектором, а
+        # признаки есть только у закэшированного, то есть у прослушанного
+        # ДРУГИМИ юзерами. По телеметрии волны новые артисты этой ветки —
+        # good 0.9% / bad 88% против 6.4% / 56% у провайдерских.
 
         # Collaborative neighbours remain useful, but compete in the same
-        # ranking as acoustic and library candidates instead of consuming a
+        # ranking as library candidates instead of consuming a
         # preallocated exploration slice.
         got_ids = set(candidate_pool)
         seeds = (liked_track_ids + played_track_ids + playlisted_track_ids)[:80]
@@ -2019,11 +1932,7 @@ def _compute_recommendations(
             # акустический кандидат обходил keep_track, а вместе с ним и
             # проверку excluded_artists.
             and not _is_excluded_artist(track)
-            and (
-                not isinstance(track.id, int)
-                or keep_track(track)
-                or track.id in acoustic_candidate_ids
-            )
+            and (not isinstance(track.id, int) or keep_track(track))
         ]
         # Скор одного кандидата ~0.2мс, а нужен он и сортировке, и rerank —
         # считаем один раз.
