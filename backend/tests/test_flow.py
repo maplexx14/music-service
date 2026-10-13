@@ -3197,7 +3197,12 @@ def test_ready_portion_is_precomputed_and_served(client, db, monkeypatch):
     # Конверт атрибуции — от этого запроса, а не от предрасчёта.
     assert {t["recommendation_position"] for t in served} == set(range(len(served)))
     assert len({t["recommendation_id"] for t in served}) == 1
-    # Остаток пула — готовая порция под историю после выдачи.
+    # Остаток пула — готовая порция под историю после выдачи, и записан он до
+    # постановки в очередь: warmer не пересчитывает пул, которого хватает.
+    from app import flow_warmer
+    from tests.conftest import TestingSessionLocal
+
+    assert asyncio.run(flow_warmer._precompute(user.id, TestingSessionLocal)) == "current"
     leftover = get_cache(f"flow:ready:{user.id}")
     assert [t["external_id"] for t in leftover["items"]] == [
         t["external_id"] for t in ready["items"][5:]

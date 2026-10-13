@@ -94,3 +94,34 @@ def test_fresh_cluster_over_the_cap_goes_to_the_tail():
     ]
     chosen, _liked = _compose(pool, SlateRules(limit=6, fresh_cap=1))
     assert [item["id"] for item in chosen] == [0, 10, 11, 12, 1, 2]
+
+
+def _genre_item(i, genre):
+    return {"id": i, "artist": f"g{i}" if genre else f"o{i}", "novel": True,
+            "liked": False, "fresh": False, "probe": False, "genre": genre}
+
+
+def _compose_capped(pool, rules):
+    return compose_slate(
+        pool,
+        rules,
+        is_novel=lambda item: item["novel"],
+        is_liked=lambda item: False,
+        artist_of=lambda item: item["artist"],
+        capped=lambda item: item["genre"],
+    )
+
+
+def test_genre_cap_moves_extra_genre_hits_to_the_tail():
+    pool = [_genre_item(i, True) for i in range(4)] + [_genre_item(10 + i, False) for i in range(4)]
+    chosen, _liked = _compose_capped(pool, SlateRules(limit=6, discovery_target=3, capped_max=2))
+    ids = [item["id"] for item in chosen]
+    assert sum(1 for item in chosen if item["genre"]) == 2
+    assert ids[:2] == [0, 1]
+
+
+def test_genre_only_user_still_gets_a_full_portion():
+    """Кроме жанра предложить нечего — потолок мягкий, порция полная."""
+    pool = [_genre_item(i, True) for i in range(8)]
+    chosen, _liked = _compose_capped(pool, SlateRules(limit=6, discovery_target=3, capped_max=2))
+    assert len(chosen) == 6

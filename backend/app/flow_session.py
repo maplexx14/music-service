@@ -168,6 +168,24 @@ def _greedy_gap(ranked: list, artist_of, limit: int, previous: Iterable[str], mi
     return picked
 
 
+def _apply_cap(chosen: list, rest: list, capped, cap: Optional[int]) -> list:
+    """Не больше ``cap`` кандидатов ``capped`` в выдаче: лишние заменяются
+    следующими по порядку из ``rest``; заменить нечем — остаются (мягко)."""
+    if capped is None or cap is None:
+        return chosen
+    spare = [item for item in rest if not capped(item)]
+    result = []
+    used = 0
+    for item in chosen:
+        if capped(item):
+            if used >= cap and spare:
+                result.append(spare.pop(0))
+                continue
+            used += 1
+        result.append(item)
+    return result
+
+
 def select(
     pool: list,
     *,
@@ -181,6 +199,8 @@ def select(
     neighbours: Optional[set] = None,
     previous_artists: Iterable[str] = (),
     rng: Optional[random.Random] = None,
+    capped: Optional[Callable[[dict], bool]] = None,
+    capped_max: Optional[int] = None,
 ) -> tuple[list, dict]:
     """Порция из пула для варианта ``arm``: (items, {identity: доп. признаки}).
 
@@ -190,7 +210,7 @@ def select(
     """
     extra: dict = {}
     if arm != "session":
-        chosen = list(pool[:limit])
+        chosen = _apply_cap(list(pool[:limit]), list(pool[limit:]), capped, capped_max)
         for item in chosen:
             extra[identity_of(item)] = {"arm": arm}
         return chosen, extra
@@ -238,6 +258,9 @@ def select(
             previous_artists,
             MIN_ARTIST_GAP,
         )
+    chosen = _apply_cap(
+        chosen, [item for item in ranked if item not in chosen], capped, capped_max
+    )
     # Разведка: место отдаётся случайному кандидату из невыбранной части пула.
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]
