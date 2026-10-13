@@ -194,7 +194,7 @@ function Playlists() {
         <div className="import-playlist-form">
           <p className="import-hint">
             Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music
-            либо Spotify. Треки Yandex и Spotify подбираются из YouTube Music. Из профиля
+            либо Spotify. Из профиля
             Yandex Music переносятся открытые плейлисты и «Мне нравится» — каждый отдельным
             плейлистом.
           </p>

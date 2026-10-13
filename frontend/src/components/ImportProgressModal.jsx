@@ -7,7 +7,7 @@ import './ImportProgressModal.css'
 
 const STEPS = [
   { stage: 'fetching', label: 'Читаем ссылку' },
-  { stage: 'matching', label: 'Подбираем треки в YouTube Music' },
+  { stage: 'matching', label: 'Подбираем треки' },
   { stage: 'saving', label: 'Сохраняем плейлист' },
 ]
 const STAGE_ORDER = ['fetching', 'matching', 'saving', 'done']
@@ -162,7 +162,7 @@ function ImportProgressModal() {
               <div className="import-progress-result-text">
                 {playlistIds.length > 1 && `Плейлистов: ${playlistIds.length}. `}
                 Треков в плейлисте: {state.imported ?? 0}
-                {state.skipped > 0 && `. Не нашлись в YouTube Music: ${state.skipped}`}
+                {state.skipped > 0 && `. Не нашлось: ${state.skipped}`}
               </div>
             </div>
           </div>
