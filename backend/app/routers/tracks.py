@@ -183,6 +183,22 @@ def _cover_cache_key(url: str) -> str:
     return "cover-proxy:" + hashlib.sha256(url.encode("utf-8")).hexdigest()
 
 
+# Полноэкранный плеер просит у i.ytimg.com maxresdefault (utils/media.js), а
+# есть он не у всех роликов: на 404 прокси отвечал 502, и вместо обложки
+# стояла заглушка (58 таких ответов за трое суток на проде, 2026-10-13).
+# Кадр поменьше есть всегда — hqdefault.
+_YTIMG_FALLBACKS = ("sddefault.jpg", "hqdefault.jpg")
+
+
+def _ytimg_fallbacks(url: str) -> List[str]:
+    if urllib.parse.urlsplit(url).netloc.lower() != "i.ytimg.com" or not url.endswith(
+        "/maxresdefault.jpg"
+    ):
+        return []
+    base = url[: -len("maxresdefault.jpg")]
+    return [base + name for name in _YTIMG_FALLBACKS]
+
+
 def _is_allowed_cover_url(url: str) -> bool:
     try:
         parts = urllib.parse.urlsplit(url)
@@ -254,6 +270,10 @@ async def _fetch_cover_to_cache(url: str, cache_key: str) -> Response:
     try:
         client = await _get_cover_http()
         resp = await client.get(url)
+        for fallback in _ytimg_fallbacks(url) if resp.status_code == 404 else ():
+            resp = await client.get(fallback)
+            if resp.status_code != 404:
+                break
         resp.raise_for_status()
         body = resp.content
         if len(body) > _COVER_PROXY_MAX_BYTES:

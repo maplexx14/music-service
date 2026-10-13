@@ -2,6 +2,7 @@
 напрямую с CDN провайдера (прямой выход к ним с браузера/контейнера мигает).
 Проверяем allowlist хостов, кэш (позитивный/негативный) и проходной fetch."""
 
+import uuid
 from unittest.mock import patch
 
 import httpx
@@ -83,3 +84,40 @@ def test_oversized_cover_rejected(client):
     ):
         resp = client.get("/api/tracks/cover-proxy", params={"url": url})
     assert resp.status_code == 502
+
+
+def test_ytimg_maxres_404_falls_back_to_smaller_frame(client):
+    """maxresdefault есть не у всех роликов: на 404 берём кадр поменьше, а не
+    отвечаем 502 (полноэкранный плеер показывал бы заглушку)."""
+    # Уникальный id: Redis между прогонами не чистится, а ответ кэшируется.
+    vid = uuid.uuid4().hex[:11]
+    url = f"https://i.ytimg.com/vi/{vid}/maxresdefault.jpg"
+    asked = []
+
+    async def fake_get(self, target, *args, **kwargs):
+        asked.append(target)
+        req = httpx.Request("GET", target)
+        if target.endswith("/hqdefault.jpg"):
+            return httpx.Response(
+                200, content=b"\xff\xd8hq", headers={"content-type": "image/jpeg"}, request=req
+            )
+        return httpx.Response(404, request=req)
+
+    with patch.object(httpx.AsyncClient, "get", fake_get):
+        resp = client.get("/api/tracks/cover-proxy", params={"url": url})
+    assert resp.status_code == 200
+    assert resp.content == b"\xff\xd8hq"
+    assert asked == [
+        url,
+        f"https://i.ytimg.com/vi/{vid}/sddefault.jpg",
+        f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+    ]
+
+
+def test_404_without_fallback_stays_502(client):
+    url = f"https://i1.sndcdn.com/artworks-{uuid.uuid4().hex}-t500x500.jpg"
+    req = httpx.Request("GET", url)
+    with patch.object(httpx.AsyncClient, "get", return_value=httpx.Response(404, request=req)) as mocked:
+        resp = client.get("/api/tracks/cover-proxy", params={"url": url})
+    assert resp.status_code == 502
+    assert mocked.call_count == 1
