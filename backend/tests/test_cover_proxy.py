@@ -109,7 +109,6 @@ def test_ytimg_maxres_404_falls_back_to_smaller_frame(client):
     assert resp.content == b"\xff\xd8hq"
     assert asked == [
         url,
-        f"https://i.ytimg.com/vi/{vid}/sddefault.jpg",
         f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
     ]
 

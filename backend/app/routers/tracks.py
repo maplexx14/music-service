@@ -186,8 +186,10 @@ def _cover_cache_key(url: str) -> str:
 # Полноэкранный плеер просит у i.ytimg.com maxresdefault (utils/media.js), а
 # есть он не у всех роликов: на 404 прокси отвечал 502, и вместо обложки
 # стояла заглушка (58 таких ответов за трое суток на проде, 2026-10-13).
-# Кадр поменьше есть всегда — hqdefault.
-_YTIMG_FALLBACKS = ("sddefault.jpg", "hqdefault.jpg")
+# Кадр поменьше есть всегда — hqdefault. sddefault мимо: у роликов без
+# maxres его обычно тоже нет, а 404 от ytimg идёт 0.5–1.5 с — цепочка
+# через него стоила первой загрузке 2–4 с.
+_YTIMG_FALLBACKS = ("hqdefault.jpg",)
 
 
 def _ytimg_fallbacks(url: str) -> List[str]:
