@@ -17,6 +17,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -29,7 +30,7 @@ from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app.artist_utils import split_title_artist
-from app.cache import get_cache_async, set_cache_async
+from app.cache import get_cache_async, redis_client, set_cache, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
@@ -74,6 +75,9 @@ _MATCH_MISS_TTL = 24 * 3600
 # одним запросом, окно опрашивает этот ключ параллельно.
 _PROGRESS_TTL = 3600
 _PROGRESS_EVERY = 0.5  # не чаще раза в полсекунды — Redis на каждый трек не дёргаем
+# Импорт, не обновлявший прогресс дольше этого, считаем оборванным: живой пишет
+# хотя бы раз на трек, а рестарт бэкенда убивает импорт молча, без stage=error.
+_STALL_AFTER = 300
 _IMPORT_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
 # Директория для хранения cookies файлов (для обхода CAPTCHA на Yandex Music)
@@ -742,25 +746,35 @@ async def check_cookies(
 class _Progress:
     """Прогресс одного импорта в Redis: {stage, total, done, collection, …}.
 
-    stage: fetching (читаем источник) → matching (подбираем треки) → saving →
-    done | error. Без import_id — пустышка: старые клиенты работают как раньше.
+    stage: fetching (читаем источник) → matching (подбираем треки) → saving
+    (saved из save_total записано в БД) → done | error. Без import_id —
+    пустышка: старые клиенты работают как раньше.
+
+    Id импортов юзера лежат ещё и в множестве import:active:{user_id} — по нему
+    фронт после перезагрузки страницы находит идущие импорты (GET /active).
     """
 
-    def __init__(self, user_id: int, import_id: Optional[str]):
-        self.key = (
-            f"import:progress:{user_id}:{import_id}"
-            if import_id and _IMPORT_ID_RE.match(import_id)
-            else None
-        )
+    def __init__(self, user_id: int, import_id: Optional[str], url: Optional[str] = None):
+        valid = bool(import_id and _IMPORT_ID_RE.match(import_id))
+        self.key = f"import:progress:{user_id}:{import_id}" if valid else None
+        self.index_key = _active_key(user_id) if valid else None
+        self.import_id = import_id if valid else None
+        now = time.time()
         self.state = {
             "stage": "fetching",
+            "url": url,
             "total": 0,
             "done": 0,
+            "saved": 0,
+            "save_total": 0,
             "collection": None,
             "collections_done": 0,
             "collections_total": 0,
+            "started_at": now,
+            "updated_at": now,
         }
         self._written = 0.0
+        self._indexed = False
 
     async def update(self, **fields) -> None:
         self.state.update(fields)
@@ -772,11 +786,70 @@ class _Progress:
         if time.monotonic() - self._written >= _PROGRESS_EVERY:
             await self._write()
 
+    def saved_step(self) -> None:
+        """Ещё один трек записан в БД. Зовётся из треда _save_playlist."""
+        self.state["saved"] += 1
+        if time.monotonic() - self._written >= _PROGRESS_EVERY:
+            self._write_sync()
+
     async def _write(self) -> None:
+        if self.key:
+            await asyncio.to_thread(self._write_sync)
+
+    def _write_sync(self) -> None:
         if not self.key:
             return
         self._written = time.monotonic()
-        await set_cache_async(self.key, self.state, expire=_PROGRESS_TTL)
+        self.state["updated_at"] = time.time()
+        set_cache(self.key, self.state, expire=_PROGRESS_TTL)
+        if not self._indexed:
+            try:
+                redis_client.sadd(self.index_key, self.import_id)
+                redis_client.expire(self.index_key, _PROGRESS_TTL)
+                self._indexed = True
+            except Exception:  # noqa: BLE001 — без индекса окно всё равно работает
+                pass
+
+
+def _active_key(user_id: int) -> str:
+    return f"import:active:{user_id}"
+
+
+def _with_stalled(state: dict) -> dict:
+    """Импорт, давно не писавший прогресс, — оборван (рестарт бэкенда)."""
+    updated = state.get("updated_at")
+    stalled = (
+        state.get("stage") not in ("done", "error")
+        and updated is not None
+        and time.time() - updated > _STALL_AFTER
+    )
+    return {**state, "stalled": stalled}
+
+
+def _user_imports_sync(user_id: int) -> List[dict]:
+    """Все импорты юзера за последний час (идущие и законченные), старые первыми."""
+    index_key = _active_key(user_id)
+    try:
+        ids = sorted(redis_client.smembers(index_key))
+        values = redis_client.mget([f"import:progress:{user_id}:{i}" for i in ids]) if ids else []
+    except Exception:  # noqa: BLE001
+        return []
+    out, gone = [], []
+    for import_id, raw in zip(ids, values):
+        if not raw:
+            gone.append(import_id)  # ключ прогресса истёк — чистим индекс
+            continue
+        try:
+            out.append({"id": import_id, **_with_stalled(json.loads(raw))})
+        except ValueError:
+            continue
+    if gone:
+        try:
+            redis_client.srem(index_key, *gone)
+        except Exception:  # noqa: BLE001
+            pass
+    out.sort(key=lambda s: s.get("started_at") or 0)
+    return out
 
 
 @router.get("/progress/{import_id}")
@@ -787,7 +860,13 @@ async def import_progress(import_id: str, current_user=Depends(get_current_activ
     state = await get_cache_async(f"import:progress:{current_user.id}:{import_id}")
     if state is None:
         raise HTTPException(status_code=404, detail="Импорт не найден")
-    return state
+    return _with_stalled(state)
+
+
+@router.get("/active")
+async def active_imports(current_user=Depends(get_current_active_user)):
+    """Импорты юзера за последний час — чтобы фронт показал их после перезагрузки."""
+    return await asyncio.to_thread(_user_imports_sync, current_user.id)
 
 
 async def _yandex_profile(url: str):
@@ -936,6 +1015,7 @@ def _save_playlist(
     description: str,
     cover: Optional[str],
     imports: List[ExternalTrackImport],
+    on_saved: Optional[Callable[[], None]] = None,
 ) -> Tuple[Playlist, int]:
     """Материализует треки и собирает из них плейлист. → (плейлист, число треков).
 
@@ -957,6 +1037,8 @@ def _save_playlist(
             external_id=imp.external_id,
             track_id=track.id,
         )
+        if on_saved is not None:
+            on_saved()
         if track.id in seen:
             continue  # дубли внутри коллекции (напр. матч в один и тот же трек)
         seen.add(track.id)
@@ -1032,7 +1114,7 @@ async def _import_yandex_profile(
             continue
 
         is_likes = coll.kind == "likes"
-        await progress.update(stage="saving")
+        await progress.update(stage="saving", saved=0, save_total=len(imports))
         playlist, count = await asyncio.to_thread(
             _save_playlist,
             db,
@@ -1041,6 +1123,7 @@ async def _import_yandex_profile(
             f"Импортировано из {source_label}" + (" (избранное)" if is_likes else ""),
             cover or coll.cover_url,
             imports,
+            progress.saved_step,
         )
         created.append(playlist)
         imported += count
@@ -1052,7 +1135,13 @@ async def _import_yandex_profile(
         )
 
     invalidate_recommendation_cache(user.id)
-    await progress.update(stage="done", collections_done=len(collections))
+    await progress.update(
+        stage="done",
+        collections_done=len(collections),
+        imported=imported,
+        skipped=skipped,
+        playlist_ids=[p.id for p in created],
+    )
     playlists = [PlaylistResponse.model_validate(p) for p in created]
     return ImportResult(
         playlist=playlists[0],
@@ -1075,7 +1164,20 @@ async def import_collection(
 
     Профиль Yandex Music — несколько плейлистов разом (см. _import_yandex_profile).
     """
-    progress = _Progress(current_user.id, payload.import_id)
+    url = payload.url.strip()
+    # Повторный клик по той же ссылке, пока первый импорт идёт, плодил копии
+    # плейлиста (у юзера с плейлистом на 4 тыс. треков — пять одинаковых).
+    for running in await asyncio.to_thread(_user_imports_sync, current_user.id):
+        if (
+            running.get("url") == url
+            and running.get("stage") not in ("done", "error")
+            and not running.get("stalled")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Эта ссылка уже импортируется — дождитесь окончания",
+            )
+    progress = _Progress(current_user.id, payload.import_id, url)
     await progress.update()
     try:
         return await _import(payload, request, current_user, db, progress)
@@ -1122,7 +1224,12 @@ async def _import(
             detail="Не удалось сделать играбельным ни один трек из коллекции",
         )
 
-    await progress.update(stage="saving", total=progress.state["total"] or len(imports))
+    await progress.update(
+        stage="saving",
+        total=progress.state["total"] or len(imports),
+        saved=0,
+        save_total=len(imports),
+    )
     new_playlist, imported = await asyncio.to_thread(
         _save_playlist,
         db,
@@ -1132,9 +1239,16 @@ async def _import(
         + (" (избранное)" if kind == "likes" else ""),
         cover,
         imports,
+        progress.saved_step,
     )
     invalidate_recommendation_cache(current_user.id)
-    await progress.update(stage="done", done=progress.state["total"])
+    await progress.update(
+        stage="done",
+        done=progress.state["total"],
+        imported=imported,
+        skipped=skipped,
+        playlist_ids=[new_playlist.id],
+    )
     playlist = PlaylistResponse.model_validate(new_playlist)
 
     return ImportResult(

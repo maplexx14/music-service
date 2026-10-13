@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Plus, Download, Trash2, Upload } from 'lucide-react'
 import api from '../services/api'
 import {
@@ -15,14 +15,13 @@ import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
 } from '../components/ImportCollectionPicker'
-import ImportProgressModal, { newImportId } from '../components/ImportProgressModal'
+import { useImportStore } from '../store/importStore'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Playlists.css'
 
 function Playlists() {
-  const navigate = useNavigate()
   // Список из прошлого захода рисуется сразу, свежий приезжает фоном: вкладка
   // «Медиатека» открывается без спиннера.
   const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
@@ -40,8 +39,8 @@ function Playlists() {
   const [importing, setImporting] = useState(false)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
-  // Окно прогресса: { id, title } идущего импорта или null.
-  const [importProgress, setImportProgress] = useState(null)
+  // Законченный импорт добавил плейлисты — перечитываем медиатеку.
+  const importsCompleted = useImportStore((s) => s.completed)
 
 
   // Медиатека растёт без потолка, а обложка у каждого плейлиста своя — рисуем
@@ -53,7 +52,7 @@ function Playlists() {
 
   useEffect(() => {
     fetchPlaylists()
-  }, [])
+  }, [importsCompleted])
 
   // Создание и удаление правят список на месте — кэш следует за ним, иначе
   // возврат на вкладку на миг показал бы прошлую версию.
@@ -122,33 +121,15 @@ function Playlists() {
   const handleImport = async () => {
     if (!importUrl.trim() || importing) return
     setImporting(true)
-    try {
-      const body = { url: importUrl.trim() }
-      const importId = newImportId()
-      body.import_id = importId
-      setImportProgress({ id: importId, title: preview?.title })
-      if (isProfilePreview) body.collections = [...selectedCollections]
-      // Без таймаута: большой плейлист (сотни треков) импортируется дольше
-      // глобальных 60 с axios — браузер рвал запрос, хотя сервер доделывал
-      // импорт. Ход виден в окне прогресса, ограничивает только nginx (1 ч).
-      const { data } = await api.post('/import', body, { timeout: 0 })
-      const created = data.playlists?.length || (data.playlist ? 1 : 0)
-      const parts = [`Импортировано треков: ${data.imported}`]
-      if (created > 1) parts.push(`плейлистов: ${created}`)
-      if (data.matched) parts.push(`подобрано: ${data.matched}`)
-      if (data.skipped) parts.push(`пропущено: ${data.skipped}`)
-      toast.success(parts.join(', '))
-      resetImport()
-      await fetchPlaylists()
-      // Профиль даёт несколько плейлистов — остаёмся в медиатеке.
-      if (created === 1 && data.playlist?.id) navigate(`/playlists/${data.playlist.id}`)
-    } catch (error) {
-      const detail = error.response?.data?.detail || 'Не удалось импортировать'
-      toast.error(detail)
-    } finally {
-      setImporting(false)
-      setImportProgress(null)
-    }
+    // Ход и итог — в окне импорта (ImportTracker): оно переживает уход со
+    // страницы, а «Открыть плейлист» в нём ведёт к результату.
+    const { accepted } = await useImportStore.getState().start({
+      url: importUrl.trim(),
+      collections: isProfilePreview ? [...selectedCollections] : undefined,
+      title: preview?.title,
+    })
+    if (accepted) resetImport()
+    setImporting(false)
   }
 
   const handleDeletePlaylist = async (e, playlist) => {
@@ -183,13 +164,6 @@ function Playlists() {
 
   return (
     <div className="page-container">
-      {importProgress && (
-        <ImportProgressModal
-          importId={importProgress.id}
-          title={importProgress.title}
-          onClose={() => setImportProgress(null)}
-        />
-      )}
       <div className="playlists-header">
         <h1>Медиатека</h1>
         <div className="playlists-header-actions">

@@ -10,7 +10,7 @@ import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
 } from '../components/ImportCollectionPicker'
-import ImportProgressModal, { newImportId } from '../components/ImportProgressModal'
+import { useImportStore } from '../store/importStore'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import './PreferencesOnboarding.css'
@@ -54,8 +54,6 @@ function PreferencesOnboarding() {
   const [imported, setImported] = useState(0)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
-  // Окно прогресса: { id, title } идущего импорта или null.
-  const [importProgress, setImportProgress] = useState(null)
   const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
 
   // Вкус, выведенный из прослушиваний: у пришедшего по инвайту юзера история
@@ -143,30 +141,18 @@ function PreferencesOnboarding() {
     const url = importUrl.trim()
     if (!url || importing) return
     setImporting(true)
-    try {
-      const body = { url }
-      const importId = newImportId()
-      body.import_id = importId
-      setImportProgress({ id: importId, title: preview?.title })
-      if (isProfilePreview) body.collections = [...selectedCollections]
-      // Без таймаута: большой плейлист (сотни треков) импортируется дольше
-      // глобальных 60 с axios — браузер рвал запрос, хотя сервер доделывал
-      // импорт. Ход виден в окне прогресса, ограничивает только nginx (1 ч).
-      const { data } = await api.post('/import', body, { timeout: 0 })
-      const parts = [`Импортировано треков: ${data.imported}`]
-      if (data.playlists?.length > 1) parts.push(`плейлистов: ${data.playlists.length}`)
-      if (data.matched) parts.push(`подобрано: ${data.matched}`)
-      if (data.skipped) parts.push(`пропущено: ${data.skipped}`)
-      toast.success(parts.join(', '))
-      setImported((count) => count + (data.imported || 0))
+    // Ход и итог — в окне импорта (ImportTracker), оно же сообщает об ошибке.
+    const { accepted, data } = await useImportStore.getState().start({
+      url,
+      collections: isProfilePreview ? [...selectedCollections] : undefined,
+      title: preview?.title,
+    })
+    if (data) setImported((count) => count + (data.imported || 0))
+    if (accepted) {
       setImportUrl('')
       setPreview(null)
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Не удалось импортировать')
-    } finally {
-      setImporting(false)
-      setImportProgress(null)
     }
+    setImporting(false)
   }
 
   const nextLabel = () => {
@@ -182,13 +168,6 @@ function PreferencesOnboarding() {
 
   return (
     <div className="onboarding-container">
-      {importProgress && (
-        <ImportProgressModal
-          importId={importProgress.id}
-          title={importProgress.title}
-          onClose={() => setImportProgress(null)}
-        />
-      )}
       <div className={`onboarding-card ${step < 2 ? 'wide' : ''}`}>
         <div className="onboarding-steps" aria-label={`Шаг ${step + 1} из ${STEPS.length}`}>
           {STEPS.map((_, index) => (

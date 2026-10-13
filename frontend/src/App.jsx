@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
 import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
+import ImportTracker from './components/ImportTracker'
 import Spinner from './components/Spinner'
 import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
@@ -197,6 +198,7 @@ function App() {
         />
       </Routes>
       <RouteCommitSignal />
+      <ImportTracker enabled={isAuthenticated} />
     </HistoryRouter>
   )
 }

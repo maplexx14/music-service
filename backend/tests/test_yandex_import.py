@@ -854,3 +854,49 @@ def test_import_progress_is_per_user(client, db):
     assert other.status_code == 404
     bad = client.get("/api/import/progress/x", headers=auth_headers(client))
     assert bad.status_code == 422
+
+
+def test_import_progress_reports_save_and_result(client, db, monkeypatch):
+    create_user(db)
+    headers = auth_headers(client)
+    _no_token(monkeypatch)
+    _profile_api(monkeypatch)
+    _ytmusic_echo(monkeypatch)
+    url = "https://music.yandex.ru/users/someone/playlists"
+
+    resp = client.post(
+        "/api/import", json={"url": url, "import_id": "test-progress-1"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [p["id"] for p in resp.json()["playlists"]]
+
+    state = client.get("/api/import/progress/test-progress-1", headers=headers).json()
+    assert state["stage"] == "done"
+    assert state["url"] == url
+    assert state["saved"] == state["save_total"] > 0
+    assert state["imported"] == 4
+    assert state["playlist_ids"] == ids
+    assert state["stalled"] is False
+
+    active = client.get("/api/import/active", headers=headers).json()
+    assert "test-progress-1" in [a["id"] for a in active]
+
+
+def test_import_rejects_same_url_while_running(client, db, monkeypatch):
+    user = create_user(db)
+    headers = auth_headers(client)
+    url = "https://music.yandex.ru/users/someone/playlists"
+    progress = importer._Progress(user.id, "test-running-1", url)
+    progress.state["stage"] = "matching"
+    progress._write_sync()
+
+    resp = client.post(
+        "/api/import", json={"url": url, "import_id": "test-running-2"}, headers=headers
+    )
+    assert resp.status_code == 409
+
+    # Оборванный (давно молчащий) импорт повтор не блокирует.
+    progress.state["updated_at"] = 0
+    importer.set_cache(progress.key, progress.state)
+    state = client.get("/api/import/progress/test-running-1", headers=headers).json()
+    assert state["stalled"] is True

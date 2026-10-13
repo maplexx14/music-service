@@ -99,17 +99,266 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .import-progress-bar.indeterminate .import-progress-fill {
+  .import-progress-bar.indeterminate .import-progress-fill,
+  .import-pill-bar.indeterminate .import-progress-fill {
     width: 100%;
     opacity: 0.5;
     animation: none;
   }
 }
 
-.import-progress-percent {
-  align-self: flex-end;
+.import-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-tertiary);
+}
+
+/* Шаги импорта: пройденные — с галочкой, текущий — акцентом, впереди — тускло. */
+.import-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.import-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-tertiary);
+}
+
+.import-progress-step-mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--surface-4);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.import-progress-step.active {
+  color: var(--text-primary);
+}
+
+.import-progress-step.active .import-progress-step-mark {
+  border-color: var(--brand-accent);
+  color: var(--brand-accent);
+}
+
+.import-progress-step.done {
+  color: var(--text-secondary);
+}
+
+.import-progress-step.done .import-progress-step-mark {
+  border-color: transparent;
+  background-color: var(--status-success-soft);
+  color: var(--status-success);
+}
+
+.import-progress-step-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-progress-step-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.import-progress-result {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+}
+
+.import-progress-result > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.import-progress-result.success {
+  background-color: var(--status-success-soft);
+}
+
+.import-progress-result.success > svg {
+  color: var(--status-success);
+}
+
+.import-progress-result.warning {
+  background-color: var(--status-warning-soft);
+}
+
+.import-progress-result.warning > svg {
+  color: var(--status-warning);
+}
+
+.import-progress-result.error {
+  background-color: var(--status-danger-soft);
+}
+
+.import-progress-result.error > svg {
+  color: var(--status-danger);
+}
+
+.import-progress-result-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-progress-result-text {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.import-progress-action {
+  align-self: stretch;
+  margin-top: 4px;
+}
+
+/* Плашка статуса, пока окно закрыто. Десктоп — справа над плеером (по центру
+   там тосты), телефон — над мини-плеером. */
+.import-pill-container {
+  position: fixed;
+  right: 16px;
+  bottom: 104px;
+  z-index: 1400;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.import-pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 300px;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-dialog);
+  pointer-events: auto;
+}
+
+.import-pill-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.import-pill-icon {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}
+
+.import-pill.success .import-pill-icon {
+  color: var(--status-success);
+}
+
+.import-pill.error .import-pill-icon {
+  color: var(--status-danger);
+}
+
+.import-pill-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.import-pill-title,
+.import-pill-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-pill-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-pill-status {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.import-pill-close {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-right: 2px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.import-pill-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  overflow: hidden;
+  background-color: var(--surface-4);
+}
+
+.import-pill-bar.indeterminate .import-progress-fill {
+  width: 35%;
+  animation: import-progress-slide 1.2s ease-in-out infinite;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .import-pill-main:hover .import-pill-title {
+    text-decoration: underline;
+  }
+
+  .import-pill-close:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@media (max-width: 768px) {
+  .import-pill-container {
+    left: 12px;
+    right: 12px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 160px);
+  }
+
+  .import-pill {
+    width: 100%;
+  }
 }
 
 .import-progress-error {

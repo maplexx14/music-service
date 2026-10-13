@@ -1,76 +1,103 @@
-import { useEffect, useState } from 'react'
+import { useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, X } from 'lucide-react'
-import api from '../services/api'
+import { useNavigate } from 'react-router-dom'
+import { AlertTriangle, Check, Download, X } from 'lucide-react'
+import { useImportStore, importIsFinal } from '../store/importStore'
 import './ImportProgressModal.css'
 
-const POLL_MS = 1000
+const STEPS = [
+  { stage: 'fetching', label: 'Читаем ссылку' },
+  { stage: 'matching', label: 'Подбираем треки в YouTube Music' },
+  { stage: 'saving', label: 'Сохраняем плейлист' },
+]
+const STAGE_ORDER = ['fetching', 'matching', 'saving', 'done']
 
-const STAGE_LABELS = {
-  fetching: 'Читаем коллекцию…',
-  matching: 'Подбираем треки',
-  saving: 'Сохраняем плейлист…',
-  done: 'Готово',
-  error: 'Ошибка импорта',
+export const formatDuration = (seconds) => {
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 60) return `${s} с`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} мин ${String(s % 60).padStart(2, '0')} с`
+  return `${Math.floor(m / 60)} ч ${m % 60} мин`
 }
 
-/** Id импорта, под которым бэкенд пишет прогресс (GET /import/progress/{id}). */
-export function newImportId() {
-  if (window.crypto?.randomUUID) return window.crypto.randomUUID()
-  return `imp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+/** Счётчик текущего шага: [сделано, всего] или null, если шаг без счётчика. */
+export function stageCounter(state) {
+  if (state?.stage === 'matching' && state.total) return [Math.min(state.done || 0, state.total), state.total]
+  if (state?.stage === 'saving' && state.save_total) {
+    return [Math.min(state.saved || 0, state.save_total), state.save_total]
+  }
+  return null
 }
 
 /**
- * Окно прогресса импорта. Импорт идёт одним POST /import, а окно параллельно
- * опрашивает прогресс по importId. Закрыть окно можно — импорт продолжится,
- * итог придёт тостом, как и без окна.
+ * Оценка оставшегося времени по скорости текущего шага. Отсчёт — с момента,
+ * когда окно увидело шаг: у бэкенда время начала шага не хранится.
  */
-function ImportProgressModal({ importId, title, onClose }) {
-  const [state, setState] = useState(null)
+function useEta(id, state) {
+  const mark = useRef(null)
+  const counter = stageCounter(state)
+  const now = Date.now() / 1000
+  if (!counter) {
+    mark.current = null
+    return null
+  }
+  const [value, total] = counter
+  if (!mark.current || mark.current.id !== id || mark.current.stage !== state.stage) {
+    mark.current = { id, stage: state.stage, t: now, value }
+    return null
+  }
+  const elapsed = now - mark.current.t
+  const progressed = value - mark.current.value
+  if (elapsed < 3 || progressed <= 0) return null
+  return ((total - value) * elapsed) / progressed
+}
 
-  useEffect(() => {
-    if (!importId) return undefined
-    let active = true
-    let timer = null
+/**
+ * Окно статуса импорта. Импорт ведёт importStore — окно только показывает
+ * его: закрыть окно можно, импорт продолжится, статус останется плашкой
+ * внизу экрана (ImportStatusPill).
+ */
+function ImportProgressModal() {
+  const navigate = useNavigate()
+  const openId = useImportStore((s) => s.openId)
+  const entry = useImportStore((s) => (s.openId ? s.imports[s.openId] : null))
+  const close = useImportStore((s) => s.close)
+  const dismiss = useImportStore((s) => s.dismiss)
+  const eta = useEta(openId, entry?.state)
 
-    const poll = async () => {
-      try {
-        // skipErrorToast: первый опрос обгоняет POST /import и ловит 404 —
-        // без флага перехватчик показывал тост «Импорт не найден».
-        const { data } = await api.get(`/import/progress/${importId}`, {
-          skipErrorToast: true,
-        })
-        if (active) setState(data)
-      } catch {
-        // 404 до первой записи прогресса — просто ждём следующего опроса.
-      }
-      if (active) timer = setTimeout(poll, POLL_MS)
-    }
-    poll()
+  if (!entry) return null
 
-    return () => {
-      active = false
-      clearTimeout(timer)
-    }
-  }, [importId])
+  const { state, title, lost } = entry
+  const stage = state.stage || 'fetching'
+  const final = importIsFinal(state)
+  const counter = stageCounter(state)
+  const percent = counter ? Math.round((counter[0] / counter[1]) * 100) : 0
+  const stageIndex = STAGE_ORDER.indexOf(stage)
+  const elapsed = state.started_at ? Date.now() / 1000 - state.started_at : 0
+  const collectionsTotal = state.collections_total || 0
+  const playlistIds = state.playlist_ids || []
 
-  if (!importId) return null
-
-  const stage = state?.stage || 'fetching'
-  const total = state?.total || 0
-  const done = Math.min(state?.done || 0, total)
-  const percent = total ? Math.round((done / total) * 100) : 0
-  const indeterminate = !total || stage === 'fetching'
-  const collectionsTotal = state?.collections_total || 0
+  const hide = () => (final ? dismiss(entry.id) : close())
+  const openResult = () => {
+    dismiss(entry.id)
+    navigate(playlistIds.length === 1 ? `/playlists/${playlistIds[0]}` : '/playlists')
+  }
 
   return createPortal(
-    <div className="import-progress-overlay" role="dialog" aria-modal="true" aria-label="Импорт">
+    <div
+      className="import-progress-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Импорт"
+      onClick={(e) => e.target === e.currentTarget && hide()}
+    >
       <div className="import-progress-modal">
         <button
           type="button"
           className="import-progress-close"
-          onClick={onClose}
-          title="Скрыть — импорт продолжится"
+          onClick={hide}
+          aria-label={final ? 'Закрыть' : 'Скрыть — импорт продолжится'}
+          title={final ? 'Закрыть' : 'Скрыть — импорт продолжится'}
         >
           <X size={18} />
         </button>
@@ -80,35 +107,105 @@ function ImportProgressModal({ importId, title, onClose }) {
           <span>{title || 'Импорт'}</span>
         </div>
 
-        <div className="import-progress-stage">
-          {STAGE_LABELS[stage] || STAGE_LABELS.fetching}
-          {stage === 'matching' && total > 0 && ` · ${done} из ${total}`}
-        </div>
-
-        {state?.collection && (
+        {collectionsTotal > 1 && state.collection && (
           <div className="import-progress-collection">
-            {collectionsTotal > 1 &&
-              `${Math.min((state.collections_done || 0) + 1, collectionsTotal)}/${collectionsTotal} · `}
-            {state.collection}
+            Коллекция {Math.min((state.collections_done || 0) + 1, collectionsTotal)} из{' '}
+            {collectionsTotal} · {state.collection}
           </div>
         )}
 
-        <div className={`import-progress-bar ${indeterminate ? 'indeterminate' : ''}`}>
-          <div
-            className="import-progress-fill"
-            style={indeterminate ? undefined : { width: `${percent}%` }}
-          />
-        </div>
-        {!indeterminate && <div className="import-progress-percent">{percent}%</div>}
-
-        {stage === 'error' && state?.error && (
-          <div className="import-progress-error">{state.error}</div>
+        {stage !== 'done' && !state.stalled && stage !== 'error' && (
+          <ol className="import-progress-steps">
+            {STEPS.map((step, index) => {
+              const status = index < stageIndex ? 'done' : index === stageIndex ? 'active' : 'pending'
+              const showCounter = status === 'active' && counter
+              return (
+                <li key={step.stage} className={`import-progress-step ${status}`}>
+                  <span className="import-progress-step-mark" aria-hidden="true">
+                    {status === 'done' ? <Check size={12} strokeWidth={3} /> : index + 1}
+                  </span>
+                  <span className="import-progress-step-label">{step.label}</span>
+                  {showCounter && (
+                    <span className="import-progress-step-count">
+                      {counter[0]} из {counter[1]}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ol>
         )}
 
-        <p className="import-progress-hint">
-          Треки подбираются в YouTube Music — большой плейлист может занять пару минут.
-          Окно можно закрыть, импорт продолжится.
-        </p>
+        {!final && (
+          <>
+            <div className={`import-progress-bar ${counter ? '' : 'indeterminate'}`}>
+              <div
+                className="import-progress-fill"
+                style={counter ? { width: `${percent}%` } : undefined}
+              />
+            </div>
+            <div className="import-progress-meta">
+              <span>Прошло {formatDuration(elapsed)}</span>
+              <span>
+                {counter && `${percent}%`}
+                {eta != null && ` · осталось ~${formatDuration(eta)}`}
+              </span>
+            </div>
+          </>
+        )}
+
+        {stage === 'done' && (
+          <div className="import-progress-result success">
+            <Check size={18} />
+            <div>
+              <div className="import-progress-result-title">Импорт готов</div>
+              <div className="import-progress-result-text">
+                {playlistIds.length > 1 && `Плейлистов: ${playlistIds.length}. `}
+                Треков в плейлисте: {state.imported ?? 0}
+                {state.skipped > 0 && `. Не нашлись в YouTube Music: ${state.skipped}`}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {state.stalled && (
+          <div className="import-progress-result warning">
+            <AlertTriangle size={18} />
+            <div>
+              <div className="import-progress-result-title">Импорт прервался</div>
+              <div className="import-progress-result-text">
+                Сервер перезапускался, плейлист не создан. Запустите импорт ещё раз — уже
+                подобранные треки запомнены, второй раз пойдёт быстрее.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {stage === 'error' && !state.stalled && (
+          <div className="import-progress-result error">
+            <AlertTriangle size={18} />
+            <div>
+              <div className="import-progress-result-title">Ошибка импорта</div>
+              <div className="import-progress-result-text">{state.error || 'Не удалось импортировать'}</div>
+            </div>
+          </div>
+        )}
+
+        {stage === 'done' ? (
+          <button type="button" className="btn btn--primary import-progress-action" onClick={openResult}>
+            {playlistIds.length === 1 ? 'Открыть плейлист' : 'Открыть медиатеку'}
+          </button>
+        ) : final ? (
+          <button type="button" className="btn btn--secondary import-progress-action" onClick={hide}>
+            Закрыть
+          </button>
+        ) : (
+          <p className="import-progress-hint">
+            {lost && 'Связь со страницей прерывалась, но импорт идёт на сервере. '}
+            Не запускайте импорт заново: окно можно закрыть или уйти со страницы — статус
+            останется внизу экрана.
+          </p>
+        )}
       </div>
     </div>,
     document.body,
