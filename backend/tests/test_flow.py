@@ -1931,31 +1931,38 @@ def test_flow_keeps_import_only_library_out_of_global_top(client, db):
 
 
 def test_flow_searches_explicit_genres(client, db, monkeypatch):
-    """Выбранный жанр создаёт внешний пул, а не остаётся слабым фильтром."""
+    """Выбранный жанр создаёт внешний пул — хиты артистов жанра по Last.fm, а
+    не поиск по слову (тот приносил «POP IT», «Rock That Body», 2026-10-13)."""
     user = create_user(db, username="genre-user")
     user.preferred_genres = ["phonk"]
     db.commit()
 
-    queries = []
+    pools, searched = [], []
 
-    async def _genre_search(request, query):
-        queries.append(query)
+    async def _genre_pool(request, genre, part):
+        pools.append(genre)
         return [
-            _external(f"PhonkArtist{i}", f"phonk track {i}", f"phonk{i}")
+            _external(f"PhonkArtist{i}", f"night ride {i}", f"phonk{i}")
             for i in range(6)
         ]
 
-    monkeypatch.setattr("app.routers.flow._tag_pool", _genre_search)
+    async def _tag(request, query):
+        searched.append(query)
+        return []
+
+    monkeypatch.setattr("app.routers.flow._genre_hits_pool", _genre_pool)
+    monkeypatch.setattr("app.routers.flow._tag_pool", _tag)
 
     resp = client.get(
         "/api/recommendations/flow?limit=5",
         headers=auth_headers(client, username="genre-user"),
     )
     assert resp.status_code == 200, resp.text
-    assert any("phonk" in query for query in queries), queries
+    assert pools == ["phonk"], pools
+    assert not any("phonk" in query for query in searched), searched
     mix = resp.json()
     assert len(mix) == 5, mix
-    assert all("phonk" in track["title"].lower() for track in mix), mix
+    assert all(track["artist"].startswith("PhonkArtist") for track in mix), mix
 
 
 def test_tag_search_requires_the_searched_words_not_just_the_language(
@@ -1970,8 +1977,9 @@ def test_tag_search_requires_the_searched_words_not_just_the_language(
     так в поток попадали новые артисты, не имеющие к вкусу отношения.
     """
     user = create_user(db, username="tag-leak-user")
-    _liked(db, user, artist="Кровосток", title="Дно")
-    user.preferred_genres = ["phonk"]
+    now = datetime.now(timezone.utc)
+    # Слово-тег из названий (встречается в двух лайках), жанр не выбран.
+    _liked_at(db, user, [("Кровосток", "phonk дно", now), ("Кровосток", "phonk тело", now)])
     db.commit()
 
     captured = []
@@ -3654,3 +3662,66 @@ def test_title_tags_ignore_guest_and_producer_credits():
     assert not {"максим", "игоревич", "ланда", "someone"} & set(tags), tags
     assert {"night", "drive"} <= set(tags), tags
     assert strip_credits("Gift (Original Mix)") == "Gift (Original Mix)"
+
+
+def test_title_junk_filters():
+    """Сборники/перезаливки с именем артиста и треки с жанром в названии."""
+    from app.routers.flow import _title_names_genre, _title_repeats_artist
+
+    assert _title_repeats_artist(_external("Icona Pop, Charli XCX", "Icona Pop: I Love It", "a"))
+    assert _title_repeats_artist(_external("Eminem", "Eminem Greatest Hits", "b"))
+    assert _title_repeats_artist(_external("Linkin Park", "Linkin Park - Best of mix", "c"))
+    assert not _title_repeats_artist(_external("Queen", "Killer Queen", "d"))
+    assert not _title_repeats_artist(_external("Iron Maiden", "Iron Maiden", "e"))
+    assert not _title_repeats_artist(_external("Eminem", "Mockingbird", "f"))
+
+    assert _title_names_genre(_external("Gloomulus", "Prowler Theme but Breakcore", "g"), "breakcore")
+    assert _title_names_genre(_external("X", "Nu Metal Anthem", "h"), "nu metal")
+    assert not _title_names_genre(_external("Korn", "Freak on a Leash", "i"), "nu metal")
+    assert not _title_names_genre(_external("Korn", "Metal Health", "j"), "nu metal")
+
+
+def test_genre_artists_follow_lastfm_artist_tags(monkeypatch):
+    """Топ тега Last.fm сверяется с тегами самих артистов: жанровые — первыми,
+    неизвестные — следом, мимо-жанровые (Justin Bieber в «nu metal») — вон."""
+    from app import lastfm_genres
+
+    monkeypatch.setattr(
+        lastfm_genres, "tag_artists",
+        lambda tag, limit=30: ["Justin Bieber", "Unknown Band", "Skrillex", "Korn"],
+    )
+    monkeypatch.setattr(lastfm_genres, "_artist_tag_map", lambda names: {
+        "Justin Bieber": [("pop", 100), ("nu metal", 40)],
+        # Тот же широкий ключ electronic, но не breakcore.
+        "Skrillex": [("dubstep", 100), ("electronic", 90)],
+        "Korn": [("nu metal", 100), ("metal", 80)],
+        "Unknown Band": [],
+    })
+    assert flow_router._genre_artists_fetch("nu metal") == ["Korn", "Unknown Band"]
+    monkeypatch.setattr(lastfm_genres, "_artist_tag_map", lambda names: {
+        "Skrillex": [("dubstep", 100), ("electronic", 90)],
+        "Korn": [("breakcore", 100)],
+    })
+    assert flow_router._genre_artists_fetch("breakcore") == ["Korn", "Justin Bieber", "Unknown Band"]
+
+
+def test_genre_hits_pool_skips_titles_with_the_genre(monkeypatch):
+    from app import mainstream
+    from app.cache import clear_pattern
+
+    clear_pattern("flow:genre_hits:*")
+
+    async def _artists(genre):
+        return ["Korn"]
+
+    async def _hits(artists, timeout, **_kwargs):
+        return {"korn": {"listeners": 10**6, "top": ["Nu Metal Anthem", "Freak on a Leash"]}}
+
+    async def _resolve(request, artist, title):
+        return _external(artist, title, f"korn-{len(title)}")
+
+    monkeypatch.setattr(flow_router, "_genre_artists", _artists)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+    monkeypatch.setattr(flow_router, "_resolve_similar", _resolve)
+    pool = asyncio.run(flow_router._genre_hits_pool(None, "nu metal", 0))
+    assert [t.title for t in pool] == ["Freak on a Leash"]

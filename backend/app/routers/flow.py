@@ -63,7 +63,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from app import artist_probe, beets_genre, beets_similar, censorship, storage
+from app import artist_probe, beets_genre, beets_similar, censorship, lastfm_genres, storage
 from app.cache import delete_cache, get_cache_async, redis_client, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -199,6 +199,16 @@ _SIMILAR_HITS_CHECK = 12
 _SIMILAR_HITS_ARTISTS = 5
 _SIMILAR_HITS_PER_ARTIST = 2
 _SIMILAR_HITS_TTL = 6 * 60 * 60
+# Выбранный в настройках жанр (_genre_hits_pool): артисты жанра — топ тега
+# Last.fm, сверенный с тегами самих артистов, — и их хиты. Не поиск по слову:
+# 2026-10-13 поиск «rock»/«pop» за час принёс владельцу «POP IT», «Icona Pop»,
+# «Rock That Body» и перезаливки, 8 дизлайков подряд (откат f63fde2). Срез из
+# _GENRE_SLICE артистов на порцию, по кругу из _GENRE_PARTS срезов.
+_GENRE_ARTISTS = 24
+_GENRE_SLICE = 6
+_GENRE_PARTS = 4
+_GENRE_HITS_PER_ARTIST = 2
+_GENRE_TTL = 24 * 60 * 60
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -2244,6 +2254,114 @@ async def _similar_hits_pool_fetch(
     return pool
 
 
+def _genre_artists_fetch(genre: str) -> List[str]:
+    """Артисты жанра по Last.fm. БЛОКИРУЮЩАЯ.
+
+    Топ тега Last.fm народный и испорчен шуточными тегами, поэтому каждого
+    сверяем с его собственными главными тегами: жанр среди них — первыми,
+    Last.fm артиста не знает — следом, остальные — вон.
+    """
+    # Не глубже, чем _artist_tag_map успевает сверить (_VERIFY_BUDGET): хвост
+    # без тегов прошёл бы как «неизвестный» — так в breakcore попадал Skrillex.
+    names = lastfm_genres.tag_artists(
+        genre, limit=min(_GENRE_ARTISTS, lastfm_genres._VERIFY_BUDGET)
+    )
+    tags = lastfm_genres._artist_tag_map(names)
+
+    def rank(name: str) -> int:
+        # «Рядом» (тот же наш широкий ключ) для жанра мало: dubstep и breakcore
+        # оба сводятся к electronic, и в breakcore шёл Skrillex. Нужен сам жанр
+        # среди главных тегов артиста; без тегов Last.fm — следом за точными.
+        artist_tags = tags.get(name)
+        if not artist_tags:
+            return 1
+        return 2 if lastfm_genres._genre_affinity(genre, artist_tags) == 2 else 0
+
+    scored = sorted((-rank(name), index, name) for index, name in enumerate(names))
+    return [name for negative, _index, name in scored if negative < 0][:_GENRE_ARTISTS]
+
+
+async def _genre_artists(genre: str) -> List[str]:
+    key = f"flow:genre_artists:v1:{genre.lower()}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return cached
+    names = await asyncio.to_thread(_genre_artists_fetch, genre)
+    await set_cache_async(key, names, expire=_GENRE_TTL if names else 600)
+    return names
+
+
+def _title_names_genre(track, genre: str) -> bool:
+    """В названии трека стоит сам жанр («… but Breakcore», «Nu Metal Mix»)."""
+    _artist, title = effective_track_artist_title(track)
+    words = re.findall(r"\w+", genre.lower())
+    text = " ".join(re.findall(r"\w+", (title or "").lower()))
+    return bool(words) and re.search(r"\b" + r"\W+".join(map(re.escape, words)) + r"\b", text) is not None
+
+
+async def _genre_hits_pool(request: Request, genre: str, part: int) -> List[ExternalTrackResponse]:
+    """Хиты среза артистов выбранного жанра, уже играбельные, с кэшем на сутки."""
+    key = f"flow:genre_hits:v1:{genre.lower()}:{part}"
+    cached = await get_cache_async(key)
+    if cached is not None:
+        return [ExternalTrackResponse(**t) for t in cached]
+    return await _pool_single_flight(
+        key, lambda: _genre_hits_pool_fetch(request, genre, part, key)
+    )
+
+
+async def _genre_hits_pool_fetch(
+    request: Request, genre: str, part: int, key: str
+) -> List[ExternalTrackResponse]:
+    artists = await _genre_artists(genre)
+    chunk = artists[part * _GENRE_SLICE:(part + 1) * _GENRE_SLICE] or artists[:_GENRE_SLICE]
+    if not chunk:
+        await set_cache_async(key, [], expire=600)
+        return []
+    infos = await mainstream.artist_hits(chunk, timeout=60)
+    wanted = [
+        (name, title)
+        for name in chunk
+        for title in ((infos.get(artist_key(name)) or {}).get("top") or [])[:_GENRE_HITS_PER_ARTIST]
+    ]
+    resolved = await asyncio.gather(
+        *(_resolve_similar(request, name, title) for name, title in wanted)
+    )
+    # Первый хит каждого артиста, потом вторые — как в _similar_hits_pool.
+    by_rank = sorted(
+        (index % _GENRE_HITS_PER_ARTIST, index, track)
+        for index, track in enumerate(resolved)
+        if track is not None and not _title_names_genre(track, genre)
+    )
+    pool = [track for _rank, _index, track in by_rank]
+    await set_cache_async(
+        key, [t.model_dump() for t in pool], expire=_GENRE_TTL if pool else 600
+    )
+    return pool
+
+
+# Сборники и перезаливки: «Icona Pop: I Love It», «Eminem Greatest Hits». Песню,
+# названную как артист («Iron Maiden» у Iron Maiden) или со словом из имени
+# («Killer Queen» у Queen), не трогаем — только имя артиста В НАЧАЛЕ названия
+# с разделителем или вместе со словом сборника.
+_COMPILATION_RE = re.compile(
+    r"\b(?:mix|megamix|best of|greatest hits|full album|playlist|top songs|"
+    r"all songs|лучшие|сборник|все песни|полный альбом)\b",
+    re.IGNORECASE,
+)
+
+
+def _title_repeats_artist(track) -> bool:
+    artist, title = effective_track_artist_title(track)
+    name = (artist or "").split(",")[0].strip().lower()
+    title = (title or "").strip().lower()
+    if len(name) < 3 or not title or name == title:
+        return False
+    if title.startswith(name) and re.match(r"\s*[:\-–—|/]", title[len(name):]):
+        return True
+    return name in title and _COMPILATION_RE.search(title) is not None
+
+
 async def _similar_artist_names(artist: str) -> List[dict]:
     """Соседи артиста по графу YT Music: [{"name", "browse_id"}, ...]."""
     key = f"flow:similar_names:{artist_key(artist)}"
@@ -2770,6 +2888,24 @@ def _external_plan(
         else:
             tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
 
+    tag_query = " ".join(tag_words[:2]) if tag_words else ""
+    # Выбранный в настройках жанр — пул хитов его артистов (_genre_hits_pool),
+    # по одному жанру и срезу артистов за подгрузку. Поиск по словам при нём
+    # не нужен: по слову жанра он и приносил мусор, а слова из названий у таких
+    # юзеров — имена их же песен.
+    explicit = [
+        genre.strip()
+        for genre in (profile.get("explicit_genres") or [])
+        if isinstance(genre, str) and genre.strip()
+    ]
+    genre = (
+        max(explicit, key=lambda name: stable_jitter(ranking_context, f"explicit-genre:{name}"))
+        if explicit
+        else ""
+    )
+    if genre:
+        tag_query = ""
+
     return {
         "seeds": seeds,
         "similar_artists": similar_artists,
@@ -2777,7 +2913,9 @@ def _external_plan(
         "seed_tracks": seed_tracks,
         "hits_seed_artists": hits_seed_artists,
         "sc_artists": sc_artists,
-        "tag_query": " ".join(tag_words[:2]) if tag_words else "",
+        "tag_query": tag_query,
+        "genre": genre,
+        "genre_part": int(stable_jitter(ranking_context, f"genre-part:{genre}") * _GENRE_PARTS),
     }
 
 
@@ -3677,6 +3815,9 @@ async def _compute_flow(
     origin_by_identity: dict[str, str] = {}
     # Прошёл ли кандидат мейнстрим-фильтр (только для проверенных) — в телеметрию.
     hit_by_identity: dict[str, bool] = {}
+    # Хиты артистов выбранного жанра: это и есть мейнстрим жанра, фильтр их не
+    # режет (у андерграундного жанра почти нет артистов с 50k слушателей).
+    genre_identities: set[str] = set()
 
     def _add_explore(
         tracks,
@@ -3713,6 +3854,8 @@ async def _compute_flow(
             if banned and any(
                 artist_key(a) in banned for a in effective_artist.split(",")
             ):
+                continue
+            if _title_repeats_artist(t):
                 continue
             # Треки без рабочего источника не добавляем: ytmusic без external_id
             # или soundcloud без stream_url не смогут играться.
@@ -4003,6 +4146,17 @@ async def _compute_flow(
             origin="soundcloud",
         )
 
+    genre = plan.get("genre") or ""
+    if genre:
+        stage_started = loop.time()
+        (genre_pool,) = await _gather_within(
+            [_genre_hits_pool(request, genre, plan.get("genre_part") or 0)],
+            network_deadline,
+        )
+        _mark_stage("genre", stage_started)
+        genre_identities.update(_item_identity(t) for t in genre_pool)
+        _add_explore(genre_pool, origin="genre")
+
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
     query = plan["tag_query"]
@@ -4177,6 +4331,7 @@ async def _compute_flow(
             c
             for c in unified_candidates
             if _item_identity(c) not in liked_identity_set
+            and _item_identity(c) not in genre_identities
             and _gate_artist(c) not in deep_ok
         ]
         hits = await mainstream.artist_hits(
