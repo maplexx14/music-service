@@ -12,6 +12,7 @@ import EmailChangeSettings from '../components/EmailChangeSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import ContactDeveloper from '../components/ContactDeveloper'
+import TasteAvatar from '../components/TasteAvatar'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import {
   clearFrameMeter,
@@ -263,16 +264,9 @@ function Settings() {
 
   const profileCard = user && (
     <div className="settings-profile">
-      {user.avatar_url ? (
-        <img src={user.avatar_url} alt="" className="settings-profile-avatar" />
-      ) : (
-        <div className="settings-profile-avatar settings-profile-avatar-placeholder" aria-hidden="true">
-          {(user.username || 'U').charAt(0).toUpperCase()}
-        </div>
-      )}
+      <TasteAvatar user={user} className="settings-profile-avatar" />
       <div className="settings-profile-text">
         <div className="settings-profile-name">{user.full_name || user.username}</div>
-        {user.email && <div className="settings-profile-email">{user.email}</div>}
       </div>
     </div>
   )

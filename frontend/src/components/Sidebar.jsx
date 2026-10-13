@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settings2, MessageCircle } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
+import TasteAvatar from './TasteAvatar'
 import './Sidebar.css'
 
 function Sidebar() {
@@ -88,28 +89,15 @@ function Sidebar() {
         >
           {!isCollapsed && (
             <div className="user-info">
-              {user?.avatar_url ? (
-                <img src={user.avatar_url} alt="" className="user-avatar" />
-              ) : (
-                <div className="user-avatar user-avatar-placeholder" aria-hidden="true">
-                  {(user?.username || 'U').charAt(0).toUpperCase()}
-                </div>
-              )}
+              <TasteAvatar user={user} className="user-avatar" />
               <div className="user-details">
                 <div className="user-name">{user?.full_name || user?.username}</div>
-                <div className="user-email">{user?.email}</div>
               </div>
               <Settings2 size={16} className="profile-chevron" aria-hidden="true" />
             </div>
           )}
           {isCollapsed && (
-            user?.avatar_url ? (
-              <img src={user.avatar_url} alt="" className="user-avatar-collapsed" />
-            ) : (
-              <div className="user-avatar-collapsed user-avatar-placeholder" aria-hidden="true">
-                {(user?.username || 'U').charAt(0).toUpperCase()}
-              </div>
-            )
+            <TasteAvatar user={user} className="user-avatar-collapsed" />
           )}
         </Link>
       </div>

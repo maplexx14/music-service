@@ -21,6 +21,7 @@ import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
 import HeroBolts from '../components/HeroBolts'
+import TasteAvatar from '../components/TasteAvatar'
 import { isSoftwareRendering } from '../utils/gpu'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
@@ -441,11 +442,7 @@ function Home() {
           <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
         </span>
         <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
-          {user?.avatar_url ? (
-            <img src={user.avatar_url} alt="" className="mobile-avatar-img" />
-          ) : (
-            <span aria-hidden="true">{(user?.username || 'U').charAt(0).toUpperCase()}</span>
-          )}
+          <TasteAvatar user={user} className="mobile-avatar-img" />
         </Link>
       </div>
       <div
