@@ -4428,9 +4428,22 @@ async def _flow_response(mix: list, response: Response, *, encoded: bool) -> Res
     )
 
 
+# Server-Timing видит только клиент; доля готовых выдач на проде — по этой
+# строке. Бэкенд logging не настраивает (в gunicorn до stderr доходят только
+# WARNING+ через lastResort), поэтому у логгера свой обработчик.
+_served_logger = logging.getLogger("flow.served")
+if not _served_logger.handlers:
+    _served_handler = logging.StreamHandler()
+    _served_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    _served_logger.addHandler(_served_handler)
+    _served_logger.setLevel(logging.INFO)
+    _served_logger.propagate = False
+
+
 def _log_served(user_id: int, path: str, ready_state: str, mix: list, started: float) -> None:
-    # Server-Timing видит только клиент; доля готовых выдач на проде — по логу.
-    logger.info(
+    _served_logger.info(
         "flow served user=%s path=%s ready=%s items=%d %.0fms",
         user_id, path, ready_state, len(mix), (time.perf_counter() - started) * 1000,
     )
