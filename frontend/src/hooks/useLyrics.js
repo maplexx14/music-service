@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import api from '../services/api'
 import { getActive } from '../services/audioEngine'
 
 // Parse LRC timestamp line: [mm:ss.xx] text
@@ -25,31 +26,42 @@ function parseLrc(lrc) {
   return result.sort((a, b) => a.time - b.time)
 }
 
-// Расхождение длительности (сек), при котором синхронный текст из поиска ещё
-// считается той же записью. /api/get сверяет длительность сам, ±2 с.
-const SYNC_DURATION_TOLERANCE = 3
-
-function stripLrcTimestamps(lrc) {
-  return lrc
-    .split('\n')
-    .map((line) => line.replace(/^(\[\d{2}:\d{2}\.\d{2,3}\])+/, '').trim())
-    .join('\n')
-}
-
-// Cache keyed by artist+title
+// Текст ищет бэкенд (routers/lyrics.py): lrclib стоит за Cloudflare, который
+// провайдеры в РФ душат, а его фолбэк-поиск отдаёт ~0.5 МБ — без VPN текст
+// искался секундами. Сервер отдаёт только выбранный текст и кэширует его.
+// Одна загрузка на трек: хук живёт сразу в нескольких местах (мини-плеер,
+// фуллскрин, две панели текста), и раньше каждый слал свой запрос.
 const lyricsCache = new Map()
+const pendingLyrics = new Map()
+
+function loadLyrics(cacheKey, artist, title, duration) {
+  if (lyricsCache.has(cacheKey)) return Promise.resolve(lyricsCache.get(cacheKey))
+  if (pendingLyrics.has(cacheKey)) return pendingLyrics.get(cacheKey)
+  const request = api
+    .get('/lyrics', {
+      params: { artist, title, duration: duration || undefined },
+      skipErrorToast: true,
+      timeout: 20000,
+    })
+    .then(({ data }) => {
+      const entry = { synced: parseLrc(data?.synced), plain: data?.plain || '' }
+      lyricsCache.set(cacheKey, entry)
+      return entry
+    })
+    .finally(() => pendingLyrics.delete(cacheKey))
+  pendingLyrics.set(cacheKey, request)
+  return request
+}
 
 export function useLyrics(track) {
   const [syncedLines, setSyncedLines] = useState([])
   const [plainText, setPlainText] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const abortRef = useRef(null)
-  const prevKeyRef = useRef(null)
 
   const artist = track?.artist
   const title = track?.title
-  const duration = track?.duration
+  const duration = Math.round(Number(track?.duration) || 0)
 
   const cacheKey = useMemo(
     () => `${(artist || '').toLowerCase()}|${(title || '').toLowerCase()}`,
@@ -62,105 +74,44 @@ export function useLyrics(track) {
       setPlainText('')
       setError(null)
       setLoading(false)
-      prevKeyRef.current = null
-      return
+      return undefined
     }
 
-    if (cacheKey === prevKeyRef.current) return
-    prevKeyRef.current = cacheKey
-
-    // Check in-memory cache
-    if (lyricsCache.has(cacheKey)) {
-      const cached = lyricsCache.get(cacheKey)
+    const cached = lyricsCache.get(cacheKey)
+    if (cached) {
       setSyncedLines(cached.synced)
       setPlainText(cached.plain)
       setError(null)
       setLoading(false)
-      return
+      return undefined
     }
 
-    // Abort previous request
-    if (abortRef.current) abortRef.current.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-
+    let cancelled = false
     setLoading(true)
     setError(null)
     setSyncedLines([])
     setPlainText('')
 
-    const durSec = Math.round(Number(duration) || 0)
-
-    const fetchSynced = async () => {
-      const params = new URLSearchParams({ artist_name: artist, track_name: title })
-      if (durSec > 0) params.set('duration', String(durSec))
-      const res = await fetch(`https://lrclib.net/api/get?${params}`, {
-        signal: controller.signal,
+    loadLyrics(cacheKey, artist, title, duration)
+      .then((entry) => {
+        if (cancelled) return
+        setSyncedLines(entry.synced)
+        setPlainText(entry.plain)
       })
-      if (!res.ok) throw new Error(res.status)
-      const data = await res.json()
-      return data.syncedLyrics || null
+      .catch((err) => {
+        if (!cancelled) setError(err)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
     }
-
-    const fetchPlain = async () => {
-      const params = new URLSearchParams({ q: `${artist} ${title}` })
-      const res = await fetch(`https://lrclib.net/api/search?${params}`, { signal: controller.signal })
-      if (!res.ok) return null
-      const results = await res.json()
-      // Синхронный текст — только той же записи: поиск отдаёт и live, и
-      // радио-версии, и их тайминги расходятся с нашим треком на секунды
-      // (строки «отставали» весь трек). Длительность не совпала — показываем
-      // текст без подсветки: лучше честно без синхронизации, чем со сдвигом.
-      const sameRecording = (r) =>
-        durSec > 0 && Math.abs((Number(r.duration) || 0) - durSec) <= SYNC_DURATION_TOLERANCE
-      const synced = results.find((r) => r.syncedLyrics && sameRecording(r))
-      if (synced) return { synced: synced.syncedLyrics }
-      for (const r of results) {
-        if (r.plainLyrics) return { plain: r.plainLyrics }
-        if (r.syncedLyrics) return { plain: stripLrcTimestamps(r.syncedLyrics) }
-      }
-      return null
-    }
-
-    ;(async () => {
-      try {
-        let synced = null
-        let plain = ''
-
-        // Try exact match first
-        try {
-          synced = await fetchSynced()
-        } catch {
-          // Exact failed — try search
-        }
-
-        if (!synced) {
-          // Fallback: search endpoint
-          const searchResult = await fetchPlain()
-          if (searchResult?.synced) synced = searchResult.synced
-          else if (searchResult?.plain) plain = searchResult.plain
-        }
-
-        const parsed = synced ? parseLrc(synced) : []
-
-        lyricsCache.set(cacheKey, { synced: parsed, plain })
-
-        if (!controller.signal.aborted) {
-          setSyncedLines(parsed)
-          setPlainText(plain)
-          setError(null)
-        }
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          setError(err)
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    })()
-
-    return () => controller.abort()
-  }, [artist, title, duration, cacheKey])
+    // duration в зависимостях нет намеренно: текст привязан к артисту и
+    // названию, а длительность лишь помогает выбрать синхронную версию.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artist, title, cacheKey])
 
   return { syncedLines, plainText, loading, error }
 }
