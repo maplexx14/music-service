@@ -74,7 +74,15 @@ from app.discovery import (
     effective_discovery_ratio,
     liked_slots,
 )
-from app.discovery_feedback import cached_origin_counts, discovery_acceptance, origin_terms
+from app.discovery_feedback import (
+    cached_outcome_stats,
+    cached_population_stats,
+    discovery_acceptance,
+    language_terms,
+    origin_terms,
+    source_posteriors,
+    thompson_source_order,
+)
 from app.artist_genre import artists_matching_keywords
 from app.genre_keywords import (
     build_keyword_filters,
@@ -82,7 +90,7 @@ from app.genre_keywords import (
     top_genre_keywords,
     weighted_explicit_genres,
 )
-from app.lang import dominant_is_cyrillic
+from app.lang import cyrillic_share, dominant_is_cyrillic, script_of
 from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
 from app.diversity import (
@@ -1407,6 +1415,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
         "banned_artists": banned_artists,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
+        # (доля кириллицы, сколько текстов) — априор языка в волне
+        # (discovery_feedback.language_terms).
+        "cyrillic_share": cyrillic_share(lang_texts),
         "recent_ids": recent_ids,
         # Отдельно от recent_ids: тот склеивает скипы с «последними 100
         # прослушиваниями». Квота лайков не применяет ни то, ни другое — скип
@@ -3383,11 +3394,30 @@ async def _compute_flow(
         len(profile.get("artist_weight") or {}),
     )
     explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
+    # Исходы юзера и всех юзеров по источнику и письменности (часовой кэш).
+    outcomes = await asyncio.to_thread(cached_outcome_stats, db, user_id)
+    population_outcomes = await asyncio.to_thread(
+        cached_population_stats, db, precompute or not _FLOW_PRECOMPUTE
+    )
+    user_origin_outcomes = outcomes.get("origin") or {}
     # Поправка скора на источник кандидата по тому, как юзер принимал его
     # отдачу (см. discovery_feedback.origin_terms).
     origin_term_by_name = origin_terms(
-        await asyncio.to_thread(cached_origin_counts, db, user_id),
+        {origin: stats[:2] for origin, stats in user_origin_outcomes.items()},
         f"origin:{ranking_context}",
+    )
+    # Места порции — источникам по их приёму (thompson_source_order ниже).
+    source_posterior = source_posteriors(
+        user_origin_outcomes, population_outcomes.get("origin") or {}
+    )
+    # Понижающая поправка за письменность, которую юзер не принимает: априор
+    # из коллекции, апостериор из исходов (discovery_feedback.language_terms).
+    cyr_share, lang_texts_count = profile.get("cyrillic_share") or (0.0, 0)
+    language_term_by_script = language_terms(
+        outcomes.get("script") or {},
+        population_outcomes.get("script") or {},
+        cyr_share,
+        lang_texts_count,
     )
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
@@ -3425,7 +3455,7 @@ async def _compute_flow(
         score_key = f"{identity}:{content_bonus:.3f}:{origin_term:.4f}"
         if score_key in score_by_item:
             return score_by_item[score_key]
-        artist, _title = _item_artist_title(item)
+        artist, title = _item_artist_title(item)
         key = artist_key(artist)
         population = external_population.get(identity) or {}
         item_play_count = (
@@ -3486,12 +3516,13 @@ async def _compute_flow(
             _ARTIST_REPEAT_CAP,
             _ARTIST_REPEAT_PENALTY * recent_artist_counts[primary_artist_key(artist)],
         )
-        score += discovery_term + repeat_term + origin_term
+        language_term = language_term_by_script.get(script_of(artist, title), 0.0)
+        score += discovery_term + repeat_term + origin_term + language_term
         score_by_item[score_key] = score
         # Компоненты считаются только для отданных позиций (см. телеметрию
         # ниже) — входы запоминаем, а не пересчитываем весь пул.
         score_inputs_by_item[score_key] = (
-            item, score_inputs, discovery_term, repeat_term, origin_term
+            item, score_inputs, discovery_term, repeat_term, origin_term, language_term
         )
         return score
 
@@ -3521,12 +3552,18 @@ async def _compute_flow(
             "discovery_requested": round(requested_ratio, 3),
             "discovery_effective": round(explore_ratio, 3),
         }
+        script = script_of(artist, _title)
+        if script:
+            features["script"] = script
         if cached is not None:
-            source_item, inputs, discovery_term, repeat_term, origin_term = cached
+            (
+                source_item, inputs, discovery_term, repeat_term, origin_term, language_term
+            ) = cached
             components = score_components(source_item, **inputs)
             components["discovery"] = discovery_term
             components["repeat"] = repeat_term
             components["origin"] = origin_term
+            components["language"] = language_term
             features["components"] = {
                 name: round(value, 4) for name, value in components.items()
             }
@@ -4193,6 +4230,34 @@ async def _compute_flow(
     def _is_novel(candidate) -> bool:
         artist, _title = _item_artist_title(candidate)
         return artist_key(artist) not in familiar_artists
+
+    # Какому источнику достаётся место — решает его приём у юзера (сэмпл
+    # Томпсона, discovery_feedback.thompson_source_order), а не общий рейтинг:
+    # поправка origin в score почти не меняла состав порции. Новые и знакомые
+    # артисты переставляются порознь, каждые на своих местах рейтинга, — иначе
+    # источники разведки вытеснили бы знакомое из добора и новизна ушла бы
+    # выше ползунка. Лайки (своя квота) остаются на месте.
+    if source_posterior:
+        novelty = [
+            None if _item_identity(c) in liked_identities else _is_novel(c)
+            for c in ranked_candidates
+        ]
+        reordered = {
+            flag: iter(
+                thompson_source_order(
+                    [c for c, f in zip(ranked_candidates, novelty) if f is flag],
+                    lambda c: origin_by_identity.get(_item_identity(c), "unknown"),
+                    source_posterior,
+                    seed=f"source:{flag}:{ranking_context}",
+                    window=limit,
+                )
+            )
+            for flag in (True, False)
+        }
+        ranked_candidates = [
+            c if flag is None else next(reordered[flag])
+            for c, flag in zip(ranked_candidates, novelty)
+        ]
 
     novel_selection: List = []
     if discovery_target:

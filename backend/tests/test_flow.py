@@ -3540,3 +3540,53 @@ def test_warmer_recomputes_after_signal(client, db, monkeypatch):
     assert run() == "computed"
     assert get_cache(f"flow:ready:{user.id}")["created"] > created_before
     assert run() == "current"
+
+
+def test_flow_sources_follow_acceptance(client, db, monkeypatch):
+    """Места порции — источникам по приёму: плохо принимаемый local теснится
+    хорошо принимаемым favorite, хотя в рейтинге они рядом."""
+    from app.cache import clear_pattern
+
+    user = create_user(db, username="source-bandit")
+    _liked(db, user, artist="LovedArtist")
+    for i in range(20):
+        db.add(Track(
+            title=f"cat-local-{i}", artist="LovedArtist", duration=100, source="ytmusic",
+            external_id=f"sb-local-{i}", play_count=500, unique_listener_count=50,
+        ))
+    db.commit()
+
+    async def _favorite(request, artist):
+        return [_external(artist, f"catalog-{i}", f"sb-{i}") for i in range(20)]
+
+    def stats(n, good, bad):
+        g, b = round(n * good), round(n * bad)
+        return [g, n, g + 0.5 * (n - g - b)]
+
+    population = {
+        "origin": {"local": stats(1000, 0.01, 0.85), "favorite": stats(1000, 0.15, 0.4)},
+        "script": {},
+    }
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr(flow_router, "cached_population_stats", lambda db, build: population)
+    monkeypatch.setattr(
+        flow_router, "cached_outcome_stats", lambda db, uid: {"origin": {}, "script": {}}
+    )
+
+    def portion_origins():
+        clear_pattern("flow:*")
+        resp = client.get(
+            "/api/recommendations/flow?limit=10",
+            headers=auth_headers(client, username="source-bandit"),
+        )
+        assert resp.status_code == 200, resp.text
+        return Counter(
+            "local" if "cat-local" in t["title"] else "other"
+            for t in resp.json()
+        )
+
+    with_bandit = portion_origins()
+    monkeypatch.setattr(flow_router, "source_posteriors", lambda user, population: {})
+    by_rank = portion_origins()
+    assert by_rank["local"] >= 3, by_rank
+    assert with_bandit["local"] < by_rank["local"], (with_bandit, by_rank)

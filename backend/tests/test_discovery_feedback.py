@@ -200,3 +200,94 @@ def test_origin_counts_group_outcomes_by_logged_origin(db):
     db.commit()
 
     assert origin_counts(db, user.id, now=now) == {"local": [1, 2], "radio": [1, 1]}
+
+
+def test_outcome_stats_reward_by_origin_and_script(db):
+    from app.discovery_feedback import outcome_stats
+
+    user = create_user(db, username="outcome-user")
+    now = datetime.now(timezone.utc)
+    for ext, artist, origin, event, value in (
+        ("a", "Band", "local", "skip", 0.05),       # плохо — 0
+        ("b", "Band", "local", "listen", 0.5),      # между — 0.5
+        ("c", "Группа", "radio", "like", None),     # хорошо — 1
+    ):
+        _delivery(db, user, request_id="r1", artist=artist, external_id=ext,
+                  shown_at=now - timedelta(hours=1), features={"origin": origin})
+        _event(db, user, request_id="r1", external_id=ext, event_type=event, value=value, at=now)
+    db.commit()
+
+    assert outcome_stats(db, user.id, now=now) == {
+        "origin": {"local": [0, 2, 0.5], "radio": [1, 1, 1.0]},
+        "script": {"lat": [0, 2, 0.5], "cyr": [1, 1, 1.0]},
+    }
+
+
+def _prod_like_population():
+    def stats(n, good, bad):
+        g, b = round(n * good), round(n * bad)
+        return [g, n, g + 0.5 * (n - g - b)]
+
+    # Прод, 14 дней до 2026-10-13: local и similar_hits почти не принимают.
+    return {
+        "radio": stats(1542, 0.058, 0.645),
+        "favorite": stats(1466, 0.052, 0.687),
+        "local": stats(1028, 0.024, 0.817),
+        "similar_hits": stats(276, 0.007, 0.696),
+    }
+
+
+def test_source_posteriors_need_population_and_cap_evidence():
+    from app.discovery_feedback import SOURCE_EVIDENCE_CAP, source_posteriors
+
+    assert source_posteriors({}, {"radio": [1, 50, 20.0]}) == {}
+    # Все исходы плохие (награда 0) — Beta не построить, сэмплирования нет.
+    assert source_posteriors({}, {"radio": [0, 500, 0.0], "local": [0, 300, 0.0]}) == {}
+    posteriors = source_posteriors({"local": [0, 900, 50.0]}, _prod_like_population())
+    for alpha, beta in posteriors.values():
+        assert alpha + beta <= SOURCE_EVIDENCE_CAP + 1e-9
+    mean = {name: a / (a + b) for name, (a, b) in posteriors.items()}
+    assert mean["local"] < mean["similar_hits"] < mean["favorite"] < mean["radio"]
+    # Новый источник — между, по общей доле.
+    assert "*" in posteriors
+
+
+def test_thompson_source_order_prefers_accepted_sources():
+    from collections import Counter
+
+    from app.discovery_feedback import source_posteriors, thompson_source_order
+
+    posteriors = source_posteriors({}, _prod_like_population())
+    items = [(origin, i) for origin in ("local", "radio", "similar_hits") for i in range(20)]
+    first = Counter()
+    for seed in range(200):
+        order = thompson_source_order(
+            items, lambda item: item[0], posteriors, seed=f"s{seed}", window=15
+        )
+        assert sorted(order) == sorted(items)
+        # Внутри источника порядок рейтинга сохраняется.
+        for origin in ("local", "radio", "similar_hits"):
+            assert [i for o, i in order if o == origin] == list(range(20))
+        window = Counter(o for o, _i in order[:15])
+        assert max(window.values()) <= 9  # MAX_SOURCE_SHARE 0.6 от 15
+        first.update(window)
+    assert first["radio"] > first["similar_hits"] > first["local"]
+    # Детерминирован в запросе; без апостериоров — рейтинг как есть.
+    assert thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=15) == \
+        thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=15)
+    assert thompson_source_order(items, lambda i: i[0], {}, seed="x", window=15) == items
+
+
+def test_language_terms_prior_from_library_and_fade_with_evidence():
+    from app.discovery_feedback import language_terms
+
+    population = {"cyr": [0, 1000, 300.0], "lat": [0, 4000, 1200.0]}
+    # Новый юзер, коллекция на 82% русская: латиница вниз, кириллица без поправки.
+    terms = language_terms({}, population, 0.82, 11)
+    assert set(terms) == {"lat"} and terms["lat"] < -0.4
+    # Мало текстов в коллекции или смешанная — не сигнал.
+    assert language_terms({}, population, 0.9, 5) == {}
+    assert language_terms({}, population, 0.5, 100) == {}
+    # Исходы показывают, что латиницу принимают не хуже, — поправка сходит на нет.
+    accepted = {"cyr": [5, 100, 30.0], "lat": [20, 400, 120.0]}
+    assert language_terms(accepted, population, 0.82, 11).get("lat", 0.0) > -0.1

@@ -65,3 +65,25 @@ def dominant_is_cyrillic(texts) -> bool | None:
     if share <= 1 - _LANG_DOMINANCE:
         return False
     return None
+
+
+_LATIN_RE = re.compile("[a-z]", re.IGNORECASE)
+
+
+def script_of(artist: str, title: str) -> str | None:
+    """Письменность трека: "cyr" (кириллица в названии или имени), "lat" или
+    None (ни той ни другой — цифры, символы, чужие алфавиты)."""
+    text = f"{title or ''} {artist or ''}"
+    if is_cyrillic(text):
+        return "cyr"
+    if _LATIN_RE.search(text):
+        return "lat"
+    return None
+
+
+def cyrillic_share(texts) -> tuple[float, int]:
+    """(доля кириллических, сколько текстов) — для априора языка в волне."""
+    texts = [t for t in texts if t]
+    if not texts:
+        return 0.0, 0
+    return sum(1 for t in texts if is_cyrillic(t)) / len(texts), len(texts)
