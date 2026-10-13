@@ -63,7 +63,16 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, desc, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from app import artist_probe, beets_genre, beets_similar, censorship, lastfm_genres, storage
+from app import (
+    artist_probe,
+    beets_genre,
+    beets_similar,
+    censorship,
+    flow_session,
+    lastfm_genres,
+    learned_ranker,
+    storage,
+)
 from app.cache import delete_cache, get_cache_async, redis_client, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
@@ -93,6 +102,7 @@ from app.genre_keywords import (
 from app.lang import cyrillic_share, dominant_is_cyrillic, script_of
 from app.taste import make_relevance_check, track_check
 from app.title_tags import build_tag_filters, build_title_tag_profile
+from app.flow_slate import SlateRules, compose_slate
 from app.diversity import (
     interleave_artists,
     primary_artist_key,
@@ -3146,9 +3156,11 @@ async def _take_ready_portion(
     exclude: str,
     base_url: str = "",
 ) -> tuple[Optional[tuple[list, dict, dict, bool]], str]:
-    """Готовая порция для этого запроса: ((items, scores, features, matched),
-    "hit") или (None, причина промаха) — причина уходит в Server-Timing.
-    matched — матчи источников аудио уже поставлены при предрасчёте."""
+    """Готовый пул для этого запроса: ((items, scores, features, matched,
+    payload), "hit") или (None, причина промаха) — причина уходит в
+    Server-Timing. matched — матчи источников аудио уже поставлены при
+    предрасчёте. Пул больше ``limit``: выдачу из него выбирает _session_select,
+    остаток возвращается готовой порцией (_store_leftover)."""
     key = _ready_key(user_id)
     # Одним пакетом (get_cache_async склеивает одновременные чтения в MGET).
     payload, negative_at = await asyncio.gather(
@@ -3160,8 +3172,6 @@ async def _take_ready_portion(
     await asyncio.to_thread(delete_cache, key)
     if payload.get("context") != _ranking_context(user_id, history):
         return None, "context"
-    if payload.get("limit") != limit:
-        return None, "limit"
     created = float(payload.get("created") or 0)
     if time.time() - created > _READY_MAX_AGE:
         return None, "stale"
@@ -3207,6 +3217,7 @@ async def _take_ready_portion(
         payload.get("scores") or {},
         payload.get("features") or {},
         bool(payload.get("matched", True)),
+        payload,
     ), "hit"
 
 
@@ -3310,6 +3321,22 @@ async def _deliver_portion(
                 [a for a in (history.get("artists") or []) if isinstance(a, str)]
                 + [primary_artist_key(_flow_item_artist_title(item)[0]) for item in mix]
             )[-_ARTIST_HISTORY:],
+            # Что было отдано под каким id клиента: по нему разбираются
+            # сигналы сессии (параметр sess, app/flow_session.py).
+            "meta": flow_session.clamp_meta(
+                {
+                    **(history.get("meta") if isinstance(history.get("meta"), dict) else {}),
+                    **{
+                        str(item.get("id")): flow_session.history_meta(
+                            str(item.get("id")),
+                            _flow_item_artist_title(item)[0],
+                            features.get(_flow_item_identity(item)) or {},
+                        )
+                        for item in mix
+                        if item.get("id") is not None
+                    },
+                }
+            ),
             # Очередь в формате клиентского exclude — для предрасчёта.
             "queue": (
                 [str(q) for q in (history.get("queue") or [])]
@@ -3489,6 +3516,8 @@ async def _compute_flow(
     schedule_matches: bool = True,
     relax: bool = False,
     prior: Optional[tuple] = None,
+    pool_limit: Optional[int] = None,
+    session: str = "",
 ):
     """Расчёт порции потока.
 
@@ -3502,8 +3531,14 @@ async def _compute_flow(
     schedule_matches=False в предрасчёте — матчи источников аудио поставит
     выдача (payload["matched"]): порцию для того, кто сейчас не слушает, могут
     так и не забрать, а матч Soulseek качает файл на диск.
+    pool_limit — сколько кандидатов отобрать в предрасчёте: пул на несколько выдач,
+    из которого каждая берёт ``limit`` под сигналы сессии (app/flow_session.py).
+    session — сигналы сессии от клиента (параметр sess) для живой выдачи.
     """
     precompute = mode == "precompute"
+    request_limit = limit
+    if pool_limit:
+        limit = max(limit, int(pool_limit))
     cache_only = _pool_cache_only.get()
     request_id = new_request_id()
     ranking_now = datetime.now(timezone.utc)
@@ -3712,6 +3747,9 @@ async def _compute_flow(
         script = script_of(artist, _title)
         if script:
             features["script"] = script
+        proximity = proximity_by_artist.get(primary_artist_key(artist))
+        if proximity:
+            features["proximity"] = round(proximity, 3)
         if cached is not None:
             (
                 source_item, inputs, discovery_term, repeat_term, origin_term, language_term
@@ -3813,6 +3851,8 @@ async def _compute_flow(
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
     origin_by_identity: dict[str, str] = {}
+    # primary_artist_key -> близость к любимым артистам (см. _artist_proximity).
+    proximity_by_artist: dict[str, float] = {}
     # Прошёл ли кандидат мейнстрим-фильтр (только для проверенных) — в телеметрию.
     hit_by_identity: dict[str, bool] = {}
     # Хиты артистов выбранного жанра: это и есть мейнстрим жанра, фильтр их не
@@ -4371,6 +4411,20 @@ async def _compute_flow(
         response.headers["Server-Timing"] = ", ".join(
             f"{name};dur={duration:.0f}" for name, duration in stage_timings
         )
+    # Близость артиста кандидата к любимым по графу Last.fm similar — признак
+    # для обучаемого ранкера (app/learned_ranker.py): у нового артиста
+    # affinity = 0, и без него новые кандидаты неразличимы ни для какой модели.
+    stage_started = loop.time()
+    proximity_by_artist.update(
+        await _artist_proximity(
+            profile.get("deep_catalog_artist_keys")
+            or profile.get("trusted_artist_keys")
+            or [],
+            fetch=not cache_only,
+            timeout=_PROXIMITY_WAIT if precompute else 0.3,
+        )
+    )
+    _mark_stage("proximity", stage_started)
     # Явный лайк — самый сильный первичный сигнал, какой у нас есть про
     # КОНКРЕТНЫЙ трек, поэтому bonus выше, чем у точного каталога любимого
     # артиста. На попадание в порцию это влияет только внутри своей квоты (см.
@@ -4433,107 +4487,31 @@ async def _compute_flow(
             for c, flag in zip(ranked_candidates, novelty)
         ]
 
-    novel_selection: List = []
-    if discovery_target:
-        novel_candidates = [
-            candidate for candidate in ranked_candidates if _is_novel(candidate)
-        ]
-        # Пик воркера — первый среди новых имён, но именно ВНУТРИ уже
-        # существующей цели разведки: третьей квоты он не получает, и когда
-        # цели нет (ползунок на дефолте), этой ветки просто не будет. Сортировка
-        # стабильная, так что для всех остальных порядок общего ранжирования
-        # сохраняется. Приоритет здесь потому, что косинус померил близость
-        # каталогом целиком, а ранкер видит один трек — при равном score
-        # проверенное имя стоит показать раньше.
-        probe_identities = {_item_identity(t) for t in probe_explore}
-        if probe_identities:
-            novel_candidates.sort(
-                key=lambda candidate: _item_identity(candidate) not in probe_identities
-            )
-        novel_artist_keys = set()
-
-        # Prefer one track per new artist first, then use additional tracks from
-        # those artists only when the requested target needs them.
-        for candidate in novel_candidates:
-            key = artist_key(_item_artist_title(candidate)[0])
-            if key in novel_artist_keys:
-                continue
-            novel_artist_keys.add(key)
-            novel_selection.append(candidate)
-            if len(novel_selection) >= discovery_target:
-                break
-        if len(novel_selection) < discovery_target:
-            selected_ids = {id(candidate) for candidate in novel_selection}
-            novel_selection.extend(
-                candidate
-                for candidate in novel_candidates
-                if id(candidate) not in selected_ids
-            )
-            novel_selection = novel_selection[:discovery_target]
-
-    # Свежий кластер коллекции (см. _FRESH_CLUSTER_SHARE): лайки и добор делят
-    # один потолок. Не влезшее идёт в конец добора — пустая волна хуже.
+    # Квоты новизны, лайков и свежего кластера — одной функцией (app/flow_slate.py).
     fresh_cluster = set(profile.get("fresh_cluster_artist_keys") or [])
-    fresh_cap = max(1, math.floor(limit * _FRESH_CLUSTER_SHARE))
-
-    def _in_fresh_cluster(candidate) -> bool:
-        return primary_artist_key(_item_artist_title(candidate)[0]) in fresh_cluster
-
-    fresh_used = sum(1 for candidate in novel_selection if _in_fresh_cluster(candidate))
-
-    # Понравившееся берём в порядке общего рейтинга, но ровно liked_target штук.
-    # Лайк — трек знакомого артиста, так что с novel_selection пересечений нет;
-    # дедуп по id ниже всё равно на месте, чтобы порядок отбора не был неявным
-    # условием корректности.
-    # Не больше одного лайка на артиста в порции, и сначала — артисты, которых
-    # не было в последних отданных треках: иначе квота держалась на паре
-    # имён из порции в порцию. Не хватило разных артистов — квота остаётся
-    # недобранной, место уходит добору, а не второму треку того же артиста.
-    liked_selection: List = []
-    if liked_target:
-        liked_artists: set[str] = set()
-        for allow_recent in (False, True):
-            for candidate in ranked_candidates:
-                if len(liked_selection) >= liked_target:
-                    break
-                if _item_identity(candidate) not in liked_identities:
-                    continue
-                key = primary_artist_key(_item_artist_title(candidate)[0])
-                if key in liked_artists:
-                    continue
-                if not allow_recent and recent_artist_counts[key]:
-                    continue
-                if _in_fresh_cluster(candidate):
-                    if fresh_used >= fresh_cap:
-                        continue
-                    fresh_used += 1
-                liked_artists.add(key)
-                liked_selection.append(candidate)
-
-    reserved: List = []
-    reserved_ids: set[int] = set()
-    for candidate in (*novel_selection, *liked_selection):
-        if id(candidate) in reserved_ids:
-            continue
-        reserved_ids.add(id(candidate))
-        reserved.append(candidate)
-    # Добор — общим рейтингом, но БЕЗ лайков: их квота уже заполнена, и всё
-    # сверх неё вытеснило бы из порции то новое, за чем в поток и приходят.
-    filler: List = []
-    fresh_overflow: List = []
-    for candidate in ranked_candidates:
-        if (
-            id(candidate) in reserved_ids
-            or _item_identity(candidate) in liked_identities
-        ):
-            continue
-        if _in_fresh_cluster(candidate):
-            if fresh_used >= fresh_cap:
-                fresh_overflow.append(candidate)
-                continue
-            fresh_used += 1
-        filler.append(candidate)
-    selected_candidates = (reserved + filler + fresh_overflow)[:limit]
+    probe_identities = {_item_identity(t) for t in probe_explore}
+    selected_candidates, liked_selection = compose_slate(
+        ranked_candidates,
+        SlateRules(
+            limit=limit,
+            discovery_target=discovery_target,
+            liked_target=liked_target,
+            fresh_cap=max(1, math.floor(limit * _FRESH_CLUSTER_SHARE)),
+        ),
+        is_novel=_is_novel,
+        is_liked=lambda candidate: _item_identity(candidate) in liked_identities,
+        artist_of=lambda candidate: primary_artist_key(_item_artist_title(candidate)[0]),
+        novel_artist_of=lambda candidate: artist_key(_item_artist_title(candidate)[0]),
+        recently_played_artist=lambda key: bool(recent_artist_counts[key]),
+        in_fresh_cluster=lambda candidate: (
+            primary_artist_key(_item_artist_title(candidate)[0]) in fresh_cluster
+        ),
+        is_probe=(
+            (lambda candidate: _item_identity(candidate) in probe_identities)
+            if probe_identities
+            else None
+        ),
+    )
 
     mix: List[dict] = [
         _candidate_payload(candidate) for candidate in selected_candidates
@@ -4599,11 +4577,12 @@ async def _compute_flow(
     # Пустая или неполная порция хуже порции с артистом, которого юзер однажды
     # скипнул: на пустом ответе у фронта кончается очередь и музыка встаёт.
     # Второй проход со снятым мягким баном добирает недостающие места.
-    if not relax and len(mix) < limit:
+    if not relax and len(mix) < request_limit:
         return await _compute_flow(
-            request, response, limit, exclude, hour, current_user, db,
+            request, response, request_limit, exclude, hour, current_user, db,
             mode=mode, history=history, schedule_matches=schedule_matches,
             relax=True, prior=(mix, scores_by_identity, features_by_identity),
+            pool_limit=pool_limit, session=session,
         )
     if prior is not None:
         prior_mix, prior_scores, prior_features = prior
@@ -4639,22 +4618,34 @@ async def _compute_flow(
     if precompute:
         # Юзер слушает (порцию заказала его выдача) — матчи источников аудио
         # ставим уже сейчас, к выдаче они будут готовы. Иначе их поставит выдача.
-        if schedule_matches:
-            ytdlp._schedule_audio_matches(mix)
+        # Только голове пула: остальное, может, так и не отдадут, а матч
+        # Soulseek качает файл. Хвосту матчи поставит выдача (matched_ids).
+        matched_items = mix[:request_limit] if schedule_matches else []
+        if matched_items:
+            ytdlp._schedule_audio_matches(matched_items)
         return {
             "context": ranking_context,
-            "limit": limit,
+            "limit": request_limit,
             "created": time.time(),
             "matched": schedule_matches,
+            "matched_ids": [_item_identity(item) for item in matched_items],
             "base_url": base_url,
             "items": jsonable_encoder(mix),
             "scores": scores_by_identity,
             "features": jsonable_encoder(features_by_identity),
         }
+    mix, features_by_identity = await _session_select(
+        mix,
+        features_by_identity,
+        limit=request_limit,
+        user_id=user_id,
+        history=history,
+        session=session,
+    )
     return await _deliver_portion(
         request=request,
         user_id=user_id,
-        limit=limit,
+        limit=request_limit,
         hour=hour,
         exclude=exclude,
         mix=mix,
@@ -4664,6 +4655,147 @@ async def _compute_flow(
         telemetry_bind=telemetry_bind,
         request_id=request_id,
     )
+
+
+# Сколько кандидатов отбирает предрасчёт на одну выдачу ``limit``: пул на
+# несколько выдач, каждая берёт свои ``limit`` под сигналы сессии. Меньше
+# _POOL_MIN пул не держим — иначе переставлять почти нечего.
+_POOL_FACTOR = 3
+_POOL_MIN = 30
+# Сколько соседей позитивного артиста сессии поднимаются (Last.fm, из кэша).
+_SESSION_NEIGHBOUR_SEEDS = 3
+_SESSION_NEIGHBOURS = 20
+
+
+def pool_size(limit: int) -> int:
+    return max(_POOL_MIN, int(limit) * _POOL_FACTOR)
+
+
+async def _session_select(
+    pool: list,
+    features: dict,
+    *,
+    limit: int,
+    user_id: int,
+    history: dict,
+    session: str,
+    arm: Optional[str] = None,
+) -> tuple[list, dict]:
+    """Выдача ``limit`` из пула по варианту A/B и сигналам сессии.
+
+    Возвращает (items, features) — к признакам отданных добавлены arm,
+    поправки сессии, логит ранкера и пометка разведки (для телеметрии).
+    """
+    arm = arm or flow_session.pick_arm()
+    meta = history.get("meta") if isinstance(history.get("meta"), dict) else {}
+    state = flow_session.SessionState(
+        flow_session.parse_session(session), lambda item_id: meta.get(str(item_id))
+    )
+    neighbours: set = set()
+    learned = None
+    if arm == "session":
+        if state.positive_artists:
+            lists = await asyncio.gather(
+                *(
+                    mainstream.cached_similar_artists(artist)
+                    for artist in state.positive_artists[:_SESSION_NEIGHBOUR_SEEDS]
+                ),
+                return_exceptions=True,
+            )
+            neighbours = {
+                primary_artist_key(name)
+                for names in lists
+                if isinstance(names, list)
+                for name in names[:_SESSION_NEIGHBOURS]
+            }
+        model = await asyncio.to_thread(learned_ranker.load, user_id)
+        learned = learned_ranker.scorer(model)
+    chosen, extra = flow_session.select(
+        pool,
+        limit=limit,
+        arm=arm,
+        identity_of=_flow_item_identity,
+        artist_of=lambda item: _flow_item_artist_title(item)[0],
+        features=features,
+        session=state,
+        learned=learned,
+        neighbours=neighbours,
+        previous_artists=history.get("artists") or [],
+    )
+    merged = dict(features)
+    for identity, row in extra.items():
+        merged[identity] = {**(features.get(identity) or {}), **row}
+    return chosen, merged
+
+
+def _history_ids_after(history: dict, mix: list) -> list:
+    """history["ids"], какой её запишет _deliver_portion после выдачи mix."""
+    returned = []
+    for item in mix:
+        source = item.get("source")
+        external_id = item.get("external_id")
+        if source and external_id:
+            returned.append(f"{source}:{external_id}")
+        elif item.get("id") is not None:
+            returned.append(f"local:{item['id']}")
+    return list(dict.fromkeys(list(history.get("ids") or []) + returned))[-_FLOW_HISTORY_LIMIT:]
+
+
+async def _store_leftover(
+    user_id: int, history: dict, delivered: list, leftover: list, ready: dict, limit: int
+) -> None:
+    """Невыданный остаток пула — готовой порцией под историю после выдачи.
+
+    Следующая выдача возьмёт из него без расчёта, с новыми сигналами сессии.
+    Мелкий остаток не храним: flow-warmer как раз считает свежий пул.
+    """
+    if len(leftover) < limit:
+        return
+    context = _ranking_context(user_id, {"ids": _history_ids_after(history, delivered)})
+    await set_cache_async(
+        _ready_key(user_id),
+        {
+            **ready,
+            "context": context,
+            "items": leftover,
+        },
+        expire=_READY_TTL,
+    )
+
+
+# Близость к любимым артистам: соседи из Last.fm artist.getSimilar (кэш 7 дней
+# в mainstream). Якорей не больше _PROXIMITY_ANCHORS, соседей на якорь —
+# _PROXIMITY_NEIGHBOURS; место соседа в списке даёт 1 / (1 + rank / 10).
+_PROXIMITY_ANCHORS = 12
+_PROXIMITY_NEIGHBOURS = 30
+_PROXIMITY_WAIT = 2.0
+
+
+async def _artist_proximity(anchors, *, fetch: bool, timeout: float) -> dict:
+    """{primary_artist_key: близость в (0, 1]}; сам якорь — 1.0.
+
+    fetch=False — только кэш (живая выдача под нагрузкой). Не успевшие за
+    timeout запросы дочитываются в фоне и попадут в следующий расчёт.
+    """
+    anchors = list(dict.fromkeys(a for a in anchors if a))[:_PROXIMITY_ANCHORS]
+    if not anchors:
+        return {}
+    getter = mainstream.similar_artists if fetch and mainstream.available() else (
+        mainstream.cached_similar_artists
+    )
+    tasks = [asyncio.ensure_future(getter(anchor)) for anchor in anchors]
+    done, _pending = await asyncio.wait(tasks, timeout=timeout)
+    proximity: dict = {}
+    for anchor, task in zip(anchors, tasks):
+        proximity[primary_artist_key(anchor)] = 1.0
+        if task not in done or task.cancelled() or task.exception() is not None:
+            continue
+        for rank, name in enumerate((task.result() or [])[:_PROXIMITY_NEIGHBOURS]):
+            key = primary_artist_key(name)
+            value = 1.0 / (1.0 + rank / 10.0)
+            if key and value > proximity.get(key, 0.0):
+                proximity[key] = value
+    return proximity
 
 
 def _release_request_session(db: Session, user: User) -> None:
@@ -4735,10 +4867,12 @@ async def get_flow(
     limit: int = Query(8, ge=5, le=50),
     exclude: str = Query("", max_length=4000),
     hour: Optional[int] = Query(None, ge=0, le=23),
+    sess: str = Query("", max_length=4000),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """Порция персонального потока. exclude — id уже находящихся в очереди."""
+    """Порция персонального потока. exclude — id уже находящихся в очереди,
+    sess — что юзер сделал с последними треками волны (app/flow_session.py)."""
     global _live_network_inflight, _live_waiting
     # Ответ уникален для каждого запроса — кэшировать нельзя ни на секунду
     # (подробно — в _compute_flow).
@@ -4769,7 +4903,19 @@ async def get_flow(
         )
         timings.append(("take", time.perf_counter() - stage))
         if ready is not None:
-            items, scores, features, matched = ready
+            pool, scores, features, matched, ready_payload = ready
+            stage = time.perf_counter()
+            items, features = await _session_select(
+                pool,
+                features,
+                limit=limit,
+                user_id=user_id,
+                history=history,
+                session=sess,
+            )
+            timings.append(("select", time.perf_counter() - stage))
+            chosen = {_flow_item_identity(item) for item in items}
+            leftover = [item for item in pool if _flow_item_identity(item) not in chosen]
             telemetry_bind = db.get_bind()
             db.close()
             mix = await _deliver_portion(
@@ -4785,8 +4931,16 @@ async def get_flow(
                 telemetry_bind=telemetry_bind,
                 request_id=new_request_id(),
                 timings=timings,
-                schedule_matches=not matched,
+                schedule_matches=False,
             )
+            # Предрасчёт поставил матчи только голове пула (matched_ids).
+            already = set(ready_payload.get("matched_ids") or []) if matched else set()
+            unmatched = [item for item in mix if _flow_item_identity(item) not in already]
+            if unmatched:
+                ytdlp._schedule_audio_matches(unmatched)
+            # После выдачи: её порядок (первый трек мог смениться на мгновенный
+            # старт) и есть порядок истории, под которую считается контекст.
+            await _store_leftover(user_id, history, mix, leftover, ready_payload, limit)
             response.headers["Server-Timing"] = ", ".join(
                 [f"{name};dur={seconds * 1000:.0f}" for name, seconds in timings]
                 + ["flow;desc=ready"]
@@ -4811,7 +4965,7 @@ async def get_flow(
     try:
         mix = await _compute_flow(
             request, response, limit, exclude, hour, current_user, db,
-            mode="live", history=history,
+            mode="live", history=history, session=sess,
         )
     finally:
         _pool_cache_only.reset(token)

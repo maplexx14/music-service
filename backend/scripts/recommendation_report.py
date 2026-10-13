@@ -61,6 +61,9 @@ def main() -> None:
     finally:
         db.close()
 
+    for user_id, user_rows in by_user.items():
+        for row in user_rows:
+            row["user_id"] = user_id
     rows = [row for user_rows in by_user.values() for row in user_rows]
     print(
         f"surface={args.surface} days={args.days} version={args.version or 'all'} "
@@ -73,6 +76,24 @@ def main() -> None:
     _table("Версии алгоритма", sorted(
         _group(rows, lambda row: row["algorithm_version"]).items()
     ))
+    _table("Вариант A/B (features.arm, с hybrid-v18)", sorted(
+        _group(rows, lambda row: row["features"].get("arm", "до A/B")).items()
+    ))
+    arm_rows = [row for row in rows if row["features"].get("arm")]
+    if arm_rows:
+        _table("Вариант A/B без владельца (user != 1)", sorted(
+            _group(
+                [row for row in arm_rows if row.get("user_id") != 1],
+                lambda row: row["features"]["arm"],
+            ).items()
+        ))
+        _table("Разведка в варианте session (features.explore)", [
+            ("разведка", [row for row in arm_rows if row["features"].get("explore")]),
+            ("ранжирование", [
+                row for row in arm_rows
+                if row["features"].get("arm") == "session" and not row["features"].get("explore")
+            ]),
+        ])
     _table("Артист", [
         ("новый", [row for row in rows if row["novel"]]),
         ("знакомый", [row for row in rows if not row["novel"]]),

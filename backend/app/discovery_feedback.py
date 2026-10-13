@@ -183,6 +183,7 @@ def delivery_outcomes(
                 "features": features,
                 "artist": artist,
                 "title": title,
+                "shown_at": _utc(shown_at),
             }
         )
     return rows

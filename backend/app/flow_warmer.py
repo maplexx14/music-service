@@ -23,6 +23,7 @@ recommendation_cache.mark_flow_signal). Матчи источников ауди
 import asyncio
 import logging
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -63,6 +64,10 @@ DEFAULT_LIMIT = 15
 MATCH_WINDOW = int(os.getenv("FLOW_WARMER_MATCH_SEC", "600"))
 # Как часто перекладывать созревшие сигналы из flow:pc:delayed в очередь.
 SIGNAL_POLL = float(os.getenv("FLOW_WARMER_SIGNAL_POLL_SEC", "1"))
+# Обучение ранкера (app/learned_ranker.py) — раз в столько секунд, отдельным
+# процессом: чистый Python держал бы GIL расчётов порций. 0 — выключено.
+RANKER_EVERY = int(os.getenv("FLOW_RANKER_TRAIN_SEC", str(24 * 60 * 60)))
+RANKER_FIRST_DELAY = int(os.getenv("FLOW_RANKER_FIRST_DELAY_SEC", "300"))
 # BLPOP короче socket_timeout клиента Redis (cache.py, 2 с), иначе пустая
 # очередь заканчивалась бы исключением таймаута сокета.
 _POP_TIMEOUT = 1
@@ -105,14 +110,18 @@ _user_locks: dict = {}
 
 
 def _is_current(payload, context: str, limit: int, signal_at: float = 0.0) -> bool:
-    """Готовая порция посчитана под эту историю, после последнего сигнала
-    юзера и ещё не просит пересчёта."""
+    """Готовый пул посчитан под эту историю, после последнего сигнала юзера,
+    ещё не просит пересчёта и его хватит больше чем на одну выдачу.
+
+    Пул — на несколько выдач: остаток после выдачи возвращается готовой
+    порцией (flow._store_leftover). Когда его остаётся на одну, считаем
+    свежий заранее, пока выдачи идут из остатка."""
     if not isinstance(payload, dict):
         return False
     created = float(payload.get("created") or 0)
     return (
         payload.get("context") == context
-        and payload.get("limit") == limit
+        and len(payload.get("items") or []) >= 2 * limit
         and created > signal_at
         and time.time() - created < REFRESH_AFTER
     )
@@ -174,6 +183,7 @@ async def _precompute_unlocked(user_id: int, session_factory) -> str:
             db,
             mode="precompute",
             schedule_matches=listening,
+            pool_limit=flow.pool_size(limit),
         )
     finally:
         db.close()
@@ -299,6 +309,29 @@ async def _refresh_loop() -> None:
         await asyncio.sleep(SCAN_EVERY)
 
 
+async def _train_ranker_once() -> int:
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "app.learned_ranker",
+    )
+    return await process.wait()
+
+
+async def _ranker_loop() -> None:
+    if RANKER_EVERY <= 0:
+        return
+    await asyncio.sleep(RANKER_FIRST_DELAY)
+    while True:
+        started = time.monotonic()
+        try:
+            code = await _train_ranker_once()
+            logger.info(
+                "flow-warmer: ranker trained code=%s %.0fs", code, time.monotonic() - started
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("flow-warmer: ranker training failed", exc_info=True)
+        await asyncio.sleep(RANKER_EVERY)
+
+
 async def _run() -> None:
     asyncio.get_running_loop().set_default_executor(
         ThreadPoolExecutor(max_workers=THREADS, thread_name_prefix="flow-warmer")
@@ -311,6 +344,7 @@ async def _run() -> None:
         *(_worker(index) for index in range(CONCURRENCY)),
         _refresh_loop(),
         _signal_loop(),
+        _ranker_loop(),
     )
 
 

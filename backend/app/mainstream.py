@@ -195,6 +195,12 @@ async def similar_artists(artist: str) -> list[str]:
     return names
 
 
+async def cached_similar_artists(artist: str) -> list[str]:
+    """Соседи из кэша similar_artists, без сети (выдача волны — миллисекунды)."""
+    cached = await get_cache_async(_SIMILAR_KEY.format(artist_key(artist)))
+    return cached if isinstance(cached, list) else []
+
+
 def is_famous(info: Optional[dict]) -> bool:
     return bool(info) and int(info.get("listeners") or 0) >= MIN_ARTIST_LISTENERS
 

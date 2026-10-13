@@ -3167,9 +3167,12 @@ def _precompute(user_id):
 
 
 def test_ready_portion_is_precomputed_and_served(client, db, monkeypatch):
-    """Выдача ставит юзера в очередь flow-warmer, следующая порция — готовая."""
+    """Выдача ставит юзера в очередь flow-warmer, следующая порция — из готового
+    пула; невыданный остаток пула обслуживает и следующую выдачу."""
+    from app import flow_session
     from app.cache import get_cache, redis_client
 
+    monkeypatch.setattr(flow_session, "pick_arm", lambda rng=None: "control")
     user, headers, first = _ready_setup(client, db, monkeypatch, "ready-user")
     assert redis_client.lrange(flow_router._PC_QUEUE, 0, -1) == [str(user.id)]
     meta = get_cache(f"flow:pc:meta:{user.id}")
@@ -3177,7 +3180,9 @@ def test_ready_portion_is_precomputed_and_served(client, db, monkeypatch):
 
     assert _precompute(user.id) is True
     ready = get_cache(f"flow:ready:{user.id}")
-    assert ready and len(ready["items"]) == 5
+    # Пул на несколько выдач, а не одна порция.
+    assert ready and len(ready["items"]) > 5
+    assert ready["limit"] == 5
 
     second = client.get(
         f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}", headers=headers
@@ -3185,16 +3190,23 @@ def test_ready_portion_is_precomputed_and_served(client, db, monkeypatch):
     assert second.status_code == 200, second.text
     assert "flow;desc=ready" in second.headers["Server-Timing"]
     served = second.json()
+    # Вариант control отдаёт голову пула в порядке предрасчёта.
     assert [t["external_id"] for t in served] == [
-        t["external_id"] for t in ready["items"]
+        t["external_id"] for t in ready["items"][:5]
     ]
     # Конверт атрибуции — от этого запроса, а не от предрасчёта.
     assert {t["recommendation_position"] for t in served} == set(range(len(served)))
     assert len({t["recommendation_id"] for t in served}) == 1
-    # Порция одноразовая, а история сдвинулась — третья снова живая.
-    assert get_cache(f"flow:ready:{user.id}") is None
-    third = client.get("/api/recommendations/flow?limit=5", headers=headers)
-    assert "flow;desc=live" in third.headers["Server-Timing"]
+    # Остаток пула — готовая порция под историю после выдачи.
+    leftover = get_cache(f"flow:ready:{user.id}")
+    assert [t["external_id"] for t in leftover["items"]] == [
+        t["external_id"] for t in ready["items"][5:]
+    ]
+    third = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first + served)}",
+        headers=headers,
+    )
+    assert "flow;desc=ready" in third.headers["Server-Timing"]
     assert not {t["external_id"] for t in third.json()} & {
         t["external_id"] for t in first + served
     }
@@ -3242,7 +3254,10 @@ def test_ready_portion_drops_fresh_skips_and_queue(client, db, monkeypatch):
     served = second.json()
     assert not {t["artist"] for t in served} & {"Artist0"}
     assert queued["external_id"] not in {t["external_id"] for t in served}
-    assert len(served) == 12 - 4 - 1
+    # Из 12 осталось 12 - 4 - 1 = 7: выдача берёт limit, остаток (2) меньше
+    # порции — его не храним, свежий пул считает flow-warmer.
+    assert len(served) == 5
+    assert get_cache(f"flow:ready:{user.id}") is None
 
 
 def test_ready_portion_falls_back_when_skip_empties_it(client, db, monkeypatch):
@@ -3725,3 +3740,37 @@ def test_genre_hits_pool_skips_titles_with_the_genre(monkeypatch):
     monkeypatch.setattr(flow_router, "_resolve_similar", _resolve)
     pool = asyncio.run(flow_router._genre_hits_pool(None, "nu metal", 0))
     assert [t.title for t in pool] == ["Freak on a Leash"]
+
+
+def test_ready_pool_session_arm_logs_arm_and_session_terms(client, db, monkeypatch):
+    """Вариант session: сигналы sess разбираются по history["meta"], а вариант
+    и поправки сессии уходят в телеметрию показа."""
+    from app import flow_session
+    from app.cache import get_cache
+
+    monkeypatch.setattr(flow_session, "pick_arm", lambda rng=None: "session")
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-session")
+    history = get_cache(f"flow:history:v2:{user.id}")
+    meta = history["meta"]
+    assert meta[str(first[0]["id"])]["artist"] == "lovedartist"
+    assert meta[str(first[0]["id"])]["origin"]
+
+    assert _precompute(user.id) is True
+    sess = f"n{first[0]['id']},c{first[1]['id']}"
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}&sess={sess}",
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    assert "flow;desc=ready" in second.headers["Server-Timing"]
+    served = second.json()
+    assert len(served) == 5
+    from sqlalchemy import select
+
+    rows = db.execute(
+        select(recommendation_impressions.c.features).where(
+            recommendation_impressions.c.request_id == served[0]["recommendation_id"]
+        )
+    ).scalars().all()
+    assert rows and all(row["arm"] == "session" for row in rows)
+    assert any("session" in row for row in rows)
