@@ -6,6 +6,8 @@ import re
 import tempfile
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from typing import List, Optional
 from urllib.parse import urlsplit
 
@@ -81,22 +83,81 @@ _YTMUSIC_AUTH = os.getenv("YTMUSIC_AUTH", "").strip()
 # пулы догреваются в фоне — им 10 с хватает с запасом.
 _YTMUSIC_TIMEOUT = float(os.getenv("YTMUSIC_TIMEOUT", "10"))
 
+# Хедж запросов к YouTube Music. Замер с прода 2026-10-13: из 30 поисков
+# подряд 3 висели 7.7–9.4 с и кончались 403 (ytmusicapi видит HTML вместо
+# JSON — JSONDecodeError), остальные отвечали за 0.3–0.7 с, а повтор того же
+# запроса проходил сразу. На этих зависаниях стояли хвост поиска (секция
+# «Исполнители» 4–9 с), страница артиста (7 с, и урезанная выдача ещё и
+# ложилась в кэш) и поиск матча Deezer на старте холодного трека. Поэтому
+# запрос, не ответивший за _YTMUSIC_HEDGE_DELAY, дублируется и берётся первый
+# удачный ответ, а быстрый отказ повторяется один раз. Цена — лишний запрос к
+# каталогу (не к плееру — bot-check его не задевает) примерно на каждый
+# десятый вызов.
+_YTMUSIC_HEDGE_DELAY = float(os.getenv("YTMUSIC_HEDGE_DELAY", "1.2"))
+# Вызовы идут из пула тредов asyncio (ASYNCIO_THREADS), и каждый занимает до
+# двух тредов хеджа. Треды пул создаёт по требованию, запас — чтобы очередь к
+# пулу не съедала хедж-задержку под залпом flow-warmer.
+_YTMUSIC_HEDGE_THREADS = 3 * int(os.getenv("ASYNCIO_THREADS", "32"))
+_ytmusic_hedge_pool = ThreadPoolExecutor(
+    max_workers=_YTMUSIC_HEDGE_THREADS, thread_name_prefix="ytmusic"
+)
+
+
+def _ytmusic_response_ok(response) -> bool:
+    return response.status_code < 400 and bool(response.content)
+
+
+def _hedged_request(send):
+    """Ответ ``send()`` с хеджем (см. _YTMUSIC_HEDGE_DELAY).
+
+    Ответил вовремя и удачно — он и возвращается. Быстрый отказ (4xx/5xx,
+    пустое тело, сетевая ошибка) — одна повторная попытка. Не ответил за
+    хедж-задержку — параллельно уходит вторая, побеждает первая удачная;
+    если обе неудачны, возвращается последняя (ошибку разберёт ytmusicapi).
+    """
+    first = _ytmusic_hedge_pool.submit(send)
+    done, _ = futures_wait([first], timeout=_YTMUSIC_HEDGE_DELAY)
+    if done:
+        try:
+            response = first.result()
+        except Exception:  # noqa: BLE001 — разовый сбой сети, повтор ниже
+            return send()
+        return response if _ytmusic_response_ok(response) else send()
+
+    pending = {first, _ytmusic_hedge_pool.submit(send)}
+    last = None
+    while pending:
+        done, pending = futures_wait(pending, return_when=FIRST_COMPLETED)
+        for future in done:
+            try:
+                response = future.result()
+            except Exception as exc:  # noqa: BLE001 — ждём вторую попытку
+                last = exc
+                continue
+            if _ytmusic_response_ok(response):
+                return response
+            last = response
+    if isinstance(last, Exception):
+        raise last
+    return last
+
 
 def _ytmusic_session():
-    import functools
-
     import requests
     from requests.adapters import HTTPAdapter
 
-    session = requests.Session()
-    session.request = functools.partial(session.request, timeout=_YTMUSIC_TIMEOUT)
+    class HedgedSession(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs.setdefault("timeout", _YTMUSIC_TIMEOUT)
+            send = super().request
+            return _hedged_request(lambda: send(method, url, **kwargs))
+
+    session = HedgedSession()
     # Пул urllib3 по умолчанию — 10 соединений на хост, а вызовы идут из пула
-    # тредов asyncio (ASYNCIO_THREADS): лишние соединения закрывались после
+    # тредов asyncio (ASYNCIO_THREADS) и хеджа: лишние соединения закрывались после
     # ответа («Connection pool is full, discarding connection: music.youtube.com»,
     # 83 раза за 6 минут flow-warmer), и следующий вызов снова платил за TLS.
-    session.mount(
-        "https://", HTTPAdapter(pool_maxsize=int(os.getenv("ASYNCIO_THREADS", "32")))
-    )
+    session.mount("https://", HTTPAdapter(pool_maxsize=_YTMUSIC_HEDGE_THREADS))
     return session
 
 
@@ -951,11 +1012,14 @@ _SOCKET_TIMEOUT = 8
 # Хедж-задержка: первым стартует самый надёжный набор клиентов; остальные
 # подключаются параллельно, только если он не ответил за это время. Экономит
 # нагрузку на YouTube в общем случае (обычно первый клиент и так отвечает),
-# но не жертвует задержкой, если он подвис. Primary теперь лёгкий одиночный
-# клиент (см. _CLIENT_CANDIDATES) и обычно отвечает быстро, поэтому задержку
-# можно держать короче — подвисший primary не тянет резолв дольше 0.6с до
-# подключения fallback-наборов.
-_HEDGE_DELAY = 0.6
+# но не жертвует задержкой, если он подвис.
+# Замер с прода 2026-10-13: visionos резолвит за 0.7–1.2 с, а web_safari
+# отдаёт 0 аудио-форматов. При задержке 0.6 с хедж срабатывал почти на каждом
+# холодном треке: второй резолв, заведомо пустой, делил с первым GIL воркера и
+# удваивал запросы к плееру YouTube, которые и приближают bot-check. 1.5 с —
+# выше нормального ответа visionos; подвисший запрос по таймауту хеджирует
+# второй такой же (см. _resolve_via_ytdlp).
+_HEDGE_DELAY = 1.5
 
 
 class TrackUnavailable(Exception):
@@ -1516,11 +1580,13 @@ async def _resolve_via_ytdlp(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
-                # Хедж: первый набор не успел за _HEDGE_DELAY — подключаем остальных.
+                # Хедж: первый набор не успел за _HEDGE_DELAY — подключаем
+                # остальных и второй запрос того же primary: подвисает обычно
+                # конкретный запрос, а не клиент (см. _HEDGE_DELAY).
                 hedged = True
                 pending |= {
                     asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients, egress))
-                    for clients in rest
+                    for clients in (primary, *rest)
                 }
                 continue
             success = False
