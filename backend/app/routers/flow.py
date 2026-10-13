@@ -2770,28 +2770,6 @@ def _external_plan(
         else:
             tag_words = list(profile.get("genres") or [])[:_TAG_EXPLORE_TAGS]
 
-    tag_query = " ".join(tag_words[:2]) if tag_words else ""
-    # Жанр, выбранный в настройках, — свой поиск в каждой порции, по одному
-    # жанру за подгрузку по кругу. Раньше он доходил до поиска, только когда в
-    # названиях не набиралось слов-тегов (у 16 из 23 юзеров жанры выбраны), а
-    # найденное резал мейнстрим-фильтр: у андерграундного жанра почти нет
-    # артистов с 50k слушателей (breakcore: 3 из 13 найденных).
-    explicit = [
-        genre.strip()
-        for genre in (profile.get("explicit_genres") or [])
-        if isinstance(genre, str) and genre.strip()
-    ]
-    genre_query = (
-        max(explicit, key=lambda genre: stable_jitter(ranking_context, f"explicit-genre:{genre}"))
-        if explicit
-        else ""
-    )
-    # Есть выбранный жанр — слова из названий не ищем: у такого юзера это чаще
-    # имена его же песен («наблюдатель ртуть»), и поиск приносил одноимённые
-    # чужие треки (прод, 2026-10-13).
-    if genre_query:
-        tag_query = ""
-
     return {
         "seeds": seeds,
         "similar_artists": similar_artists,
@@ -2799,8 +2777,7 @@ def _external_plan(
         "seed_tracks": seed_tracks,
         "hits_seed_artists": hits_seed_artists,
         "sc_artists": sc_artists,
-        "tag_query": tag_query,
-        "genre_query": genre_query,
+        "tag_query": " ".join(tag_words[:2]) if tag_words else "",
     }
 
 
@@ -3700,8 +3677,6 @@ async def _compute_flow(
     origin_by_identity: dict[str, str] = {}
     # Прошёл ли кандидат мейнстрим-фильтр (только для проверенных) — в телеметрию.
     hit_by_identity: dict[str, bool] = {}
-    # Найденное по выбранному в настройках жанру: мейнстрим-фильтр не режет.
-    genre_identities: set[str] = set()
 
     def _add_explore(
         tracks,
@@ -4028,29 +4003,6 @@ async def _compute_flow(
             origin="soundcloud",
         )
 
-    # Поиск по выбранному в настройках жанру — в каждой порции, не fallback:
-    # это явный выбор юзера, а результат кэшируется (_tag_pool). Требуем, чтобы
-    # кандидат совпал с жанром (распознанный жанр или слово в названии), как
-    # у тегового поиска ниже; мимо мейнстрим-фильтра (см. genre_identities).
-    genre_query = plan.get("genre_query") or ""
-    if genre_query:
-        genre_check = track_check(
-            make_relevance_check(
-                trusted_artist_keys=set(profile.get("curated_artist_keys") or []),
-                user_genres=set(profile.get("genres") or []),
-                prefer_cyrillic=None,
-                keywords=list(dict.fromkeys(genre_query.lower().split())),
-            )
-        )
-        stage_started = loop.time()
-        (genre_pool,) = await _gather_within(
-            [_tag_pool(request, genre_query)], network_deadline
-        )
-        _mark_stage("genre", stage_started)
-        genre_items = [t for t in genre_pool if genre_check(t)]
-        genre_identities.update(_item_identity(t) for t in genre_items)
-        _add_explore(genre_items, origin="genre")
-
     # Теговый поиск также остаётся fallback: последовательное ожидание трёх
     # провайдеров было основной причиной долгой подгрузки следующих 15 треков.
     query = plan["tag_query"]
@@ -4225,7 +4177,6 @@ async def _compute_flow(
             c
             for c in unified_candidates
             if _item_identity(c) not in liked_identity_set
-            and _item_identity(c) not in genre_identities
             and _gate_artist(c) not in deep_ok
         ]
         hits = await mainstream.artist_hits(
