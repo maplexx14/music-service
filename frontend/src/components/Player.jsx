@@ -1127,6 +1127,11 @@ function PlayerInner() {
       setIsBuffering(false)
       // Звук пошёл — теперь можно тянуть hi-res обложку (см. heavyCoverTrackId).
       const startedId = usePlayerStore.getState().currentTrack?.id ?? null
+      // Был ли звук у трека — признак скипа (до звука или после), см.
+      // playbackMetadata в playerStore.
+      if (usePlayerStore.getState().audibleTrackId !== startedId) {
+        usePlayerStore.setState({ audibleTrackId: startedId })
+      }
       const allowHeavyCover = () => usePlayerStore.setState({ heavyCoverTrackId: startedId })
       clearTimeout(heavyCoverTimerRef.current)
       if (document.hidden) allowHeavyCover()

@@ -60,6 +60,16 @@ const resolvedPrefetchKeys = new Set()
 let flowPreloadPromise = null
 let flowPreloadGeneration = 0
 const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
+// Порции волны короче и чаще: каждая выдача выбирается на бэке из готового
+// пула под сигналы сессии (sess), и чем меньше треков уже стоит в очереди,
+// тем быстрее скип или лайк меняет то, что заиграет дальше. Раньше порция
+// была 15 и догружалась за 8 до конца — сигнал доходил через 8–15 треков.
+// Готовый пул отдаётся за десятки мс, поэтому запаса в 4 трека хватает.
+const FLOW_START_LIMIT = 8
+const FLOW_EXTEND_LIMIT = 6
+const FLOW_EXTEND_LEAD = 4
+// Сколько последних сигналов волны отправлять в sess (см. flow_session.py).
+const FLOW_SESSION_MAX = 30
 
 function invalidateFlowPreload() {
   flowPreloadGeneration += 1
@@ -104,6 +114,18 @@ function postRecommendationEvent(track, eventType, value = null, metadata = null
   return api
     .post('/recommendations/events', payload, { skipErrorToast: true })
     .catch(() => {})
+}
+
+// Сколько трека реально прозвучало и был ли звук вообще. Скип до первого
+// звука — осознанный отказ по названию и обложке, а не сбой: сохраняем его
+// отдельно, чтобы ранкер мог отличать «отказ по метаданным» от «послушал и
+// ушёл».
+function playbackMetadata(state) {
+  const { currentTrack, currentTime, audibleTrackId } = state
+  return {
+    played_ms: Math.max(0, Math.round((currentTime || 0) * 1000)),
+    audible: currentTrack?.id != null && audibleTrackId === currentTrack.id,
+  }
 }
 
 function recordRecommendationImpression(track, metadata = null) {
@@ -202,6 +224,11 @@ const usePlayerStore = create((set, get) => ({
   // после первого звука (с форой буферу): до этого сотни КБ картинки качались
   // бы параллельно с первыми байтами аудио и на узком канале задерживали старт.
   heavyCoverTrackId: null,
+  // id трека, у которого уже пошёл звук ('playing'). Ставит Player.
+  audibleTrackId: null,
+  // Сигналы волны этой сессии: [{ code, id }] — n/s скип до/после звука,
+  // c дослушал, l лайк, d дизлайк. Уходят на бэк параметром sess.
+  flowSession: [],
   isFullScreen: false,
   isRepeatOne: false,
   isShuffle: false,
@@ -375,6 +402,7 @@ const usePlayerStore = create((set, get) => ({
       const context = trackContext || get().currentTrack
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, wasLiked ? 'unlike' : 'like')
+        if (!wasLiked) get()._noteFlowSignal(context, 'l')
       }
       invalidateFlowPreload()
     } catch (error) {
@@ -421,6 +449,7 @@ const usePlayerStore = create((set, get) => ({
       const context = trackContext || get().currentTrack
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, wasDisliked ? 'undislike' : 'dislike')
+        if (!wasDisliked) get()._noteFlowSignal(context, 'd')
       }
       invalidateFlowPreload()
     } catch (error) {
@@ -622,7 +651,7 @@ const usePlayerStore = create((set, get) => ({
     const generation = flowPreloadGeneration
     flowPreloadPromise = api
       .get('/recommendations/flow', {
-        params: { limit: 15, hour: new Date().getHours() },
+        params: { limit: FLOW_START_LIMIT, hour: new Date().getHours(), sess: get()._flowSessionParam() },
         skipErrorToast: true,
       })
       .then(({ data }) => {
@@ -672,7 +701,7 @@ const usePlayerStore = create((set, get) => ({
       }
 
       const { data } = await api.get('/recommendations/flow', {
-        params: { limit: 15, hour: new Date().getHours() },
+        params: { limit: FLOW_START_LIMIT, hour: new Date().getHours(), sess: get()._flowSessionParam() },
       })
       if (!data || data.length === 0) return false
       get().playPlaylist(data, 0, 'flow')
@@ -687,21 +716,26 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Подгружает следующую порцию заранее. Запас в 8 треков маскирует сетевую
-  // задержку даже при нескольких быстрых пропусках подряд; flowLoading не даёт
-  // запустить параллельные дублирующие запросы.
+  // Подгружает следующую порцию заранее. Запас в FLOW_EXTEND_LEAD треков
+  // маскирует задержку даже при быстрых пропусках подряд (готовый пул — десятки
+  // мс); flowLoading не даёт запустить параллельные дублирующие запросы.
   extendFlowIfNeeded: async () => {
     const { flowActive, flowLoading, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
     if (!flowActive || flowLoading) return
     const pos = isShuffle ? currentShuffleIndex : currentIndex
-    if (pos < queue.length - 8) return
+    if (pos < queue.length - FLOW_EXTEND_LEAD) return
 
     set({ flowLoading: true })
     try {
       // Исключаем то, что уже в очереди (хвост до 100 треков).
       const exclude = queue.slice(-100).map((t) => t.id).join(',')
       const { data } = await api.get('/recommendations/flow', {
-        params: { limit: 15, exclude, hour: new Date().getHours() },
+        params: {
+          limit: FLOW_EXTEND_LIMIT,
+          exclude,
+          hour: new Date().getHours(),
+          sess: get()._flowSessionParam(),
+        },
       })
       const known = new Set(get().queue.map((t) => t.id))
       const fresh = (data || []).filter((t) => !known.has(t.id))
@@ -926,7 +960,9 @@ const usePlayerStore = create((set, get) => ({
     const durationKnown = duration && !isNaN(duration) && duration > 0
     if (durationKnown && currentTime / duration >= 0.25) return
     const completion = durationKnown ? currentTime / duration : 0
-    postRecommendationEvent(currentTrack, 'skip', completion)
+    const playback = playbackMetadata(get())
+    postRecommendationEvent(currentTrack, 'skip', completion, playback)
+    get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n')
     invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
@@ -953,7 +989,8 @@ const usePlayerStore = create((set, get) => ({
     const durationKnown = duration && !isNaN(duration) && duration > 0
     if (!durationKnown || currentTime <= 0) return // не успел начаться — не событие
     const completion = Math.max(0, Math.min(1, currentTime / duration))
-    postRecommendationEvent(currentTrack, 'listen', completion)
+    postRecommendationEvent(currentTrack, 'listen', completion, playbackMetadata(get()))
+    if (completion >= 0.8) get()._noteFlowSignal(currentTrack, 'c')
     invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
@@ -969,6 +1006,18 @@ const usePlayerStore = create((set, get) => ({
         .catch(() => {})
     }
   },
+
+  _noteFlowSignal: (track, code) => {
+    if (!track || track.recommendation_surface !== 'flow' || track.id == null) return
+    set((state) => ({
+      flowSession: [...state.flowSession, { code, id: String(track.id) }].slice(-FLOW_SESSION_MAX),
+    }))
+  },
+
+  _flowSessionParam: () =>
+    get()
+      .flowSession.map(({ code, id }) => `${code}${id}`)
+      .join(','),
 
   nextTrack: () => {
     get()._recordSkipIfNeeded()
