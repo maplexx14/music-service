@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Optional
 
@@ -127,6 +128,61 @@ def mark_negative_signal(user_id: int) -> None:
         redis_client.set(
             negative_signal_key(user_id), str(time.time()), ex=_NEGATIVE_SIGNAL_TTL
         )
+    except Exception:
+        pass
+
+
+# Пересчёт готовой порции потока по сигналу юзера (см. app/flow_warmer.py).
+# Следующую порцию flow-warmer считает сразу после выдачи текущей, а фронт
+# просит её только через ~15 треков (за 8 до конца очереди): лайки и скипы за
+# это время в ранжирование не попадали, выдача лишь вычищала скипнутых
+# артистов. Явное действие (лайк, дизлайк, их отмена) и серия скипов ставят
+# юзера в отложенную очередь; каждый следующий сигнал отодвигает срок
+# (ZADD GT), так что серия сливается в один расчёт. Одиночный скип пересчёта не
+# стоит: трек и его артиста и так убирает выдача, а скипов в потоке много.
+FLOW_PC_DELAYED = "flow:pc:delayed"
+_FLOW_SIGNAL_DELAY = float(os.getenv("FLOW_SIGNAL_DELAY_SEC", "30"))
+_FLOW_SIGNAL_SKIPS = int(os.getenv("FLOW_SIGNAL_SKIPS", "2"))
+_FLOW_SIGNAL_TTL = 2 * 60 * 60
+
+
+def flow_pc_meta_key(user_id: int) -> str:
+    # Пишется выдачей потока (flow._enqueue_precompute) на сутки.
+    return f"flow:pc:meta:{user_id}"
+
+
+def flow_signal_key(user_id: int) -> str:
+    """Время сигнала, после которого готовая порция устарела."""
+    return f"flow:pc:signal:{user_id}"
+
+
+def flow_skips_key(user_id: int) -> str:
+    """Разные треки, скипнутые после последнего расчёта порции."""
+    return f"flow:pc:skips:{user_id}"
+
+
+def mark_flow_signal(user_id: int, kind: str, identity: Optional[str] = None) -> None:
+    """Звать ПОСЛЕ коммита. kind="explicit" — лайк/дизлайк и их отмена,
+    kind="skip" — скип трека identity (local:id или source:external_id: скип
+    одного трека приходит и в /tracks/{id}/skip, и в /recommendations/events)."""
+    try:
+        # Потоком за сутки не пользовался — готовой порции нет и не нужна.
+        if not redis_client.exists(flow_pc_meta_key(user_id)):
+            return
+        if kind == "skip":
+            key = flow_skips_key(user_id)
+            pipe = redis_client.pipeline(transaction=False)
+            pipe.sadd(key, identity or f"t:{time.time()}")
+            pipe.expire(key, _FLOW_SIGNAL_TTL)
+            pipe.scard(key)
+            if pipe.execute()[-1] < _FLOW_SIGNAL_SKIPS:
+                return
+            redis_client.delete(key)
+        now = time.time()
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.set(flow_signal_key(user_id), str(now), ex=_FLOW_SIGNAL_TTL)
+        pipe.zadd(FLOW_PC_DELAYED, {str(user_id): now + _FLOW_SIGNAL_DELAY}, gt=True)
+        pipe.execute()
     except Exception:
         pass
 

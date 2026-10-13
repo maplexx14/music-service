@@ -57,6 +57,7 @@ from app.discovery_feedback import discovery_acceptance
 from app.recommendation_cache import (
     claim_delivery,
     invalidate_recommendation_cache,
+    mark_flow_signal,
     mark_negative_signal,
     recommendation_cache_key,
     remember_delivery,
@@ -2332,6 +2333,17 @@ def record_recommendation_event(
         invalidate_recommendation_cache(current_user.id)
     if payload.event_type in ("skip", "dislike"):
         mark_negative_signal(current_user.id)
+    if payload.event_type == "skip":
+        # Тот же трек, что и в /tracks/{id}/skip, — та же идентичность.
+        if track_id is not None:
+            identity = f"local:{track_id}"
+        elif payload.source and payload.external_id:
+            identity = f"{payload.source}:{payload.external_id}"
+        else:
+            identity = None
+        mark_flow_signal(current_user.id, "skip", identity)
+    elif payload.event_type in ("like", "unlike", "dislike", "undislike"):
+        mark_flow_signal(current_user.id, "explicit")
     return None
 
 

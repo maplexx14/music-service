@@ -3466,3 +3466,77 @@ def test_warmer_skips_current_portion_and_serializes_user(client, db, monkeypatc
 
     assert sorted(asyncio.run(_both())) == ["computed", "current"]
     assert len(calls) == 1
+
+
+def _delayed_score(user_id):
+    from app.cache import redis_client
+    from app.recommendation_cache import FLOW_PC_DELAYED
+
+    return redis_client.zscore(FLOW_PC_DELAYED, str(user_id))
+
+
+def test_flow_signal_schedules_recompute_on_like_and_skip_series(client, db, monkeypatch):
+    """Лайк ставит пересчёт порции; скипы — только серией разных треков."""
+    from app.cache import get_cache, redis_client
+    from app.recommendation_cache import FLOW_PC_DELAYED
+
+    user, headers, _first = _ready_setup(client, db, monkeypatch, "signal-user")
+    redis_client.delete(FLOW_PC_DELAYED)
+    tracks = []
+    for i in range(3):
+        track = Track(title=f"sig-{i}", artist="SigArtist", duration=100, source="local")
+        db.add(track)
+        db.commit()
+        tracks.append(track)
+
+    # Один трек, два канала (/tracks/{id}/skip и событие) — это один скип.
+    assert client.post(f"/api/tracks/{tracks[0].id}/skip", headers=headers).status_code == 200
+    event = {"event_type": "skip", "track_id": tracks[0].id, "surface": "flow"}
+    assert client.post("/api/recommendations/events", json=event, headers=headers).status_code == 204
+    assert _delayed_score(user.id) is None
+
+    started = time.time()
+    assert client.post(f"/api/tracks/{tracks[1].id}/skip", headers=headers).status_code == 200
+    due = _delayed_score(user.id)
+    assert due is not None and due > started
+    assert get_cache(f"flow:pc:signal:{user.id}") >= started
+    assert not redis_client.exists(f"flow:pc:skips:{user.id}")
+
+    # Следующий сигнал отодвигает срок, а не ставит второй расчёт.
+    redis_client.zadd(FLOW_PC_DELAYED, {str(user.id): started})
+    assert client.post(f"/api/tracks/{tracks[2].id}/like", headers=headers).status_code == 200
+    assert _delayed_score(user.id) > started
+    assert redis_client.zcard(FLOW_PC_DELAYED) == 1
+
+    # Тот, кто потоком не пользуется, пересчётов не ставит.
+    redis_client.delete(FLOW_PC_DELAYED)
+    create_user(db, username="no-flow-user")
+    other_headers = auth_headers(client, username="no-flow-user")
+    assert client.post(f"/api/tracks/{tracks[0].id}/like", headers=other_headers).status_code == 200
+    assert redis_client.zcard(FLOW_PC_DELAYED) == 0
+
+
+def test_warmer_recomputes_after_signal(client, db, monkeypatch):
+    """Порция под ту же историю, но старше сигнала — пересчитывается."""
+    from app import flow_warmer
+    from app.cache import get_cache, redis_client
+    from app.recommendation_cache import FLOW_PC_DELAYED, mark_flow_signal
+    from tests.conftest import TestingSessionLocal
+
+    user, _headers, _first = _ready_setup(client, db, monkeypatch, "signal-warm")
+    redis_client.delete(FLOW_PC_DELAYED, flow_router._PC_QUEUE, flow_router._PC_QUEUED)
+    run = lambda: asyncio.run(flow_warmer._precompute(user.id, TestingSessionLocal))  # noqa: E731
+    assert run() == "computed"
+    assert run() == "current"
+
+    mark_flow_signal(user.id, "explicit")
+    # Созрел — перекладывается в очередь воркера, с отложки снимается.
+    redis_client.zadd(FLOW_PC_DELAYED, {str(user.id): time.time() - 1})
+    assert flow_warmer._pop_due_signals() == [user.id]
+    assert redis_client.zcard(FLOW_PC_DELAYED) == 0
+    assert flow_warmer._enqueue([user.id]) == 1
+
+    created_before = get_cache(f"flow:ready:{user.id}")["created"]
+    assert run() == "computed"
+    assert get_cache(f"flow:ready:{user.id}")["created"] > created_before
+    assert run() == "current"

@@ -12,8 +12,11 @@ flow._compute_flow(mode="precompute") и кладётся в flow:ready:{user} �
 ranking_context, для которого посчитана. Плюс периодический проход: тем, кто
 был в потоке за FLOW_WARMER_ACTIVE_HOURS, порция пересчитывается незадолго до
 того, как выдача сочтёт её устаревшей, — чтобы и первый клик после перерыва
-попадал в готовое. Матчи источников аудио (Soulseek качает файл) ставятся
-сразу только для порции, заказанной выдачей; периодической — при её выдаче.
+попадал в готовое. И пересчёт по сигналу юзера: лайк, дизлайк или серия
+скипов после расчёта (отложенная очередь flow:pc:delayed, см.
+recommendation_cache.mark_flow_signal). Матчи источников аудио (Soulseek качает
+файл) ставятся сразу только для порции, заказанной выдачей; остальным — при
+выдаче.
 
 Запуск: python -m app.flow_warmer
 """
@@ -31,6 +34,7 @@ from sqlalchemy import func, select
 from starlette.requests import Request
 
 from app.cache import get_cache_async, redis_client, set_cache_async
+from app.recommendation_cache import FLOW_PC_DELAYED, flow_signal_key, flow_skips_key
 from app.database import SessionLocal
 from app.models import User, recommendation_impressions
 from app.routers import flow
@@ -56,6 +60,8 @@ DEFAULT_LIMIT = 15
 # Выдача была не раньше этого — юзер слушает, порцию скоро заберут: матчи
 # источников аудио ставим при предрасчёте, а не при выдаче.
 MATCH_WINDOW = int(os.getenv("FLOW_WARMER_MATCH_SEC", "600"))
+# Как часто перекладывать созревшие сигналы из flow:pc:delayed в очередь.
+SIGNAL_POLL = float(os.getenv("FLOW_WARMER_SIGNAL_POLL_SEC", "1"))
 # BLPOP короче socket_timeout клиента Redis (cache.py, 2 с), иначе пустая
 # очередь заканчивалась бы исключением таймаута сокета.
 _POP_TIMEOUT = 1
@@ -97,13 +103,17 @@ def _client_hour(meta: dict) -> Optional[int]:
 _user_locks: dict = {}
 
 
-def _is_current(payload, context: str, limit: int) -> bool:
-    """Готовая порция посчитана под эту историю и ещё не просит пересчёта."""
+def _is_current(payload, context: str, limit: int, signal_at: float = 0.0) -> bool:
+    """Готовая порция посчитана под эту историю, после последнего сигнала
+    юзера и ещё не просит пересчёта."""
+    if not isinstance(payload, dict):
+        return False
+    created = float(payload.get("created") or 0)
     return (
-        isinstance(payload, dict)
-        and payload.get("context") == context
+        payload.get("context") == context
         and payload.get("limit") == limit
-        and time.time() - float(payload.get("created") or 0) < REFRESH_AFTER
+        and created > signal_at
+        and time.time() - created < REFRESH_AFTER
     )
 
 
@@ -142,9 +152,16 @@ async def _precompute_unlocked(user_id: int, session_factory) -> str:
         if user is None or not user.is_active:
             return "inactive"
         history = await flow._load_flow_history(db, user_id)
-        current = await get_cache_async(flow._ready_key(user_id))
-        if _is_current(current, flow._ranking_context(user_id, history), limit):
+        current, signal_at = await asyncio.gather(
+            get_cache_async(flow._ready_key(user_id)),
+            get_cache_async(flow_signal_key(user_id)),
+        )
+        if not isinstance(signal_at, (int, float)):
+            signal_at = 0.0
+        if _is_current(current, flow._ranking_context(user_id, history), limit, signal_at):
             return "current"
+        # Скипы до этого момента расчёт прочтёт из БД — серия считается заново.
+        await asyncio.to_thread(redis_client.delete, flow_skips_key(user_id))
         exclude = await asyncio.to_thread(flow._precompute_exclude, db, history)
         payload = await flow._compute_flow(
             _request_for(base_url),
@@ -246,6 +263,29 @@ def _enqueue(user_ids: list) -> int:
     return added
 
 
+def _pop_due_signals() -> list:
+    """Юзеры, чей отложенный пересчёт по сигналу созрел; снимаются с отложки."""
+    due = redis_client.zrangebyscore(FLOW_PC_DELAYED, "-inf", time.time(), start=0, num=100)
+    users = []
+    for member in due:
+        # ZREM — отметка «забрал»: при нескольких процессах юзер уйдёт один раз.
+        if redis_client.zrem(FLOW_PC_DELAYED, member):
+            users.append(int(member))
+    return users
+
+
+async def _signal_loop() -> None:
+    while True:
+        try:
+            users = await asyncio.to_thread(_pop_due_signals)
+            if users:
+                added = await asyncio.to_thread(_enqueue, users)
+                logger.info("flow-warmer: signal queued %d users", added)
+        except Exception:  # noqa: BLE001
+            logger.warning("flow-warmer: signal scan failed", exc_info=True)
+        await asyncio.sleep(SIGNAL_POLL)
+
+
 async def _refresh_loop() -> None:
     while True:
         try:
@@ -269,6 +309,7 @@ async def _run() -> None:
     await asyncio.gather(
         *(_worker(index) for index in range(CONCURRENCY)),
         _refresh_loop(),
+        _signal_loop(),
     )
 
 

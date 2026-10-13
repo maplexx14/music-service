@@ -108,7 +108,7 @@ from app.acoustic_features import weighted_centroid
 from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
-from app.recommendation_cache import negative_signal_key
+from app.recommendation_cache import flow_pc_meta_key, negative_signal_key
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import (
     artist_key,
@@ -2820,7 +2820,7 @@ def _ready_key(user_id: int) -> str:
 
 
 def _pc_meta_key(user_id: int) -> str:
-    return f"flow:pc:meta:{user_id}"
+    return flow_pc_meta_key(user_id)
 
 
 def _ranking_context(user_id: int, history: dict) -> str:

@@ -19,7 +19,11 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from app.database import SessionLocal, get_db
 from app.cache import get_cache, get_cache_async, set_cache, set_cache_async
-from app.recommendation_cache import invalidate_recommendation_cache, mark_negative_signal
+from app.recommendation_cache import (
+    invalidate_recommendation_cache,
+    mark_flow_signal,
+    mark_negative_signal,
+)
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.models import Track, User, Playlist, playlist_tracks, user_track_plays, user_track_skips, user_play_events, rec_impressions
 from app.schemas import TrackResponse, TrackCreate, ExternalTrackImport
@@ -1114,6 +1118,7 @@ def like_track(
     # Лайк — сильный явный сигнал: сбрасываем кэш рекомендаций сразу, а не
     # ждём истечения TTL (иначе юзер лайкает и 5 минут видит старую выдачу).
     invalidate_recommendation_cache(current_user.id)
+    mark_flow_signal(current_user.id, "explicit")
     return {"message": "Track liked successfully"}
 
 
@@ -1143,6 +1148,7 @@ def unlike_track(
     db.commit()
     # Явное действие — инвалидируем кэш рекомендаций (см. like_track).
     invalidate_recommendation_cache(current_user.id)
+    mark_flow_signal(current_user.id, "explicit")
     return {"message": "Track unliked successfully"}
 
 
@@ -1305,6 +1311,7 @@ def record_track_skip(
     # Скип — явный негативный сигнал: кэш рекомендаций сбрасываем сразу.
     invalidate_recommendation_cache(current_user.id)
     mark_negative_signal(current_user.id)
+    mark_flow_signal(current_user.id, "skip", f"local:{track_id}")
     return {"message": "Skip recorded"}
 
 
@@ -1352,6 +1359,7 @@ def dislike_track(
     db.commit()
     invalidate_recommendation_cache(current_user.id)
     mark_negative_signal(current_user.id)
+    mark_flow_signal(current_user.id, "explicit")
     return {"message": "Track disliked"}
 
 
@@ -1370,6 +1378,7 @@ def undislike_track(
     ))
     db.commit()
     invalidate_recommendation_cache(current_user.id)
+    mark_flow_signal(current_user.id, "explicit")
     return {"message": "Dislike removed"}
 
 
