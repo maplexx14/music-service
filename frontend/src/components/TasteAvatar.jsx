@@ -10,7 +10,7 @@ const GENRES = {
   phonk: { colors: ['#2a0a3d', '#7b1fa2', '#ff3df5'], motif: 'shards' },
   trap: { colors: ['#14080a', '#b3121f', '#ff5a3c'], motif: 'bars' },
   'hip-hop': { colors: ['#1c1408', '#b8860b', '#ffd54a'], motif: 'vinyl' },
-  rock: { colors: ['#121212', '#5a1010', '#ff4433'], motif: 'bolt' },
+  rock: { colors: ['#121212', '#5a1010', '#ff4433'], motif: 'distortion' },
   electronic: { colors: ['#04102a', '#1440c8', '#21f0ff'], motif: 'wave' },
   lofi: { colors: ['#3b2f4a', '#c48b9f', '#ffe3c2'], motif: 'moon' },
   pop: { colors: ['#ff4f9a', '#ff9f43', '#fff35c'], motif: 'bubbles' },
@@ -80,7 +80,19 @@ const MOTIFS = {
     [38, 30, 22, 14].map((rad, i) => (
       <circle key={i} cx="50" cy="50" r={rad} fill="none" stroke={c} strokeWidth={i === 3 ? 10 : 2.5} opacity={0.4 + i * 0.12} />
     )),
-  bolt: (c) => <polygon points="56,8 26,56 46,56 38,92 74,40 54,40 64,8" fill={c} opacity="0.8" />,
+  // Рваная волна перегруза. Молния — эмблема самого сервиса, поэтому главным
+  // элементом её не делаем: изредка (по имени) она мелькает маленькой в углу.
+  distortion: (c, r) => (
+    <>
+      {[0, 1, 2].map((i) => {
+        const y = 32 + i * 18
+        let d = `M-5 ${y}`
+        for (let x = 5; x <= 105; x += 10) d += ` L${x} ${y + (x % 20 ? -1 : 1) * (4 + r() * 8)}`
+        return <path key={i} d={d} fill="none" stroke={c} strokeWidth="3" strokeLinejoin="miter" opacity={0.35 + i * 0.2} />
+      })}
+      {r() < 0.3 && <polygon points="76,12 68,26 74,26 70,38 82,22 76,22 80,12" fill={c} opacity="0.6" />}
+    </>
+  ),
   wave: (c, r) =>
     [0, 1, 2].map((i) => {
       const y = 30 + i * 20
