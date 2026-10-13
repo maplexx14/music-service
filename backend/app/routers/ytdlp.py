@@ -86,9 +86,17 @@ def _ytmusic_session():
     import functools
 
     import requests
+    from requests.adapters import HTTPAdapter
 
     session = requests.Session()
     session.request = functools.partial(session.request, timeout=_YTMUSIC_TIMEOUT)
+    # Пул urllib3 по умолчанию — 10 соединений на хост, а вызовы идут из пула
+    # тредов asyncio (ASYNCIO_THREADS): лишние соединения закрывались после
+    # ответа («Connection pool is full, discarding connection: music.youtube.com»,
+    # 83 раза за 6 минут flow-warmer), и следующий вызов снова платил за TLS.
+    session.mount(
+        "https://", HTTPAdapter(pool_maxsize=int(os.getenv("ASYNCIO_THREADS", "32")))
+    )
     return session
 
 

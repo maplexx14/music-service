@@ -3405,3 +3405,64 @@ def test_warmer_refreshes_recent_flow_users_without_ready(client, db, monkeypatc
     assert user.id in flow_warmer._stale_active_users(TestingSessionLocal)
     assert _precompute(user.id) is True
     assert user.id not in flow_warmer._stale_active_users(TestingSessionLocal)
+
+
+def test_audio_matches_follow_listening_not_refresh(client, db, monkeypatch):
+    """Порция по выдаче ставит матчи сразу; периодическая — только при выдаче.
+
+    Матч Soulseek качает файл: порцию для того, кто сейчас не слушает, могут
+    так и не забрать, а пересчёт идёт каждые полтора часа.
+    """
+    from app.cache import get_cache, set_cache
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "ready-matches")
+    scheduled = []
+    monkeypatch.setattr(
+        flow_router.ytdlp, "_schedule_audio_matches", lambda items: scheduled.append(len(items))
+    )
+    # Сразу после выдачи — юзер слушает.
+    assert _precompute(user.id) is True
+    assert get_cache(f"flow:ready:{user.id}")["matched"] is True
+    assert scheduled == [5]
+
+    # Периодический пересчёт: выдача была давно.
+    scheduled.clear()
+    clear_pattern("flow:ready:*")
+    meta = get_cache(f"flow:pc:meta:{user.id}")
+    meta["at"] = time.time() - 3600
+    set_cache(f"flow:pc:meta:{user.id}", meta, expire=600)
+    assert _precompute(user.id) is True
+    assert get_cache(f"flow:ready:{user.id}")["matched"] is False
+    assert scheduled == []
+
+    second = client.get(
+        f"/api/recommendations/flow?limit=5&exclude={_queue_ids(first)}", headers=headers
+    )
+    assert "flow;desc=ready" in second.headers["Server-Timing"]
+    assert scheduled == [len(second.json())]
+
+
+def test_warmer_skips_current_portion_and_serializes_user(client, db, monkeypatch):
+    """Второй расчёт того же юзера ждёт первого и не пересчитывает готовое."""
+    from app import flow_warmer
+    from tests.conftest import TestingSessionLocal
+
+    user, _headers, _first = _ready_setup(client, db, monkeypatch, "ready-dedupe")
+    calls = []
+    original = flow_router._compute_flow
+
+    async def _counting(*args, **kwargs):
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(flow_router, "_compute_flow", _counting)
+
+    async def _both():
+        return await asyncio.gather(
+            flow_warmer._precompute(user.id, TestingSessionLocal),
+            flow_warmer._precompute(user.id, TestingSessionLocal),
+        )
+
+    assert sorted(asyncio.run(_both())) == ["computed", "current"]
+    assert len(calls) == 1

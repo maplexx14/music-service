@@ -10,8 +10,10 @@
 каждой выдачи (см. flow._deliver_portion). Порция считается тем же конвейером
 flow._compute_flow(mode="precompute") и кладётся в flow:ready:{user} вместе с
 ranking_context, для которого посчитана. Плюс периодический проход: тем, кто
-был в потоке за сутки, порция пересчитывается, когда устаревает, — чтобы и
-первый клик после перерыва попадал в готовое.
+был в потоке за FLOW_WARMER_ACTIVE_HOURS, порция пересчитывается незадолго до
+того, как выдача сочтёт её устаревшей, — чтобы и первый клик после перерыва
+попадал в готовое. Матчи источников аудио (Soulseek качает файл) ставятся
+сразу только для порции, заказанной выдачей; периодической — при её выдаче.
 
 Запуск: python -m app.flow_warmer
 """
@@ -38,8 +40,10 @@ logger = logging.getLogger("flow_warmer")
 # Одновременных расчётов. Каждый — секунды CPU под GIL одного процесса, так что
 # больше двух-трёх даёт только очередь внутри процесса, а не скорость.
 CONCURRENCY = int(os.getenv("FLOW_WARMER_CONCURRENCY", "3"))
-# Готовая порция старше этого пересчитывается периодическим проходом.
-REFRESH_AFTER = int(os.getenv("FLOW_WARMER_REFRESH_SEC", "1800"))
+# Готовая порция старше этого пересчитывается периодическим проходом. Чуть
+# меньше flow._READY_MAX_AGE (90 мин) за вычетом прохода и расчёта: раньше —
+# лишние расчёты и походы к провайдерам для тех, кто сейчас не слушает.
+REFRESH_AFTER = int(os.getenv("FLOW_WARMER_REFRESH_SEC", "4500"))
 SCAN_EVERY = int(os.getenv("FLOW_WARMER_SCAN_SEC", "300"))
 NICE = int(os.getenv("FLOW_WARMER_NICE", "10"))
 THREADS = int(os.getenv("FLOW_WARMER_THREADS", "32"))
@@ -49,6 +53,9 @@ THREADS = int(os.getenv("FLOW_WARMER_THREADS", "32"))
 ACTIVE_HOURS = int(os.getenv("FLOW_WARMER_ACTIVE_HOURS", "72"))
 MAX_USERS = int(os.getenv("FLOW_WARMER_MAX_USERS", "5000"))
 DEFAULT_LIMIT = 15
+# Выдача была не раньше этого — юзер слушает, порцию скоро заберут: матчи
+# источников аудио ставим при предрасчёте, а не при выдаче.
+MATCH_WINDOW = int(os.getenv("FLOW_WARMER_MATCH_SEC", "600"))
 # BLPOP короче socket_timeout клиента Redis (cache.py, 2 с), иначе пустая
 # очередь заканчивалась бы исключением таймаута сокета.
 _POP_TIMEOUT = 1
@@ -84,8 +91,36 @@ def _client_hour(meta: dict) -> Optional[int]:
     return (datetime.now(timezone.utc).hour + offset) % 24
 
 
+# Один юзер — один расчёт за раз: периодический проход мог поставить в очередь
+# юзера, чью порцию по выдаче уже считал другой воркер (2026-10-13 на проде:
+# user=1 дважды параллельно). Второй ждёт первого и видит готовую порцию.
+_user_locks: dict = {}
+
+
+def _is_current(payload, context: str, limit: int) -> bool:
+    """Готовая порция посчитана под эту историю и ещё не просит пересчёта."""
+    return (
+        isinstance(payload, dict)
+        and payload.get("context") == context
+        and payload.get("limit") == limit
+        and time.time() - float(payload.get("created") or 0) < REFRESH_AFTER
+    )
+
+
 async def precompute_user(user_id: int, session_factory=SessionLocal) -> bool:
     """Считает следующую порцию юзера и кладёт её в flow:ready. True — готово."""
+    return await _precompute(user_id, session_factory) in ("computed", "current")
+
+
+async def _precompute(user_id: int, session_factory=SessionLocal) -> str:
+    # По loop: тесты гоняют каждый asyncio.run в своём (как flow._live_semaphore).
+    key = (id(asyncio.get_running_loop()), user_id)
+    lock = _user_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        return await _precompute_unlocked(user_id, session_factory)
+
+
+async def _precompute_unlocked(user_id: int, session_factory) -> str:
     meta = await get_cache_async(flow._pc_meta_key(user_id)) or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -97,12 +132,19 @@ async def precompute_user(user_id: int, session_factory=SessionLocal) -> bool:
         or await get_cache_async(flow._PC_BASE_URL)
         or os.getenv("FLOW_PUBLIC_BASE_URL", "")
     )
+    delivered_at = meta.get("at")
+    listening = (
+        isinstance(delivered_at, (int, float)) and time.time() - delivered_at < MATCH_WINDOW
+    )
     db = session_factory()
     try:
         user = db.get(User, user_id)
         if user is None or not user.is_active:
-            return False
+            return "inactive"
         history = await flow._load_flow_history(db, user_id)
+        current = await get_cache_async(flow._ready_key(user_id))
+        if _is_current(current, flow._ranking_context(user_id, history), limit):
+            return "current"
         exclude = await asyncio.to_thread(flow._precompute_exclude, db, history)
         payload = await flow._compute_flow(
             _request_for(base_url),
@@ -113,13 +155,14 @@ async def precompute_user(user_id: int, session_factory=SessionLocal) -> bool:
             user,
             db,
             mode="precompute",
+            schedule_matches=listening,
         )
     finally:
         db.close()
     if not isinstance(payload, dict) or not payload.get("items"):
-        return False
+        return "empty"
     await set_cache_async(flow._ready_key(user_id), payload, expire=flow._READY_TTL)
-    return True
+    return "computed"
 
 
 def _pop_job() -> Optional[int]:
@@ -145,13 +188,13 @@ async def _worker(index: int) -> None:
             continue
         started = time.monotonic()
         try:
-            ready = await precompute_user(user_id)
+            state = await _precompute(user_id)
         except Exception:  # noqa: BLE001 — один юзер не должен ронять воркер
             logger.exception("flow-warmer: precompute failed user=%s", user_id)
             continue
         logger.info(
-            "flow-warmer: user=%s ready=%s %.1fs worker=%d",
-            user_id, ready, time.monotonic() - started, index,
+            "flow-warmer: user=%s %s %.1fs worker=%d",
+            user_id, state, time.monotonic() - started, index,
         )
 
 

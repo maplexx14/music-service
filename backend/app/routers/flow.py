@@ -2984,9 +2984,10 @@ async def _take_ready_portion(
     limit: int,
     exclude: str,
     base_url: str = "",
-) -> tuple[Optional[tuple[list, dict, dict]], str]:
-    """Готовая порция для этого запроса: ((items, scores, features), "hit") или
-    (None, причина промаха) — причина уходит в Server-Timing."""
+) -> tuple[Optional[tuple[list, dict, dict, bool]], str]:
+    """Готовая порция для этого запроса: ((items, scores, features, matched),
+    "hit") или (None, причина промаха) — причина уходит в Server-Timing.
+    matched — матчи источников аудио уже поставлены при предрасчёте."""
     key = _ready_key(user_id)
     # Одним пакетом (get_cache_async склеивает одновременные чтения в MGET).
     payload, negative_at = await asyncio.gather(
@@ -3040,7 +3041,12 @@ async def _take_ready_portion(
         kept.append(dict(item))
     if len(kept) < max(1, math.ceil(limit * _READY_MIN_SHARE)):
         return None, "drops"
-    return (kept, payload.get("scores") or {}, payload.get("features") or {}), "hit"
+    return (
+        kept,
+        payload.get("scores") or {},
+        payload.get("features") or {},
+        bool(payload.get("matched", True)),
+    ), "hit"
 
 
 def _record_flow_delivery(
@@ -3172,8 +3178,8 @@ async def _deliver_portion(
     # ytmusic в потоке — только метаданные: фоновой ищем soundcloud-эквиваленты
     # треков отданной порции, чтобы /api/ytdlp/stream/{id} успевал уйти на
     # SoundCloud, а не качать аудио с YouTube. Мисс — фолбэк на YouTube.
-    # У готовой порции матчи уже поставил flow-warmer при предрасчёте, а здесь
-    # это до 45 задач с чтением кэша на каждую выдачу.
+    # У готовой порции, посчитанной по выдаче, матчи уже поставил flow-warmer
+    # при предрасчёте, а здесь это до 45 задач с чтением кэша на каждую выдачу.
     if schedule_matches:
         ytdlp._schedule_audio_matches(mix)
     # Следующую порцию — в предрасчёт. Час клиента храним сдвигом от UTC:
@@ -3187,6 +3193,9 @@ async def _deliver_portion(
             "base_url": str(request.base_url).rstrip("/"),
             "limit": limit,
             "hour_offset": hour_offset,
+            # Когда была выдача: flow-warmer по ней отличает порцию для
+            # слушающего сейчас от периодического пересчёта.
+            "at": time.time(),
         },
     )
     return mix
@@ -3316,6 +3325,7 @@ async def _compute_flow(
     *,
     mode: str = "live",
     history: Optional[dict] = None,
+    schedule_matches: bool = True,
 ):
     """Расчёт порции потока.
 
@@ -3323,6 +3333,9 @@ async def _compute_flow(
     предрасчёт). mode="precompute" — тот же конвейер без побочных эффектов для
     flow-warmer: возвращает payload для flow:ready. Ротация любимых пишется в
     обоих режимах — она описывает ту порцию, что уйдёт следующей.
+    schedule_matches=False в предрасчёте — матчи источников аудио поставит
+    выдача (payload["matched"]): порцию для того, кто сейчас не слушает, могут
+    так и не забрать, а матч Soulseek качает файл на диск.
     """
     precompute = mode == "precompute"
     cache_only = _pool_cache_only.get()
@@ -4345,12 +4358,15 @@ async def _compute_flow(
         len(mix),
     )
     if precompute:
-        # Матчи источников аудио ставим уже сейчас: к выдаче они будут готовы.
-        ytdlp._schedule_audio_matches(mix)
+        # Юзер слушает (порцию заказала его выдача) — матчи источников аудио
+        # ставим уже сейчас, к выдаче они будут готовы. Иначе их поставит выдача.
+        if schedule_matches:
+            ytdlp._schedule_audio_matches(mix)
         return {
             "context": ranking_context,
             "limit": limit,
             "created": time.time(),
+            "matched": schedule_matches,
             "base_url": base_url,
             "items": jsonable_encoder(mix),
             "scores": scores_by_identity,
@@ -4412,6 +4428,14 @@ async def _flow_response(mix: list, response: Response, *, encoded: bool) -> Res
     )
 
 
+def _log_served(user_id: int, path: str, ready_state: str, mix: list, started: float) -> None:
+    # Server-Timing видит только клиент; доля готовых выдач на проде — по логу.
+    logger.info(
+        "flow served user=%s path=%s ready=%s items=%d %.0fms",
+        user_id, path, ready_state, len(mix), (time.perf_counter() - started) * 1000,
+    )
+
+
 @router.get("/flow")
 async def get_flow(
     request: Request,
@@ -4431,6 +4455,7 @@ async def get_flow(
     # каждое обращение к БД берёт своё в треде и тут же возвращает. Иначе под
     # пиком запрос держал одно соединение и ждал второе (телеметрия), и при
     # 25 одновременных /flow на воркер пул (15+15) вставал до таймаута 30 с.
+    started = time.perf_counter()
     await asyncio.to_thread(_release_request_session, db, current_user)
     user_id = current_user.id
     excluded_artists = list(current_user.excluded_artists or [])
@@ -4452,7 +4477,7 @@ async def get_flow(
         )
         timings.append(("take", time.perf_counter() - stage))
         if ready is not None:
-            items, scores, features = ready
+            items, scores, features, matched = ready
             telemetry_bind = db.get_bind()
             db.close()
             mix = await _deliver_portion(
@@ -4468,12 +4493,13 @@ async def get_flow(
                 telemetry_bind=telemetry_bind,
                 request_id=new_request_id(),
                 timings=timings,
-                schedule_matches=False,
+                schedule_matches=not matched,
             )
             response.headers["Server-Timing"] = ", ".join(
                 [f"{name};dur={seconds * 1000:.0f}" for name, seconds in timings]
                 + ["flow;desc=ready"]
             )
+            _log_served(user_id, "ready", "hit", mix, started)
             return await _flow_response(mix, response, encoded=True)
     else:
         ready_state = "off"
@@ -4510,4 +4536,5 @@ async def get_flow(
         )
         if part
     )
+    _log_served(user_id, "cache" if cache_only else "live", ready_state, mix, started)
     return await _flow_response(mix, response, encoded=False)
