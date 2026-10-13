@@ -66,6 +66,9 @@ def device_label_from_user_agent(user_agent: str | None) -> str:
         platform = "Windows"
     elif "Linux" in ua:
         platform = "Linux"
+    elif "CFNetwork" in ua or "Darwin" in ua:
+        # Нативное iOS-приложение ходит через URLSession: «App/1 CFNetwork Darwin».
+        platform = "iOS-приложение"
     else:
         platform = "Устройство"
 

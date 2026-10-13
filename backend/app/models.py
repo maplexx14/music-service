@@ -194,6 +194,9 @@ class User(Base):
     # делать UPDATE на каждый запрос; живой маркер онлайна остаётся в Redis
     # (users:online:<id>). NULL — юзер не заходил после появления колонки.
     last_seen = Column(DateTime(timezone=True), nullable=True, index=True)
+    # User-Agent запроса, обновившего last_seen, — «с какого устройства
+    # заходил последний раз» в админке. Пишется вместе с last_seen.
+    last_user_agent = Column(String(512), nullable=True)
 
     # Relationships
     playlists = relationship("Playlist", back_populates="owner", cascade="all, delete-orphan")

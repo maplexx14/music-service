@@ -1,7 +1,7 @@
 import time
 from datetime import datetime, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -38,8 +38,14 @@ def _mark_online(user_id: int) -> None:
     set_cache(f"users:online:{user_id}", True, expire=ONLINE_MARKER_TTL)
 
 
-def _touch_last_seen(db: Session, user: User) -> None:
+# Потолок для users.last_user_agent: UA бывает раздут расширениями, а админке
+# нужна только платформа и браузер.
+USER_AGENT_MAX_LENGTH = 512
+
+
+def _touch_last_seen(db: Session, user: User, user_agent: str | None = None) -> None:
     now = datetime.now(timezone.utc)
+    user_agent = (user_agent or "")[:USER_AGENT_MAX_LENGTH] or None
     last = user.last_seen
     if last is not None:
         # sqlite (тестовый suite) отдаёт наивный datetime — приводим к aware,
@@ -49,6 +55,11 @@ def _touch_last_seen(db: Session, user: User) -> None:
         if (now - last).total_seconds() < LAST_SEEN_WRITE_INTERVAL:
             return
     user.last_seen = now
+    # Устройство пишется тем же троттлингом, что и last_seen: если юзер
+    # одновременно сидит с двух устройств, админка покажет то, с которого
+    # пришёл запрос на минутной границе — для «откуда заходил» этого хватает.
+    if user_agent:
+        user.last_user_agent = user_agent
     # get_db не коммитит, а эндпоинт не обязан знать про эту запись —
     # фиксируем сразу, пока транзакция не закрылась вместе с сессией.
     db.commit()
@@ -61,6 +72,7 @@ def _touch_last_seen(db: Session, user: User) -> None:
 # запросов RPS падал вместо того, чтобы выйти на плато. Как def FastAPI
 # выполняет зависимость в threadpool, и ожидание пула блокирует только тред.
 def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
@@ -78,7 +90,7 @@ def get_current_user(
     # Presence marker used by the admin dashboard. Short TTL means stale
     # browser tabs disappear automatically without a logout request.
     _mark_online(user.id)
-    _touch_last_seen(db, user)
+    _touch_last_seen(db, user, request.headers.get("user-agent"))
     return user
 
 

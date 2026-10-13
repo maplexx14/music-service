@@ -10,12 +10,13 @@ import logging
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
-from app.models import User, Track, UserPlayerState
+from app.models import User, Track, UserPlayerState, user_track_plays
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption, ArtistCard
 from app import artist_cards
 from app import lastfm_genres
 from app.genre_keywords import GENRE_KEYWORDS, resolve_internal_key
 from app.dependencies import get_current_active_user, get_current_admin_user
+from app.trusted_devices import device_label_from_user_agent
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
 from app.artist_utils import artist_key
@@ -322,7 +323,53 @@ def _admin_taste(db: Session, user_id: int) -> dict:
     return result
 
 
-def _admin_profile(db: Session, user: User, online_ids: set, with_taste: bool = True) -> dict:
+def _admin_last_tracks(db: Session, user_ids: List[int]) -> Dict[int, dict]:
+    """Последний прослушанный трек каждого юзера страницы — одним запросом.
+
+    Берётся из агрегата user_track_plays (last_played обновляется на каждом
+    прослушивании), а не из now-playing: тот живёт в Redis 90 с и у
+    офлайн-юзеров пуст.
+    """
+    if not user_ids:
+        return {}
+    latest = (
+        db.query(
+            user_track_plays.c.user_id,
+            func.max(user_track_plays.c.last_played).label("last_played"),
+        )
+        .filter(user_track_plays.c.user_id.in_(user_ids))
+        .group_by(user_track_plays.c.user_id)
+        .subquery()
+    )
+    rows = (
+        db.query(user_track_plays.c.user_id, user_track_plays.c.last_played, Track)
+        .join(
+            latest,
+            (latest.c.user_id == user_track_plays.c.user_id)
+            & (latest.c.last_played == user_track_plays.c.last_played),
+        )
+        .join(Track, Track.id == user_track_plays.c.track_id)
+        .all()
+    )
+    result: Dict[int, dict] = {}
+    for user_id, played_at, track in rows:
+        result.setdefault(user_id, {
+            "id": track.id,
+            "title": track.title,
+            "artist": track.artist,
+            "cover_url": track.cover_url,
+            "played_at": played_at,
+        })
+    return result
+
+
+def _admin_profile(
+    db: Session,
+    user: User,
+    online_ids: set,
+    with_taste: bool = True,
+    last_track: Optional[dict] = None,
+) -> dict:
     profile = {
         "id": user.id,
         "username": user.username,
@@ -333,6 +380,11 @@ def _admin_profile(db: Session, user: User, online_ids: set, with_taste: bool = 
         "last_seen": user.last_seen,
         "is_online": user.id in online_ids,
         "is_active": user.is_active,
+        "last_device": (
+            device_label_from_user_agent(user.last_user_agent) if user.last_user_agent else None
+        ),
+        "last_user_agent": user.last_user_agent,
+        "last_track": last_track,
     }
     if with_taste:
         profile.update(_admin_taste(db, user.id))
@@ -354,7 +406,11 @@ def _admin_users_page(
     )
     total = query.count()
     users = query.limit(limit).offset(offset).all()
-    return total, [_admin_profile(db, user, online_ids, with_taste) for user in users]
+    last_tracks = _admin_last_tracks(db, [user.id for user in users])
+    return total, [
+        _admin_profile(db, user, online_ids, with_taste, last_tracks.get(user.id))
+        for user in users
+    ]
 
 
 @router.get("/admin/dashboard")

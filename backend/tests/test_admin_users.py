@@ -9,7 +9,7 @@
 
 from datetime import datetime, timedelta
 
-from app.models import User
+from app.models import Track, User, user_track_plays
 
 from tests.conftest import auth_headers, create_user
 
@@ -75,6 +75,38 @@ def test_last_seen_write_is_throttled(client, db):
     db.expire_all()
     after_second = db.query(User).filter_by(username="admin").one().last_seen
     assert after_second == after_first
+
+
+def test_last_device_and_last_track_reported(client, db):
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+    create_user(db, "silent")
+    older = Track(title="Old Song", artist="A", duration=100)
+    newer = Track(title="New Song", artist="B", duration=100)
+    db.add_all([older, newer])
+    db.commit()
+    db.execute(user_track_plays.insert(), [
+        {"user_id": listener.id, "track_id": older.id, "last_played": datetime.utcnow() - timedelta(days=1)},
+        {"user_id": listener.id, "track_id": newer.id, "last_played": datetime.utcnow()},
+    ])
+    db.commit()
+
+    iphone_ua = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    )
+    headers = {**auth_headers(client, "listener"), "User-Agent": iphone_ua}
+    resp = client.get("/api/users/me", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/users/admin/dashboard", headers=auth_headers(client, "admin"))
+    assert resp.status_code == 200, resp.text
+    profiles = {u["username"]: u for u in resp.json()["users"]}
+    assert profiles["listener"]["last_device"] == "iPhone · Safari"
+    assert profiles["listener"]["last_user_agent"] == iphone_ua
+    assert profiles["listener"]["last_track"]["title"] == "New Song"
+    assert profiles["silent"]["last_device"] is None
+    assert profiles["silent"]["last_track"] is None
 
 
 def test_admin_users_pagination(client, db):

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
@@ -9,6 +10,55 @@ import './Admin.css'
 
 const USERS_PAGE_SIZE = 50
 const NOW_PLAYING_POLL_MS = 15000
+const OPEN_PANELS_KEY = 'admin-open-panels'
+const DEFAULT_OPEN_PANELS = ['users']
+
+function readOpenPanels() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(OPEN_PANELS_KEY))
+    return Array.isArray(stored) ? stored : DEFAULT_OPEN_PANELS
+  } catch {
+    return DEFAULT_OPEN_PANELS
+  }
+}
+
+// Раскрывающийся раздел панели. Тело монтируется при первом раскрытии и
+// дальше только прячется: тяжёлые разделы (200 треков) не грузятся, пока их
+// не открыли, а раз открытые не теряют поиск и прокрутку при сворачивании.
+function AdminPanel({ title, subtitle, badge, accent, open, onToggle, actions, children }) {
+  const bodyId = useId()
+  const [mounted, setMounted] = useState(open)
+  useEffect(() => {
+    if (open) setMounted(true)
+  }, [open])
+
+  return (
+    <section className={`admin-panel${open ? ' is-open' : ''}`}>
+      <div className="admin-panel-head">
+        <button
+          type="button"
+          className="admin-panel-toggle"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={onToggle}
+        >
+          <ChevronDown size={18} className="admin-panel-chevron" aria-hidden="true" />
+          <span className="admin-panel-titles">
+            <span className="admin-panel-title">
+              {title}
+              {badge ? <span className={`admin-panel-badge${accent ? ' is-accent' : ''}`}>{badge}</span> : null}
+            </span>
+            {subtitle && <span className="admin-panel-subtitle">{subtitle}</span>}
+          </span>
+        </button>
+        {open && actions}
+      </div>
+      <div id={bodyId} className="admin-panel-body" hidden={!open}>
+        {mounted && children}
+      </div>
+    </section>
+  )
+}
 
 function formatClock(seconds) {
   const total = Math.max(0, Math.floor(seconds || 0))
@@ -57,7 +107,7 @@ const CENSOR_STATUS_LABEL = { suggested: 'Подсказка', confirmed: 'Иг�
 // надёжный оригинал привязывает сразу («автоматически» — такую привязку стоит
 // глянуть и при ошибке снять), сомнительный оставляет подсказкой. Привязать
 // трек вручную — «Оригинал без цензуры» в меню трека или в плеере.
-function CensorOverrides() {
+function CensorOverrides({ onCount }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
@@ -92,13 +142,14 @@ function CensorOverrides() {
   // Сначала то, что ждёт решения, потом действующие; отклонённые — в конце.
   const order = { suggested: 0, confirmed: 1, rejected: 2 }
   const sorted = [...items].sort((a, b) => order[a.status] - order[b.status])
+  const pending = items.filter((item) => item.status === 'suggested').length
+
+  useEffect(() => {
+    onCount?.(pending)
+  }, [pending])
 
   return (
-    <div className="admin-section">
-      <div className="admin-section-title">Цензура</div>
-      <div className="admin-section-subtitle">
-        Треки, зацензуренные по закону РФ, и их оригиналы на SoundCloud
-      </div>
+    <>
       {loading ? (
         <Spinner />
       ) : sorted.length === 0 ? (
@@ -145,7 +196,7 @@ function CensorOverrides() {
           ))}
         </div>
       )}
-    </div>
+    </>
   )
 }
 
@@ -164,7 +215,7 @@ function formatLastSeen(value) {
 
 // Сообщения из «Связь с разработчиком» (настройки). Новые подсвечены, пока
 // админ не отметит прочитанным.
-function DeveloperMessages() {
+function DeveloperMessages({ onCount }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
@@ -190,10 +241,12 @@ function DeveloperMessages() {
 
   const unread = items.filter((item) => !item.is_read).length
 
+  useEffect(() => {
+    onCount?.(unread)
+  }, [unread])
+
   return (
-    <div className="admin-section">
-      <div className="admin-section-title">Сообщения{unread > 0 ? ` (${unread})` : ''}</div>
-      <div className="admin-section-subtitle">Из «Связь с разработчиком» в настройках</div>
+    <>
       {loading ? (
         <Spinner />
       ) : items.length === 0 ? (
@@ -224,6 +277,56 @@ function DeveloperMessages() {
           ))}
         </div>
       )}
+    </>
+  )
+}
+
+function UserCard({ user, nowPlaying }) {
+  const [expanded, setExpanded] = useState(false)
+  const lastTrack = user.last_track
+
+  return (
+    <div className={`admin-user${expanded ? ' is-expanded' : ''}`}>
+      <button
+        type="button"
+        className="admin-user-summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="admin-user-name">
+          {user.is_online && <span className="admin-user-online-dot" role="img" aria-label="онлайн" />}
+          <strong>{user.username}</strong>
+        </span>
+        <span className="admin-user-seen">
+          {user.is_online ? 'в сети' : formatLastSeen(user.last_seen)}
+        </span>
+        <ChevronDown size={16} className="admin-user-chevron" aria-hidden="true" />
+      </button>
+      <div className="admin-user-facts">
+        <span title={user.last_user_agent || undefined}>
+          {user.last_device || 'устройство неизвестно'}
+        </span>
+        {!nowPlaying && (
+          <span className="admin-user-last-track">
+            {lastTrack
+              ? `${lastTrack.title}${lastTrack.artist ? ` — ${lastTrack.artist}` : ''} · ${formatLastSeen(lastTrack.played_at)}`
+              : 'ещё ничего не слушал(а)'}
+          </span>
+        )}
+      </div>
+      {nowPlaying && <NowPlaying state={nowPlaying} />}
+      {expanded && (
+        <div className="admin-user-preferences">
+          <span>Почта: {user.email}</span>
+          <span>Регистрация: {formatLastSeen(user.created_at)}</span>
+          {user.last_user_agent && <span className="admin-user-ua">{user.last_user_agent}</span>}
+          <span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span>
+          <span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span>
+          <span className="admin-user-detected">
+            Определены системой: {user.detected_artists === undefined ? 'загрузка…' : user.detected_artists.join(', ') || 'нет данных'}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -242,6 +345,22 @@ function Admin() {
   const [deletingId, setDeletingId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [nowPlaying, setNowPlaying] = useState({})
+  const [userFilter, setUserFilter] = useState('')
+  const [openPanels, setOpenPanels] = useState(readOpenPanels)
+  const [unreadMessages, setUnreadMessages] = useState(0)
+  const [pendingCensor, setPendingCensor] = useState(0)
+
+  const togglePanel = (id) => {
+    setOpenPanels((prev) => {
+      const next = prev.includes(id) ? prev.filter((panel) => panel !== id) : [...prev, id]
+      try {
+        localStorage.setItem(OPEN_PANELS_KEY, JSON.stringify(next))
+      } catch {
+        // Без хранилища раскрытые разделы просто не запомнятся.
+      }
+      return next
+    })
+  }
 
   // Профиль вкуса («Определены системой») — самая дорогая часть панели: на
   // бэке это полдесятка запросов на каждого юзера. Поэтому карточки приходят
@@ -279,7 +398,6 @@ function Admin() {
   }
 
   const fetchAdminData = async () => {
-    fetchTracks()
     try {
       const response = await api.get('/users/admin/dashboard', { params: { taste: false } })
       const page = response.data.users || []
@@ -325,6 +443,16 @@ function Admin() {
     fetchAdminData()
   }, [])
 
+  // Треки грузятся только когда раздел раскрыт впервые.
+  const tracksOpen = openPanels.includes('tracks')
+  const tracksRequested = useRef(false)
+  useEffect(() => {
+    if (tracksOpen && !tracksRequested.current) {
+      tracksRequested.current = true
+      fetchTracks()
+    }
+  }, [tracksOpen])
+
   // Отдельный частый опрос: эндпоинт читает только Redis, а перезапрашивать
   // ради него весь дашборд с профилями было бы в разы дороже.
   useEffect(() => {
@@ -340,6 +468,14 @@ function Admin() {
     () => Object.values(nowPlaying).filter((state) => state.is_playing).length,
     [nowPlaying],
   )
+
+  const filteredUsers = useMemo(() => {
+    const term = userFilter.trim().toLowerCase()
+    if (!term) return users
+    return users.filter((user) => (
+      user.username?.toLowerCase().includes(term) || user.email?.toLowerCase().includes(term)
+    ))
+  }, [users, userFilter])
 
   const filteredTracks = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -380,7 +516,11 @@ function Admin() {
           <h1 className="admin-title">Админ панель</h1>
           <div className="admin-subtitle">Сводка по сервису</div>
         </div>
-        <button type="button" className="admin-refresh" onClick={() => { fetchAdminData(); fetchNowPlaying() }}>
+        <button type="button" className="admin-refresh" onClick={() => {
+          fetchAdminData()
+          fetchNowPlaying()
+          if (tracksRequested.current) fetchTracks()
+        }}>
           Обновить
         </button>
       </div>
@@ -395,31 +535,30 @@ function Admin() {
         ].map(([label, value]) => <div className="admin-stat" key={label}><strong>{value}</strong><span>{label}</span></div>)}
       </div>
 
-      <div className="admin-section">
-        <div className="admin-section-head">
-          <div>
-            <div className="admin-section-title">Профили пользователей</div>
-            <div className="admin-section-subtitle">
-              Отсортированы по последнему входу — кто в сети, те выше
-            </div>
+      <AdminPanel
+        title="Пользователи"
+        subtitle="По последнему входу — кто в сети, те выше"
+        badge={usersTotal}
+        open={openPanels.includes('users')}
+        onToggle={() => togglePanel('users')}
+      >
+        <input
+          type="search"
+          className="admin-search-input admin-panel-search"
+          placeholder="Имя или почта"
+          aria-label="Найти пользователя"
+          value={userFilter}
+          onChange={(e) => setUserFilter(e.target.value)}
+        />
+        {filteredUsers.length === 0 ? (
+          <div className="admin-empty">Среди загруженных никого не нашлось</div>
+        ) : (
+          <div className="admin-users">
+            {filteredUsers.map((user) => (
+              <UserCard key={user.id} user={user} nowPlaying={nowPlaying[user.id]} />
+            ))}
           </div>
-        </div>
-        <div className="admin-users">
-          {users.map((user) => <div className="admin-user" key={user.id}>
-            <div className="admin-user-main">
-              <div className="admin-user-name">
-                <strong>{user.username}</strong>
-                {user.is_online && <span className="admin-user-online"><span className="admin-user-online-dot" />онлайн</span>}
-                <span className="admin-user-email">{user.email}</span>
-              </div>
-              <span className="admin-user-seen">
-                {user.is_online ? 'сейчас в сети' : `был(а) в сети: ${formatLastSeen(user.last_seen)}`}
-              </span>
-            </div>
-            {nowPlaying[user.id] && <NowPlaying state={nowPlaying[user.id]} />}
-            <div className="admin-user-preferences"><span>Жанры: {(user.preferred_genres || []).join(', ') || 'не указаны'}</span><span>Артисты: {(user.preferred_artists || []).join(', ') || 'не указаны'}</span><span className="admin-user-detected">Определены системой: {user.detected_artists === undefined ? 'загрузка…' : user.detected_artists.join(', ') || 'нет данных'}</span></div>
-          </div>)}
-        </div>
+        )}
         {users.length < usersTotal && (
           <button
             type="button"
@@ -430,23 +569,44 @@ function Admin() {
             {loadingMore ? 'Загрузка...' : `Показать ещё (${usersTotal - users.length})`}
           </button>
         )}
-      </div>
+      </AdminPanel>
 
-      <DeveloperMessages />
+      <AdminPanel
+        title="Сообщения"
+        subtitle="Из «Связь с разработчиком» в настройках"
+        badge={unreadMessages}
+        accent
+        open={openPanels.includes('messages')}
+        onToggle={() => togglePanel('messages')}
+      >
+        <DeveloperMessages onCount={setUnreadMessages} />
+      </AdminPanel>
 
-      <CensorOverrides />
+      <AdminPanel
+        title="Цензура"
+        subtitle="Треки, зацензуренные по закону РФ, и их оригиналы на SoundCloud"
+        badge={pendingCensor}
+        accent
+        open={openPanels.includes('censor')}
+        onToggle={() => togglePanel('censor')}
+      >
+        <CensorOverrides onCount={setPendingCensor} />
+      </AdminPanel>
 
-      <div className="admin-section">
-        <div className="admin-section-head">
-          <div className="admin-section-title">Треки</div>
-          <input
-            type="text"
-            className="admin-search-input"
-            placeholder="Поиск по названию или артисту"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
+      <AdminPanel
+        title="Треки"
+        subtitle="200 самых прослушиваемых"
+        open={tracksOpen}
+        onToggle={() => togglePanel('tracks')}
+      >
+        <input
+          type="search"
+          className="admin-search-input admin-panel-search"
+          placeholder="Поиск по названию или артисту"
+          aria-label="Найти трек"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         {tracksLoading ? (
           <Spinner />
         ) : filteredTracks.length === 0 ? (
@@ -479,7 +639,7 @@ function Admin() {
             ))}
           </div>
         )}
-      </div>
+      </AdminPanel>
     </div>
   )
 }
