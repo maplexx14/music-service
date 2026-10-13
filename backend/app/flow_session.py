@@ -226,13 +226,18 @@ def select(
     ranked = [row[2] for row in keyed]
     terms_of = {identity_of(row[2]): row[3] for row in keyed}
 
-    chosen = _greedy_gap(
-        ranked,
-        lambda item: primary_artist_key(artist_of(item)),
-        limit,
-        previous_artists,
-        MIN_ARTIST_GAP,
-    )
+    if ranked == list(pool):
+        # Поправок нет — порядок предрасчёта уже разнесён по артистам (и
+        # лайки расставлены spread_into), перекладывать его незачем.
+        chosen = list(pool[:limit])
+    else:
+        chosen = _greedy_gap(
+            ranked,
+            lambda item: primary_artist_key(artist_of(item)),
+            limit,
+            previous_artists,
+            MIN_ARTIST_GAP,
+        )
     # Разведка: место отдаётся случайному кандидату из невыбранной части пула.
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]

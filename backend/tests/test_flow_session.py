@@ -72,15 +72,26 @@ def test_without_signals_session_arm_keeps_order():
 
 
 def test_session_arm_keeps_artist_gap_with_previous_portion():
-    pool = _pool(["a", "a", "b", "c", "d", "e"])
+    """Переставленный по сессии пул разносит артистов и на стыке порций."""
+    meta = {"9": {"artist": "z"}}
+    state = flow_session.SessionState(flow_session.parse_session("s9"), meta.get)
+    pool = _pool(["z", "a", "a", "b", "c", "d", "e"])
+    rng = random.Random(0)
+    rng.random = lambda: 0.99
+    chosen, _extra = _select(pool, {}, state, rng=rng, previous_artists=["a"])
+    artists = [item["artist"] for item in chosen]
+    assert artists[0] != "a"
+    assert artists.count("a") <= 1
+
+
+def test_without_session_terms_pool_order_is_kept_as_interleaved():
+    pool = _pool(["a", "a", "b", "c", "d"])
     rng = random.Random(0)
     rng.random = lambda: 0.99
     chosen, _extra = _select(
         pool, {}, flow_session.SessionState([], {}.get), rng=rng, previous_artists=["a"]
     )
-    artists = [item["artist"] for item in chosen]
-    assert artists[0] != "a"
-    assert artists.count("a") <= 1
+    assert [item["id"] for item in chosen] == [0, 1, 2, 3]
 
 
 def test_exploration_logs_propensity():

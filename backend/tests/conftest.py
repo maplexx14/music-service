@@ -66,6 +66,15 @@ def _reset_rate_limiter():
 
 
 @pytest.fixture(autouse=True)
+def _flow_arm_control(monkeypatch):
+    """Вариант A/B волны раздаётся случайно (flow_session.pick_arm) — тесты
+    по умолчанию идут в control, session включают явно своим monkeypatch."""
+    from app import flow_session
+
+    monkeypatch.setattr(flow_session, "pick_arm", lambda rng=None: "control")
+
+
+@pytest.fixture(autouse=True)
 def _reset_email_verification_tokens():
     """Токены и незавершённые регистрации живут 24 ч в общем Redis."""
     from app.cache import clear_pattern
