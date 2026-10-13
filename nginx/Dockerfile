@@ -69,6 +69,12 @@ RUN sed -i 's/^worker_processes .*/worker_processes auto;/' /etc/nginx/nginx.con
     && sed -i 's/worker_connections .*/worker_connections 8192;/' /etc/nginx/nginx.conf \
     && sed -i '/^events {/i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
 
+# Время ответа в access-логе: rt — весь запрос, uht — до первого байта от
+# бэкенда (для стрима это и есть старт трека; rt у него — длина прослушивания).
+# Без них тормоза у живых пользователей из логов не видны вовсе — оставались
+# только синтетические замеры (разбор 2026-10-13).
+RUN sed -i 's/"\$http_x_forwarded_for"/"$http_x_forwarded_for" rt=$request_time uht=$upstream_header_time/' /etc/nginx/nginx.conf
+
 # Каталог disk-кэша обложек (proxy_cache_path в conf.d/00-upstreams.conf и
 # nginx.conf). nginx сам создаёт только подуровни levels=1:2, базовый каталог
 # должен существовать; воркер (пользователь nginx) пишет в него файлы.
