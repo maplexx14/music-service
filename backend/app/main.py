@@ -182,6 +182,23 @@ async def _configure_threadpool() -> None:
     except Exception:  # noqa: BLE001 — не критично, если API изменится
         pass
 
+    # asyncio.to_thread — это ДРУГОЙ пул: default executor event loop'а, а не
+    # anyio-лимитер выше. Его дефолт min(32, cpu+4) — 8 тредов на 4 vCPU, и
+    # через них идёт всё блокирующее из async-кода: Redis (cache.py), сессии
+    # БД /flow, ytmusicapi/SoundCloud/Last.fm. Холодный /flow сам ставил в
+    # очередь десятки сетевых вызовов, и параллельные запросы ждали тред даже
+    # на попадании в Redis. Потолок держим не выше пула БД
+    # (DB_POOL_SIZE+DB_MAX_OVERFLOW на воркер): иначе лишние треды с сессией
+    # будут ждать соединение в QueuePool, а не тред.
+    from concurrent.futures import ThreadPoolExecutor
+
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=int(os.getenv("ASYNCIO_THREADS", "32")),
+            thread_name_prefix="asyncio-to-thread",
+        )
+    )
+
 
 @app.on_event("startup")
 async def _init_async_storage_client() -> None:

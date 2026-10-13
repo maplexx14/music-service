@@ -574,6 +574,43 @@ _API_V2 = "https://api-v2.soundcloud.com"
 # CloudFront на весь стек. Прецедент и размер — как у ytdlp._WARM_SEM.
 _API_V2_SEMAPHORE = asyncio.Semaphore(8)
 
+# Один httpx-клиент на (прокси, event loop) вместо нового на каждый запрос.
+# Создание AsyncClient — это SSL-контекст с разбором certifi, ~22 мс CPU прямо
+# в event loop, плюс новое TLS-рукопожатие без keep-alive. Фоновые матчи
+# (schedule_ytmusic_soundcloud_match) зовут api-v2 сотнями: замер 2026-10-13 —
+# половина CPU воркера под /flow уходила сюда, и loop отставал до WORKER
+# TIMEOUT. Ключ по loop — как у mainstream._semaphores: пул соединений
+# привязан к loop, а тесты гоняют каждый TestClient в своём. Ключ по прокси —
+# ротация меняет выход, старый клиент закрываем с запасом на запросы в полёте.
+_api_v2_clients: dict = {}
+_API_V2_CLIENT_GRACE = 120.0
+
+
+def _api_v2_client() -> "httpx.AsyncClient":
+    import httpx
+
+    loop = asyncio.get_running_loop()
+    proxy = soundcloud_proxy()
+    current = _api_v2_clients.get(id(loop))
+    if current is not None and current[0] == proxy and current[1] is loop:
+        return current[2]
+    client = httpx.AsyncClient(
+        # connect отдельно и коротким: недоступный/зафильтрованный api-v2
+        # должен отваливаться быстро (замер: с общим timeout=15 один такой
+        # вызов стоил ровно 15с), а вот чтение ответа по медленному каналу
+        # ждём дольше. proxy: прямой выход к api-v2 отдаёт 403 даже с
+        # валидным client_id, см. soundcloud_proxy.
+        timeout=httpx.Timeout(15.0, connect=5.0),
+        follow_redirects=True,
+        proxy=proxy,
+    )
+    _api_v2_clients[id(loop)] = (proxy, loop, client)
+    if current is not None and current[1] is loop:
+        loop.call_later(
+            _API_V2_CLIENT_GRACE, lambda old=current[2]: loop.create_task(old.aclose())
+        )
+    return client
+
 
 async def _scrape_client_id(client: "httpx.AsyncClient") -> Optional[str]:
     try:
@@ -596,16 +633,9 @@ async def _api_get(path: str, params: dict) -> Optional[dict | list]:
     """GET к api-v2 с client_id из Redis; при 401/403 скрейпит новый и повторяет."""
     import httpx
 
-    # connect отдельно и коротким: недоступный/зафильтрованный api-v2 должен
-    # отваливаться быстро (замер: с общим timeout=15 один такой вызов стоил
-    # ровно 15с), а вот чтение ответа по медленному каналу ждём дольше.
-    # proxy: прямой выход к api-v2 отдаёт 403 даже с валидным client_id,
-    # см. soundcloud_proxy.
-    async with _API_V2_SEMAPHORE, httpx.AsyncClient(
-        timeout=httpx.Timeout(15.0, connect=5.0),
-        follow_redirects=True,
-        proxy=soundcloud_proxy(),
-    ) as client:
+    # Таймауты и прокси — у общего клиента, см. _api_v2_client.
+    async with _API_V2_SEMAPHORE:
+        client = _api_v2_client()
         client_id = await get_cache_async(_CLIENT_ID_KEY)
         for attempt in range(2):
             if not client_id:
@@ -645,37 +675,41 @@ async def _transcoding_direct_url(transcoding_url: str) -> str:
 
     # proxy: эндпоинт транскодирования — тот же api-v2, закрытый для прямого
     # выхода (см. soundcloud_proxy). Проксируется только он: выданная им ссылка
-    # на аудио к IP не привязана и качается напрямую.
-    async with httpx.AsyncClient(
-        timeout=15, follow_redirects=False, proxy=soundcloud_proxy()
-    ) as client:
-        client_id = await get_cache_async(_CLIENT_ID_KEY)
-        for attempt in range(2):
+    # на аудио к IP не привязана и качается напрямую. Редиректы общий клиент
+    # проходит, поэтому здесь follow_redirects=False на уровне запроса.
+    client = _api_v2_client()
+    client_id = await get_cache_async(_CLIENT_ID_KEY)
+    for attempt in range(2):
+        if not client_id:
+            client_id = await _scrape_client_id(client)
             if not client_id:
-                client_id = await _scrape_client_id(client)
-                if not client_id:
-                    raise RuntimeError("could not obtain SoundCloud client_id")
-                await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
+                raise RuntimeError("could not obtain SoundCloud client_id")
+            await set_cache_async(_CLIENT_ID_KEY, client_id, expire=_CLIENT_ID_TTL)
+        try:
+            response = await client.get(
+                transcoding_url,
+                params={"client_id": client_id},
+                follow_redirects=False,
+                timeout=15,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError("SoundCloud transcoding request failed") from exc
+        if response.status_code in (401, 403) and attempt == 0:
+            client_id = None
+            continue
+        if response.status_code == 404:
+            raise _TranscodingGone("SoundCloud transcoding returned HTTP 404")
+        if response.is_error:
+            raise RuntimeError(f"SoundCloud transcoding returned HTTP {response.status_code}")
+        direct_url = response.headers.get("location") if response.is_redirect else None
+        if not direct_url:
             try:
-                response = await client.get(transcoding_url, params={"client_id": client_id})
-            except httpx.HTTPError as exc:
-                raise RuntimeError("SoundCloud transcoding request failed") from exc
-            if response.status_code in (401, 403) and attempt == 0:
-                client_id = None
-                continue
-            if response.status_code == 404:
-                raise _TranscodingGone("SoundCloud transcoding returned HTTP 404")
-            if response.is_error:
-                raise RuntimeError(f"SoundCloud transcoding returned HTTP {response.status_code}")
-            direct_url = response.headers.get("location") if response.is_redirect else None
-            if not direct_url:
-                try:
-                    direct_url = response.json().get("url")
-                except ValueError as exc:
-                    raise RuntimeError("SoundCloud transcoding returned invalid response") from exc
-            if not direct_url:
-                raise RuntimeError("SoundCloud transcoding response has no audio URL")
-            return direct_url
+                direct_url = response.json().get("url")
+            except ValueError as exc:
+                raise RuntimeError("SoundCloud transcoding returned invalid response") from exc
+        if not direct_url:
+            raise RuntimeError("SoundCloud transcoding response has no audio URL")
+        return direct_url
 
     raise RuntimeError("SoundCloud client_id was rejected")
 

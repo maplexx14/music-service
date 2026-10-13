@@ -190,7 +190,7 @@ def test_soundcloud_drm_track_with_dead_progressive_is_unavailable(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, _url, params=None):
+        async def get(self, _url, params=None, **_kwargs):
             return DeadTranscoding()
 
     import httpx

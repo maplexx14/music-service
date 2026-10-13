@@ -138,3 +138,29 @@ def test_soundcloud_audio_stays_direct(sc_proxy_file, monkeypatch):
     assert ytdlp.proxy_for_url(_SC_MEDIA) is None
     # И наоборот: знак SoundCloud не включает платный выход для googlevideo.
     assert ytdlp.proxy_for_url(_GV) is None
+
+
+def test_api_get_reuses_one_client_per_loop(monkeypatch):
+    """Новый AsyncClient на каждый запрос стоил ~22 мс CPU в event loop."""
+    monkeypatch.setattr(soundcloud, "_SC_PROXY_FILE", "")
+    monkeypatch.setattr(soundcloud, "_SC_PROXY_STATIC", "")
+    created = []
+
+    class _CountingClient(_FakeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            created.append(self)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _CountingClient)
+
+    async def fake_get_cache_async(key):
+        return "c" * 32
+
+    monkeypatch.setattr(soundcloud, "get_cache_async", fake_get_cache_async)
+
+    async def three_calls():
+        for _ in range(3):
+            await soundcloud._api_get("/search/tracks", {"q": "phonk"})
+
+    asyncio.run(three_calls())
+    assert len(created) == 1

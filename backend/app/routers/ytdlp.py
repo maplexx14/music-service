@@ -74,22 +74,42 @@ def _patch_watch_tab_parser() -> None:
 # (см. .env.example); при сбое файлa откатываемся на анонимную сессию, а не
 # отключаем провайдер целиком.
 _YTMUSIC_AUTH = os.getenv("YTMUSIC_AUTH", "").strip()
+# Таймаут запроса ytmusicapi. Библиотечный дефолт — 30 с, и всё это время
+# вызов держит тред asyncio-executor'а (все обращения идут через to_thread):
+# пара зависших ответов YouTube забивала пул, и в очередь за ними вставали
+# Redis и БД параллельных /flow. Бюджет /flow всё равно 2.5 с, недождавшиеся
+# пулы догреваются в фоне — им 10 с хватает с запасом.
+_YTMUSIC_TIMEOUT = float(os.getenv("YTMUSIC_TIMEOUT", "10"))
+
+
+def _ytmusic_session():
+    import functools
+
+    import requests
+
+    session = requests.Session()
+    session.request = functools.partial(session.request, timeout=_YTMUSIC_TIMEOUT)
+    return session
+
+
 try:
     from ytmusicapi import YTMusic
 
     _patch_watch_tab_parser()
     if _YTMUSIC_AUTH:
         try:
-            _ytmusic: Optional["YTMusic"] = YTMusic(auth=_YTMUSIC_AUTH)
+            _ytmusic: Optional["YTMusic"] = YTMusic(
+                auth=_YTMUSIC_AUTH, requests_session=_ytmusic_session()
+            )
         except Exception:  # noqa: BLE001 — битый/протухший auth-файл
             logger.warning(
                 "YTMUSIC_AUTH=%s не открылся — ytmusicapi работает анонимно",
                 _YTMUSIC_AUTH,
                 exc_info=True,
             )
-            _ytmusic = YTMusic()
+            _ytmusic = YTMusic(requests_session=_ytmusic_session())
     else:
-        _ytmusic = YTMusic()
+        _ytmusic = YTMusic(requests_session=_ytmusic_session())
 except Exception:  # noqa: BLE001 — библиотека может быть не установлена / без сети
     _ytmusic = None
     logger.warning("ytmusicapi недоступен — провайдер YouTube Music отключён")
@@ -255,11 +275,17 @@ async def search_ytmusic(
     request: Request,
     q: str,
     limit: int = 20,
+    *,
+    schedule_matches: bool = True,
 ) -> List[ExternalTrackResponse]:
     """Поиск по YouTube Music. Возвращает ExternalTrackResponse (source=ytmusic).
 
     Выдача кэшируется коротко: поиск повторяет те же строки (возврат на
     вкладку, стирание буквы), а каждый вызов — round-trip к YouTube.
+
+    schedule_matches=False — для внутренних поисков, чья выдача не уходит
+    пользователю целиком (сбор кандидатов /flow): матч источников аудио
+    ставит тот, кто отдаёт итоговый список (см. _schedule_audio_matches).
     """
     if _ytmusic is None:
         return []
@@ -294,7 +320,8 @@ async def search_ytmusic(
         results.append(track)
         if len(results) >= limit:
             break
-    _schedule_audio_matches(results)
+    if schedule_matches:
+        _schedule_audio_matches(results)
     # Пустую выдачу не кэшируем: чаще это сбой провайдера, а не «ничего нет».
     if results:
         await set_cache_async(
@@ -449,7 +476,7 @@ async def _songs_from_info(info: dict, limit: int) -> List[ExternalTrackResponse
 
 
 async def ytmusic_artist_songs(
-    browse_id: str, limit: int = 0
+    browse_id: str, limit: int = 0, *, schedule_matches: bool = True
 ) -> List[ExternalTrackResponse]:
     """Треки артиста по его browseId (stream_url проставляет вызывающий).
 
@@ -461,7 +488,8 @@ async def ytmusic_artist_songs(
     тем же _normalize.
     """
     tracks = await _songs_from_info(await _artist_info(browse_id), limit)
-    _schedule_audio_matches(tracks)
+    if schedule_matches:
+        _schedule_audio_matches(tracks)
     return tracks
 
 
@@ -532,7 +560,7 @@ _ARTIST_CATALOG_TTL = 6 * 3600
 
 
 async def ytmusic_artist_catalog(
-    request: Request, q: str, limit: int = 20
+    request: Request, q: str, limit: int = 20, *, schedule_matches: bool = True
 ) -> List[ExternalTrackResponse]:
     """Треки со страницы артиста — если запрос и есть имя артиста.
 
@@ -556,7 +584,7 @@ async def ytmusic_artist_catalog(
     if cached is not None:
         tracks = [ExternalTrackResponse(**t) for t in cached]
     else:
-        tracks = await _fetch_artist_catalog(q, limit)
+        tracks = await _fetch_artist_catalog(q, limit, schedule_matches)
         # Негативный кэш короткий: запрос-не-имя дешевле перепроверить позже,
         # чем держать артиста вычеркнутым полдня.
         await set_cache_async(
@@ -571,7 +599,9 @@ async def ytmusic_artist_catalog(
     return tracks
 
 
-async def _fetch_artist_catalog(q: str, limit: int) -> List[ExternalTrackResponse]:
+async def _fetch_artist_catalog(
+    q: str, limit: int, schedule_matches: bool = True
+) -> List[ExternalTrackResponse]:
     try:
         found = await asyncio.to_thread(_ytmusic.search, q, filter="artists", limit=1)
     except Exception:  # noqa: BLE001 — провайдер, агрегатор падать не должен
@@ -584,7 +614,9 @@ async def _fetch_artist_catalog(q: str, limit: int) -> List[ExternalTrackRespons
     if not browse_id or not _query_names_artist(q, name):
         return []
 
-    return await ytmusic_artist_songs(browse_id, limit=limit)
+    return await ytmusic_artist_songs(
+        browse_id, limit=limit, schedule_matches=schedule_matches
+    )
 
 
 async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -> dict:
@@ -2505,7 +2537,10 @@ async def stream_cached_audio(
 
 async def _local_copy_path(video_id: str) -> Optional[str]:
     """Своя копия трека: файл дискового кэша или minio-путь архива, иначе None."""
-    return _cached_file(video_id) or await archived_music_path(f"ytmusic/{video_id}")
+    # В тред: glob по маске читает ВЕСЬ каталог кэша (тысячи файлов на проде),
+    # а /flow зовёт это на каждый трек окна старта прямо из event loop.
+    cached = await asyncio.to_thread(_cached_file, video_id)
+    return cached or await archived_music_path(f"ytmusic/{video_id}")
 
 
 async def _has_local_copy(video_id: str) -> bool:
