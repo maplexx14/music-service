@@ -3590,3 +3590,50 @@ def test_flow_sources_follow_acceptance(client, db, monkeypatch):
     by_rank = portion_origins()
     assert by_rank["local"] >= 3, by_rank
     assert with_bandit["local"] < by_rank["local"], (with_bandit, by_rank)
+
+
+def test_flow_relaxes_skip_bans_when_portion_runs_dry(client, db, monkeypatch):
+    """Прод, 2026-10-13: каждый быстрый скип банил артиста целиком, и у нового
+    юзера с узким вкусом порции стали пустыми — музыка вставала. Если обычный
+    проход не набрал порцию, второй снимает бан за одиночные скипы; дизлайк и
+    серия скипов артиста бан держат."""
+    user = create_user(db, username="relax-user")
+    playlist = Playlist(name="Понравившиеся", is_public=False, is_liked=True, owner_id=user.id)
+    db.add(playlist)
+    seed = Track(title="seed", artist="LovedArtist", duration=100, source="ytmusic",
+                 external_id="relax-seed")
+    db.add(seed)
+    db.commit()
+    db.execute(playlist_tracks.insert().values(
+        playlist_id=playlist.id, track_id=seed.id, position=0))
+    now = datetime.now(timezone.utc)
+    skips = []
+    for artist, tracks, disliked in (
+        ("SkippedOnce", 1, False), ("Disliked", 1, True), ("SkippedOften", 3, False),
+    ):
+        for i in range(tracks):
+            track = Track(title=f"old-{artist}-{i}", artist=artist, duration=100,
+                          source="ytmusic", external_id=f"old-{artist}-{i}")
+            db.add(track)
+            db.commit()
+            skips.append({"user_id": user.id, "track_id": track.id, "skip_count": 1,
+                          "disliked": disliked, "last_skipped": now})
+    db.execute(user_track_skips.insert(), skips)
+    db.commit()
+
+    async def _radio(seed_video_id):
+        return [
+            _external(artist, f"radio-{artist}-{i}", f"radio-{artist}-{i}")
+            for artist in ("SkippedOnce", "Disliked", "SkippedOften")
+            for i in range(6)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="relax-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    artists = Counter(t["artist"] for t in resp.json())
+    assert artists["SkippedOnce"] > 0, artists
+    assert artists["Disliked"] == 0 and artists["SkippedOften"] == 0, artists

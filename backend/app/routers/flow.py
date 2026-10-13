@@ -294,6 +294,13 @@ _DISLIKE_ARTIST_PENALTY = 3.5
 # остаётся знакомым и не попадает в banned_artists. Сродни весу одного
 # импортированного трека недельной давности — в ротации, но не в голове.
 _FAVORITE_SKIP_FLOOR = 0.5
+# Мягкий бан для второго прохода порции (см. _compute_flow, relax): артист
+# остаётся в бане, только если вес ниже этого (скип одного трека даёт около
+# -1.04, то есть это примерно три скипнутых трека), дизлайкнут или исключён.
+# Прод, 2026-10-13: новому юзеру с узким вкусом каждый быстрый скип банил
+# артиста целиком — 139 артистов в бане, порции по 0 треков, музыка вставала;
+# без бана за одиночные скипы та же порция собиралась из 15 треков его жанра.
+_RELAXED_BAN_WEIGHT = 2.5
 # Краткосрочная серверная история не даёт новому запуску волны сразу вернуть
 # тот же исчерпанный пул в другом порядке. Хвоста достаточно для нескольких
 # длинных сессий, TTL позже разрешает старым трекам естественно вернуться.
@@ -1249,6 +1256,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
     banned_artists |= excluded_artists
+    hard_banned_artists = {
+        a for a, w in artist_weight.items() if w <= -_RELAXED_BAN_WEIGHT
+    } | disliked_artist_keys | excluded_artists
     for key in excluded_artists:
         artist_weight.pop(key, None)
         artist_display.pop(key, None)
@@ -1414,6 +1424,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "explicit_genres": pref_genres,
         "title_tags": list(build_title_tag_profile(weighted_titles).keys()),
         "banned_artists": banned_artists,
+        # Бан второго прохода, когда обычный не набрал порцию (_compute_flow).
+        "hard_banned_artists": hard_banned_artists,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         # (доля кириллицы, сколько текстов) — априор языка в волне
         # (discovery_feedback.language_terms).
@@ -3337,6 +3349,8 @@ async def _compute_flow(
     mode: str = "live",
     history: Optional[dict] = None,
     schedule_matches: bool = True,
+    relax: bool = False,
+    prior: Optional[tuple] = None,
 ):
     """Расчёт порции потока.
 
@@ -3344,6 +3358,9 @@ async def _compute_flow(
     предрасчёт). mode="precompute" — тот же конвейер без побочных эффектов для
     flow-warmer: возвращает payload для flow:ready. Ротация любимых пишется в
     обоих режимах — она описывает ту порцию, что уйдёт следующей.
+    relax/prior — второй проход, когда обычный набрал меньше limit: бан артистов
+    за одиночные скипы снят (profile["hard_banned_artists"]), недостающие места
+    добираются к уже отобранному prior = (mix, scores, features).
     schedule_matches=False в предрасчёте — матчи источников аудио поставит
     выдача (payload["matched"]): порцию для того, кто сейчас не слушает, могут
     так и не забрать, а матч Soulseek качает файл на диск.
@@ -3384,6 +3401,8 @@ async def _compute_flow(
 
     requested_ratio = discovery_ratio(current_user)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
+    if relax:
+        profile = {**profile, "banned_artists": set(profile.get("hard_banned_artists") or ())}
     # Ползунок — потолок новизны, а фактическая доля зависит от того, как юзер
     # принимает новых артистов (см. app/discovery_feedback.py). Тонкий профиль
     # защищён: там фактор не применяется.
@@ -4422,6 +4441,46 @@ async def _compute_flow(
         sum(1 for item in mix if _item_identity(item) in probe_identities_delivered),
         len(mix),
     )
+    # Пустая или неполная порция хуже порции с артистом, которого юзер однажды
+    # скипнул: на пустом ответе у фронта кончается очередь и музыка встаёт.
+    # Второй проход со снятым мягким баном добирает недостающие места.
+    if not relax and len(mix) < limit:
+        return await _compute_flow(
+            request, response, limit, exclude, hour, current_user, db,
+            mode=mode, history=history, schedule_matches=schedule_matches,
+            relax=True, prior=(mix, scores_by_identity, features_by_identity),
+        )
+    if prior is not None:
+        prior_mix, prior_scores, prior_features = prior
+        taken = {_item_identity(item) for item in prior_mix}
+        taken_keys = {_norm_key(*_item_artist_title(item)) for item in prior_mix}
+        extra = []
+        for item in mix:
+            identity = _item_identity(item)
+            key = _norm_key(*_item_artist_title(item))
+            if identity in taken or key in taken_keys:
+                continue
+            taken.add(identity)
+            taken_keys.add(key)
+            extra.append(item)
+            if len(prior_mix) + len(extra) >= limit:
+                break
+        logger.info(
+            "flow relaxed bans user=%s strict=%d added=%d", user_id, len(prior_mix), len(extra)
+        )
+        extra_ids = {_item_identity(item) for item in extra}
+        for identity in extra_ids:
+            if identity in features_by_identity:
+                features_by_identity[identity]["relaxed"] = True
+        mix = list(prior_mix) + extra
+        scores_by_identity = {
+            **{k: v for k, v in scores_by_identity.items() if k in extra_ids},
+            **prior_scores,
+        }
+        features_by_identity = {
+            **{k: v for k, v in features_by_identity.items() if k in extra_ids},
+            **prior_features,
+        }
     if precompute:
         # Юзер слушает (порцию заказала его выдача) — матчи источников аудио
         # ставим уже сейчас, к выдаче они будут готовы. Иначе их поставит выдача.
