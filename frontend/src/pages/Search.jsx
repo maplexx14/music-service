@@ -235,7 +235,7 @@ function Search() {
     } catch (error) {
       if (signal.aborted) return
       console.error('Local search error:', error)
-      setResults({ tracks: [], playlists: [], users: [] })
+      setResults({ tracks: [], playlists: [] })
       setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
       if (!signal.aborted) setLoading(false)
@@ -289,8 +289,7 @@ function Search() {
       externalTracks.soundcloud.length > 0 ||
       results.playlists.length > 0 ||
       externalPlaylists.length > 0 ||
-      artists.length > 0 ||
-      results.users.length > 0
+      artists.length > 0
     : {
         top: topTracks,
         library: results.tracks,
@@ -559,27 +558,6 @@ function Search() {
                   </div>
                 )}
               />
-            </div>
-          )}
-
-          {showAll && results.users.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Пользователи</h2>
-              <div className="users-list">
-                {results.users.map((user) => (
-                  <div key={user.id} className="user-item">
-                    {user.avatar_url ? (
-                      <img src={user.avatar_url} alt={user.username} className="user-avatar" />
-                    ) : (
-                      <div className="user-avatar placeholder">{user.username[0].toUpperCase()}</div>
-                    )}
-                    <div className="user-info">
-                      <div className="user-name">{user.full_name || user.username}</div>
-                      <div className="user-username">@{user.username}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 

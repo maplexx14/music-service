@@ -4,14 +4,14 @@ from sqlalchemy import and_, case, or_
 from app.database import get_db
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User
-from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse, PublicUserResponse
+from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse
 from app.dependencies import get_current_user_optional
 
 router = APIRouter()
 
 _SEARCH_TTL = 180
-# Плейлистов и пользователей в выдаче нужно немного: лимит поднимают ради
-# треков артиста, а не ради полусотни плейлистов и тёзок в юзернеймах.
+# Плейлистов в выдаче нужно немного: лимит поднимают ради треков артиста,
+# а не ради полусотни плейлистов.
 _SECONDARY_LIMIT = 20
 
 
@@ -55,7 +55,7 @@ def search(
     if not tokens:
         # q из одних пробелов: min_length=1 такое пропускает, а пустой and_()
         # выродился бы в TRUE и отдал всю библиотеку.
-        return SearchResponse(tracks=[], playlists=[], users=[])
+        return SearchResponse(tracks=[], playlists=[])
 
     secondary_limit = min(limit, _SECONDARY_LIMIT)
 
@@ -87,19 +87,9 @@ def search(
         .all()
     )
 
-    # Search users
-    users = (
-        db.query(User)
-        .filter(_all_tokens_match(tokens, (User.username, User.full_name)))
-        .filter(User.is_active == True)
-        .limit(secondary_limit)
-        .all()
-    )
-
     response = SearchResponse(
         tracks=[TrackResponse.model_validate(t) for t in tracks],
         playlists=[PlaylistSummaryResponse.model_validate(p) for p in playlists],
-        users=[PublicUserResponse.model_validate(u) for u in users]
     )
     set_cache(cache_key, response.model_dump(mode="json"), expire=_SEARCH_TTL)
     return response

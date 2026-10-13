@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-const emptyResults = { tracks: [], playlists: [], users: [] }
+const emptyResults = { tracks: [], playlists: [] }
 const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
 
 // Выдача поиска живёт в сторе, а не в состоянии страницы: роутер размонтирует

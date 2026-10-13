@@ -257,57 +257,6 @@
   -webkit-box-orient: vertical;
 }
 
-.users-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
-}
-
-.user-item {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-  background-color: var(--surface-1);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background-color var(--duration-base) var(--ease-out),
-              transform var(--duration-fast) var(--ease-out);
-}
-
-.user-item:hover {
-  background-color: var(--surface-3);
-}
-
-.user-avatar {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  object-fit: cover;
-  background-color: var(--surface-4);
-}
-
-.user-avatar.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  font-weight: bold;
-  color: var(--text-disabled);
-}
-
-.user-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.user-username {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
 .search-error {
   text-align: center;
   padding: 16px;

@@ -157,17 +157,15 @@ def test_local_search_ignores_blank_query(client, db):
     assert resp.json()["tracks"] == []
 
 
-def test_local_search_users_expose_only_public_fields(client, db):
-    """Найденный юзер — без почты и флагов. Почта, которую не пропускает
-    EmailStr (admin@localhost), раньше роняла весь поиск в 500."""
+def test_local_search_does_not_return_users(client, db):
+    """Поиск не ищет людей: имена и юзернеймы чужих аккаунтов не светим."""
     db.add(User(username="kirpich", email="admin@localhost", hashed_password="x", is_admin=True))
     db.commit()
 
     resp = client.get("/api/search", params={"q": "kirpich", "limit": 50})
 
     assert resp.status_code == 200, resp.text
-    (user,) = resp.json()["users"]
-    assert set(user) == {"id", "username", "full_name", "avatar_url"}
+    assert "users" not in resp.json()
 
 
 def test_local_search_survives_null_play_count(client, db):
