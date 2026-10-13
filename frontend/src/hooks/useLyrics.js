@@ -110,7 +110,6 @@ export function useLyrics(track) {
     }
     // duration в зависимостях нет намеренно: текст привязан к артисту и
     // названию, а длительность лишь помогает выбрать синхронную версию.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artist, title, cacheKey])
 
   return { syncedLines, plainText, loading, error }
