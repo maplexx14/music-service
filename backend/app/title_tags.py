@@ -36,6 +36,22 @@ _MIN_OCCURRENCES = 2
 _MAX_TAGS = 8
 
 
+# Гости и продюсер в названии — имена, а не тема трека. «Не боюсь смерти
+# (feat. Максим Игоревич Ланда)» делал тегами вкуса «максим», «игоревич»,
+# «ланда»: прод, 2026-10-13 — теговый поиск волны искал «игоревич ланда» и
+# находил только уже слышанные треки того же артиста.
+_CREDIT_RE = re.compile(
+    r"[\(\[][^\)\]]*\b(?:feat|ft|featuring|prod|produced by)\b[^\)\]]*[\)\]]"
+    r"|\s(?:feat|ft|featuring|prod)\b\.?\s.*$",
+    re.IGNORECASE,
+)
+
+
+def strip_credits(title: str) -> str:
+    """Название без указания гостей и продюсера: (feat. …), ft. …, prod. …."""
+    return _CREDIT_RE.sub(" ", title or "")
+
+
 def extract_words(text: str) -> list:
     return [w.lower() for w in _WORD_RE.findall(text or "") if len(w) >= _MIN_WORD_LEN]
 
@@ -48,7 +64,7 @@ def build_title_tag_profile(weighted_titles: Iterable[tuple]) -> dict:
     occurrence_count: Counter = Counter()
     weight_sum: dict = {}
     for title, weight in weighted_titles:
-        words_in_title = set(extract_words(title))
+        words_in_title = set(extract_words(strip_credits(title)))
         for word in words_in_title:
             if word in _STOPWORDS:
                 continue

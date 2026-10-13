@@ -3637,3 +3637,71 @@ def test_flow_relaxes_skip_bans_when_portion_runs_dry(client, db, monkeypatch):
     artists = Counter(t["artist"] for t in resp.json())
     assert artists["SkippedOnce"] > 0, artists
     assert artists["Disliked"] == 0 and artists["SkippedOften"] == 0, artists
+
+
+def test_title_tags_ignore_guest_and_producer_credits():
+    """Имена из (feat. …) и prod. — не тема трека и не теги вкуса."""
+    from app.title_tags import build_title_tag_profile, strip_credits
+
+    titles = [
+        ("Не боюсь смерти (feat. Максим Игоревич Ланда)", 1.0),
+        ("Ртуть (sped up) (feat. Максим Игоревич Ланда)", 1.0),
+        ("Лучше чем ты ft. Максим Ланда", 1.0),
+        ("night drive [prod. Someone]", 1.0),
+        ("night drive two", 1.0),
+    ]
+    tags = build_title_tag_profile(titles)
+    assert not {"максим", "игоревич", "ланда", "someone"} & set(tags), tags
+    assert {"night", "drive"} <= set(tags), tags
+    assert strip_credits("Gift (Original Mix)") == "Gift (Original Mix)"
+
+
+def test_flow_searches_explicit_genre_despite_title_tags_and_skips_mainstream_gate(
+    client, db, monkeypatch
+):
+    """Прод, 2026-10-13: у юзера с breakcore в настройках теговый поиск шёл по
+    словам из названий («игоревич ланда»), а выбранный жанр не искался вовсе;
+    найденное по жанру резал мейнстрим-фильтр (у андерграунда мало артистов
+    с 50k слушателей)."""
+    from app import mainstream
+    from app.models import recommendation_impressions
+
+    user = create_user(db, username="breakcore-user")
+    now = datetime.now(timezone.utc)
+    _liked_at(db, user, [
+        ("LovedArtist", "night drive one", now),
+        ("LovedArtist", "night drive two", now),
+    ])
+    user.preferred_genres = ["breakcore"]
+    db.commit()
+
+    queries = []
+
+    async def _search(request, query):
+        queries.append(query)
+        if query != "breakcore":
+            return []
+        return [_external(f"Underground{i}", f"breakcore song {i}", f"bc{i}") for i in range(8)]
+
+    async def _hits(artists, timeout, **_kwargs):
+        return {}  # никто из найденных не «известен» Last.fm
+
+    monkeypatch.setattr("app.routers.flow._tag_pool", _search)
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(mainstream, "artist_hits", _hits)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=6",
+        headers=auth_headers(client, username="breakcore-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert "breakcore" in queries, queries
+    delivered = [t for t in resp.json() if t["title"].startswith("breakcore song")]
+    assert len(delivered) >= 3, resp.json()
+    rows = db.execute(
+        recommendation_impressions.select().where(
+            recommendation_impressions.c.user_id == user.id
+        )
+    ).mappings().all()
+    genre_rows = [r for r in rows if (r["features"] or {}).get("origin") == "genre"]
+    assert genre_rows and all("hit" not in r["features"] for r in genre_rows), rows
