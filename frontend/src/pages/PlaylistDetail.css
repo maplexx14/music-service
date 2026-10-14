@@ -373,20 +373,53 @@
     flex: 1;
   }
 
-  /* В ряду с «Перемешать» кнопок две, и обе с подписями: при базовых отбивках
-     «Воспроизвести» и «Перемешать» в строку на узком экране не влезают и ряд
-     вылезает за край. Ужимаем подписи и внутренние отступы обеих, а на самых
-     узких экранах разрешаем второй кнопке уехать на следующую строку. Базис
-     при этом по содержимому: с flex-basis: 0 из общего правила выше перенос не
-     сработал бы — обе кнопки остались бы в одной строке и переполнили её. */
-  .shuffle-actions {
-    flex-wrap: wrap;
+  /* Ряд действий шапки (артист, альбом, плейлист, «Понравившиеся») — как в
+     нативных плеерах: слева вторичные действия круглыми иконками, справа
+     крупная круглая «Воспроизвести» под большой палец. Подписи прячем — на
+     узком экране «Добавить в медиатеку» не помещалась и рвалась; смысл несут
+     иконка и aria-label. */
+  .playlist-actions.round-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 12px;
   }
 
-  .shuffle-actions .play-button-large {
-    flex: 1 1 auto;
-    padding: 0 16px;
-    font-size: var(--text-base);
+  .round-actions .round-actions__label {
+    display: none;
+  }
+
+  .round-actions .play-button-large.round-actions__play {
+    order: 3;
+    margin-left: auto;
+    flex: none;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--radius-avatar);
+  }
+
+  .round-actions .round-actions__icon {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-avatar);
+    color: var(--text-primary);
+    /* У .btn--secondary обводка — inset-тенью; здесь она уже рамкой. */
+    box-shadow: none;
+  }
+
+  .round-actions .action-button.liked,
+  .round-actions .round-actions__icon.liked {
+    color: var(--brand-accent);
+    border-color: var(--brand-accent);
+  }
+
+  .round-actions button {
+    touch-action: manipulation;
   }
 
   .playlist-tracks {

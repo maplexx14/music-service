@@ -206,19 +206,24 @@ function PlaylistDetail() {
               </>
             )}
           </div>
-          <div className="playlist-actions shuffle-actions">
-            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
+          <div className="playlist-actions round-actions">
+            <button
+              className="btn btn--primary btn--lg play-button-large round-actions__play"
+              onClick={handlePlay}
+              aria-label="Воспроизвести"
+            >
               <Play size={24} fill="currentColor" />
-              Воспроизвести
+              <span className="round-actions__label">Воспроизвести</span>
             </button>
             <button
-              className="btn btn--secondary btn--lg play-button-large"
+              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
               onClick={handleShuffle}
               disabled={shuffling}
               title="Перемешать и воспроизвести"
+              aria-label="Перемешать"
             >
               <Shuffle size={20} />
-              {shuffling ? 'Загрузка…' : 'Перемешать'}
+              <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
             </button>
           </div>
         </div>

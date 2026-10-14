@@ -105,22 +105,27 @@ function Track() {
               </>
             )}
           </div>
-          <div className="playlist-actions shuffle-actions">
-            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
+          <div className="playlist-actions round-actions">
+            <button
+              className="btn btn--primary btn--lg play-button-large round-actions__play"
+              onClick={handlePlay}
+              aria-label={isCurrent && isPlaying ? 'Пауза' : 'Слушать'}
+            >
               {isCurrent && isPlaying ? (
                 <Pause size={24} fill="currentColor" />
               ) : (
                 <Play size={24} fill="currentColor" />
               )}
-              {isCurrent && isPlaying ? 'Пауза' : 'Слушать'}
+              <span className="round-actions__label">{isCurrent && isPlaying ? 'Пауза' : 'Слушать'}</span>
             </button>
             <button
-              className="btn btn--secondary btn--lg play-button-large"
+              className={`btn btn--secondary btn--lg play-button-large round-actions__icon${isLiked ? ' liked' : ''}`}
               onClick={handleLike}
               aria-pressed={isLiked}
+              aria-label={isLiked ? 'В понравившихся' : 'Нравится'}
             >
               <LikeHeart size={20} liked={isLiked} />
-              {isLiked ? 'В понравившихся' : 'Нравится'}
+              <span className="round-actions__label">{isLiked ? 'В понравившихся' : 'Нравится'}</span>
             </button>
           </div>
         </div>

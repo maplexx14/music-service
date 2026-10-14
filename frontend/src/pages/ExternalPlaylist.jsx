@@ -183,18 +183,23 @@ function ExternalPlaylist() {
               </>
             )}
           </div>
-          <div className="playlist-actions shuffle-actions">
-            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
+          <div className="playlist-actions round-actions">
+            <button
+              className="btn btn--primary btn--lg play-button-large round-actions__play"
+              onClick={handlePlay}
+              aria-label="Воспроизвести"
+            >
               <Play size={24} fill="currentColor" />
-              Воспроизвести
+              <span className="round-actions__label">Воспроизвести</span>
             </button>
             <button
-              className="btn btn--secondary btn--lg play-button-large"
+              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
               onClick={handleImport}
               disabled={importing}
+              aria-label="Добавить в медиатеку"
             >
               <Plus size={20} />
-              {importing ? 'Добавление...' : 'Добавить в медиатеку'}
+              <span className="round-actions__label">{importing ? 'Добавление...' : 'Добавить в медиатеку'}</span>
             </button>
           </div>
         </div>

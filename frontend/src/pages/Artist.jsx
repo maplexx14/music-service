@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Play, Pause, ListPlus, ListChecks } from 'lucide-react'
+import { Play, Pause, ListPlus, ListChecks, Shuffle } from 'lucide-react'
 import LikeHeart from '../components/LikeHeart'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
@@ -98,9 +98,11 @@ function Artist() {
   const [loading, setLoading] = useState(() => !peekCache(artistCacheKey(name)))
   const [liking, setLiking] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [shuffling, setShuffling] = useState(false)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const shufflePlaylist = usePlayerStore((s) => s.shufflePlaylist)
   // Только id: страница отмечает текущую строку, а подписка на весь объект
   // перерисовывала её и тогда, когда трек тот же, а объект новый.
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
@@ -203,6 +205,17 @@ function Artist() {
 
   const handlePlay = () => {
     if (tracks.length > 0) playPlaylist(tracks, 0, 'artist')
+  }
+
+  const handleShuffle = async () => {
+    if (shuffling || tracks.length === 0) return
+    haptic(HAPTIC.selection)
+    setShuffling(true)
+    try {
+      await shufflePlaylist(tracks, 'artist')
+    } finally {
+      setShuffling(false)
+    }
   }
 
   // Очередь уже из треков этого исполнителя — кнопка становится паузой, а не
@@ -403,9 +416,9 @@ function Artist() {
       </div>
 
       <div className="artist-toolbar">
-        <div className="playlist-actions artist-actions">
+        <div className="playlist-actions round-actions">
           <button
-            className="btn btn--primary btn--lg play-button-large artist-play"
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
             onClick={handlePlayToggle}
             disabled={tracks.length === 0}
             aria-label={playLabel}
@@ -415,10 +428,10 @@ function Artist() {
             ) : (
               <Play size={24} fill="currentColor" />
             )}
-            <span className="artist-action-label">{playLabel}</span>
+            <span className="round-actions__label">{playLabel}</span>
           </button>
           <button
-            className="btn btn--secondary btn--lg play-button-large artist-save"
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
             onClick={handleSaveToLibrary}
             disabled={saving || tracks.length === 0}
             aria-label={saveLabel}
@@ -429,11 +442,21 @@ function Artist() {
             }
           >
             {artist.playlist_id ? <ListChecks size={20} /> : <ListPlus size={20} />}
-            <span className="artist-action-label">{saveLabel}</span>
+            <span className="round-actions__label">{saveLabel}</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
+            onClick={handleShuffle}
+            disabled={shuffling || tracks.length === 0}
+            title="Перемешать и воспроизвести"
+            aria-label="Перемешать"
+          >
+            <Shuffle size={20} />
+            <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
           </button>
           <button
             type="button"
-            className={`action-button${artist.is_liked ? ' liked' : ''}`}
+            className={`action-button round-actions__icon${artist.is_liked ? ' liked' : ''}`}
             onClick={handleToggleArtistLike}
             disabled={liking}
             title={

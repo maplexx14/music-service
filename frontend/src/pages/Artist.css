@@ -240,7 +240,10 @@
      с полями по 16px на телефоне выглядела вставкой, а не экраном артиста. */
   .artist-hero {
     margin-inline: -16px;
-    padding: 32px 16px 24px;
+    /* Градиент заходит под плавающую «Назад» до верха экрана: отступ под неё
+       (--main-pad-top, Layout.css) иначе оставался чёрной полосой. */
+    margin-top: calc(-1 * var(--main-pad-top, 0px));
+    padding: calc(32px + var(--main-pad-top, 0px)) 16px 24px;
     border-radius: 0;
   }
 
@@ -267,54 +270,6 @@
 
   .artist-toolbar {
     padding-top: 16px;
-  }
-
-  /* Кнопки — одним рядом, как в нативных плеерах: слева вторичные действия
-     иконками, справа крупная круглая «Воспроизвести» под большой палец.
-     Подписи прячем — на узком экране «Добавить в медиатеку» не помещалась и
-     рвалась; смысл несут иконка и aria-label. */
-  .playlist-actions.artist-actions {
-    display: flex;
-    justify-content: flex-start;
-    gap: 12px;
-  }
-
-  .artist-action-label {
-    display: none;
-  }
-
-  .artist-actions .artist-play {
-    order: 3;
-    margin-left: auto;
-    flex: none;
-    width: 56px;
-    height: 56px;
-    padding: 0;
-    justify-content: center;
-    border-radius: var(--radius-avatar);
-  }
-
-  .artist-actions .artist-save,
-  .artist-actions .action-button {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: var(--radius-avatar);
-    color: var(--text-primary);
-    /* У .btn--secondary обводка — inset-тенью; здесь она уже рамкой. */
-    box-shadow: none;
-  }
-
-  .artist-actions .action-button.liked {
-    color: var(--brand-accent);
-    border-color: var(--brand-accent);
-  }
-
-  .artist-actions button {
-    touch-action: manipulation;
   }
 
   /* --- Компактная полоса при прокрутке ---

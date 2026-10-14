@@ -219,26 +219,28 @@ function Album() {
               </>
             )}
           </div>
-          <div className="playlist-actions shuffle-actions">
+          <div className="playlist-actions round-actions">
             <button
-              className="btn btn--primary btn--lg play-button-large"
+              className="btn btn--primary btn--lg play-button-large round-actions__play"
               onClick={handlePlay}
               disabled={tracks.length === 0}
+              aria-label="Воспроизвести"
             >
               <Play size={24} fill="currentColor" />
-              Воспроизвести
+              <span className="round-actions__label">Воспроизвести</span>
             </button>
             <button
-              className="btn btn--secondary btn--lg play-button-large"
+              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
               onClick={handleShuffle}
               disabled={shuffling || tracks.length === 0}
               title="Перемешать и воспроизвести"
+              aria-label="Перемешать"
             >
               <Shuffle size={20} />
-              {shuffling ? 'Загрузка…' : 'Перемешать'}
+              <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
             </button>
             <button
-              className="btn btn--secondary btn--lg playlist-action-icon"
+              className="btn btn--secondary btn--lg playlist-action-icon round-actions__icon"
               onClick={handleSaveToLibrary}
               disabled={saving || tracks.length === 0}
               title="Добавить в медиатеку"
