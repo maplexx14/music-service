@@ -394,6 +394,9 @@ _FAVORITE_CATALOG_LIMIT = 40
 # не меньше запрошенной порции — иначе у пользователя с одним-двумя артистами
 # выдача станет короче, чем он просил.
 _FAVORITE_ARTIST_WINDOW = 10
+# Сколько песен доказанного любимого из СВОЕЙ коллекции юзера его каталог
+# предлагает ранкеру за подгрузку (см. _favorite_collection_candidates).
+_FAVORITE_COLLECTION_PER_ARTIST = 3
 # Ротация каталогов любимых артистов (см. _pick_favorite_artists). За подгрузку
 # сеть тянет каталоги лишь ~15 имён, а коллекция бывает в сотни артистов.
 # Раньше выбор решала позиция в списке коллекции — и волна крутила первые ~25
@@ -1825,6 +1828,20 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
     return candidates
 
 
+def _touched_seconds(moment) -> float:
+    """Когда трек играли или скипали — числом; никогда — минус бесконечность.
+
+    Числом, а не самим datetime: время приходит из БД то наивным, то с
+    таймзоной, и сортировка смешанного списка падала бы на сравнении aware с
+    naive. Наивное считаем UTC — та же конвенция, что в _decay.
+    """
+    if moment is None:
+        return float("-inf")
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.timestamp()
+
+
 def _liked_candidates(
     db: Session,
     profile: dict,
@@ -1888,17 +1905,6 @@ def _liked_candidates(
         .all()
     )
 
-    def _played_seconds(last_played) -> float:
-        # Числом, а не самим datetime: last_played приходит из БД то наивным, то
-        # с таймзоной, и сортировка смешанного списка падала бы на сравнении
-        # aware с naive. Наивное считаем UTC — та же конвенция, что в _decay.
-        # Ни разу не игранный — впереди всех.
-        if last_played is None:
-            return float("-inf")
-        if last_played.tzinfo is None:
-            last_played = last_played.replace(tzinfo=timezone.utc)
-        return last_played.timestamp()
-
     cooldown_before = (
         datetime.now(timezone.utc) - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS)
     ).timestamp()
@@ -1912,7 +1918,7 @@ def _liked_candidates(
             continue
         if not _media_available(track):
             continue
-        touched_at = max(_played_seconds(last_played), _played_seconds(last_skipped))
+        touched_at = max(_touched_seconds(last_played), _touched_seconds(last_skipped))
         if touched_at > cooldown_before:
             continue
         ordered.append(
@@ -1943,6 +1949,119 @@ def _liked_candidates(
     return (picked + overflow)[:window]
 
 
+def _favorite_collection_candidates(
+    db: Session,
+    profile: dict,
+    favorite_ranks: dict,
+    context: str,
+    exclude_ids: Optional[set] = None,
+) -> List[Track]:
+    """Песни доказанных любимых артистов из СВОЕЙ коллекции юзера (блокирующая).
+
+    ``favorite_ranks`` — {артист: нормализованные названия его каталога по
+    популярности на площадке} для доказанных любимых, чьи каталоги тянет эта
+    подгрузка. Провайдерская выдача коллекцию исключает, и у артиста, собранного
+    целиком, выбор любимого оставался пустым (прод, 2026-10-14: все 40 треков
+    Limp Bizkit на YT Music лежали в коллекции владельца — из 192 отдач LB за
+    4 дня от его каталога ни одной, только radio и local глубиной каталога).
+    Здесь — его песни строками коллекции, хиты чаще (место в каталоге площадки,
+    _rank_weighted_shuffle), не больше ``_FAVORITE_COLLECTION_PER_ARTIST``.
+
+    Повторы держат правила лайков: дизлайк, бан артиста и
+    ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания или скипа любой копии
+    песни. Кулдаун показанного и provider id очереди сверяет вызывающий.
+    """
+    names = [artist for artist in favorite_ranks if artist_key(artist)]
+    if not names:
+        return []
+    exclude_ids = exclude_ids or set()
+    rows = (
+        db.query(
+            Track,
+            user_track_plays.c.last_played,
+            user_track_skips.c.last_skipped,
+            user_track_skips.c.disliked,
+        )
+        .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
+        .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
+        .outerjoin(
+            user_track_plays,
+            and_(
+                user_track_plays.c.track_id == Track.id,
+                user_track_plays.c.user_id == profile["user_id"],
+            ),
+        )
+        .outerjoin(
+            user_track_skips,
+            and_(
+                user_track_skips.c.track_id == Track.id,
+                user_track_skips.c.user_id == profile["user_id"],
+            ),
+        )
+        .filter(Playlist.owner_id == profile["user_id"])
+        # SoundCloud-строки бывают с uploader в Track.artist — их артиста
+        # сверяем ниже по эффективному имени.
+        .filter(
+            or_(
+                *(
+                    func.lower(Track.artist).contains(name.lower(), autoescape=True)
+                    for name in names
+                ),
+                Track.source == "soundcloud",
+            )
+        )
+        .all()
+    )
+    # Одна песня бывает несколькими строками (два плейлиста, копии с разных
+    # площадок): кулдаун и дизлайк любой копии — на всю песню.
+    songs: dict = {}
+    for track, last_played, last_skipped, disliked in rows:
+        effective_artist, effective_title = effective_track_artist_title(track)
+        owner = next((name for name in names if names_whole_artist(name, effective_artist)), None)
+        if owner is None:
+            continue
+        song = songs.setdefault(
+            (owner, _norm_text(effective_title)),
+            {"tracks": {}, "touched": float("-inf"), "blocked": False},
+        )
+        song["tracks"][track.id] = track
+        song["touched"] = max(
+            song["touched"], _touched_seconds(last_played), _touched_seconds(last_skipped)
+        )
+        song["blocked"] |= bool(disliked) or track.id in exclude_ids or bool(
+            profile["banned_artists"]
+            and artist_key(effective_artist) in profile["banned_artists"]
+        )
+    cooldown_before = (
+        datetime.now(timezone.utc) - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS)
+    ).timestamp()
+    by_artist: dict = {}
+    for (owner, title), song in songs.items():
+        if song["blocked"] or song["touched"] > cooldown_before:
+            continue
+        track = next((t for t in song["tracks"].values() if _media_available(t)), None)
+        if track is not None:
+            by_artist.setdefault(owner, []).append((title, track))
+    picked: List[Track] = []
+    for owner, items in by_artist.items():
+        ranks = favorite_ranks.get(owner) or []
+        place = {title: index for index, title in enumerate(ranks)}
+        items.sort(
+            key=lambda pair: (
+                place.get(pair[0], len(ranks)),
+                -_service_play_count(pair[1]),
+                pair[1].id,
+            )
+        )
+        picked += _rank_weighted_shuffle(
+            [track for _title, track in items],
+            context,
+            f"favorite-collection:{artist_key(owner)}",
+            lambda track: track.id,
+        )[:_FAVORITE_COLLECTION_PER_ARTIST]
+    return picked
+
+
 def _familiar_candidates_on_bind(
     bind,
     profile: dict,
@@ -1950,12 +2069,16 @@ def _familiar_candidates_on_bind(
     extra_exclude_ids: Optional[set] = None,
     liked_exclude_ids: Optional[set] = None,
     liked_limit: Optional[int] = None,
-) -> tuple[List[Track], List[Track]]:
-    """Каталог и понравившееся одной короткой сессией: (local, liked).
+    favorite_ranks: Optional[dict] = None,
+    context: str = "",
+) -> tuple[List[Track], List[Track], List[Track]]:
+    """Каталог, понравившееся и песни любимых из коллекции одной короткой
+    сессией: (local, liked, favorite).
 
-    Обе выборки блокирующие и обе нужны в один момент, поэтому они делят одну
+    Выборки блокирующие и нужны в один момент, поэтому они делят одну
     сессию и один поток — второй Session ради второго запроса брал бы из пула
-    лишнее соединение на то же самое время.
+    лишнее соединение на то же самое время. Песни любимых
+    (_favorite_collection_candidates) исключают, как и лайки, только очередь.
 
     Исключения у выборок РАЗНЫЕ, и это главное, зачем здесь два параметра.
     Каталогу передают полный ``extra_exclude_ids`` (очередь фронта плюс
@@ -1981,6 +2104,9 @@ def _familiar_candidates_on_bind(
         return (
             _local_candidates(local_db, profile, limit, extra_exclude_ids),
             liked,
+            _favorite_collection_candidates(
+                local_db, profile, favorite_ranks or {}, context, liked_exclude_ids
+            ),
         )
     finally:
         local_db.close()
@@ -2599,7 +2725,12 @@ def _popular_first_shuffle(pool, context: str, salt: str, identity_of) -> list:
     Выборка без возвращения (Efraimidis–Spirakis, ключ log(u) / w),
     детерминированная контекстом подгрузки.
     """
-    ranked = _by_service_popularity(pool)
+    return _rank_weighted_shuffle(_by_service_popularity(pool), context, salt, identity_of)
+
+
+def _rank_weighted_shuffle(ranked: list, context: str, salt: str, identity_of) -> list:
+    """То же для уже упорядоченного по популярности списка: место r весит
+    exp(-r / _DEEP_CUT_SCALE)."""
 
     def key(pair):
         rank, item = pair
@@ -4324,6 +4455,10 @@ async def _compute_flow(
     hits_seed_artists = plan["hits_seed_artists"]
     hits_jobs = [_similar_hits_pool(request, artist) for artist in hits_seed_artists]
 
+    # Доказанные любимые этой подгрузки -> названия их каталога по популярности:
+    # по нему песни из своей коллекции идут хитами вперёд
+    # (_favorite_collection_candidates).
+    favorite_ranks: dict = {}
     if favorite_jobs or lastfm_jobs or hits_jobs or discovery:
         stage_started = loop.time()
         pools = await _gather_within(
@@ -4343,6 +4478,11 @@ async def _compute_flow(
                 accept_limit=favorite_window,
                 origin="favorite",
             )
+            if artist_weights.get(artist_key(artist), 0.0) >= _ARTIST_PROVEN_WEIGHT:
+                favorite_ranks[artist] = [
+                    _norm_text(effective_track_artist_title(t)[1])
+                    for t in _by_service_popularity(pool)
+                ]
         _add_explore(
             (
                 t for t in _interleave(
@@ -4484,7 +4624,7 @@ async def _compute_flow(
     probe_explore = [t for t in probe_explore if _population_allows_discovery(t)]
     explore = [t for t in explore if _population_allows_discovery(t)]
     # --- локальная библиотека, понравившееся и единый пул ---
-    local, liked_pool = await asyncio.to_thread(
+    local, liked_pool, favorite_pool = await asyncio.to_thread(
         _familiar_candidates_on_bind,
         telemetry_bind,
         profile,
@@ -4492,6 +4632,8 @@ async def _compute_flow(
         set(excl_ids),
         queued_ids,
         liked_target,
+        favorite_ranks,
+        ranking_context,
     )
     # Понравившееся разбираем ПЕРВЫМ: при совпадении нормализованного ключа с
     # другой строкой каталога в единый пул должна попасть именно лайкнутая.
@@ -4530,6 +4672,28 @@ async def _compute_flow(
         liked_candidates.append(t)
         liked_identities.add(_item_identity(t))
         origin_by_identity.setdefault(_item_identity(t), "liked")
+    # Песни доказанных любимых из своей коллекции — каталог любимого артиста,
+    # как и провайдерский (origin favorite). Сверка как у лайков выше (очередь,
+    # provider id недавнего и уже отданного), плюс кулдаун показанного: квота
+    # лайков его не видит, а здесь без него хиты любимого шли бы по кругу.
+    taken_keys = {_norm_key(*effective_track_artist_title(t)) for t in liked_candidates}
+    shown_ids = set() if relax else set(profile.get("shown_ids") or ())
+    shown_external_ids = set() if relax else set(profile.get("shown_external_ids") or ())
+    shown_keys = set() if relax else set(profile.get("shown_keys") or ())
+    favorite_collection: List[Track] = []
+    for t in favorite_pool:
+        key = _norm_key(*effective_track_artist_title(t))
+        if t.id in queued_ids or t.id in shown_ids or key in shown_keys or key in taken_keys:
+            continue
+        if t.external_id and (
+            t.external_id in liked_excl_videos
+            or f"{t.source}:{t.external_id}" in shown_external_ids
+        ):
+            continue
+        taken_keys.add(key)
+        excl_ids.add(t.id)
+        favorite_collection.append(t)
+        origin_by_identity.setdefault(_item_identity(t), "favorite")
     local_candidates: List[Track] = []
     for t in local:
         effective_artist, effective_title = effective_track_artist_title(t)
@@ -4556,13 +4720,15 @@ async def _compute_flow(
     # прийти локально, через YT Music и SoundCloud с разными provider id. При
     # совпадении оставляем первый источник: понравившееся, локальный файл, затем
     # точный каталог, затем похожесть и прочую разведку. Треки из собственных
-    # (не «Понравившиеся») плейлистов сюда намеренно не добавляются: они уже
-    # отфильтрованы выше и должны влиять на вкус, но не повторяться в потоке.
+    # (не «Понравившиеся») плейлистов сюда идут только как песни доказанных
+    # любимых (favorite_collection, со своими кулдаунами): остальные влияют на
+    # вкус, но не повторяются в потоке.
     unified_candidates = []
     unified_identities = set()
     unified_keys = set()
     for candidate in (
         *liked_candidates,
+        *favorite_collection,
         *local_candidates,
         *probe_explore,
         *favorite_explore,
@@ -4657,7 +4823,7 @@ async def _compute_flow(
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.05)
     for candidate in probe_explore:
         content_bonus_by_identity.setdefault(_item_identity(candidate), _PROBE_BONUS)
-    for candidate in favorite_explore:
+    for candidate in (*favorite_collection, *favorite_explore):
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.12)
     for candidate in similar_explore:
         content_bonus_by_identity.setdefault(_item_identity(candidate), 0.08)

@@ -2140,6 +2140,14 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     _imported_playlist(
         db, user, [("ProvenArtist", f"импорт {i}") for i in range(3)]
     )
+    # Свои песни артиста только что слушали — коллекция на кулдауне
+    # (_favorite_collection_candidates), здесь проверяется провайдерский каталог.
+    now = datetime.now(timezone.utc)
+    db.execute(user_track_plays.insert(), [
+        {"user_id": user.id, "track_id": track.id, "play_count": 1, "last_played": now}
+        for track in db.query(Track).filter(Track.artist == "ProvenArtist")
+    ])
+    db.commit()
 
     # Монотонная метрика: популярный хвост каталога отличить от головы легко.
     catalog = [_popular("ProvenArtist", i, 1000 - i * 10) for i in range(20)]
@@ -2433,6 +2441,122 @@ def test_favorite_artist_survives_a_collection_full_of_his_hits(client, db, monk
     delivered = {track["external_id"] for track in resp.json()}
     assert delivered, "знакомый артист исчез из выдачи целиком"
     assert delivered <= {track.external_id for track in deep}, delivered
+
+
+def test_favorite_collection_offers_own_songs_hits_first_with_cooldowns(db):
+    """Песни доказанного любимого из своей коллекции: хиты чаще; дизлайкнутое,
+    недавно сыгранное или скипнутое (любой копией) и стоящее в очереди — нет."""
+    from app.routers.flow import (
+        _FAVORITE_COLLECTION_PER_ARTIST,
+        _favorite_collection_candidates,
+        _norm_text,
+    )
+
+    user = create_user(db, username="favorite-collection-user")
+    hits = [f"hit {i}" for i in range(10)]
+    _imported_playlist(
+        db, user,
+        [("FavArtist", title) for title in (*hits, "hated", "played", "skipped", "queued")]
+        + [("Other", "other song")],
+    )
+    # Вторая копия песни в другом плейлисте: кулдаун первой — на всю песню.
+    _imported_playlist(db, user, [("FavArtist", "played")], name="Second")
+    tracks = {}
+    for track in db.query(Track).filter(Track.artist == "FavArtist").order_by(Track.id):
+        tracks.setdefault(track.title, track)
+    now = datetime.now(timezone.utc)
+    db.execute(user_track_skips.insert(), [
+        {"user_id": user.id, "track_id": tracks["hated"].id, "skip_count": 1,
+         "disliked": True, "last_skipped": now - timedelta(days=30)},
+        {"user_id": user.id, "track_id": tracks["skipped"].id, "skip_count": 1,
+         "disliked": False, "last_skipped": now},
+    ])
+    db.execute(user_track_plays.insert(), [
+        {"user_id": user.id, "track_id": tracks["played"].id, "play_count": 1,
+         "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS - 1)},
+    ])
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert "favartist" not in profile["banned_artists"]
+    favorite = {"FavArtist": [_norm_text(title) for title in hits]}
+    queued = {tracks["queued"].id}
+    picked = _favorite_collection_candidates(db, profile, favorite, "ctx", queued)
+    assert len(picked) == _FAVORITE_COLLECTION_PER_ARTIST
+    assert {track.title for track in picked} <= set(hits), [t.title for t in picked]
+
+    first = Counter(
+        _favorite_collection_candidates(db, profile, favorite, f"ctx{i}", queued)[0].title
+        for i in range(200)
+    )
+    top = sum(first[title] for title in hits[:3])
+    deep = sum(first[title] for title in hits[-3:])
+    assert top > 2 * deep, first
+
+
+def test_fully_collected_favorite_reaches_the_flow_with_own_songs(client, db, monkeypatch):
+    """Каталог любимого на площадке целиком в коллекции (прод, 2026-10-14:
+    Limp Bizkit, 40 из 40) — раньше его выбор был пустым, теперь он приходит
+    своими песнями строками коллекции, а не копиями провайдера."""
+    user = create_user(db, username="fully-collected-user")
+    titles = [f"хит {i}" for i in range(10)]
+    _imported_playlist(db, user, [("FavArtist", title) for title in titles])
+    catalog = [_popular("FavArtist", i, 1000 - i) for i in range(10)]
+    for track, title in zip(catalog, titles):
+        track.title = title
+
+    async def _favorite(request, artist):
+        return catalog
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
+
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="fully-collected-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    own = {track.id for track in db.query(Track).filter(Track.artist == "FavArtist")}
+    delivered = resp.json()
+    assert any(track["id"] in own for track in delivered), delivered
+    assert not any(track["id"] in {t.id for t in catalog} for track in delivered), delivered
+
+
+def test_favorite_collection_songs_cool_down_after_a_show(client, db, monkeypatch):
+    """Показанная в волне песня из коллекции не возвращается _SHOWN_COOLDOWN_DAYS."""
+    user = create_user(db, username="collected-shown-user")
+    titles = [f"хит {i}" for i in range(10)]
+    _imported_playlist(db, user, [("FavArtist", title) for title in titles])
+    # Непрослушанные треки артиста в общем каталоге набирают порцию, иначе
+    # недобор добрал бы её вторым проходом, где кулдаун показанного не действует.
+    db.add_all([
+        Track(title=f"новый {i}", artist="FavArtist", duration=100, source="local",
+              file_path=f"minio://music/fresh-{i}.mp3")
+        for i in range(10)
+    ])
+    now = datetime.now(timezone.utc)
+    shown = [track for track in db.query(Track).filter(Track.artist == "FavArtist")
+             if track.title in titles[:9]]
+    for track in shown:
+        db.execute(recommendation_impressions.insert().values(
+            user_id=user.id, track_id=track.id, source="local", artist="FavArtist",
+            title=track.title, surface="flow", position=0, request_id="shown",
+            visible=True, shown_at=now - timedelta(days=1),
+        ))
+    db.commit()
+
+    async def _favorite(request, artist):
+        return []
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="collected-shown-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = {track["title"] for track in resp.json()}
+    assert len(delivered) == 5, delivered
+    assert not delivered & set(titles[:9]), delivered
 
 
 def _dislike_event(db, user, external_id, *, event_type="dislike", surface="flow",
