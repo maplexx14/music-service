@@ -2216,10 +2216,11 @@ def test_recently_delivered_artists_yield_to_the_rest_of_the_library(
         ]
 
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
-    # Первые пять имён всегда «сильнее» трёх последних.
+    # Первые пять имён всегда «сильнее» трёх последних. Разрыв меньше штрафа
+    # за повтор: у артистов с весом плейлиста он смягчён (_artist_repeat_penalty).
     monkeypatch.setattr(
         "app.routers.flow.score_track",
-        lambda item, **kwargs: 3.0 - 0.1 * artists.index(item.artist),
+        lambda item, **kwargs: 3.0 - 0.05 * artists.index(item.artist),
     )
     headers = auth_headers(client, username="artist-rotation-user")
 

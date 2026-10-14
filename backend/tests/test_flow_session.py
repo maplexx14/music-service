@@ -324,3 +324,80 @@ def test_core_artists_get_most_favorite_catalog_slots():
         counts.update(plan["favorite_artists"])
         assert len(plan["favorite_artists"]) == 12
     assert counts["Core"] == counts["Second"] == counts["Pref"] == 30
+
+
+def test_heavy_favorite_picked_more_often_than_light_with_a_big_pool():
+    """Пул предрасчёта 30 не должен брать почти всё ядро: тогда вес не решает
+    (прод, 2026-10-14: Limp Bizkit, вес 269, показан реже Pixies с весом 0.5)."""
+    from collections import Counter
+
+    from app.routers.flow import _external_plan
+
+    deep = [f"fav{i}" for i in range(25)]
+    weights = {key: 0.5 for key in deep}
+    weights["fav0"] = 269.0
+    profile = {
+        "playlist_seeds": [], "seeds": [], "fresh_seeds": [], "artists": [],
+        "trusted_artist_keys": [], "liked_artists": [], "playlist_artists": [],
+        "catalog_artists": [f"Fav{i}" for i in range(25)],
+        "artist_weight": weights, "deep_catalog_artist_keys": deep,
+        "seed_tracks": [], "fresh_seed_tracks": [], "title_tags": [], "genres": [],
+        "explicit_genres": [],
+    }
+    counts = Counter()
+    for context in range(60):
+        plan = _external_plan(
+            profile, f"ctx{context}", limit=30, favorite_limit=6, last_picked={},
+            recent_artist_counts=Counter(), now_ts=0.0,
+        )
+        # 12 мест, хвоста нет — ядру достаются его 3/4.
+        assert len(plan["favorite_artists"]) == 9
+        counts.update(plan["favorite_artists"])
+    light = sum(counts[f"Fav{i}"] for i in range(1, 25)) / 24
+    assert counts["Fav0"] >= 55
+    assert light < 30
+
+
+def test_repeat_penalty_softer_for_heavy_artists():
+    from app.routers.flow import _artist_repeat_penalty
+
+    assert _artist_repeat_penalty(0, 300.0) == 0.0
+    heavy = _artist_repeat_penalty(3, 269.0)
+    light = _artist_repeat_penalty(3, 0.5)
+    new = _artist_repeat_penalty(3, None)
+    assert heavy < light / 3
+    assert light <= new
+
+
+def test_single_song_unproven_artists_fill_tail_last():
+    """Один лайк не открывает каталог артиста, пока хвосту есть кого брать."""
+    from collections import Counter
+
+    from app.routers.flow import _external_plan
+
+    weights = {"core": 300.0, "liked once": 3.0}
+    weights.update({f"tail{i}": 1.0 for i in range(20)})
+    profile = {
+        "playlist_seeds": [], "seeds": [], "fresh_seeds": [], "artists": [],
+        "trusted_artist_keys": [], "liked_artists": ["Liked Once"], "playlist_artists": [],
+        "catalog_artists": ["Core"] + [f"Tail{i}" for i in range(20)],
+        "artist_weight": weights, "deep_catalog_artist_keys": ["core"],
+        "collection_song_counts": {"core": 40, "liked once": 1, **{f"tail{i}": 2 for i in range(20)}},
+        "seed_tracks": [], "fresh_seed_tracks": [], "title_tags": [], "genres": [],
+        "explicit_genres": [],
+    }
+    counts = Counter()
+    for context in range(30):
+        plan = _external_plan(
+            profile, f"ctx{context}", limit=6, last_picked={},
+            recent_artist_counts=Counter(), now_ts=0.0,
+        )
+        counts.update(plan["favorite_artists"])
+    assert counts["Liked Once"] == 0
+
+    # Хвост из одних одиночных — тогда берутся и они.
+    profile["collection_song_counts"] = {"core": 40}
+    plan = _external_plan(
+        profile, "ctx", limit=6, last_picked={}, recent_artist_counts=Counter(), now_ts=0.0,
+    )
+    assert len(plan["favorite_artists"]) == 12

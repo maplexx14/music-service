@@ -325,6 +325,11 @@ _MIN_ARTIST_GAP = 4
 # а не выкидывает его из волны.
 _ARTIST_REPEAT_PENALTY = 0.3
 _ARTIST_REPEAT_CAP = 1.2
+# Штраф за повтор делится на 1 + sqrt(вес)/_ARTIST_REPEAT_WEIGHT_SCALE: одинаковый
+# для всех, он выравнивал показы — Limp Bizkit (вес 269, 744 прослушивания)
+# штрафовался за каждое появление так же, как Pixies (вес 0.5), и звучал реже
+# (прод, 2026-10-14). С делителем у LB штраф ~0.06 за появление, у Pixies ~0.25.
+_ARTIST_REPEAT_WEIGHT_SCALE = 4.0
 # Вес сигнала вкуса (лайк/прослушивание/скип) экспоненциально затухает со
 # временем вместо жёсткого окна «последние N записей» — иначе у активных
 # пользователей (сотни прослушиваний за сессию) более ранний, но всё ещё
@@ -452,6 +457,15 @@ _FRESH_SEED_SHARE = 2
 # ниже явного лайка (0.15) — измерение всё-таки не подтверждение от юзера.
 # Места в порции бонус не даёт: пик идёт в общий пул и конкурирует ранжированием.
 _PROBE_BONUS = 0.14
+
+
+def _artist_repeat_penalty(count: int, weight: Optional[float]) -> float:
+    """Штраф за ``count`` появлений артиста в недавней выдаче: чем больше вес
+    вкуса, тем мягче — доля артиста в волне растёт с тем, как его слушают."""
+    if not count:
+        return 0.0
+    scale = 1.0 + math.sqrt(max(weight or 0.0, 0.0)) / _ARTIST_REPEAT_WEIGHT_SCALE
+    return _ARTIST_REPEAT_PENALTY * count / scale
 
 
 def _artist_affinity(artist: str, weights: dict) -> Optional[float]:
@@ -626,6 +640,23 @@ def _collection_rows(db: Session, user_id: int) -> list:
     )
 
 
+def collection_song_counts(collection_rows) -> dict[str, int]:
+    """{primary_artist_key: разных песен в коллекции}; один трек в двух
+    плейлистах — одна песня."""
+    songs_by_artist: dict[str, set] = {}
+    for _track_id, artist, title, source, _external_id, album in collection_rows:
+        effective_artist, effective_title = effective_artist_title(
+            title or "",
+            artist or "",
+            source=source or "",
+            album=album or "",
+        )
+        key = _norm_key(effective_artist, effective_title)
+        if all(key):
+            songs_by_artist.setdefault(primary_artist_key(effective_artist), set()).add(key)
+    return {artist: len(songs) for artist, songs in songs_by_artist.items()}
+
+
 def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List[str]:
     """Любимые артисты: от _DEEP_CATALOG_MIN_TRACKS разных песен в коллекции.
 
@@ -639,22 +670,11 @@ def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List
     мейнстрим-фильтре ВСЕ свои треки (прод, 2026-10-10: первый по весу артист
     профиля не попал в волну ни разу).
     """
-    songs_by_artist: dict[str, set] = {}
-    for _track_id, artist, title, source, _external_id, album in collection_rows:
-        effective_artist, effective_title = effective_artist_title(
-            title or "",
-            artist or "",
-            source=source or "",
-            album=album or "",
-        )
-        key = _norm_key(effective_artist, effective_title)
-        if all(key):
-            songs_by_artist.setdefault(primary_artist_key(effective_artist), set()).add(key)
     excluded = set(excluded)
     deep = {
         artist
-        for artist, songs in songs_by_artist.items()
-        if artist and len(songs) >= _DEEP_CATALOG_MIN_TRACKS
+        for artist, songs in collection_song_counts(collection_rows).items()
+        if artist and songs >= _DEEP_CATALOG_MIN_TRACKS
     }
     deep.update(primary_artist_key(name) for name in preferred)
     return sorted(artist for artist in deep if artist and artist not in excluded)
@@ -1525,6 +1545,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         # (см. app/mainstream.py). Считаются разные песни, а не строки: один
         # трек в двух плейлистах — это один выбор.
         "deep_catalog_artist_keys": deep_keys,
+        "collection_song_counts": collection_song_counts(collection_rows),
         "fresh_cluster_artist_keys": fresh_collection_artist_keys(db, user_id),
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists":[artist_display.get(k, k) for k in catalog_artist_keys],
@@ -2909,6 +2930,7 @@ def _external_plan(
     last_picked: dict,
     recent_artist_counts: Counter,
     now_ts: float,
+    favorite_limit: Optional[int] = None,
 ) -> dict:
     """Что именно спрашивать у внешних провайдеров для одной порции потока.
 
@@ -2973,7 +2995,10 @@ def _external_plan(
     core_keys = _core_artist_keys(profile)
     core = [a for a in catalog_artists if _is_core_artist(a, core_keys)]
     tail = [a for a in catalog_artists if not _is_core_artist(a, core_keys)]
-    total = max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), limit))
+    # От размера выдачи, а не пула предрасчёта: с пулом 30 (hybrid-v18) брались
+    # 23 артиста ядра из 25 — почти все, и вес на выбор уже не влиял (прод,
+    # 2026-10-14: Limp Bizkit, вес 269, показан реже Queen и Pixies с весом 0.5).
+    total = max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), favorite_limit or limit))
     core_limit = min(len(core), math.ceil(total * _CORE_FAVORITE_SHARE))
     pick = functools.partial(
         _pick_favorite_artists,
@@ -2984,7 +3009,23 @@ def _external_plan(
         context=ranking_context,
     )
     favorite_artists = pick(core, limit=core_limit)
-    favorite_artists += pick(tail, limit=total - len(favorite_artists))
+    # Артист хвоста с одной песней в коллекции и без доказанного веса — чаще
+    # всего один лайк, а не любимый: его каталог уходит в скипы (прод: good
+    # 2.7% / bad 65%; 2026-10-14 — Аукцыон, 10 показов за 2 дня от лайка одной
+    # песни, 8 скипов). Такие идут, только если остальным хвостом мест не
+    # заполнить: у коллекции из одних одиночных треков волна не должна пустеть.
+    song_counts = profile.get("collection_song_counts") or {}
+
+    def _single_unproven(artist: str) -> bool:
+        return (
+            song_counts.get(primary_artist_key(artist), 0) <= 1
+            and weights.get(artist_key(artist), 0.0) < _ARTIST_PROVEN_WEIGHT
+        )
+
+    tail_main = [a for a in tail if not _single_unproven(a)]
+    tail_single = [a for a in tail if _single_unproven(a)]
+    favorite_artists += pick(tail_main, limit=total - len(favorite_artists))
+    favorite_artists += pick(tail_single, limit=total - len(favorite_artists))
 
     # Похожие по ТРЕКУ (Last.fm) держим отдельным списком только до общей
     # фильтрации и статистики качества. Сиды перемешиваем, чтобы каждая
@@ -3877,7 +3918,10 @@ async def _compute_flow(
         discovery_term = (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
         repeat_term = -min(
             _ARTIST_REPEAT_CAP,
-            _ARTIST_REPEAT_PENALTY * recent_artist_counts[primary_artist_key(artist)],
+            _artist_repeat_penalty(
+                recent_artist_counts[primary_artist_key(artist)],
+                _artist_affinity(artist, profile.get("artist_weight") or {}),
+            ),
         )
         language_term = language_term_by_script.get(script_of(artist, title), 0.0)
         score += discovery_term + repeat_term + origin_term + language_term
@@ -4170,6 +4214,7 @@ async def _compute_flow(
         last_picked=last_picked,
         recent_artist_counts=recent_artist_counts,
         now_ts=now_ts,
+        favorite_limit=request_limit,
     )
     seeds = plan["seeds"]
     similar_artists = plan["similar_artists"]
