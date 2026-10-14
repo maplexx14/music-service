@@ -37,16 +37,13 @@
   color: var(--text-tertiary);
 }
 
-/* Фильтр источника: лента пилюль под полем. На узком экране не переносится,
-   а листается вбок — пять кнопок в две строки занимали бы пол-экрана. */
-.search-header.has-filters {
-  margin-bottom: 12px;
-}
-
+/* Фильтр источника: лента пилюль под полем, внутри шапки. На узком экране
+   не переносится, а листается вбок — пять кнопок в две строки занимали бы
+   пол-экрана. */
 .search-filters {
   display: flex;
   gap: 8px;
-  margin-bottom: 28px;
+  margin-top: 12px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -305,14 +302,10 @@
     box-shadow: 0 -64px 0 var(--bg-app-mobile);
   }
 
-  .search-header.has-filters {
-    margin-bottom: 4px;
-  }
-
   /* Лента до краёв экрана: обрезка на полях выглядела как сломанная вёрстка,
-     а так видно, что её можно листать. */
+     а так видно, что её можно листать. Шапка липкая — лента всегда под полем. */
   .search-filters {
-    margin: 0 -16px 20px;
+    margin: 10px -16px 0;
     padding: 0 16px;
   }
 
@@ -427,6 +420,11 @@
 @media (max-width: 380px) {
   /* Поля страницы здесь 12px (Home.css). */
   .search-header {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+
+  .search-filters {
     margin-inline: -12px;
     padding-inline: 12px;
   }
