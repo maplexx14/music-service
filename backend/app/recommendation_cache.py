@@ -151,6 +151,23 @@ def flow_pc_meta_key(user_id: int) -> str:
     return f"flow:pc:meta:{user_id}"
 
 
+def flow_ready_key(user_id: int) -> str:
+    """Готовый пул потока (см. routers.flow._take_ready_portion)."""
+    return f"flow:ready:{user_id}"
+
+
+def invalidate_flow_ready(user_id: int) -> None:
+    """Сбросить готовый пул и попросить flow-warmer посчитать новый: настройки
+    (ползунок новизны, любимые артисты, жанры, исключения) поменялись, а пул
+    посчитан под старые. Прод, 2026-10-14: ползунок опустили с 0.6 до 0.2, а
+    пул под 0.6 продолжал отдаваться до 90 минут."""
+    try:
+        redis_client.delete(flow_ready_key(user_id))
+    except Exception:
+        pass
+    mark_flow_signal(user_id, "explicit")
+
+
 def flow_signal_key(user_id: int) -> str:
     """Время сигнала, после которого готовая порция устарела."""
     return f"flow:pc:signal:{user_id}"

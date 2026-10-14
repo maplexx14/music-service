@@ -247,3 +247,43 @@ def test_favorite_catalog_prefers_the_artists_hits():
     # Детерминирован контекстом.
     first = _popular_first_shuffle(pool, "same", "s", lambda t: t.id)
     assert first == _popular_first_shuffle(pool, "same", "s", lambda t: t.id)
+
+
+def test_delivery_novel_cap_and_same_class_exploration():
+    pool = _pool([f"n{i}" for i in range(5)] + [f"f{i}" for i in range(5)])
+    features = {i: {"novel": i < 5} for i in range(10)}
+    chosen, _extra = _select(pool, features, arm="control", limit=4, novel_max=1)
+    assert sum(1 for item in chosen if features[item["id"]]["novel"]) == 1
+    rng = random.Random(0)
+    rng.random = lambda: 0.0  # каждое место — разведка
+    chosen, extra = _select(
+        pool, features, flow_session.SessionState([], {}.get), rng=rng, limit=4, novel_max=1
+    )
+    assert sum(1 for item in chosen if features[item["id"]]["novel"]) == 1
+    assert any(row.get("explore") for row in extra.values())
+
+
+def test_core_artists_get_most_favorite_catalog_slots():
+    from collections import Counter
+
+    from app.routers.flow import _external_plan
+
+    weights = {"core": 300.0, "second": 50.0}
+    weights.update({f"tail{i}": 1.5 for i in range(200)})
+    profile = {
+        "playlist_seeds": [], "seeds": [], "fresh_seeds": [], "artists": [],
+        "trusted_artist_keys": [], "liked_artists": [], "playlist_artists": [],
+        "catalog_artists": ["Core", "Second", "Pref"] + [f"Tail{i}" for i in range(200)],
+        "artist_weight": weights, "deep_catalog_artist_keys": ["pref"],
+        "seed_tracks": [], "fresh_seed_tracks": [], "title_tags": [], "genres": [],
+        "explicit_genres": [],
+    }
+    counts = Counter()
+    for context in range(30):
+        plan = _external_plan(
+            profile, f"ctx{context}", limit=6, last_picked={},
+            recent_artist_counts=Counter(), now_ts=0.0,
+        )
+        counts.update(plan["favorite_artists"])
+        assert len(plan["favorite_artists"]) == 12
+    assert counts["Core"] == counts["Second"] == counts["Pref"] == 30

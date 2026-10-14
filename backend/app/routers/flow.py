@@ -127,7 +127,7 @@ from app.acoustic_features import weighted_centroid
 from app.feedback_labels import FEEDBACK_EVENT_TYPES, GOOD_COMPLETION, OutcomeTracker
 from app.playlist_signals import aggregate_playlist_origin, find_liked_playlist_id
 from app.context_profile import build_context_profile, context_bonus, hour_bucket
-from app.recommendation_cache import flow_pc_meta_key, negative_signal_key
+from app.recommendation_cache import flow_pc_meta_key, flow_ready_key, negative_signal_key
 from app.recommendation_telemetry import new_request_id, record_delivery
 from app.artist_utils import (
     artist_key,
@@ -232,6 +232,19 @@ _GENRE_SHARE = 0.25
 
 def _genre_cap(limit: int) -> int:
     return max(1, round(limit * _GENRE_SHARE))
+
+
+def _novel_cap(limit: int, ratio: float) -> int:
+    """Потолок новых артистов в порции — та же доля, что и цель новизны.
+
+    Прод, 2026-10-14: цель новизны была только полом, и новые добирались ещё и
+    общим рейтингом — в порциях по 6 при цели 3 новых выходило 4–5, а
+    знакомых и любимых артистов не хватало. Потолок мягкий: нечем заменить —
+    новые остаются (compose_slate, flow_session.select).
+    """
+    if ratio > DEFAULT_DISCOVERY_RATIO:
+        return discovery_slots(limit, ratio)
+    return max(0, round(limit * ratio))
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -2585,6 +2598,36 @@ async def _similar_pool_fetch(artist: str) -> List[ExternalTrackResponse]:
     return _neighbour_popular_mix(pools, artist_key(artist))
 
 
+# Доля каталогов на подгрузку у ядра коллекции. Прод, 2026-10-14: у владельца
+# 276 артистов в коллекции, веса от 298 (Limp Bizkit) до сотни имён с одним
+# импортированным треком; выбор с весом sqrt(вес) по всей коллекции отдавал
+# большинство мест хвосту, и в волне было мало тех, кого юзер слушает и выбрал
+# любимыми (выбранные в настройках — 15% видимой волны).
+_CORE_FAVORITE_SHARE = 0.75
+# Сколько самых тяжёлых по весу вкуса артистов входят в ядро помимо любимых.
+_CORE_TOP_ARTISTS = 20
+
+
+def _core_artist_keys(profile: dict) -> set:
+    """Ядро коллекции: любимые (deep catalog — 5+ песен или выбраны в
+    настройках) и самые слушаемые доказанные по весу вкуса."""
+    weights = profile.get("artist_weight") or {}
+    # Только «доказанные» (_ARTIST_PROVEN_WEIGHT): у юзера с плоской
+    # коллекцией топ по весу — это случайные имена с одним треком.
+    top = [
+        key
+        for key in sorted(weights, key=weights.get, reverse=True)
+        if weights[key] >= _ARTIST_PROVEN_WEIGHT
+    ][:_CORE_TOP_ARTISTS]
+    return set(profile.get("deep_catalog_artist_keys") or []) | {
+        primary_artist_key(key) for key in top
+    }
+
+
+def _is_core_artist(name: str, core_keys: set) -> bool:
+    return primary_artist_key(name) in core_keys or artist_key(name) in core_keys
+
+
 def _pick_favorite_artists(
     catalog_artists: List[str],
     artist_weights: dict,
@@ -2875,15 +2918,25 @@ def _external_plan(
     # прошедшие исключения), а места в ответе по-прежнему не закреплены ни за
     # одним источником: каталог каждого артиста конкурирует со всеми остальными
     # кандидатами в общей модели.
-    favorite_artists = _pick_favorite_artists(
-        catalog_artists,
-        profile.get("artist_weight") or {},
-        last_picked,
-        recent_artist_counts,
+    # Ядро коллекции — выбранные в настройках, любимые (5+ песен) и самые
+    # слушаемые — получает большую часть мест, хвост — остальное (см.
+    # _CORE_FAVORITE_SHARE).
+    weights = profile.get("artist_weight") or {}
+    core_keys = _core_artist_keys(profile)
+    core = [a for a in catalog_artists if _is_core_artist(a, core_keys)]
+    tail = [a for a in catalog_artists if not _is_core_artist(a, core_keys)]
+    total = max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), limit))
+    core_limit = min(len(core), math.ceil(total * _CORE_FAVORITE_SHARE))
+    pick = functools.partial(
+        _pick_favorite_artists,
+        artist_weights=weights,
+        last_picked=last_picked,
+        recent_artist_counts=recent_artist_counts,
         now_ts=now_ts,
         context=ranking_context,
-        limit=max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), limit)),
     )
+    favorite_artists = pick(core, limit=core_limit)
+    favorite_artists += pick(tail, limit=total - len(favorite_artists))
 
     # Похожие по ТРЕКУ (Last.fm) держим отдельным списком только до общей
     # фильтрации и статистики качества. Сиды перемешиваем, чтобы каждая
@@ -3051,7 +3104,7 @@ def _history_key(user_id: int) -> str:
 
 
 def _ready_key(user_id: int) -> str:
-    return f"flow:ready:{user_id}"
+    return flow_ready_key(user_id)
 
 
 def _pc_meta_key(user_id: int) -> str:
@@ -4570,6 +4623,7 @@ async def _compute_flow(
             liked_target=liked_target,
             fresh_cap=max(1, math.floor(limit * _FRESH_CLUSTER_SHARE)),
             capped_max=_genre_cap(limit),
+            novel_max=_novel_cap(limit, explore_ratio),
         ),
         is_novel=_is_novel,
         is_liked=lambda candidate: _item_identity(candidate) in liked_identities,
@@ -4797,11 +4851,21 @@ async def _session_select(
         previous_artists=history.get("artists") or [],
         capped=lambda item: (features.get(_flow_item_identity(item)) or {}).get("origin") == "genre",
         capped_max=_genre_cap(limit),
+        novel_max=_novel_cap(limit, _pool_discovery_ratio(pool, features)),
     )
     merged = dict(features)
     for identity, row in extra.items():
         merged[identity] = {**(features.get(identity) or {}), **row}
     return chosen, merged
+
+
+def _pool_discovery_ratio(pool: list, features: dict) -> float:
+    """Доля новизны, под которую считался пул (features.discovery_effective)."""
+    for item in pool:
+        value = (features.get(_flow_item_identity(item)) or {}).get("discovery_effective")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return DEFAULT_DISCOVERY_RATIO
 
 
 def _history_ids_after(history: dict, mix: list) -> list:

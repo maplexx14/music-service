@@ -20,7 +20,7 @@ from app.trusted_devices import device_label_from_user_agent
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
 from app.artist_utils import artist_key
-from app.recommendation_cache import invalidate_recommendation_cache
+from app.recommendation_cache import invalidate_flow_ready, invalidate_recommendation_cache
 
 router = APIRouter()
 
@@ -265,6 +265,7 @@ def update_preferences(
     # Следующий запрос должен сразу учитывать новый выбор, а не отдавать
     # пятиминутную выдачу, построенную до сохранения предпочтений.
     invalidate_recommendation_cache(current_user.id)
+    invalidate_flow_ready(current_user.id)
     return current_user
 
 

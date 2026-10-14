@@ -125,3 +125,20 @@ def test_genre_only_user_still_gets_a_full_portion():
     pool = [_genre_item(i, True) for i in range(8)]
     chosen, _liked = _compose_capped(pool, SlateRules(limit=6, discovery_target=3, capped_max=2))
     assert len(chosen) == 6
+
+
+def test_novel_cap_keeps_familiar_artists_in_the_portion():
+    """Цель новизны — и потолок: лишние новые уходят в хвост, а не
+    вытесняют знакомых."""
+    pool = [
+        {"id": i, "artist": f"n{i}", "novel": True, "liked": False, "fresh": False, "probe": False}
+        for i in range(6)
+    ] + [
+        {"id": 10 + i, "artist": f"f{i}", "novel": False, "liked": False, "fresh": False, "probe": False}
+        for i in range(6)
+    ]
+    chosen, _liked = _compose(pool, SlateRules(limit=6, discovery_target=2, novel_max=2))
+    assert sum(1 for item in chosen if item["novel"]) == 2
+    only_new = [item for item in pool if item["novel"]]
+    chosen, _liked = _compose(only_new, SlateRules(limit=6, discovery_target=2, novel_max=2))
+    assert len(chosen) == 6  # заменить нечем — потолок мягкий

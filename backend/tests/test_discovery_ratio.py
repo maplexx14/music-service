@@ -238,3 +238,20 @@ def test_recommendations_ratio_is_soft_prior(client, db, monkeypatch):
     high_artists = _artists(high)
     assert low_artists.count("StrangerBand") <= high_artists.count("StrangerBand")
     assert {novelty for _artist, novelty in captured} == {False, True}
+
+
+def test_changing_preferences_drops_the_ready_flow_pool(client, db):
+    """Пул посчитан под старый ползунок — после сохранения настроек он не
+    должен отдаваться (прод, 2026-10-14: пул под 0.6 жил до 90 минут)."""
+    from app.cache import get_cache, set_cache
+    from app.recommendation_cache import flow_ready_key
+
+    user = create_user(db, username="slider-pool-user")
+    headers = auth_headers(client, username="slider-pool-user")
+    set_cache(flow_ready_key(user.id), {"items": [{"id": 1}]}, expire=600)
+
+    saved = client.put(
+        "/api/users/me/preferences", headers=headers, json={"discovery_ratio": 0.2}
+    )
+    assert saved.status_code == 200, saved.text
+    assert get_cache(flow_ready_key(user.id)) is None

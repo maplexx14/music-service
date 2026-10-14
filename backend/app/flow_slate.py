@@ -18,6 +18,8 @@
   на новизну и добор вместе; лишнее уходит в хвост, а не выбрасывается, так
   что у юзера, которому кроме жанра предложить нечего, жанр по-прежнему
   заполняет порцию;
+* потолок новых артистов ``novel_max`` — цель новизны и сверху: лишние
+  новые уходят в хвост (мягко, как и остальные потолки);
 * добор — общим рейтингом.
 
 Порядок прослушивания (разнос артистов) решает не эта функция, а
@@ -36,6 +38,9 @@ class SlateRules:
     liked_target: int = 0
     fresh_cap: int = 0
     capped_max: Optional[int] = None
+    # Потолок новых артистов на порцию (None — без потолка). Цель новизны —
+    # пол, а без потолка новые добирались ещё и общим рейтингом сверх цели.
+    novel_max: Optional[int] = None
 
 
 def compose_slate(
@@ -121,12 +126,19 @@ def compose_slate(
             reserved.append(item)
     filler: List = []
     fresh_overflow: List = []
+    novel_overflow: List = []
+    novel_used = len(novel_selection)
     for item in ranked:
         if id(item) in reserved_ids or is_liked(item):
             continue
         if over_cap(item):
             capped_overflow.append(item)
             continue
+        if is_novel(item) and rules.novel_max is not None:
+            if novel_used >= rules.novel_max:
+                novel_overflow.append(item)
+                continue
+            novel_used += 1
         if capped is not None and capped(item):
             capped_used += 1
         if in_fresh_cluster(item):
@@ -135,4 +147,5 @@ def compose_slate(
                 continue
             fresh_used += 1
         filler.append(item)
-    return (reserved + filler + fresh_overflow + capped_overflow)[: rules.limit], liked_selection
+    tail = fresh_overflow + novel_overflow + capped_overflow
+    return (reserved + filler + tail)[: rules.limit], liked_selection

@@ -201,6 +201,7 @@ def select(
     rng: Optional[random.Random] = None,
     capped: Optional[Callable[[dict], bool]] = None,
     capped_max: Optional[int] = None,
+    novel_max: Optional[int] = None,
 ) -> tuple[list, dict]:
     """Порция из пула для варианта ``arm``: (items, {identity: доп. признаки}).
 
@@ -209,8 +210,16 @@ def select(
     место разведки с вероятностью ``EXPLORE_RATE`` на позицию.
     """
     extra: dict = {}
+
+    def is_novel(item) -> bool:
+        return bool((features.get(identity_of(item)) or {}).get("novel"))
+
+    def apply_caps(chosen: list, rest: list) -> list:
+        chosen = _apply_cap(chosen, rest, capped, capped_max)
+        return _apply_cap(chosen, [i for i in rest if i not in chosen], is_novel, novel_max)
+
     if arm != "session":
-        chosen = _apply_cap(list(pool[:limit]), list(pool[limit:]), capped, capped_max)
+        chosen = apply_caps(list(pool[:limit]), list(pool[limit:]))
         for item in chosen:
             extra[identity_of(item)] = {"arm": arm}
         return chosen, extra
@@ -258,17 +267,21 @@ def select(
             previous_artists,
             MIN_ARTIST_GAP,
         )
-    chosen = _apply_cap(
-        chosen, [item for item in ranked if item not in chosen], capped, capped_max
-    )
-    # Разведка: место отдаётся случайному кандидату из невыбранной части пула.
+    chosen = apply_caps(chosen, [item for item in ranked if item not in chosen])
+    # Разведка: место отдаётся случайному кандидату из невыбранной части пула
+    # ТОГО ЖЕ класса (новый артист на нового, знакомый на знакомого) — иначе
+    # разведка раздувала бы долю новых сверх ползунка.
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]
     for position in range(len(chosen)):
-        if not rest or rng.random() >= EXPLORE_RATE:
+        if rng.random() >= EXPLORE_RATE:
             continue
-        pick = rest.pop(rng.randrange(len(rest)))
-        explored[identity_of(pick)] = EXPLORE_RATE / (len(rest) + 1)
+        same = [item for item in rest if is_novel(item) == is_novel(chosen[position])]
+        if not same:
+            continue
+        pick = same[rng.randrange(len(same))]
+        rest.remove(pick)
+        explored[identity_of(pick)] = round(EXPLORE_RATE / len(same), 5)
         chosen[position] = pick
     for item in chosen:
         identity = identity_of(item)
