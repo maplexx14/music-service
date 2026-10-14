@@ -10,12 +10,14 @@
 ``STRONG_WEIGHT`` примеров.
 
 Модель маленькая намеренно: юзеров десятки, и 9 из 10 исходов — один
-человек. Нейросеть или бустинг на таком объёме выучили бы шум. Глобальная
-модель — для всех; у юзера, набравшего ``USER_MIN_ROWS`` размеченных
-показов, — своя, обученная поверх глобальной (старт с её весов, регуляризация
-к ним). Модель сохраняется, только если на отложенной по времени части она
-различает исходы лучше монетки (``MIN_AUC``) и лучше ручного скора хотя бы на
-``MIN_GAIN`` — иначе выдача обходится без неё.
+человек. Нейросеть или бустинг на таком объёме выучили бы шум. У юзера,
+набравшего ``USER_MIN_ROWS`` размеченных показов, — своя модель, обученная
+поверх глобальной (старт с её весов, регуляризация к ним). Глобальная — для
+остальных, поэтому вклад одного юзера в неё ограничен ``GLOBAL_USER_ROWS``
+примерами, а проверяется она на их исходах (``train_global``). Модель
+сохраняется, только если на отложенной по времени части она различает исходы
+лучше монетки (``MIN_AUC``) и лучше ручного скора хотя бы на ``MIN_GAIN`` —
+иначе выдача обходится без неё.
 
 Без numpy (его нет в образе): данных тысячи строк, признаков десятки —
 полный градиентный спуск укладывается в секунды в flow-warmer.
@@ -45,6 +47,14 @@ MIN_AUC = 0.55
 # случайно (прод, 2026-10-14: глобальная 0.649 против ручного 0.653).
 MIN_GAIN = 0.01
 HOLDOUT_SHARE = 0.2
+# AUC по горстке хороших исходов — шум: модель проходила бы проверку или нет
+# случайно.
+MIN_HOLDOUT_CLASS = 10
+# Глобальная модель достаётся только тем, у кого нет своей (load), а обучалась
+# на сырой смеси, где 9 из 10 исходов — один юзер, и была его вкусом (прод,
+# 2026-10-14: 3295 из 3865 примеров — владелец; кириллица +0.86, radio +0.56 —
+# всем без своей модели). Юзер весит в ней не больше стольких примеров.
+GLOBAL_USER_ROWS = 300
 EPOCHS = 20
 # Свежие показы важнее: дальше хвост только удлиняет обучение.
 MAX_ROWS = 12000
@@ -94,23 +104,33 @@ def _sigmoid(value: float) -> float:
     return exp / (1.0 + exp)
 
 
-def auc(scores: list[float], labels: list[int]) -> float:
-    """Площадь под ROC (вероятность, что хороший выше плохого); 0.5 — монетка."""
-    pairs = sorted(zip(scores, labels))
-    positives = sum(labels)
-    negatives = len(labels) - positives
+def auc(
+    scores: list[float], labels: list[int], weights: Optional[list[float]] = None
+) -> float:
+    """Площадь под ROC (вероятность, что хороший выше плохого); 0.5 — монетка.
+
+    weights — вес примера: пара «хороший — плохой» весит произведение весов.
+    """
+    weights = weights if weights is not None else [1.0] * len(scores)
+    rows = sorted(zip(scores, labels, weights), key=lambda row: row[0])
+    positives = sum(weight for _s, label, weight in rows if label)
+    negatives = sum(weight for _s, label, weight in rows if not label)
     if not positives or not negatives:
         return 0.5
-    rank_sum = 0.0
+    area = 0.0
+    negatives_below = 0.0
     index = 0
-    while index < len(pairs):
+    while index < len(rows):
         end = index
-        while end + 1 < len(pairs) and pairs[end + 1][0] == pairs[index][0]:
+        while end + 1 < len(rows) and rows[end + 1][0] == rows[index][0]:
             end += 1
-        average_rank = (index + end) / 2 + 1
-        rank_sum += average_rank * sum(label for _s, label in pairs[index:end + 1])
+        tie = rows[index:end + 1]
+        tie_positives = sum(weight for _s, label, weight in tie if label)
+        tie_negatives = sum(weight for _s, label, weight in tie if not label)
+        area += tie_positives * (negatives_below + tie_negatives / 2)
+        negatives_below += tie_negatives
         index = end + 1
-    return (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
+    return area / (positives * negatives)
 
 
 def _standardize(rows: list[list[float]]):
@@ -176,6 +196,10 @@ def _logit(model: dict, vector: list[float]) -> float:
     )
 
 
+def _sample_weight(row: tuple) -> float:
+    return float(row[3]) if len(row) > 3 else 1.0
+
+
 def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional[dict]:
     """samples: (features, label 1/0, время показа[, вес]). Модель или None.
 
@@ -184,25 +208,79 @@ def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional
     скора на ``MIN_GAIN`` — None.
     """
     data = sorted(samples, key=lambda row: row[2])[-MAX_ROWS:]
+    split = int(len(data) * (1 - HOLDOUT_SHARE))
+    return _train(data[:split], data[split:], prior=prior)
+
+
+def train_global(per_user: dict) -> Optional[dict]:
+    """Глобальная модель по примерам юзеров ({user_id: samples}). Модель или None.
+
+    Юзер весит не больше ``GLOBAL_USER_ROWS`` примеров. Отложенная часть —
+    последние ``HOLDOUT_SHARE`` показов КАЖДОГО юзера без своей модели (меньше
+    ``USER_MIN_ROWS``): модель принимается, только если ранжирует лучше
+    ручного скора у тех, кому она достанется. Юзеры со своей моделью идут
+    в обучение целиком.
+    """
+    fit_rows: list = []
+    holdout_rows: list = []
+    holdout_weights: list = []
+    for samples in per_user.values():
+        data = sorted(samples, key=lambda row: row[2])[-MAX_ROWS:]
+        if not data:
+            continue
+        share = min(1.0, GLOBAL_USER_ROWS / len(data))
+        rows = [(row[0], row[1], row[2], _sample_weight(row) * share) for row in data]
+        if len(rows) >= USER_MIN_ROWS:
+            fit_rows += rows
+            continue
+        split = int(len(rows) * (1 - HOLDOUT_SHARE))
+        fit_rows += rows[:split]
+        holdout_rows += rows[split:]
+        holdout_weights += [share] * (len(rows) - split)
+    fit_rows = sorted(fit_rows, key=lambda row: row[2])[-MAX_ROWS:]
+    return _train(fit_rows, holdout_rows, holdout_weights=holdout_weights)
+
+
+def _train(
+    fit_rows: list,
+    holdout_rows: list,
+    *,
+    prior: Optional[dict] = None,
+    holdout_weights: Optional[list[float]] = None,
+) -> Optional[dict]:
+    """Обучение на fit_rows, проверка на holdout_rows, затем дообучение на всех."""
+    data = fit_rows + holdout_rows
     if len(data) < MIN_ROWS:
         return None
     vectors = [vectorize(row[0]) for row in data]
     labels = [int(row[1]) for row in data]
-    weights_of = [float(row[3]) if len(row) > 3 else 1.0 for row in data]
+    weights_of = [_sample_weight(row) for row in data]
     if sum(labels) < 10 or len(labels) - sum(labels) < 10:
         return None
-    split = int(len(data) * (1 - HOLDOUT_SHARE))
+    split = len(fit_rows)
+    holdout_labels = labels[split:]
+    holdout_positives = sum(holdout_labels)
+    if min(holdout_positives, len(holdout_labels) - holdout_positives) < MIN_HOLDOUT_CLASS:
+        logger.info(
+            "ranker rejected: holdout %d/%d good is too small, n=%d",
+            holdout_positives, len(holdout_labels), len(data),
+        )
+        return None
     mean, std = _standardize(vectors)
     start = prior["weights"] if prior and len(prior.get("weights") or []) == len(mean) + 1 else None
     weights = _fit(vectors[:split], labels[:split], mean, std, prior=start, sample_weights=weights_of[:split])
     probe = {"weights": weights, "mean": mean, "std": std}
-    holdout_auc = auc([_logit(probe, v) for v in vectors[split:]], labels[split:])
+    holdout_auc = auc([_logit(probe, v) for v in vectors[split:]], holdout_labels, holdout_weights)
     baseline = auc(
-        [sum(float(v) for v in ((row[0].get("components") or {}).values())) for row in data[split:]],
-        labels[split:],
+        [sum(float(v) for v in ((row[0].get("components") or {}).values())) for row in holdout_rows],
+        holdout_labels,
+        holdout_weights,
     )
     if holdout_auc < MIN_AUC or holdout_auc < baseline + MIN_GAIN:
-        logger.info("ranker rejected: auc=%.3f baseline=%.3f n=%d", holdout_auc, baseline, len(data))
+        logger.info(
+            "ranker rejected: auc=%.3f baseline=%.3f n=%d holdout=%d/%d good",
+            holdout_auc, baseline, len(data), holdout_positives, len(holdout_labels),
+        )
         return None
     weights = _fit(vectors, labels, mean, std, prior=start, sample_weights=weights_of)
     return {
@@ -215,6 +293,8 @@ def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional
         "positives": sum(labels),
         "auc": round(holdout_auc, 4),
         "baseline_auc": round(baseline, 4),
+        "holdout": len(holdout_labels),
+        "holdout_positives": holdout_positives,
         "trained_at": time.time(),
     }
 
@@ -249,7 +329,7 @@ def train_and_store(db, user_ids: Iterable[int], now: Optional[datetime] = None)
             db.rollback()
             logger.exception("ranker samples failed user=%s", user_id)
     report = {"global": None, "users": {}}
-    global_model = train([s for samples in per_user.values() for s in samples])
+    global_model = train_global(per_user)
     _store(_GLOBAL_KEY, global_model)
     if global_model is not None:
         report["global"] = {k: global_model[k] for k in ("n", "auc", "baseline_auc")}

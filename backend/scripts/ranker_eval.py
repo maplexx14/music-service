@@ -2,11 +2,13 @@
 
 Ничего не пишет: обучает модель на ранних показах и считает AUC на поздних
 (хорошо против плохо) — у модели и у суммы компонент ручного скора. AUC 0.5 —
-не лучше монетки.
+не лучше монетки. Глобальная модель — как в проде (learned_ranker.train_global):
+проверка на юзерах без своей модели.
 
     python -m scripts.ranker_eval [--days 30] [--user 1]
 """
 import argparse
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -43,23 +45,33 @@ def main() -> None:
     finally:
         db.close()
 
-    def report(name, samples, prior=None):
-        model = learned_ranker.train(samples, prior=prior)
+    def report(name, samples, model):
         positives = sum(row[1] for row in samples)
         if model is None:
-            print(f"  {name:<10} n={len(samples):<6} good={positives:<5} модель не принята (мало данных или AUC < {learned_ranker.MIN_AUC})")
+            print(f"  {name:<10} n={len(samples):<6} good={positives:<5} модель не принята (причина — в логе выше)")
             return None
         print(
             f"  {name:<10} n={model['n']:<6} good={model['positives']:<5} "
-            f"AUC ранкер={model['auc']:.3f}  ручной скор={model['baseline_auc']:.3f}"
+            f"AUC ранкер={model['auc']:.3f}  ручной скор={model['baseline_auc']:.3f}  "
+            f"отложено {model['holdout_positives']}/{model['holdout']} good"
         )
         return model
 
+    logging.basicConfig(level=logging.INFO, format="  %(message)s")
     print(f"days={args.days} users={len(user_ids)}")
-    global_model = report("все", [s for samples in by_user.values() for s in samples])
+    for user_id, samples in sorted(by_user.items()):
+        own = len(samples) >= learned_ranker.USER_MIN_ROWS
+        print(
+            f"  user {user_id:<6} примеров={len(samples):<6} good={sum(row[1] for row in samples):<5} "
+            f"{'своя модель' if own else 'глобальная'}"
+        )
+    global_model = report(
+        "все", [s for samples in by_user.values() for s in samples],
+        learned_ranker.train_global(by_user),
+    )
     for user_id, samples in sorted(by_user.items()):
         if len(samples) >= learned_ranker.USER_MIN_ROWS:
-            report(f"user {user_id}", samples, prior=global_model)
+            report(f"user {user_id}", samples, learned_ranker.train(samples, prior=global_model))
     if global_model:
         print("\nВеса глобальной модели (по стандартизованным признакам):")
         weighted = sorted(

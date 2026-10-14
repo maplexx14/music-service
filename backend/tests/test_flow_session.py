@@ -194,6 +194,72 @@ def test_samples_skip_neutral_and_unscored_rows():
     ]
 
 
+def test_weighted_auc_counts_pairs_by_weight():
+    # Хороший выше одного плохого и ниже другого: без весов 0.5; нижний
+    # плохой весит 3 — три пары из четырёх упорядочены верно.
+    assert learned_ranker.auc([0.3, 0.5, 0.7], [0, 1, 0]) == 0.5
+    assert learned_ranker.auc([0.3, 0.5, 0.7], [0, 1, 0], [3.0, 1.0, 1.0]) == 0.75
+
+
+def _heavy_and_light_users(light_users, light_rows, light_outcome, seed=7):
+    """Тяжёлый юзер (своя модель) любит кириллицу и слушает последним, как
+    владелец на проде; у лёгких исход решает light_outcome(features, rng)."""
+    rng = random.Random(seed)
+
+    def features():
+        return {
+            "components": {"affinity": rng.random()},
+            "origin": rng.choice(["liked", "local"]),
+            **({"script": "cyr"} if rng.random() < 0.5 else {}),
+        }
+
+    per_user = {}
+    moment = 0
+    for user_id in range(2, 2 + light_users):
+        rows = []
+        for _ in range(light_rows):
+            row = features()
+            rows.append((row, int(light_outcome(row, rng)), moment))
+            moment += 1
+        per_user[user_id] = rows
+    heavy = []
+    for _ in range(2000):
+        row = features()
+        heavy.append((row, int(rng.random() < (0.6 if row.get("script") == "cyr" else 0.05)), moment))
+        moment += 1
+    per_user[1] = heavy
+    return per_user
+
+
+def test_global_model_follows_users_without_their_own_model():
+    """Глобальная модель — для юзеров без своей: тяжёлый юзер её не перевешивает."""
+    per_user = _heavy_and_light_users(
+        4, 150, lambda row, rng: rng.random() < (0.5 if row["origin"] == "liked" else 0.05)
+    )
+    model = learned_ranker.train_global(per_user)
+    assert model is not None
+    score = learned_ranker.scorer(model)
+    liked_latin = score({"components": {"affinity": 0.5}, "origin": "liked"})
+    local_cyrillic = score({"components": {"affinity": 0.5}, "origin": "local", "script": "cyr"})
+    assert liked_latin > local_cyrillic
+
+
+def test_global_model_rejected_when_it_helps_only_the_heavy_user():
+    # У лёгких юзеров исход случайный: модель, выученная на тяжёлом, им
+    # ничего не даёт — значит, глобальной модели нет, а не его вкус всем.
+    per_user = _heavy_and_light_users(8, 500, lambda row, rng: rng.random() < 0.3)
+    assert learned_ranker.train_global(per_user) is None
+    assert learned_ranker.train(per_user[1]) is not None
+
+
+def test_global_model_needs_enough_outcomes_to_check_on():
+    # Лёгких юзеров мало: в отложенной части меньше MIN_HOLDOUT_CLASS хороших.
+    per_user = _heavy_and_light_users(
+        1, 40, lambda row, rng: rng.random() < (0.5 if row["origin"] == "liked" else 0.05)
+    )
+    assert learned_ranker.train_global(per_user) is None
+
+
 def test_artist_proximity_ranks_neighbours_of_favorites(monkeypatch):
     import asyncio
 
