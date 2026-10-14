@@ -4488,9 +4488,8 @@ async def _compute_flow(
         unified_candidates.append(candidate)
 
     # Мейнстрим-фильтр: у артиста не из любимых (deep_catalog_artist_keys) в
-    # волну идут только его хиты — см. app/mainstream.py; у незнакомого юзеру
-    # артиста — только топ-3 (NOVEL_TOP_TRACKS). Свои лайки юзера
-    # фильтр не трогает. Если доказанных хитов меньше порции, добираем самыми
+    # волну идут только его хиты, топ-3 по Last.fm — см. app/mainstream.py.
+    # Свои лайки юзера фильтр не трогает. Если доказанных хитов меньше порции, добираем самыми
     # популярными из отсеянных: пустая волна хуже нарушения правила.
     if mainstream.available():
         stage_started = loop.time()
@@ -4513,14 +4512,6 @@ async def _compute_flow(
             fetch_missing=not cache_only,
         )
         gated_ids = {_item_identity(c) for c in gated}
-        gate_weights = profile.get("artist_weight") or {}
-
-        def _gate_top(item) -> int:
-            artist, _title = _item_artist_title(item)
-            if _artist_affinity(artist, gate_weights) is None:
-                return mainstream.NOVEL_TOP_TRACKS
-            return mainstream.TOP_TRACKS
-
         before = len(unified_candidates)
         kept, hit_by_item = mainstream.gate(
             unified_candidates,
@@ -4535,7 +4526,6 @@ async def _compute_flow(
                 if isinstance(item, dict)
                 else getattr(item, "play_count", 0)
             ),
-            top_of=_gate_top,
         )
         for candidate in unified_candidates:
             if id(candidate) in hit_by_item:
