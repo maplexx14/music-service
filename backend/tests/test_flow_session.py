@@ -161,6 +161,17 @@ def test_ranker_learns_a_predictive_feature_and_rejects_noise():
     assert learned_ranker.train(noise) is None
 
 
+def test_ranker_rejected_when_no_better_than_manual_score():
+    # Исход зависит только от суммы компонент — ручной скор уже знает всё,
+    # модели нечего добавить.
+    rng = random.Random(5)
+    samples = []
+    for index in range(1200):
+        affinity = rng.random()
+        samples.append(({"components": {"affinity": affinity}}, int(rng.random() < 0.1 + 0.6 * affinity), index))
+    assert learned_ranker.train(samples) is None
+
+
 def test_ranker_needs_enough_rows():
     samples = [({"components": {"affinity": 1.0}}, 1, i) for i in range(50)]
     assert learned_ranker.train(samples) is None

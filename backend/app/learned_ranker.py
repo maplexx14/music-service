@@ -14,7 +14,8 @@
 модель — для всех; у юзера, набравшего ``USER_MIN_ROWS`` размеченных
 показов, — своя, обученная поверх глобальной (старт с её весов, регуляризация
 к ним). Модель сохраняется, только если на отложенной по времени части она
-различает исходы лучше монетки (``MIN_AUC``) — иначе выдача обходится без неё.
+различает исходы лучше монетки (``MIN_AUC``) и лучше ручного скора хотя бы на
+``MIN_GAIN`` — иначе выдача обходится без неё.
 
 Без numpy (его нет в образе): данных тысячи строк, признаков десятки —
 полный градиентный спуск укладывается в секунды в flow-warmer.
@@ -40,6 +41,9 @@ WINDOW_DAYS = 30
 MIN_ROWS = 300
 USER_MIN_ROWS = 800
 MIN_AUC = 0.55
+# Модель вровень с ручным скором ничего не даёт, только переставляет порцию
+# случайно (прод, 2026-10-14: глобальная 0.649 против ручного 0.653).
+MIN_GAIN = 0.01
 HOLDOUT_SHARE = 0.2
 EPOCHS = 20
 # Свежие показы важнее: дальше хвост только удлиняет обучение.
@@ -176,7 +180,8 @@ def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional
     """samples: (features, label 1/0, время показа[, вес]). Модель или None.
 
     Качество — AUC на последних по времени ``HOLDOUT_SHARE`` показов, после
-    чего модель дообучается на всех. Ниже ``MIN_AUC`` — None.
+    чего модель дообучается на всех. Ниже ``MIN_AUC`` или не лучше ручного
+    скора на ``MIN_GAIN`` — None.
     """
     data = sorted(samples, key=lambda row: row[2])[-MAX_ROWS:]
     if len(data) < MIN_ROWS:
@@ -196,7 +201,7 @@ def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional
         [sum(float(v) for v in ((row[0].get("components") or {}).values())) for row in data[split:]],
         labels[split:],
     )
-    if holdout_auc < MIN_AUC:
+    if holdout_auc < MIN_AUC or holdout_auc < baseline + MIN_GAIN:
         logger.info("ranker rejected: auc=%.3f baseline=%.3f n=%d", holdout_auc, baseline, len(data))
         return None
     weights = _fit(vectors, labels, mean, std, prior=start, sample_weights=weights_of)
@@ -245,21 +250,24 @@ def train_and_store(db, user_ids: Iterable[int], now: Optional[datetime] = None)
             logger.exception("ranker samples failed user=%s", user_id)
     report = {"global": None, "users": {}}
     global_model = train([s for samples in per_user.values() for s in samples])
+    _store(_GLOBAL_KEY, global_model)
     if global_model is not None:
-        _store(_GLOBAL_KEY, global_model)
         report["global"] = {k: global_model[k] for k in ("n", "auc", "baseline_auc")}
     for user_id, samples in per_user.items():
-        if len(samples) < USER_MIN_ROWS:
-            continue
-        model = train(samples, prior=global_model)
+        model = train(samples, prior=global_model) if len(samples) >= USER_MIN_ROWS else None
+        _store(_USER_KEY.format(user_id), model)
         if model is not None:
-            _store(_USER_KEY.format(user_id), model)
             report["users"][user_id] = {k: model[k] for k in ("n", "auc", "baseline_auc")}
     return report
 
 
-def _store(key: str, model: dict) -> None:
-    redis_client.set(key, json.dumps(model), ex=_MODEL_TTL)
+def _store(key: str, model: Optional[dict]) -> None:
+    """Отклонённая модель стирает прежнюю: иначе та работала бы ещё неделю
+    (TTL), хотя на свежих данных уже не лучше ручного скора."""
+    if model is None:
+        redis_client.delete(key)
+    else:
+        redis_client.set(key, json.dumps(model), ex=_MODEL_TTL)
 
 
 def load(user_id: int) -> Optional[dict]:
