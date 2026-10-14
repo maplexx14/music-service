@@ -8,8 +8,16 @@ def _label(*events):
     return tracker.label
 
 
+def _strong(*events):
+    tracker = OutcomeTracker()
+    for event in events:
+        tracker.add(*event)
+    return tracker.strong
+
+
 def test_completion_thresholds():
     assert _label(("listen", 0.95)) == "good"
+    assert _label(("listen", 0.6)) == "good"
     assert _label(("listen", 0.5)) is None
     assert _label(("listen", 0.1)) == "bad"
     # play без listen ничего не говорит об исходе.
@@ -33,3 +41,10 @@ def test_withdrawn_rating_falls_back_to_behaviour():
     assert _label(("dislike",), ("undislike",), ("listen", 0.9)) == "good"
     # Снятие лайка не отменяет более поздний дизлайк.
     assert _label(("like",), ("dislike",), ("unlike",)) == "bad"
+
+
+def test_strong_positive_from_80_percent_or_like():
+    assert _strong(("listen", 0.85)) is True
+    assert _strong(("listen", 0.6)) is False
+    assert _strong(("listen", 0.3), ("like",)) is True
+    assert _strong(("listen", 0.95), ("dislike",)) is False

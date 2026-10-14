@@ -12,13 +12,18 @@
   решает, если он в силе (лайк — хорошо, дизлайк — плохо);
 * иначе дослушивание до ``GOOD_COMPLETION`` — хорошо;
 * иначе скип или уход раньше ``BAD_COMPLETION`` — плохо;
-* остальное (25–80%, ``play`` без ``listen``) — нейтрально.
+* остальное (25–55%, ``play`` без ``listen``) — нейтрально.
+
+Внутри «хорошо» — две ступени (правило владельца, 2026-10-14): от 55%
+трек понравился, от ``STRONG_COMPLETION`` (80%) — понравился очень, как
+лайк. Сильный исход весит больше в награде источника и в обучении ранкера.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-GOOD_COMPLETION = 0.8
+GOOD_COMPLETION = 0.55
+STRONG_COMPLETION = 0.8
 BAD_COMPLETION = 0.25
 FEEDBACK_EVENT_TYPES = ("listen", "like", "unlike", "skip", "dislike", "undislike")
 
@@ -63,6 +68,13 @@ class OutcomeTracker:
     @property
     def good(self) -> bool:
         return self.label == "good"
+
+    @property
+    def strong(self) -> bool:
+        """Очень понравился: лайк или дослушивание до ``STRONG_COMPLETION``."""
+        if self.explicit is not None:
+            return self.explicit == "good"
+        return self.completion is not None and self.completion >= STRONG_COMPLETION
 
     @property
     def bad(self) -> bool:

@@ -35,12 +35,13 @@ from app.diversity import primary_artist_key
 ARMS = ("control", "session")
 # Доля выдач в варианте session. Половина — максимум чувствительности A/B.
 SESSION_ARM_SHARE = 0.5
-SESSION_CODES = frozenset("nsdlc")
+SESSION_CODES = frozenset("nsdlcf")
 # Сколько последних сигналов учитываем; вес старших затухает геометрически.
 SESSION_MAX_EVENTS = 30
 SESSION_DECAY = 0.85
 # Вес сигнала против (минус) и за (плюс) артиста трека.
-_ARTIST_WEIGHTS = {"n": -1.0, "s": -0.8, "d": -2.5, "l": 0.6, "c": 0.4}
+# c — дослушал от 55% (понравился), f — от 80% (очень, как лайк).
+_ARTIST_WEIGHTS = {"n": -1.0, "s": -0.8, "d": -2.5, "l": 0.6, "c": 0.4, "f": 0.6}
 # Сила поправок в единицах «мест» исходного порядка (см. _BASE_STEP).
 ARTIST_TERM = 1.6
 NEIGHBOUR_TERM = 0.5
@@ -98,7 +99,7 @@ class SessionState:
             artist = meta.get("artist") or ""
             if artist:
                 self.artist[artist] += _ARTIST_WEIGHTS[code] * weight
-            good = code in ("l", "c")
+            good = code in ("l", "c", "f")
             target = (
                 (self.origin_pos, self.novel_pos, self.script_pos)
                 if good

@@ -5,8 +5,9 @@
 у нового артиста affinity = 0, жанра у внешних треков нет, и новые кандидаты
 различаются лишь популярностью и бонусом источника. Здесь веса тех же самых
 признаков (они уже пишутся в ``recommendation_impressions.features``) берутся
-из исходов: «хорошо» (лайк, дослушал) против «плохо» (скип, дизлайк, <25%),
-нейтральное не учится.
+из исходов: «хорошо» (лайк, дослушал от 55%) против «плохо» (скип, дизлайк,
+<25%), нейтральное не учится. Сильный позитив (лайк, от 80%) весит
+``STRONG_WEIGHT`` примеров.
 
 Модель маленькая намеренно: юзеров десятки, и 9 из 10 исходов — один
 человек. Нейросеть или бустинг на таком объёме выучили бы шум. Глобальная
@@ -45,6 +46,7 @@ EPOCHS = 20
 MAX_ROWS = 12000
 LEARNING_RATE = 0.05
 L2 = 0.02
+STRONG_WEIGHT = 2.0
 
 COMPONENTS = (
     "affinity", "content", "popularity", "freshness", "source", "novelty",
@@ -125,6 +127,7 @@ def _fit(
     *,
     prior: Optional[list[float]] = None,
     epochs: int = EPOCHS,
+    sample_weights: Optional[list[float]] = None,
 ) -> list[float]:
     """Веса [bias, w...] по стандартизованным признакам; L2 тянет к ``prior``.
 
@@ -138,6 +141,7 @@ def _fit(
     weights = list(prior) if prior else [0.0] * (size + 1)
     anchor = list(prior) if prior else [0.0] * (size + 1)
     count = len(x)
+    sample_weights = sample_weights or [1.0] * count
     # Классы несбалансированы (хорошо ~5–10%): веса классов уравнивают вклад,
     # иначе модель учит в основном «всё плохо» и ранжирует хуже.
     positives = max(1, sum(labels))
@@ -152,7 +156,7 @@ def _fit(
             features = x[index]
             label = labels[index]
             logit = weights[0] + sum(w * v for w, v in zip(weights[1:], features))
-            error = (_sigmoid(logit) - label) * class_weight[label]
+            error = (_sigmoid(logit) - label) * class_weight[label] * sample_weights[index]
             weights[0] -= rate * error
             for i, value in enumerate(features, start=1):
                 weights[i] -= rate * (error * value + L2 * (weights[i] - anchor[i]) / count)
@@ -168,8 +172,8 @@ def _logit(model: dict, vector: list[float]) -> float:
     )
 
 
-def train(samples: Iterable[tuple[dict, int, float]], *, prior: Optional[dict] = None) -> Optional[dict]:
-    """samples: (features, label 1/0, время показа). Модель или None.
+def train(samples: Iterable[tuple], *, prior: Optional[dict] = None) -> Optional[dict]:
+    """samples: (features, label 1/0, время показа[, вес]). Модель или None.
 
     Качество — AUC на последних по времени ``HOLDOUT_SHARE`` показов, после
     чего модель дообучается на всех. Ниже ``MIN_AUC`` — None.
@@ -177,24 +181,25 @@ def train(samples: Iterable[tuple[dict, int, float]], *, prior: Optional[dict] =
     data = sorted(samples, key=lambda row: row[2])[-MAX_ROWS:]
     if len(data) < MIN_ROWS:
         return None
-    vectors = [vectorize(features) for features, _label, _at in data]
-    labels = [int(label) for _features, label, _at in data]
+    vectors = [vectorize(row[0]) for row in data]
+    labels = [int(row[1]) for row in data]
+    weights_of = [float(row[3]) if len(row) > 3 else 1.0 for row in data]
     if sum(labels) < 10 or len(labels) - sum(labels) < 10:
         return None
     split = int(len(data) * (1 - HOLDOUT_SHARE))
     mean, std = _standardize(vectors)
     start = prior["weights"] if prior and len(prior.get("weights") or []) == len(mean) + 1 else None
-    weights = _fit(vectors[:split], labels[:split], mean, std, prior=start)
+    weights = _fit(vectors[:split], labels[:split], mean, std, prior=start, sample_weights=weights_of[:split])
     probe = {"weights": weights, "mean": mean, "std": std}
     holdout_auc = auc([_logit(probe, v) for v in vectors[split:]], labels[split:])
     baseline = auc(
-        [sum(float(v) for v in ((f.get("components") or {}).values())) for f, _l, _a in data[split:]],
+        [sum(float(v) for v in ((row[0].get("components") or {}).values())) for row in data[split:]],
         labels[split:],
     )
     if holdout_auc < MIN_AUC:
         logger.info("ranker rejected: auc=%.3f baseline=%.3f n=%d", holdout_auc, baseline, len(data))
         return None
-    weights = _fit(vectors, labels, mean, std, prior=start)
+    weights = _fit(vectors, labels, mean, std, prior=start, sample_weights=weights_of)
     return {
         "version": MODEL_VERSION,
         "features": list(FEATURE_NAMES),
@@ -209,7 +214,7 @@ def train(samples: Iterable[tuple[dict, int, float]], *, prior: Optional[dict] =
     }
 
 
-def samples_from_outcomes(rows: Iterable[dict]) -> list[tuple[dict, int, float]]:
+def samples_from_outcomes(rows: Iterable[dict]) -> list[tuple[dict, int, float, float]]:
     """Строки delivery_outcomes -> обучающие примеры; нейтральные пропускаются."""
     samples = []
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -220,7 +225,8 @@ def samples_from_outcomes(rows: Iterable[dict]) -> list[tuple[dict, int, float]]
         if not features.get("components"):
             continue
         shown_at = row.get("shown_at") or epoch
-        samples.append((features, 1 if row.get("good") else 0, shown_at.timestamp()))
+        weight = STRONG_WEIGHT if row.get("good") and row.get("strong") else 1.0
+        samples.append((features, 1 if row.get("good") else 0, shown_at.timestamp(), weight))
     return samples
 
 

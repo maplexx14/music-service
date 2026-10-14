@@ -175,6 +175,7 @@ def delivery_outcomes(
             {
                 "novel": bool(novel),
                 "good": state.good,
+                "strong": state.strong,
                 "bad": state.bad,
                 "completion": state.completion,
                 "score": score,
@@ -338,10 +339,11 @@ def discovery_acceptance(db: Session, user_id: int, familiar_artist_count: int) 
 # порции достаётся источнику сэмплом из Beta-апостериора его «награды» у этого
 # юзера с априором по всем юзерам (thompson_source_order).
 #
-# Награда исхода: 1 — лайк или дослушивание (хорошо), 0 — скип/дизлайк/уход
-# раньше 25% (плохо), 0.5 — между. Одних «хорошо» мало (5% исходов) — у нового
+# Награда исхода: 1 — лайк или дослушивание до 80% (очень понравился), 0.8 —
+# от 55% (понравился), 0 — скип/дизлайк/уход раньше 25% (плохо), 0.5 — между. Одних «хорошо» мало (5% исходов) — у нового
 # юзера по ним источники неразличимы неделями; «плохо» — главный сигнал волны.
 NEUTRAL_REWARD = 0.5
+GOOD_REWARD = 0.8
 _OUTCOME_CACHE_KEY = "discovery:outcomes:v1:{}"
 _POPULATION_CACHE_KEY = "discovery:outcomes:population:v1"
 # Сколько юзеров (последних по показам) складывать в популяционный априор и
@@ -381,7 +383,7 @@ LANGUAGE_PRIOR_FLOOR = 0.4
 
 def outcome_reward(row: dict) -> float:
     if row.get("good"):
-        return 1.0
+        return 1.0 if row.get("strong", True) else GOOD_REWARD
     if row.get("bad"):
         return 0.0
     return NEUTRAL_REWARD

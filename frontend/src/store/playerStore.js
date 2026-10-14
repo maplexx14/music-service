@@ -227,7 +227,7 @@ const usePlayerStore = create((set, get) => ({
   // id трека, у которого уже пошёл звук ('playing'). Ставит Player.
   audibleTrackId: null,
   // Сигналы волны этой сессии: [{ code, id }] — n/s скип до/после звука,
-  // c дослушал, l лайк, d дизлайк. Уходят на бэк параметром sess.
+  // c дослушал от 55%, f от 80%, l лайк, d дизлайк. Уходят на бэк параметром sess.
   flowSession: [],
   isFullScreen: false,
   isRepeatOne: false,
@@ -990,7 +990,9 @@ const usePlayerStore = create((set, get) => ({
     if (!durationKnown || currentTime <= 0) return // не успел начаться — не событие
     const completion = Math.max(0, Math.min(1, currentTime / duration))
     postRecommendationEvent(currentTrack, 'listen', completion, playbackMetadata(get()))
-    if (completion >= 0.8) get()._noteFlowSignal(currentTrack, 'c')
+    // Дослушал от 80% — очень понравился (f), от 55% — понравился (c).
+    if (completion >= 0.8) get()._noteFlowSignal(currentTrack, 'f')
+    else if (completion >= 0.55) get()._noteFlowSignal(currentTrack, 'c')
     invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)

@@ -171,13 +171,16 @@ def test_samples_skip_neutral_and_unscored_rows():
 
     now = datetime.now(timezone.utc)
     rows = [
-        {"good": True, "bad": False, "features": {"components": {"a": 1}}, "shown_at": now},
+        {"good": True, "strong": True, "bad": False, "features": {"components": {"a": 1}}, "shown_at": now},
+        {"good": True, "strong": False, "bad": False, "features": {"components": {"a": 1}}, "shown_at": now},
         {"good": False, "bad": True, "features": {"components": {"a": 1}}, "shown_at": now},
         {"good": False, "bad": False, "features": {"components": {"a": 1}}, "shown_at": now},
         {"good": True, "bad": False, "features": {}, "shown_at": now},
     ]
     samples = learned_ranker.samples_from_outcomes(rows)
-    assert [label for _f, label, _a in samples] == [1, 0]
+    assert [(label, weight) for _f, label, _a, weight in samples] == [
+        (1, learned_ranker.STRONG_WEIGHT), (1, 1.0), (0, 1.0),
+    ]
 
 
 def test_artist_proximity_ranks_neighbours_of_favorites(monkeypatch):

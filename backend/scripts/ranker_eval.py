@@ -45,7 +45,7 @@ def main() -> None:
 
     def report(name, samples, prior=None):
         model = learned_ranker.train(samples, prior=prior)
-        positives = sum(label for _f, label, _a in samples)
+        positives = sum(row[1] for row in samples)
         if model is None:
             print(f"  {name:<10} n={len(samples):<6} good={positives:<5} модель не принята (мало данных или AUC < {learned_ranker.MIN_AUC})")
             return None
