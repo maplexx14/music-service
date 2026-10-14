@@ -14,6 +14,7 @@ import { haptic, HAPTIC } from '../utils/haptics'
 import { plural } from '../utils/format'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { titleFitStyle } from '../utils/titleFit'
 import { useCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
@@ -378,7 +379,7 @@ function Artist() {
           />
           <div className="artist-hero-info">
             <div className="artist-kicker">Исполнитель</div>
-            <h1 className="artist-name" ref={setNameEl}>
+            <h1 className="artist-name" ref={setNameEl} style={titleFitStyle(artist.name)}>
               {artist.name}
             </h1>
             <ul className="artist-stats">

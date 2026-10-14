@@ -260,7 +260,13 @@
   }
 
   .artist-name {
-    font-size: clamp(30px, 10vw, 44px);
+    /* Самое длинное слово (--title-chars, utils/titleFit.js) влезает в
+       ширину экрана за полями 16px: у Unbounded 800 буква ~0.84em, с
+       трекингом -0.03em — 0.82em («Понравившиеся» иначе рвалось). */
+    font-size: min(
+      clamp(30px, 10vw, 44px),
+      calc((100vw - 32px) / (var(--title-chars, 1) * 0.82))
+    );
     margin-bottom: 12px;
   }
 

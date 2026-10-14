@@ -11,6 +11,7 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
+import { titleFitStyle } from '../utils/titleFit'
 import { useCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
@@ -230,7 +231,7 @@ function Album() {
               {typeLabel}
               {sourceLabel ? ` · ${sourceLabel}` : ''}
             </div>
-            <h1 className="artist-name">{album.title}</h1>
+            <h1 className="artist-name" style={titleFitStyle(album.title)}>{album.title}</h1>
             <ul className="artist-stats">
               {album.artist && (
                 <li>

@@ -10,6 +10,7 @@ import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { titleFitStyle } from '../utils/titleFit'
 import { useCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
@@ -203,7 +204,7 @@ function LikedSongs() {
           />
           <div className="artist-hero-info">
             <div className="artist-kicker">Плейлист</div>
-            <h1 className="artist-name">{playlist.name}</h1>
+            <h1 className="artist-name" style={titleFitStyle(playlist.name)}>{playlist.name}</h1>
             {playlist.description && (
               <p className="playlist-hero-description">{playlist.description}</p>
             )}

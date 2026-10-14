@@ -10,6 +10,7 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
+import { titleFitStyle } from '../utils/titleFit'
 import { useCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
@@ -199,7 +200,7 @@ function ExternalPlaylist() {
           />
           <div className="artist-hero-info">
             <div className="artist-kicker">Плейлист · SoundCloud</div>
-            <h1 className="artist-name">{playlist.title}</h1>
+            <h1 className="artist-name" style={titleFitStyle(playlist.title)}>{playlist.title}</h1>
             <ul className="artist-stats">
               <li>{playlist.owner || 'SoundCloud'}</li>
               {tracks.length > 0 && <li>{tracks.length} треков</li>}
