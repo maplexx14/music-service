@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
+  noteTrackAudible,
   postRecommendationEvent,
   recordRecommendationImpression,
   trackLikeKey,
@@ -66,6 +67,13 @@ const PRELOAD_LEAD_SEC = 45
 // медленнее», а «переход не состоялся». Полминуты запаса — компромисс: текущий
 // трек уже вне опасности, а у следующего есть время догрузиться.
 const PRELOAD_MIN_BUFFER_SEC = 30
+// То же на нормальном канале (streamQuality не перевёл плеер на низкое
+// качество). Поток листают скипами в первые секунды трека — по названию и
+// обложке, — и с порогом в полминуты такой скип шёл медленным путём: новая
+// загрузка с нуля вместо мгновенной подмены на прогретый элемент. Полоса здесь
+// не страшна: AAC 128 — 16 КБ/с, а nginx отдаёт поток после первых 256 КБ не
+// быстрее 160 КБ/с, так что второй поток играющему не мешает.
+const PRELOAD_FAST_BUFFER_SEC = 8
 // Через сколько после подмены проверить, что элемент реально поехал. Должно
 // пережить паузу между play() и первыми кадрами (на устройстве — до ~0.8 с даже
 // на полностью загруженном буфере), но не тянуться так долго, чтобы виджет
@@ -474,6 +482,9 @@ function PlayerInner() {
   // ли канал текущий битрейт. Ставится в двух местах, где реально назначается
   // src (эффект audioSource и playAdjacentNow), снимается на первом 'playing'.
   const loadStartedAtRef = useRef(0)
+  // Трек, включённый подменой на прогретый элемент (мгновенный путь), — для
+  // замера старта в телеметрии (noteTrackAudible).
+  const swappedTrackIdRef = useRef(null)
   // Когда разрешить hi-res обложку (виджет системы, фуллскрин, HeroDisc) —
   // см. heavyCoverTrackId в playerStore и HEAVY_COVER_DELAY_MS.
   const heavyCoverTrackId = usePlayerStore((s) => s.heavyCoverTrackId)
@@ -716,7 +727,8 @@ function PlayerInner() {
     // узкий (~140 КБ/с через туннель), и качать два потока разом значит отобрать
     // байты у играющего трека — он начнёт запинаться. Поэтому греем, только
     // когда играющему треку сеть уже почти не нужна (докачан целиком либо есть
-    // запас PRELOAD_MIN_BUFFER_SEC вперёд) либо когда до конца осталось меньше
+    // запас вперёд: PRELOAD_FAST_BUFFER_SEC, на узком канале
+    // PRELOAD_MIN_BUFFER_SEC) либо когда до конца осталось меньше
     // PRELOAD_LEAD_SEC — там прогрев важнее возможной запинки в последние
     // секунды: без него фоновый переход просто не состоится.
     const maybePreloadNext = (el) => {
@@ -730,8 +742,8 @@ function PlayerInner() {
       const trackDuration = resolveTrackDuration(el, state.currentTrack)
       const nearEnd =
         trackDuration > 0 && trackDuration - el.currentTime <= PRELOAD_LEAD_SEC
-      const comfortable =
-        engine.isFullyBuffered(el) || engine.bufferedAhead(el) >= PRELOAD_MIN_BUFFER_SEC
+      const minBuffer = isLowQuality() ? PRELOAD_MIN_BUFFER_SEC : PRELOAD_FAST_BUFFER_SEC
+      const comfortable = engine.isFullyBuffered(el) || engine.bufferedAhead(el) >= minBuffer
       if (!nearEnd && !comfortable) return
       engine.preload(url)
     }
@@ -1131,6 +1143,7 @@ function PlayerInner() {
       // playbackMetadata в playerStore.
       if (usePlayerStore.getState().audibleTrackId !== startedId) {
         usePlayerStore.setState({ audibleTrackId: startedId })
+        noteTrackAudible(startedId, { swap: swappedTrackIdRef.current === startedId })
       }
       const allowHeavyCover = () => usePlayerStore.setState({ heavyCoverTrackId: startedId })
       clearTimeout(heavyCoverTimerRef.current)
@@ -1284,6 +1297,7 @@ function PlayerInner() {
       const startedAt = performance.now()
       audio.src = abs
       loadStartedAtRef.current = performance.now()
+      swappedTrackIdRef.current = null
       // iOS Safari: explicit load() is required to start downloading.
       // Without it, iOS may not begin fetching the audio data.
       if (isIOS) audio.load()
@@ -1385,6 +1399,7 @@ function PlayerInner() {
     const primed = engine.swapTo(url)
     if (primed) {
       pendingAdvanceRef.current = false
+      swappedTrackIdRef.current = next.id
       primed.volume = usePlayerStore.getState().volume
       diag('swap:primed', { offset, ...snapshotAudio(primed) })
       // Старый элемент отпускаем не здесь, а по факту того, что новый реально
@@ -1484,6 +1499,7 @@ function PlayerInner() {
     dropHandoff()
     audio.src = url
     loadStartedAtRef.current = performance.now()
+    swappedTrackIdRef.current = null
     audio.load()
     playWithDiag(audio, `swap:${offset > 0 ? 'next' : 'prev'}`)
     // Мост держал сессию, пока элемент перезагружался с нуля, и отпускаем мы его
@@ -1844,6 +1860,10 @@ function PlayerInner() {
   // и, если играет «Моя волна», подтягиваем следующую порцию потока.
   useEffect(() => {
     if (!currentTrack) return
+    // Сам текущий трек обычно уже прогрет (клик, порция потока, прогрев
+    // «следующего») — повтор отсекает дедуп. Нужен восстановленному после
+    // перезапуска PWA: он стоит на паузе, и первый ▶ иначе шёл холодным путём.
+    usePlayerStore.getState().prefetchTracks([currentTrack], 1)
     prefetchNext()
     usePlayerStore.getState().extendFlowIfNeeded()
     // То же для плейлиста, загруженного постранично: хвост очереди дотягиваем

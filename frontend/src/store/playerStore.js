@@ -48,8 +48,19 @@ function isTrackResolved(track) {
 
 // Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
 // ре-рендеры компонентов, но не персистится между перезагрузками страницы
-// (это нормально: кэш на бэке в Redis всё равно тёплый).
-const requestedPrefetchIds = new Set()
+// (это нормально: кэш на бэке в Redis всё равно тёплый). Ключ → момент
+// запроса: повтор через PREFETCH_REPEAT_MS снова идёт на бэк — прогрев кладёт
+// архивный трек в дисковый кэш, а тот за часы прослушивания вытесняет давно
+// прогретое.
+const requestedPrefetchIds = new Map()
+const PREFETCH_REPEAT_MS = 20 * 60 * 1000
+
+function claimPrefetch(key) {
+  const at = requestedPrefetchIds.get(key)
+  if (at && Date.now() - at < PREFETCH_REPEAT_MS) return false
+  requestedPrefetchIds.set(key, Date.now())
+  return true
+}
 
 // Ключи треков, для которых прогрев резолва на бэке УЖЕ ЗАВЕРШИЛСЯ (POST
 // вернулся). Set держим на уровне модуля, чтобы переживал ре-рендеры.
@@ -121,11 +132,37 @@ function postRecommendationEvent(track, eventType, value = null, metadata = null
 // отдельно, чтобы ранкер мог отличать «отказ по метаданным» от «послушал и
 // ушёл».
 function playbackMetadata(state) {
-  const { currentTrack, currentTime, audibleTrackId } = state
-  return {
+  const { currentTrack, currentTime, audibleTrackId, startup } = state
+  const meta = {
     played_ms: Math.max(0, Math.round((currentTime || 0) * 1000)),
     audible: currentTrack?.id != null && audibleTrackId === currentTrack.id,
   }
+  // Сколько трек ждал первого звука — замер скорости загрузки у живых
+  // слушателей (см. noteTrackAudible).
+  if (startup && currentTrack?.id != null && startup.trackId === currentTrack.id) {
+    meta.start_ms = startup.ms
+    meta.start_swap = startup.swap
+    meta.start_bg = startup.bg
+  }
+  return meta
+}
+
+// Момент смены трека — точка отсчёта времени до первого звука. Пишется
+// подпиской, а не в экшенах: трек меняет десяток путей (клик, скип, конец
+// трека, поток, восстановление очереди). Смена на паузе не в счёт: звук там
+// ждёт нажатия ▶, а не сети.
+let trackSwitch = { id: null, at: 0, playing: false }
+
+// Первый звук трека: сколько прошло от смены трека. swap — трек играл с
+// прогретого второго элемента (мгновенный путь), bg — старт в фоне (там
+// WebKit сам тормозит загрузку, такие замеры не про сеть).
+function noteTrackAudible(trackId, { swap = false } = {}) {
+  if (trackId == null || trackSwitch.id !== trackId || !trackSwitch.playing) return
+  const ms = Math.round(performance.now() - trackSwitch.at)
+  trackSwitch = { ...trackSwitch, playing: false }
+  usePlayerStore.setState({
+    startup: { trackId, ms, swap, bg: typeof document !== 'undefined' && document.hidden },
+  })
 }
 
 function recordRecommendationImpression(track, metadata = null) {
@@ -226,6 +263,8 @@ const usePlayerStore = create((set, get) => ({
   heavyCoverTrackId: null,
   // id трека, у которого уже пошёл звук ('playing'). Ставит Player.
   audibleTrackId: null,
+  // Замер старта текущего трека: { trackId, ms, swap, bg } (см. noteTrackAudible).
+  startup: null,
   // Сигналы волны этой сессии: [{ code, id }] — n/s скип до/после звука,
   // c дослушал от 55%, f от 80%, l лайк, d дизлайк. Уходят на бэк параметром sess.
   flowSession: [],
@@ -529,8 +568,7 @@ const usePlayerStore = create((set, get) => ({
         const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
         if (!externalId) continue
         const key = `yt:${externalId}`
-        if (requestedPrefetchIds.has(key)) continue
-        requestedPrefetchIds.add(key)
+        if (!claimPrefetch(key)) continue
         api.post(`/ytdlp/prefetch/${externalId}`)
           .then(() => get()._pollPrefetchReady(key, `/ytdlp/prefetch/${externalId}/ready`))
           .catch(() => requestedPrefetchIds.delete(key))
@@ -539,8 +577,7 @@ const usePlayerStore = create((set, get) => ({
         const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
         if (!token) continue
         const key = `sc:${token}`
-        if (requestedPrefetchIds.has(key)) continue
-        requestedPrefetchIds.add(key)
+        if (!claimPrefetch(key)) continue
         api.post(`/soundcloud/prefetch/${token}`)
           .then(() => get()._pollPrefetchReady(key, `/soundcloud/prefetch/${token}/ready`))
           .catch(() => requestedPrefetchIds.delete(key))
@@ -1179,6 +1216,12 @@ const usePlayerStore = create((set, get) => ({
   },
 }))
 
+usePlayerStore.subscribe((state, prev) => {
+  const id = state.currentTrack?.id ?? null
+  if (id === (prev.currentTrack?.id ?? null)) return
+  trackSwitch = { id, at: performance.now(), playing: state.isPlaying }
+})
+
 // --- Intent-префетч (hover/pointerdown по строке трека) ---
 // Запускает прогрев резолва на бэке ЗАРАНЕЕ — в момент, когда пользователь
 // только навёл курсор / коснулся строки, за 200–1000 мс до реального
@@ -1235,4 +1278,5 @@ export {
   postRecommendationEvent,
   recordRecommendationImpression,
   trackLikeKey,
+  noteTrackAudible,
 }
