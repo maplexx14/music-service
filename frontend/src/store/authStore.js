@@ -38,6 +38,9 @@ const emailChangeError = (error, fallback) => {
   return EMAIL_CHANGE_ERRORS[detail] || (typeof detail === 'string' ? detail : fallback)
 }
 
+const TOKEN_RENEW_INTERVAL_MS = 6 * 60 * 60 * 1000
+let lastTokenRenewAt = 0
+
 const useAuthStore = create((set, get) => ({
       user: null,
       token: null,
@@ -507,15 +510,40 @@ const useAuthStore = create((set, get) => ({
         if (stored && stored.token) {
           try {
             setApiAuthToken(stored.token)
-            const response = await api.get('/auth/me')
+            const response = await api.get('/auth/me', { skipErrorToast: true })
             set({
               user: response.data,
               token: stored.token,
               isAuthenticated: true,
             })
+            get().renewToken()
           } catch (error) {
-            get().logout()
+            // Выходим только на 401 — токен правда умер (сессию уже сбросил
+            // перехватчик в services/api). Сеть, таймаут, 502 на деплое или
+            // PWA, открытая без интернета, — не повод: раньше любая такая
+            // ошибка на старте стирала сессию, и юзеров «выкидывало».
+            if (error.response?.status === 401) get().logout()
           }
+        }
+      },
+
+      // Меняет живой токен на свежий (POST /auth/refresh) не чаще раза в
+      // TOKEN_RENEW_INTERVAL_MS: без этого токен истекал через фиксированный
+      // срок после входа. Ошибки молча: старый токен ещё действует, попробуем
+      // при следующем вызове.
+      renewToken: async () => {
+        const token = get().token
+        if (!token || Date.now() - lastTokenRenewAt < TOKEN_RENEW_INTERVAL_MS) return
+        lastTokenRenewAt = Date.now()
+        try {
+          const response = await api.post('/auth/refresh', null, { skipErrorToast: true })
+          const fresh = response.data?.access_token
+          // За время запроса могли выйти или войти под другим аккаунтом.
+          if (!fresh || get().token !== token) return
+          setApiAuthToken(fresh)
+          set({ token: fresh })
+        } catch {
+          lastTokenRenewAt = 0
         }
       },
     })

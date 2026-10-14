@@ -100,7 +100,12 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated) return undefined
-    const heartbeat = () => api.get('/users/me', { skipErrorToast: true, dedupe: false }).catch(() => {})
+    const heartbeat = () => {
+      api.get('/users/me', { skipErrorToast: true, dedupe: false }).catch(() => {})
+      // Приложение (особенно PWA) держат открытым неделями — продлеваем
+      // сессию и без перезапуска; чаще раза в несколько часов не ходит.
+      useAuthStore.getState().renewToken()
+    }
     heartbeat()
     const interval = window.setInterval(heartbeat, 60000)
     return () => window.clearInterval(interval)

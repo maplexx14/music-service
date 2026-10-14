@@ -1,7 +1,7 @@
 from app.email_verification import get_pending_registration, reissue_pending_token
 from app.models import User
 from app.trusted_devices import DEVICE_TOKEN_HEADER
-from tests.conftest import create_user, trust_device
+from tests.conftest import auth_headers, create_user, trust_device
 
 
 def test_register_and_login(client, db):
@@ -67,3 +67,17 @@ def test_login_by_email(client, db):
 
 def test_me_requires_auth(client):
     assert client.get("/api/auth/me").status_code == 401
+
+
+def test_refresh_issues_working_token(client, db):
+    create_user(db, "bob")
+    resp = client.post("/api/auth/refresh", headers=auth_headers(client, "bob"))
+    assert resp.status_code == 200
+    token = resp.json()["access_token"]
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["username"] == "bob"
+
+
+def test_refresh_requires_auth(client):
+    assert client.post("/api/auth/refresh").status_code == 401

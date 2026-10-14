@@ -615,6 +615,14 @@ async def read_users_me(current_user: User = Depends(get_current_active_user)):
     return current_user
 
 
+# Скользящая сессия: клиент меняет живой токен на свежий при старте и раз в
+# несколько часов. Без этого токен истекал через ACCESS_TOKEN_EXPIRE_MINUTES
+# после входа, и выкидывало даже тех, кто слушает каждый день.
+@router.post("/refresh", response_model=Token)
+async def refresh_access_token(current_user: User = Depends(get_current_active_user)):
+    return _issue_access_token(current_user)
+
+
 @router.get("/2fa/status", response_model=TwoFactorStatus)
 def get_two_factor_status(
     current_user: User = Depends(get_current_active_user),
