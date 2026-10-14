@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
-import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom'
+import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, matchPath, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import ImportTracker from './components/ImportTracker'
@@ -38,6 +38,7 @@ const ExternalPlaylist = lazyWithReload(() => import('./pages/ExternalPlaylist')
 const Album = lazyWithReload(() => import('./pages/Album'))
 const Artist = lazyWithReload(() => import('./pages/Artist'))
 const Track = lazyWithReload(() => import('./pages/Track'))
+const GuestTrack = lazyWithReload(() => import('./pages/GuestTrack'))
 const LikedSongs = lazyWithReload(() => import('./pages/LikedSongs'))
 const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
 const Settings = lazyWithReload(() => import('./pages/Settings'))
@@ -69,6 +70,19 @@ function LoginRedirect() {
   const location = useLocation()
   const target = location.pathname + location.search
   return <Navigate to={target === '/' ? '/login' : `/login?next=${encodeURIComponent(target)}`} replace />
+}
+
+// Незалогиненный по ссылке на трек — гостевая страница: послушать можно без
+// регистрации. Внутри маршрута /*, а не отдельным: иначе вход/выход на /track
+// пересоздавал бы Layout вместе с плеером.
+function GuestRoutes() {
+  const location = useLocation()
+  if (!matchPath('/track/:id', location.pathname)) return <LoginRedirect />
+  return (
+    <Suspense fallback={<Spinner page />}>
+      <GuestTrack />
+    </Suspense>
+  )
 }
 
 // Стоит после <Routes>: layout-эффекты соседей идут по порядку, так что
@@ -192,7 +206,7 @@ function App() {
             isAuthenticated ? (
               <Layout renderRoutes={renderScreenRoutes} />
             ) : (
-              <LoginRedirect />
+              <GuestRoutes />
             )
           }
         />

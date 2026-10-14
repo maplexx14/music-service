@@ -106,7 +106,7 @@ function Track() {
             )}
           </div>
           <div className="playlist-actions shuffle-actions">
-            <button className="play-button-large" onClick={handlePlay}>
+            <button className="btn btn--primary btn--lg play-button-large" onClick={handlePlay}>
               {isCurrent && isPlaying ? (
                 <Pause size={24} fill="currentColor" />
               ) : (
@@ -115,7 +115,7 @@ function Track() {
               {isCurrent && isPlaying ? 'Пауза' : 'Слушать'}
             </button>
             <button
-              className="play-button-large secondary"
+              className="btn btn--secondary btn--lg play-button-large"
               onClick={handleLike}
               aria-pressed={isLiked}
             >

@@ -1,0 +1,161 @@
+/* Гостевая страница трека (pages/GuestTrack.jsx): карточка в раскладке
+   экранов входа (Auth.css) — обложка, плеер и предложение регистрации. */
+
+.guest-track-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+}
+
+.guest-track-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-lg);
+  background-color: var(--surface-4);
+}
+
+.guest-track-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.guest-track-title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.guest-track-artist {
+  font-size: 15px;
+  color: var(--text-secondary);
+}
+
+.guest-track-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.guest-track-progress input[type='range'] {
+  width: 100%;
+  height: 4px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--text-primary) var(--progress, 0%),
+    var(--border-strong) var(--progress, 0%)
+  );
+  cursor: pointer;
+}
+
+.guest-track-progress input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-primary);
+}
+
+.guest-track-progress input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: var(--text-primary);
+}
+
+.guest-track-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.guest-track-missing {
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.guest-track-footer {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.guest-track-footer a {
+  color: var(--brand-accent);
+  text-decoration: none;
+}
+
+.guest-track-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  animation: guest-track-fade 180ms var(--ease-out) backwards;
+}
+
+.guest-track-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 400px;
+  padding: 28px 24px 24px;
+  background-color: var(--surface-2);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  text-align: center;
+  animation: guest-track-pop 200ms var(--ease-out) backwards;
+}
+
+.guest-track-dialog h2 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.guest-track-dialog p {
+  margin-bottom: 8px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.guest-track-replay {
+  color: var(--text-secondary);
+}
+
+@keyframes guest-track-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes guest-track-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guest-track-backdrop,
+  .guest-track-dialog {
+    animation: none;
+  }
+}
