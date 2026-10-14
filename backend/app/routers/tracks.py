@@ -744,8 +744,10 @@ async def upload_track(
         )
     duration = int(audio.info.length)
 
-    # Transcode to AAC for smaller, faster-loading files
-    aac_path = transcode_to_aac(str(file_path))
+    # Transcode to AAC for smaller, faster-loading files. ffmpeg и заливка ниже —
+    # в треде: синхронно в async-хендлере они останавливали event loop
+    # воркера, и на время загрузки висели все его запросы.
+    aac_path = await asyncio.to_thread(transcode_to_aac, str(file_path))
     if aac_path != str(file_path):
         # Transcoded successfully — replace original with AAC version
         file_path.unlink(missing_ok=True)
@@ -783,14 +785,14 @@ async def upload_track(
         # Use AAC content type for transcoded files
         if file_ext == AAC_EXT:
             audio_mime = AAC_CONTENT_TYPE
-        relative_path, file_size = storage.upload_music_file(
-            str(file_path), filename, audio_mime or "audio/mp4"
+        relative_path, file_size = await asyncio.to_thread(
+            storage.upload_music_file, str(file_path), filename, audio_mime or "audio/mp4"
         )
         file_path.unlink(missing_ok=True)
         if cover_path is not None:
             cover_mime, _ = mimetypes.guess_type(str(cover_path))
-            cover_url = storage.upload_cover_file(
-                str(cover_path), cover_filename, cover_mime or "image/jpeg"
+            cover_url = await asyncio.to_thread(
+                storage.upload_cover_file, str(cover_path), cover_filename, cover_mime or "image/jpeg"
             )
             cover_path.unlink(missing_ok=True)
     else:
@@ -985,8 +987,8 @@ async def complete_chunked_upload(
         )
     duration = int(audio.info.length)
 
-    # Transcode to AAC
-    aac_path = transcode_to_aac(str(assembled_path))
+    # Transcode to AAC. В треде — см. upload_track.
+    aac_path = await asyncio.to_thread(transcode_to_aac, str(assembled_path))
     if aac_path != str(assembled_path):
         assembled_path.unlink(missing_ok=True)
         assembled_path = Path(aac_path)
@@ -1001,8 +1003,8 @@ async def complete_chunked_upload(
         audio_mime, _ = mimetypes.guess_type(str(assembled_path))
         if file_ext == AAC_EXT:
             audio_mime = AAC_CONTENT_TYPE
-        relative_path, file_size = storage.upload_music_file(
-            str(assembled_path), filename, audio_mime or "audio/mp4"
+        relative_path, file_size = await asyncio.to_thread(
+            storage.upload_music_file, str(assembled_path), filename, audio_mime or "audio/mp4"
         )
         assembled_path.unlink(missing_ok=True)
     else:
@@ -1053,10 +1055,11 @@ async def upload_track_cover(
 
     if storage.is_minio_backend():
         # Старая обложка могла лежать в MinIO — чистим её, чтобы не копить сирот.
-        storage.remove_cover_url(track.cover_url)
+        # Запросы к хранилищу — в треде, как и в upload_track.
+        await asyncio.to_thread(storage.remove_cover_url, track.cover_url)
         cover_mime, _ = mimetypes.guess_type(str(cover_path))
-        track.cover_url = storage.upload_cover_file(
-            str(cover_path), cover_filename, cover_mime or "image/jpeg"
+        track.cover_url = await asyncio.to_thread(
+            storage.upload_cover_file, str(cover_path), cover_filename, cover_mime or "image/jpeg"
         )
         cover_path.unlink(missing_ok=True)
     else:

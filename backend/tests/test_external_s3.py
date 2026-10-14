@@ -205,6 +205,37 @@ def test_sync_reads_and_writes_carry_sse_c(external_s3, monkeypatch, tmp_path):
         assert sse.headers()["X-Amz-Server-Side-Encryption-Customer-Key"] == base64.b64encode(_KEY).decode()
 
 
+def test_upload_is_single_put_up_to_threshold(external_s3, monkeypatch, tmp_path):
+    """Файл до S3_SINGLE_PUT_MAX_MB уходит одним PUT, крупнее — multipart, как раньше.
+
+    bucket.ru отвечает InvalidPart на сборке multipart: с переезда (2026-10-07)
+    в архив не попал ни один объект больше 5 МиБ — с этого размера minio-py
+    режет файл на части сам.
+    """
+    from minio.helpers import get_part_info
+
+    mib = 1024 * 1024
+    monkeypatch.setattr(storage, "_SINGLE_PUT_MAX", 64 * mib)
+    seen = {}
+
+    class _Client:
+        def fput_object(self, bucket, key, path, content_type, **kw):
+            seen[key] = kw["part_size"]
+
+    monkeypatch.setattr(storage, "_get_internal_client", lambda: _Client())
+    sizes = {"small.m4a": 3, "long.m4a": 12 * mib, "huge.flac": 65 * mib}
+    for name, size in sizes.items():
+        path = tmp_path / name
+        with open(path, "wb") as fh:
+            fh.truncate(size)  # разреженный файл: нужен только размер
+        storage.upload_object("music", name, str(path), "audio/mp4")
+
+    for name in ("small.m4a", "long.m4a"):
+        # Та же арифметика, по которой minio-py выбирает одиночный PUT.
+        assert get_part_info(sizes[name], seen[f"music/{name}"])[1] == 1
+    assert seen["music/huge.flac"] == 0
+
+
 def test_async_head_carries_sse_c_and_maps_missing(external_s3, monkeypatch):
     seen = {}
 

@@ -173,11 +173,33 @@ def download_object(bucket: str, key: str, local_path: str) -> None:
     _get_internal_client().fget_object(phys_bucket, phys_key, local_path, **_read_sse())
 
 
+# Файл до этого размера заливается одним PUT. bucket.ru отвечает InvalidPart
+# на сборке multipart-заливки: с переезда (2026-10-07) в архив не попал ни
+# один объект больше 5 МиБ — порога, с которого minio-py сам режет файл на
+# части. Одиночный PUT держит файл в памяти целиком, отсюда потолок; файлы
+# крупнее идут multipart, как раньше.
+_SINGLE_PUT_MAX = int(os.getenv("S3_SINGLE_PUT_MAX_MB", "128")) * 1024 * 1024
+# Минимальный part_size, который принимает minio-py (minio.helpers.MIN_PART_SIZE).
+_MIN_PART_SIZE = 5 * 1024 * 1024
+
+
+def _put_part_size(size: int) -> int:
+    """part_size для fput_object: при part_size >= размера файла minio-py шлёт один PUT."""
+    if size > _SINGLE_PUT_MAX:
+        return 0  # части выбирает minio-py
+    return max(size, _MIN_PART_SIZE)
+
+
 def upload_object(bucket: str, key: str, local_path: str, content_type: str) -> None:
     """Заливает локальный файл по логическим (bucket, key)."""
     phys_bucket, phys_key = locate(bucket, key)
     _get_internal_client().fput_object(
-        phys_bucket, phys_key, local_path, content_type=content_type, **_write_sse()
+        phys_bucket,
+        phys_key,
+        local_path,
+        content_type=content_type,
+        part_size=_put_part_size(os.path.getsize(local_path)),
+        **_write_sse(),
     )
     _stat_cache_invalidate(bucket, key)
     _disk_cache_drop(bucket, key)

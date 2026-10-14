@@ -132,7 +132,31 @@ class ArchiveResult:
     # попытка её продлевает. Архивация ленивая, так что следующее
     # прослушивание запустит её заново, когда бэкофф истечёт.
     BLOCKED = "blocked:source-rate-limit"
+    # Хранилище не приняло файл. Не ретраится: повтор заново скачивал и
+    # перекодировал трек и упирался в тот же отказ, а сетевые сбои minio-py
+    # повторяет сам (storage._http_client).
+    UPLOAD_FAILED = "upload-failed"
     FAILED = "failed"
+
+
+# Сколько не браться за трек после провала архивации. Ленивая архивация
+# зовётся на каждом стрим-запросе (Range тоже), и без метки провал не
+# запоминался: трек, который хранилище не принимало, качался, перекодировался
+# и заливался заново на каждый запрос плеера (прод 2026-10-14: 20 попыток за
+# 20 минут на один трек).
+ARCHIVE_FAIL_TTL = int(os.getenv("ARCHIVE_FAIL_TTL_SEC", str(6 * 3600)))
+# Исходы, которые повтор через минуту не изменит. TRANSIENT, BLOCKED и
+# UNAVAILABLE сюда не входят: их негатив кэширует резолвер, и повтор стоит
+# один поход в Redis.
+_REMEMBERED_FAILURES = {
+    ArchiveResult.FAILED,
+    ArchiveResult.UPLOAD_FAILED,
+    ArchiveResult.TOO_LARGE,
+}
+
+
+def _fail_key(source: str, external_id: str) -> str:
+    return f"archive:fail:{source}/{external_id}"
 
 
 class _TooLarge(Exception):
@@ -243,7 +267,7 @@ async def adopt_local_file(
             storage.find_music_object, f"external/{source}/{external_id}"
         )
     try:
-        storage.ensure_buckets()
+        await asyncio.to_thread(storage.ensure_buckets)
         file_path, file_size = await asyncio.to_thread(
             storage.upload_music_file, local_path, key, _audio_content_type(ext)
         )
@@ -576,7 +600,9 @@ async def _archive_cover(track: Track, external_key: str, client: httpx.AsyncCli
                             async for chunk in resp.aiter_bytes(128 * 1024):
                                 fh.write(chunk)
                         key = f"external/{external_key}{ext}"
-                        return storage.upload_cover_file(tmp_path, key, ct or "image/jpeg")
+                        return await asyncio.to_thread(
+                            storage.upload_cover_file, tmp_path, key, ct or "image/jpeg"
+                        )
                     finally:
                         if os.path.exists(tmp_path):
                             try:
@@ -620,7 +646,7 @@ async def archive_track(
     if not track.external_id:
         return ArchiveResult.NO_ID, None
 
-    storage.ensure_buckets()
+    await asyncio.to_thread(storage.ensure_buckets)
 
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
@@ -654,8 +680,10 @@ async def archive_track(
             if dl_owned:
                 await dl_client.aclose()
 
-        # Transcode to AAC for smaller, faster-loading files
-        aac_path = transcode_to_aac(tmp_path)
+        # Transcode to AAC for smaller, faster-loading files. ffmpeg и заливка —
+        # секунды блокирующей работы: только в треде, иначе на это время
+        # встаёт event loop воркера и все его запросы (прод 2026-10-14).
+        aac_path = await asyncio.to_thread(transcode_to_aac, tmp_path)
         if aac_path != tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -668,9 +696,12 @@ async def archive_track(
         acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
 
         try:
-            file_path, file_size = storage.upload_music_file(
-                tmp_path, key, _audio_content_type(ext)
+            file_path, file_size = await asyncio.to_thread(
+                storage.upload_music_file, tmp_path, key, _audio_content_type(ext)
             )
+        except Exception:  # noqa: BLE001 — см. ArchiveResult.UPLOAD_FAILED
+            logger.exception("archive: хранилище не приняло трек %s", track.id)
+            return ArchiveResult.UPLOAD_FAILED, None
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -758,6 +789,9 @@ async def schedule_archive(track_id: int) -> None:
                     return
                 if track.source not in ARCHIVABLE_SOURCES:
                     return
+                fail_key = _fail_key(track.source, track.external_id)
+                if await get_cache_async(fail_key):
+                    return
                 if track.source == "ytmusic" and await _deezer_serves(track.external_id):
                     return
                 resume_tmp = None
@@ -783,6 +817,8 @@ async def schedule_archive(track_id: int) -> None:
                             track_id, attempt + 1, _MAX_RETRIES, status, _RETRY_DELAY,
                         )
                         await asyncio.sleep(_RETRY_DELAY)
+                if status in _REMEMBERED_FAILURES:
+                    await set_cache_async(fail_key, status, expire=ARCHIVE_FAIL_TTL)
                 logger.info("lazy-archive: трек %s → %s", track_id, status)
             finally:
                 db.close()
@@ -850,7 +886,7 @@ async def _archive_external_core(
         except TransientResolveError:
             return ArchiveResult.TRANSIENT, None
 
-        storage.ensure_buckets()
+        await asyncio.to_thread(storage.ensure_buckets)
         key = f"external/{source}/{external_id}{ext}"
         dl_client, dl_owned = _download_client(url, client)
         try:
@@ -863,8 +899,9 @@ async def _archive_external_core(
             if dl_owned:
                 await dl_client.aclose()
 
-        # Transcode to AAC for smaller, faster-loading files
-        aac_path = transcode_to_aac(tmp_path)
+        # Transcode to AAC for smaller, faster-loading files. В треде — см.
+        # archive_track.
+        aac_path = await asyncio.to_thread(transcode_to_aac, tmp_path)
         if aac_path != tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -880,9 +917,12 @@ async def _archive_external_core(
         acoustic_features = await asyncio.to_thread(analyze_file, tmp_path)
 
         try:
-            file_path, file_size = storage.upload_music_file(
-                tmp_path, key, _audio_content_type(ext)
+            file_path, file_size = await asyncio.to_thread(
+                storage.upload_music_file, tmp_path, key, _audio_content_type(ext)
             )
+        except Exception:  # noqa: BLE001 — см. ArchiveResult.UPLOAD_FAILED
+            logger.exception("archive-ext: хранилище не приняло %s/%s", source, external_id)
+            return ArchiveResult.UPLOAD_FAILED, None
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -945,6 +985,10 @@ async def schedule_archive_external(
         _lazy_sem = asyncio.Semaphore(_LAZY_CONCURRENCY)
 
     try:
+        # Недавний провал не повторяем на каждом Range-запросе (ARCHIVE_FAIL_TTL).
+        # Проверка до семафора: трек с меткой не ждёт очереди архиваций.
+        if await get_cache_async(_fail_key(source, external_id)):
+            return
         async with _lazy_sem:
             # Наличие объекта берём через кэш пути (Redis), который читает и сам
             # стрим — на повторных прослушиваниях это вообще без сети к MinIO.
@@ -999,6 +1043,10 @@ async def schedule_archive_external(
                             source, external_id, attempt + 1, _MAX_RETRIES, status, _RETRY_DELAY,
                         )
                         await asyncio.sleep(_RETRY_DELAY)
+                if status in _REMEMBERED_FAILURES:
+                    await set_cache_async(
+                        _fail_key(source, external_id), status, expire=ARCHIVE_FAIL_TTL
+                    )
                 logger.info("lazy-archive-ext: %s/%s → %s", source, external_id, status)
             finally:
                 db.close()
