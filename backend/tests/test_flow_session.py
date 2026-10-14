@@ -516,3 +516,23 @@ def test_single_song_unproven_artists_fill_tail_last():
         profile, "ctx", limit=6, last_picked={}, recent_artist_counts=Counter(), now_ts=0.0,
     )
     assert len(plan["favorite_artists"]) == 12
+
+
+def test_no_more_than_two_tracks_of_an_artist_in_a_row():
+    pool = _pool(["a", "a", "a", "b", "a", "c"])
+    order = flow_session.limit_artist_runs(pool, lambda item: item["artist"])
+    artists = [item["artist"] for item in order]
+    assert artists == ["a", "a", "b", "a", "a", "c"], artists
+    assert sorted(item["id"] for item in order) == list(range(6))
+
+
+def test_artist_run_counts_the_previous_portion():
+    pool = _pool(["a", "b"])
+    order = flow_session.limit_artist_runs(pool, lambda item: item["artist"], previous=["x", "a", "a"])
+    assert [item["artist"] for item in order] == ["b", "a"]
+
+
+def test_artist_run_limit_is_soft_without_other_artists():
+    pool = _pool(["a", "a", "a"])
+    order = flow_session.limit_artist_runs(pool, lambda item: item["artist"])
+    assert [item["id"] for item in order] == [0, 1, 2]

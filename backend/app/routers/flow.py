@@ -3594,6 +3594,14 @@ async def _deliver_portion(
     # их треки прогреваются задолго до того, как до них дойдёт очередь.
     if not exclude:
         mix = await _front_instant_start(mix)
+    # Не больше двух треков одного артиста подряд — и внутри порции, и на стыке
+    # с прошлой (её хвост в history["artists"]). Первая порция стыка не имеет:
+    # трек мгновенного старта остаётся первым.
+    mix = flow_session.limit_artist_runs(
+        mix,
+        lambda item: primary_artist_key(_flow_item_artist_title(item)[0]),
+        (history.get("artists") or []) if exclude else (),
+    )
 
     # Attach one stable attribution envelope to every delivered item. It is
     # written before the response so the client can confirm a real impression

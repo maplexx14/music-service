@@ -152,6 +152,32 @@ class SessionState:
         return {name: round(value, 4) for name, value in out.items() if value}
 
 
+MAX_ARTIST_RUN = 2
+
+
+def limit_artist_runs(
+    items: list, artist_of: Callable, previous: Iterable[str] = (), max_run: int = MAX_ARTIST_RUN
+) -> list:
+    """Не больше ``max_run`` треков одного артиста подряд, считая конец
+    прошлой порции (``previous``): третий такой трек меняется местами со
+    следующим по порядку другого артиста; других нет — остаётся (мягко).
+
+    Прод, 2026-10-15: песни любимого из коллекции шли парами и тройками
+    подряд (Limp Bizkit дважды по два трека в соседних позициях).
+    """
+    result: list = []
+    rest = list(items)
+    tail = [a for a in previous if a][-max_run:]
+    while rest:
+        recent = (tail + [artist_of(item) for item in result])[-max_run:]
+        blocked = recent[0] if len(recent) == max_run and len(set(recent)) == 1 and recent[0] else None
+        index = 0
+        if blocked is not None:
+            index = next((i for i, item in enumerate(rest) if artist_of(item) != blocked), 0)
+        result.append(rest.pop(index))
+    return result
+
+
 def _greedy_gap(ranked: list, artist_of, limit: int, previous: Iterable[str], min_gap: int) -> list:
     """Первые ``limit`` по порядку, без артиста ближе ``min_gap`` (мягко)."""
     recent = [a for a in previous if a][-(min_gap - 1):] if min_gap > 1 else []

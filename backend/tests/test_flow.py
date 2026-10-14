@@ -429,10 +429,14 @@ def test_flow_spreads_liked_tracks_across_the_page(client, db):
         )
         for i in range(10)
     ]
+    # Неслышанное — от нескольких знакомых артистов: будь оно целиком одного,
+    # правило «не больше двух треков артиста подряд» (limit_artist_runs)
+    # вытягивало бы лайки других артистов вперёд, и разнос был бы невозможен.
+    fresh_artists = ["KnownArtist", "KnownArtist 1", "KnownArtist 2", "KnownArtist 3"]
     fresh = [
         Track(
             title=f"fresh-{i}",
-            artist="KnownArtist",
+            artist=fresh_artists[i % len(fresh_artists)],
             duration=100,
             source="local",
             file_path=f"minio://music/spread-fresh-{i}.mp3",
