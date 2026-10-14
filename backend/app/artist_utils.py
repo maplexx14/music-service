@@ -333,3 +333,29 @@ def effective_track_artist_title(track) -> tuple[str, str]:
         source=getattr(track, "source", "") or "",
         album=getattr(track, "album", "") or "",
     )
+
+
+# Производные версии чужой записи: ремикс, ускорение/замедление, мэшап, кавер.
+# Ремастер, radio edit и live — та же песня самого артиста, их не трогаем.
+# Слова, которые бывают и в обычных названиях («Cover Me», «Instrumental»
+# как имя трека), считаем пометкой версии только в скобках или после тире.
+_DERIVATIVE_ANYWHERE_RE = re.compile(
+    r"remix|ремикс|\brmx\b|mash\s*-?\s*up|мэшап|мешап|bootleg|бутлег"
+    r"|sped\s*up|speed\s*up|ускор|slowed|замедл|nightcore|найткор"
+    r"|karaoke|караоке|\b8d\b|bass\s*boost|\bvip\s*mix|\brework\b",
+    re.IGNORECASE,
+)
+_DERIVATIVE_TAGGED_RE = re.compile(
+    r"(?:[(\[]|\s[-–—|]\s)[^()\[\]]*?"
+    r"(?:\bcover\b|кавер|instrumental|инструментал|\bминус\b|reverb|реверб"
+    r"|\bflip\b|\bedit\b(?<!radio edit))",
+    re.IGNORECASE,
+)
+
+
+def is_derivative_title(title: str) -> bool:
+    """Название помечает производную версию, а не оригинальную запись."""
+    title = title or ""
+    return bool(
+        _DERIVATIVE_ANYWHERE_RE.search(title) or _DERIVATIVE_TAGGED_RE.search(title)
+    )

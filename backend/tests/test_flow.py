@@ -3779,3 +3779,102 @@ def test_ready_pool_session_arm_logs_arm_and_session_terms(client, db, monkeypat
     ).scalars().all()
     assert rows and all(row["arm"] == "session" for row in rows)
     assert any("session" in row for row in rows)
+
+
+def test_derivative_titles_are_recognised():
+    """Ремикс, ускорение, кавер — производные; ремастер, radio edit, live — нет."""
+    from app.artist_utils import is_derivative_title
+
+    for title in (
+        "Numb (Remix)", "In The End - Mellen Gi Remix", "Мама (speed up)",
+        "Song [Slowed + Reverb]", "Song (Nightcore)", "Song (Cover)",
+        "Kids (Instrumental)", "Song (Club Edit)", "Ртуть (ремикс)",
+    ):
+        assert is_derivative_title(title), title
+    for title in (
+        "Numb", "Cover Me", "Instrumental", "Undercover", "Song - Radio Edit",
+        "Song - Remastered 2011", "Song (Live)",
+    ):
+        assert not is_derivative_title(title), title
+
+
+def test_resolve_similar_prefers_the_original(monkeypatch):
+    """Поиск по «Artist Song» ставит ремикс первым — играть надо оригинал."""
+    from app.routers import flow, soundcloud, ytdlp
+
+    async def _yt(request, query, limit=3, schedule_matches=False):
+        return [
+            _external("Artist", "Song (DJ Remix)", "remix"),
+            _external("Artist", "Song", "original"),
+        ]
+
+    async def _sc(request, query, limit=3):
+        return []
+
+    monkeypatch.setattr(ytdlp, "search_ytmusic", _yt)
+    monkeypatch.setattr(soundcloud, "search_soundcloud", _sc)
+
+    found = asyncio.run(flow._resolve_similar(None, "Artist", "Song"))
+    assert found.external_id == "original"
+    # Last.fm назвал именно ремикс — его и берём.
+    found = asyncio.run(flow._resolve_similar(None, "Artist", "Song (DJ Remix)"))
+    assert found.external_id == "remix"
+
+
+def test_flow_prefers_originals_over_remixes(client, db, monkeypatch):
+    """Пользователь: «в приоритете всегда оригиналы, а не ремиксы». Пока
+    оригиналов хватает на порцию, ремиксы и ускорения в волну не идут."""
+    user = create_user(db, username="originals-user")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _radio(seed_video_id):
+        return [
+            t
+            for i in range(10)
+            for t in (
+                _external(f"Radio{i}", f"song-{i} (Remix)", f"remix{i}"),
+                _external(f"Radio{i}", f"song-{i} (sped up)", f"sped{i}"),
+                _external(f"Radio{i}", f"song-{i}", f"orig{i}"),
+            )
+        ]
+
+    monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
+    monkeypatch.setattr(
+        "app.routers.flow._artist_seed_videos", lambda *a, **k: _async(["seed"])
+    )
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="originals-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [str(t.get("external_id") or "") for t in resp.json()]
+    external = [i for i in ids if i.startswith(("remix", "sped", "orig"))]
+    assert external and all(i.startswith("orig") for i in external), ids
+
+
+def test_flow_falls_back_to_remixes_when_nothing_else(client, db, monkeypatch):
+    """Только ремиксы — лучше ремикс, чем тишина: их добирает второй проход."""
+    user = create_user(db, username="remixes-only-user")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _radio(seed_video_id):
+        return [
+            _external(f"Radio{i}", f"song-{i} (Remix)", f"remix{i}")
+            for i in range(10)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
+    monkeypatch.setattr(
+        "app.routers.flow._artist_seed_videos", lambda *a, **k: _async(["seed"])
+    )
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="remixes-only-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [str(t.get("external_id") or "") for t in resp.json()]
+    assert any(i.startswith("remix") for i in ids), ids
+
+
+async def _async(value):
+    return value

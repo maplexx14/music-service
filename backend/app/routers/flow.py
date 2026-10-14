@@ -133,6 +133,7 @@ from app.artist_utils import (
     artist_key,
     effective_artist_title,
     effective_track_artist_title,
+    is_derivative_title,
     names_whole_artist,
     same_artist,
 )
@@ -2065,11 +2066,17 @@ async def _resolve_similar(
         soundcloud.search_soundcloud(request, query, limit=3),
         return_exceptions=True,
     )
+    # Поиск по имени песни охотно ставит ремикс выше оригинала, а _is_same_track
+    # его пропускает («Song» входит в «Song (X Remix)»). Производную версию
+    # берём, только если Last.fm назвал именно её.
+    want_derivative = is_derivative_title(title)
     for results in (yt_results, sc_results):
         if isinstance(results, Exception):
             logger.warning("flow lastfm resolve failed for %s: %s", query, results)
             continue
         for found in results:
+            if not want_derivative and is_derivative_title(found.title):
+                continue
             if _is_same_track(artist, title, found):
                 return found
     return None
@@ -3959,6 +3966,11 @@ async def _compute_flow(
             ):
                 continue
             if _title_repeats_artist(t):
+                continue
+            # Оригиналы в приоритете: ремиксы, ускорения и каверы из внешних
+            # пулов идут только во второй проход, когда оригиналов на порцию
+            # не хватило (см. relax в конце функции).
+            if not relax and is_derivative_title(effective_title):
                 continue
             # Треки без рабочего источника не добавляем: ytmusic без external_id
             # или soundcloud без stream_url не смогут играться.
