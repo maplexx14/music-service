@@ -65,6 +65,18 @@
   margin-bottom: 24px;
 }
 
+/* Обложка плейлиста в hero-карточке (Artist.css) — квадрат, а не круг. */
+.artist-avatar.playlist-hero-cover {
+  border-radius: var(--radius-lg);
+}
+
+.playlist-hero-description {
+  font-size: var(--text-base);
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
 .playlist-actions {
   display: flex;
   align-items: center;
@@ -399,6 +411,17 @@
     border-radius: var(--radius-avatar);
   }
 
+  /* Вторичное действие, которое относится к самой кнопке «Воспроизвести»
+     («Перемешать»), стоит вплотную к ней справа, а не в левой группе. */
+  .round-actions .round-actions__near-play {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .round-actions:has(.round-actions__near-play) .play-button-large.round-actions__play {
+    margin-left: 0;
+  }
+
   .round-actions .round-actions__icon {
     flex: none;
     width: 44px;
@@ -486,6 +509,10 @@
     display: flex;
     align-items: center;
     gap: 4px;
+    /* Иконка в кнопке 44px отступает от её края на 12px — сдвигаем ячейку
+       на эти 12, чтобы край иконки встал на одну линию с краем обложки
+       слева (оба на 4px внутри строки). Зона нажатия остаётся 44px. */
+    margin-right: -12px;
   }
 
   .track-table-cover {

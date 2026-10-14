@@ -10,7 +10,11 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
+import { useCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
+// Шапка — та же hero-карточка в тон обложки, что у исполнителя.
+import './Artist.css'
 
 // Просмотр внешнего (SoundCloud) плейлиста: слушать можно сразу, в библиотеку
 // добавляется только по явному нажатию «Добавить в медиатеку».
@@ -26,6 +30,7 @@ function ExternalPlaylist() {
   const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
   const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [importing, setImporting] = useState(false)
+  const heroColors = useCoverColors(playlist?.cover_url) || DEFAULT_HERO_COLORS
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
@@ -164,44 +169,64 @@ function ExternalPlaylist() {
 
   return (
     <div className="page-container">
-      <div className="playlist-header">
-        <img
-          src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-          alt={playlist.title}
-          className="playlist-header-cover"
-          onError={handleCoverError}
-        />
-        <div className="playlist-header-info">
-          <div className="playlist-type">Плейлист · SoundCloud</div>
-          <h1 className="playlist-title">{playlist.title}</h1>
-          <div className="playlist-meta">
-            <span>{playlist.owner || 'SoundCloud'}</span>
-            {tracks.length > 0 && (
-              <>
-                <span>•</span>
-                <span>{tracks.length} треков</span>
-              </>
-            )}
+      <header
+        className="artist-hero"
+        style={{
+          '--hero-c1': heroColors[0],
+          '--hero-c2': heroColors[1],
+          '--hero-c3': heroColors[2],
+        }}
+      >
+        {playlist.cover_url && (
+          <img
+            src={resolveCoverUrl(playlist.cover_url, 'thumb') || resolveCoverUrl(playlist.cover_url)}
+            alt=""
+            aria-hidden="true"
+            decoding="async"
+            className="artist-hero-backdrop"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+        <div className="artist-hero-content">
+          <img
+            src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+            alt={playlist.title}
+            decoding="async"
+            className="artist-avatar playlist-hero-cover"
+            onError={handleCoverError}
+          />
+          <div className="artist-hero-info">
+            <div className="artist-kicker">Плейлист · SoundCloud</div>
+            <h1 className="artist-name">{playlist.title}</h1>
+            <ul className="artist-stats">
+              <li>{playlist.owner || 'SoundCloud'}</li>
+              {tracks.length > 0 && <li>{tracks.length} треков</li>}
+            </ul>
           </div>
-          <div className="playlist-actions round-actions">
-            <button
-              className="btn btn--primary btn--lg play-button-large round-actions__play"
-              onClick={handlePlay}
-              aria-label="Воспроизвести"
-            >
-              <Play size={24} fill="currentColor" />
-              <span className="round-actions__label">Воспроизвести</span>
-            </button>
-            <button
-              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
-              onClick={handleImport}
-              disabled={importing}
-              aria-label="Добавить в медиатеку"
-            >
-              <Plus size={20} />
-              <span className="round-actions__label">{importing ? 'Добавление...' : 'Добавить в медиатеку'}</span>
-            </button>
-          </div>
+        </div>
+      </header>
+
+      <div className="artist-toolbar">
+        <div className="playlist-actions round-actions">
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
+            onClick={handleImport}
+            disabled={importing}
+            aria-label="Добавить в медиатеку"
+          >
+            <Plus size={20} />
+            <span className="round-actions__label">{importing ? 'Добавление...' : 'Добавить в медиатеку'}</span>
+          </button>
         </div>
       </div>
 

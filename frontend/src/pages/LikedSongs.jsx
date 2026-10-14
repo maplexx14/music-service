@@ -10,7 +10,11 @@ import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { useCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
+// Шапка — та же hero-карточка в тон обложки, что у исполнителя.
+import './Artist.css'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 const LIKED_CACHE_KEY = 'playlist:liked'
@@ -21,6 +25,7 @@ function LikedSongs() {
   const navigate = useNavigate()
   // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
   const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
+  const heroColors = useCoverColors(playlist?.cover_url) || DEFAULT_HERO_COLORS
   const [loading, setLoading] = useState(() => !peekCache(LIKED_CACHE_KEY))
   const [totalTracks, setTotalTracks] = useState(() => peekCache(LIKED_CACHE_KEY)?.total ?? 0)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -167,44 +172,68 @@ function LikedSongs() {
 
   return (
     <div className="page-container">
-      <div className="playlist-header">
-        <img
-          src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-          alt={playlist.name}
-          className="playlist-header-cover"
-          onError={handleCoverError}
-        />
-        <div className="playlist-header-info">
-          <div className="playlist-type">Плейлист</div>
-          <h1 className="playlist-title">{playlist.name}</h1>
-          {playlist.description && (
-            <p className="playlist-description">{playlist.description}</p>
-          )}
-          <div className="playlist-meta">
-            {totalTracks > 0 && (
-              <span>{totalTracks} треков</span>
+      <header
+        className="artist-hero"
+        style={{
+          '--hero-c1': heroColors[0],
+          '--hero-c2': heroColors[1],
+          '--hero-c3': heroColors[2],
+        }}
+      >
+        {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
+        {playlist.cover_url && (
+          <img
+            src={resolveCoverUrl(playlist.cover_url, 'thumb') || resolveCoverUrl(playlist.cover_url)}
+            alt=""
+            aria-hidden="true"
+            decoding="async"
+            className="artist-hero-backdrop"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+        <div className="artist-hero-content">
+          <img
+            src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+            alt={playlist.name}
+            decoding="async"
+            className="artist-avatar playlist-hero-cover"
+            onError={handleCoverError}
+          />
+          <div className="artist-hero-info">
+            <div className="artist-kicker">Плейлист</div>
+            <h1 className="artist-name">{playlist.name}</h1>
+            {playlist.description && (
+              <p className="playlist-hero-description">{playlist.description}</p>
             )}
+            <ul className="artist-stats">
+              {totalTracks > 0 && <li>{totalTracks} треков</li>}
+            </ul>
           </div>
-          <div className="playlist-actions round-actions">
-            <button
-              className="btn btn--primary btn--lg play-button-large round-actions__play"
-              onClick={handlePlay}
-              aria-label="Воспроизвести"
-            >
-              <Play size={24} fill="currentColor" />
-              <span className="round-actions__label">Воспроизвести</span>
-            </button>
-            <button
-              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
-              onClick={handleShuffle}
-              disabled={shuffling}
-              title="Перемешать и воспроизвести"
-              aria-label="Перемешать"
-            >
-              <Shuffle size={20} />
-              <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
-            </button>
-          </div>
+        </div>
+      </header>
+
+      <div className="artist-toolbar">
+        <div className="playlist-actions round-actions">
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
+            onClick={handleShuffle}
+            disabled={shuffling}
+            title="Перемешать и воспроизвести"
+            aria-label="Перемешать"
+          >
+            <Shuffle size={20} />
+            <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
+          </button>
         </div>
       </div>
 

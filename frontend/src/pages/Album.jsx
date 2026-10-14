@@ -11,7 +11,11 @@ import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
+import { useCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
+// Шапка — та же hero-карточка в тон обложки, что у исполнителя.
+import './Artist.css'
 
 // Тип релиза от провайдера — по-русски. Незнакомый оставляем как пришёл: это
 // лучше, чем звать сингл альбомом.
@@ -42,6 +46,7 @@ function Album() {
   const [loading, setLoading] = useState(() => !peekCache(cacheKey))
   const [saving, setSaving] = useState(false)
   const [shuffling, setShuffling] = useState(false)
+  const heroColors = useCoverColors(album?.cover_url) || DEFAULT_HERO_COLORS
   // Атомарные селекторы вместо подписки на весь store: страница со списком
   // треков не должна перерисовываться на каждом тике currentTime (~4/сек).
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
@@ -191,64 +196,84 @@ function Album() {
 
   return (
     <div className="page-container">
-      <div className="playlist-header">
-        <img
-          src={resolveCoverUrl(album.cover_url) || defaultCover}
-          alt={album.title}
-          className="playlist-header-cover"
-          onError={handleCoverError}
-        />
-        <div className="playlist-header-info">
-          <div className="playlist-type">
-            {typeLabel}
-            {sourceLabel ? ` · ${sourceLabel}` : ''}
+      <header
+        className="artist-hero"
+        style={{
+          '--hero-c1': heroColors[0],
+          '--hero-c2': heroColors[1],
+          '--hero-c3': heroColors[2],
+        }}
+      >
+        {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
+        {album.cover_url && (
+          <img
+            src={resolveCoverUrl(album.cover_url, 'thumb') || resolveCoverUrl(album.cover_url)}
+            alt=""
+            aria-hidden="true"
+            decoding="async"
+            className="artist-hero-backdrop"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+        <div className="artist-hero-content">
+          <img
+            src={resolveCoverUrl(album.cover_url) || defaultCover}
+            alt={album.title}
+            decoding="async"
+            className="artist-avatar playlist-hero-cover"
+            onError={handleCoverError}
+          />
+          <div className="artist-hero-info">
+            <div className="artist-kicker">
+              {typeLabel}
+              {sourceLabel ? ` · ${sourceLabel}` : ''}
+            </div>
+            <h1 className="artist-name">{album.title}</h1>
+            <ul className="artist-stats">
+              {album.artist && (
+                <li>
+                  <ArtistLink artist={album.artist} />
+                </li>
+              )}
+              {album.year && <li>{album.year}</li>}
+              {tracks.length > 0 && <li>{tracks.length} треков</li>}
+            </ul>
           </div>
-          <h1 className="playlist-title">{album.title}</h1>
-          <div className="playlist-meta">
-            {album.artist && <ArtistLink artist={album.artist} />}
-            {album.year && (
-              <>
-                <span>•</span>
-                <span>{album.year}</span>
-              </>
-            )}
-            {tracks.length > 0 && (
-              <>
-                <span>•</span>
-                <span>{tracks.length} треков</span>
-              </>
-            )}
-          </div>
-          <div className="playlist-actions round-actions">
-            <button
-              className="btn btn--primary btn--lg play-button-large round-actions__play"
-              onClick={handlePlay}
-              disabled={tracks.length === 0}
-              aria-label="Воспроизвести"
-            >
-              <Play size={24} fill="currentColor" />
-              <span className="round-actions__label">Воспроизвести</span>
-            </button>
-            <button
-              className="btn btn--secondary btn--lg play-button-large round-actions__icon"
-              onClick={handleShuffle}
-              disabled={shuffling || tracks.length === 0}
-              title="Перемешать и воспроизвести"
-              aria-label="Перемешать"
-            >
-              <Shuffle size={20} />
-              <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
-            </button>
-            <button
-              className="btn btn--secondary btn--lg playlist-action-icon round-actions__icon"
-              onClick={handleSaveToLibrary}
-              disabled={saving || tracks.length === 0}
-              title="Добавить в медиатеку"
-              aria-label="Добавить в медиатеку"
-            >
-              <Plus size={20} />
-            </button>
-          </div>
+        </div>
+      </header>
+
+      <div className="artist-toolbar">
+        <div className="playlist-actions round-actions">
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            disabled={tracks.length === 0}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
+            onClick={handleShuffle}
+            disabled={shuffling || tracks.length === 0}
+            title="Перемешать и воспроизвести"
+            aria-label="Перемешать"
+          >
+            <Shuffle size={20} />
+            <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg playlist-action-icon round-actions__icon"
+            onClick={handleSaveToLibrary}
+            disabled={saving || tracks.length === 0}
+            title="Добавить в медиатеку"
+            aria-label="Добавить в медиатеку"
+          >
+            <Plus size={20} />
+          </button>
         </div>
       </div>
 
