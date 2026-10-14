@@ -7,10 +7,11 @@ Safari (AVFoundation) перед первым звуком из MP4 выкачи
 отдают как раз такие потоки — отсюда «у них 2-3 с, у нас до 10».
 
 Клиент просит ADTS параметром ``?fmt=adts`` (PWA на iOS, см.
-frontend/src/utils/streamQuality.js). Звук не перекодируется — ffmpeg
-перекладывает те же AAC-кадры из MP4 в ADTS (доли секунды на трек). Готовый
-файл живёт в своём подкаталоге дискового кэша с отдельным LRU-потолком,
-дальше его отдаёт обычный _serve_file с Range/ETag.
+frontend/src/utils/streamQuality.js). Звук не перекодируется: те же кадры AAC
+перекладываются по индексу из таблиц MP4 прямо при отдаче (app/mp4_adts.py) —
+с честными Content-Length и Range, без промежуточного файла. ffmpeg с
+LRU-кэшем готовых .aac остался запасным путём для раскладок, которые индекс
+не берёт.
 
 Цена: у ADTS нет индекса, длительность и позицию Safari оценивает по
 битрейту — шкала плывёт на 1-2% (UI берёт длительность из БД, перемотка
@@ -25,9 +26,11 @@ import os
 import subprocess
 import tempfile
 import uuid
-from typing import Optional
+from collections import OrderedDict
+from typing import AsyncIterator, Callable, Optional
 
-from fastapi import Request
+from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
 
 from app.transcode import FFMPEG_BIN
 
@@ -36,7 +39,9 @@ logger = logging.getLogger(__name__)
 # Расширения AAC-в-MP4. Opus/WebM в ADTS не переложить, MP3 и так быстрый.
 _MP4_EXTS = (".m4a", ".mp4", ".m4b")
 ADTS_MEDIA_TYPE = "audio/aac"
-_MAX_BYTES = int(os.getenv("ADTS_CACHE_MAX_MB", "512")) * 1024 * 1024
+# Готовые .aac пишет только запасной путь (ffmpeg): основной перекладывает на
+# лету. Потолок поэтому скромный, старый кэш ужимается на старте (trim_cache).
+_MAX_BYTES = int(os.getenv("ADTS_CACHE_MAX_MB", "128")) * 1024 * 1024
 _REMUX_TIMEOUT = 60
 
 _locks: dict[str, asyncio.Lock] = {}
@@ -89,6 +94,84 @@ def is_mp4_audio(path: str, media_type: Optional[str] = None) -> bool:
     if os.path.splitext(path)[1].lower() in _MP4_EXTS:
         return True
     return bool(media_type) and media_type.split(";")[0].strip() in ("audio/mp4", "audio/x-m4a")
+
+
+def adts_response(
+    index,
+    request: Request,
+    etag: str,
+    read: Callable[[int, int], AsyncIterator[bytes]],
+    cache_control: Optional[str] = None,
+) -> Response:
+    """Ответ с ADTS по индексу кадров (app/mp4_adts.py): Range, ETag и 304
+    как у обычной отдачи файла. ``read(a, b)`` — байты MP4 [a, b]."""
+    from app import mp4_adts, storage
+
+    common = storage.audio_common_headers(etag)
+    if cache_control:
+        common["Cache-Control"] = cache_control
+    if storage.if_none_match_matches(request, etag):
+        return Response(status_code=304, headers=common)
+    total = index.total
+    range_header = request.headers.get("range")
+    if range_header and not storage.if_range_allows_206(request, etag):
+        range_header = None
+    if range_header:
+        parsed = storage.parse_range_header(range_header, total)
+        if parsed is None:
+            return Response(status_code=416, headers={**common, "Content-Range": f"bytes */{total}"})
+        start, end = parsed
+    else:
+        start, end = 0, total - 1
+    headers = {**common, "Content-Length": str(end - start + 1)}
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+    return StreamingResponse(
+        mp4_adts.iter_range(index, start, end, read),
+        status_code=206 if range_header else 200,
+        media_type=ADTS_MEDIA_TYPE,
+        headers=headers,
+    )
+
+
+# Индексы локальных файлов (дисковый кэш провайдеров): ключ — путь, размер и
+# mtime, перезаписанный файл индексируется заново. None — не перекладывается.
+_local_indexes: "OrderedDict[tuple, object]" = OrderedDict()
+_LOCAL_INDEX_MAX = 64
+
+
+async def local_adts_response(
+    path: str, request: Request, cache_control: Optional[str] = None
+) -> Optional[Response]:
+    """ADTS из локального MP4 по индексу кадров или None — тогда ffmpeg."""
+    from app import mp4_adts, storage
+
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, st.st_size, st.st_mtime_ns)
+    if key in _local_indexes:
+        _local_indexes.move_to_end(key)
+        index = _local_indexes[key]
+    else:
+        try:
+            index = await asyncio.to_thread(mp4_adts.index_file, path)
+        except OSError:
+            return None
+        _local_indexes[key] = index
+        while len(_local_indexes) > _LOCAL_INDEX_MAX:
+            _local_indexes.popitem(last=False)
+    if index is None:
+        return None
+    etag = f'"{st.st_size:x}-{int(st.st_mtime):x}-adts"'
+    return adts_response(
+        index,
+        request,
+        etag,
+        lambda start, end: storage._iter_cached_file(path, start, end),
+        cache_control=cache_control or storage.AUDIO_CACHE_CONTROL,
+    )
 
 
 def _cache_dir() -> str:
@@ -146,6 +229,11 @@ def _enforce_limit() -> None:
             total -= size
         except OSError:
             continue
+
+
+def trim_cache() -> None:
+    """Ужимает кэш готовых .aac до потолка (зовётся на старте воркера)."""
+    _enforce_limit()
 
 
 def _touch(path: str) -> None:

@@ -1910,10 +1910,11 @@ async def _prefetch_job(
     cache_id: str, resolver, cache_key: str, ttl: int, archive_key: Optional[str] = None
 ) -> None:
     try:
-        # Архивная копия в MinIO уже даёт мгновенный старт — резолв провайдера
-        # и скачивание первых байт для такого трека были бы чистой тратой
-        # (и лишним походом к YouTube).
-        if await archived_music_path(archive_key):
+        # Архивная копия: резолв провайдера и его первые байты не нужны (и
+        # лишний поход к YouTube ни к чему), греем саму копию — из S3 на диск.
+        archived = await archived_music_path(archive_key)
+        if archived:
+            await storage.warm_music_object(archived)
             return
         async with _PREFETCH_SEM:
             url, ext, total, _ = await resolver(False)
@@ -2071,6 +2072,9 @@ async def _serve_file(
     from app import adts
 
     if adts.wants_adts(request) and adts.is_mp4_audio(path, media_type):
+        response = await adts.local_adts_response(path, request, cache_control)
+        if response is not None:
+            return response
         converted = await adts.adts_for_local(path)
         if converted:
             path, media_type = converted, adts.ADTS_MEDIA_TYPE
@@ -2974,6 +2978,14 @@ async def prefetch_ytmusic(video_id: str):
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
         local_path = None
     if local_path:
+        # Архивная копия лежит в S3 (bucket.ru): первый байт оттуда — 0.25-0.5 с,
+        # а ADTS для iOS ждёт ещё и moov. Качаем её на диск заранее — старт
+        # пойдёт с диска за миллисекунды.
+        if storage.is_minio_path(local_path):
+            try:
+                await storage.warm_music_object(local_path)
+            except Exception:  # noqa: BLE001 — прогрев best-effort
+                logger.warning("archive warm failed for %s", video_id, exc_info=True)
         # Копию с YouTube меняем на explicit-оригинал заранее, пока трек ждёт
         # в очереди (см. stream_ytmusic).
         if _is_youtube_copy(local_path):

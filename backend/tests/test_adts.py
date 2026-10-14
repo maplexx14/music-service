@@ -126,3 +126,19 @@ def test_url_served_as_original_stays_original(cache, monkeypatch):
     other = _request()
     asyncio.run(adts.keep_original_if_pinned(other, "VIDEOID2"))
     assert adts.wants_adts(other)
+
+
+def test_local_mp4_is_remuxed_on_the_fly_like_ffmpeg(cache):
+    # Без промежуточного .aac: кадры перекладываются при отдаче (app/mp4_adts.py),
+    # а байты те же, что дал бы ffmpeg, — тот же URL не меняет представление.
+    src = cache / "VIDEOID1.m4a"
+    _make(src, ["-c:a", "aac", "-b:a", "128k"])
+    expected = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(src), "-c:a", "copy", "-f", "adts", "-"],
+        check=True, capture_output=True,
+    ).stdout
+
+    response = asyncio.run(ytdlp._serve_file(str(src), "audio/mp4", _request()))
+
+    assert asyncio.run(_body(response)) == expected
+    assert not list(cache.glob("adts/*.aac"))

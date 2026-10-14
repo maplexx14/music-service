@@ -215,6 +215,20 @@ async def _init_async_storage_client() -> None:
 
 
 @app.on_event("startup")
+async def _trim_adts_cache() -> None:
+    # Кэш готовых .aac остался только запасному пути перекладки (app/adts.py) —
+    # основной отдаёт ADTS на лету. Прежние сотни МБ на диске ужимаем сразу.
+    import logging
+
+    from app import adts
+
+    try:
+        await asyncio.to_thread(adts.trim_cache)
+    except Exception:  # noqa: BLE001 — уборка не должна мешать старту
+        logging.getLogger(__name__).warning("adts cache trim failed", exc_info=True)
+
+
+@app.on_event("startup")
 async def _archive_index_loop() -> None:
     # Пути архивов внешних треков — в Redis заранее (external_archive.
     # index_archive_paths): иначе первый старт каждого трека ждал LIST в

@@ -26,6 +26,7 @@ import logging
 import os
 import tempfile
 import time
+from collections import OrderedDict
 from datetime import timedelta
 from typing import AsyncIterator, Iterator, Optional
 from urllib.parse import urlsplit
@@ -1379,6 +1380,7 @@ async def _run_download(d: _Download, bucket: str, key: str, file_path: str) -> 
         os.makedirs(os.path.dirname(d.final), exist_ok=True)
         async with aiofiles.open(d.part, "wb") as fh:
             d.ready.set()
+            _publish_download(d)
             await _fill(fh, head, min(d.size, _HEAD_BYTES))
             if d.written < d.size:
                 async with _download_sem:
@@ -1403,6 +1405,37 @@ async def _run_download(d: _Download, bucket: str, key: str, file_path: str) -> 
         _downloads.pop(d.final, None)
         if d.done:
             _maybe_evict()
+
+
+# Запросы одного трека попадают в разные воркеры gunicorn (пробный bytes=0-1
+# Safari, основной Range, прогрев очереди), а _downloads у каждого свой. Без
+# отметки второй воркер качал тот же объект заново и ждал свой первый байт из
+# S3. Отметка в Redis — путь к растущему .part и размер: соседи читают его.
+_DOWNLOAD_MARK_TTL = 120
+# Сколько ждать новых байт чужой закачки, прежде чем оборвать ответ. С запасом:
+# хвост объекта ждёт свою очередь закачек (S3_DOWNLOAD_CONCURRENCY), и всё это
+# время .part не растёт.
+_FOREIGN_STALL = 60.0
+# .part, не менявшийся дольше этого, — от упавшего воркера: на него не садимся.
+_FOREIGN_FRESH = 30.0
+_FOREIGN_POLL = 0.02
+_publish_tasks: set = set()
+
+
+def _download_mark_key(final: str) -> str:
+    return f"s3dl:{hashlib.sha1(final.encode()).hexdigest()[:24]}"
+
+
+def _publish_download(d: _Download) -> None:
+    """Объявляет закачку соседним воркерам (без ожидания Redis)."""
+    from app.cache import set_cache_async
+
+    mark = {"part": d.part, "size": d.size, "ct": d.content_type}
+    task = asyncio.create_task(
+        set_cache_async(_download_mark_key(d.final), mark, expire=_DOWNLOAD_MARK_TTL)
+    )
+    _publish_tasks.add(task)
+    task.add_done_callback(_publish_tasks.discard)
 
 
 def _start_download(bucket: str, key: str, file_path: str) -> Optional[_Download]:
@@ -1475,6 +1508,155 @@ async def _iter_downloading(d: _Download, start: int, end: int) -> AsyncIterator
             await fh.close()
 
 
+async def _iter_foreign(part: str, final: str, start: int, end: int) -> AsyncIterator[bytes]:
+    """Байты [start, end] объекта, который качает соседний воркер: читаем его
+    растущий .part. Дескриптор переживает переименование в итоговый файл."""
+    try:
+        fd = os.open(part, os.O_RDONLY)
+    except FileNotFoundError:
+        fd = os.open(final, os.O_RDONLY)  # успело докачаться
+    pos = start
+    stalled_since = None
+    try:
+        while pos <= end:
+            available = os.fstat(fd).st_size
+            if available > pos:
+                data = await asyncio.to_thread(
+                    os.pread, fd, min(_DISK_CHUNK, available - pos, end + 1 - pos), pos
+                )
+                if data:
+                    pos += len(data)
+                    stalled_since = None
+                    yield data
+                    continue
+            now = time.monotonic()
+            if stalled_since is None:
+                stalled_since = now
+            elif now - stalled_since > 1.0 and not (os.path.exists(part) or os.path.exists(final)):
+                # Сосед удалил .part, не переименовав: закачка упала.
+                raise IOError(f"закачка {final} в соседнем воркере оборвалась")
+            elif now - stalled_since > _FOREIGN_STALL:
+                raise IOError(f"закачка {final} в соседнем воркере встала")
+            await asyncio.sleep(_FOREIGN_POLL)
+    finally:
+        os.close(fd)
+
+
+class _DiskSource:
+    """Объект S3 на этом диске: готовый файл, своя закачка или закачка
+    соседнего воркера. Читается одинаково — по диапазонам байтов."""
+
+    __slots__ = ("final", "size", "content_type", "download", "foreign")
+
+    def __init__(
+        self,
+        final: str,
+        size: int,
+        content_type: str,
+        download: Optional[_Download] = None,
+        foreign: Optional[str] = None,
+    ) -> None:
+        self.final = final
+        self.size = size
+        self.content_type = content_type
+        self.download = download
+        self.foreign = foreign
+
+    def iter(self, start: int, end: int) -> AsyncIterator[bytes]:
+        if self.download is not None:
+            return _iter_downloading(self.download, start, end)
+        if self.foreign is not None:
+            return _iter_foreign(self.foreign, self.final, start, end)
+        return _iter_cached_file(self.final, start, end)
+
+    async def read(self, start: int, end: int) -> bytes:
+        return b"".join([chunk async for chunk in self.iter(start, end)])
+
+    async def complete_paths(self) -> list[str]:
+        """Пути к файлу целиком, когда докачается последний байт: готовый —
+        первым, .part — на случай, если переименование ещё не случилось."""
+        async for _ in self.iter(self.size - 1, self.size - 1):
+            pass
+        part = self.download.part if self.download is not None else self.foreign
+        return [self.final] + ([part] if part else [])
+
+
+async def _foreign_download(final: str, db_content_type: Optional[str]) -> Optional[_DiskSource]:
+    """Закачка объекта, идущая в соседнем воркере, — или None."""
+    from app.cache import get_cache_async
+
+    mark = await get_cache_async(_download_mark_key(final))
+    if not mark or not mark.get("part") or not mark.get("size"):
+        return None
+    part = mark["part"]
+    try:
+        fresh = time.time() - os.path.getmtime(part) < _FOREIGN_FRESH
+    except OSError:
+        return None
+    if not fresh:
+        return None
+    content_type = db_content_type or mark.get("ct") or "audio/mpeg"
+    return _DiskSource(final, int(mark["size"]), content_type, foreign=part)
+
+
+async def _disk_source(
+    bucket: str, key: str, file_path: str, db_content_type: Optional[str]
+) -> Optional[_DiskSource]:
+    """Объект на диске (готовый или докачивающийся) или None — места нет или
+    S3 не отдал объект на скачивание; тогда обычный путь прямо из S3."""
+    final = _disk_cache_path(bucket, key)
+    for attempt in range(2):
+        try:
+            st = os.stat(final)
+        except FileNotFoundError:
+            pass
+        else:
+            if time.time() - st.st_mtime > _TOUCH_EVERY:
+                try:
+                    os.utime(final)
+                except OSError:
+                    pass
+            cached = _stat_cache_get(bucket, key)
+            content_type = (cached[1] if cached else None) or db_content_type or _guess_audio_type(key)
+            return _DiskSource(final, st.st_size, content_type)
+        if attempt or final in _downloads:
+            break
+        foreign = await _foreign_download(final, db_content_type)
+        if foreign is not None:
+            return foreign
+        # Пока ходили в Redis, соседняя закачка могла кончиться — второй
+        # заход по готовому файлу, иначе качали бы его заново.
+    d = _start_download(bucket, key, file_path)
+    if d is None:
+        return None
+    await d.ready.wait()
+    if d.error is not None or d.size is None:
+        if isinstance(d.error, ObjectMissing):
+            raise d.error
+        return None  # S3 недоступен для скачивания — пусть попробует прямой путь
+    content_type = db_content_type or d.content_type or _guess_audio_type(key)
+    # Успело докачаться — читаем готовый файл.
+    return _DiskSource(final, d.size, content_type, download=None if d.done else d)
+
+
+async def warm_music_object(file_path: str) -> None:
+    """Качает аудио-объект в дисковый кэш заранее, не дожидаясь закачки.
+
+    Прогрев очереди плеера (POST /prefetch): архивный трек иначе ждал первый
+    байт из S3 на старте, а ADTS для iOS — ещё и moov. Повторный вызов
+    дешёвый: готовый файл, своя или соседняя закачка — ничего не делаем.
+    """
+    if not _disk_cache_enabled() or not is_minio_path(file_path):
+        return
+    bucket, key = parse_object_path(file_path)
+    final = _disk_cache_path(bucket, key)
+    if os.path.isfile(final) or final in _downloads:
+        return
+    if await _foreign_download(final, None) is not None:
+        return
+    _start_download(bucket, key, file_path)
+
+
 async def _disk_cached_response(
     file_path: str, request: Request, max_age: Optional[int], db_content_type: Optional[str]
 ) -> Optional[Response]:
@@ -1483,31 +1665,10 @@ async def _disk_cached_response(
     if not _disk_cache_enabled():
         return None
     bucket, key = parse_object_path(file_path)
-    final = _disk_cache_path(bucket, key)
-    d: Optional[_Download] = None
-    try:
-        st = os.stat(final)
-        size = st.st_size
-        if time.time() - st.st_mtime > _TOUCH_EVERY:
-            try:
-                os.utime(final)
-            except OSError:
-                pass
-        cached = _stat_cache_get(bucket, key)
-        content_type = (cached[1] if cached else None) or db_content_type or _guess_audio_type(key)
-    except FileNotFoundError:
-        d = _start_download(bucket, key, file_path)
-        if d is None:
-            return None
-        await d.ready.wait()
-        if d.error is not None or d.size is None:
-            if isinstance(d.error, ObjectMissing):
-                raise d.error
-            return None  # S3 недоступен для скачивания — пусть попробует прямой путь
-        size = d.size
-        content_type = db_content_type or d.content_type
-        if d.done:
-            d = None  # успело докачаться — читаем готовый файл
+    source = await _disk_source(bucket, key, file_path, db_content_type)
+    if source is None:
+        return None
+    size, content_type = source.size, source.content_type
 
     etag = music_etag(key, size)
     _stat_cache_put(bucket, key, (size, content_type, etag))
@@ -1531,12 +1692,86 @@ async def _disk_cached_response(
     else:
         start, end = 0, size - 1
 
-    body = _iter_downloading(d, start, end) if d is not None else _iter_cached_file(final, start, end)
+    body = source.iter(start, end)
     headers = {**common_headers, "Content-Length": str(end - start + 1)}
     if range_header:
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return StreamingResponse(
         body, status_code=206 if range_header else 200, media_type=content_type, headers=headers
+    )
+
+
+# Индексы кадров ADTS по объектам (см. app/mp4_adts.py): разбор moov — десятки
+# мс, а Safari шлёт на трек 3-4 запроса подряд. None — объект в ADTS не
+# переложить (храним, чтобы не разбирать его на каждый Range).
+_ADTS_INDEXES: "OrderedDict[tuple, object]" = OrderedDict()
+_ADTS_INDEX_MAX = 64
+# Сколько начала файла читать за раз, пока ищем moov. Немного: байты дальше
+# головы закачки (S3_HEAD_BYTES) ждут очереди, а разбор сам говорит, сколько
+# ему нужно (конец moov).
+_ADTS_HEAD_STEP = 4096
+
+
+async def _build_adts_index(source: _DiskSource):
+    from app import mp4_adts
+
+    head = await source.read(0, min(source.size, _ADTS_HEAD_STEP) - 1)
+    while True:
+        plan, value = mp4_adts.plan_from_head(head, source.size)
+        if plan != mp4_adts.NEED_MORE:
+            break
+        upto = min(source.size, max(value, len(head) + _ADTS_HEAD_STEP))
+        head += await source.read(len(head), upto - 1)
+    if plan == mp4_adts.INDEX:
+        return value
+    if plan != mp4_adts.NEED_FILE:
+        return None
+    # moov в конце или фрагменты (DASH-файлы YouTube) — индекс по файлу
+    # целиком, ждём конца закачки.
+    for path in await source.complete_paths():
+        try:
+            return await asyncio.to_thread(mp4_adts.index_file, path)
+        except FileNotFoundError:
+            continue  # .part уже переименован — следующий кандидат
+    return None
+
+
+def adts_etag(key: str, size: int) -> str:
+    """ETag ADTS-представления: байты не те, что у MP4 под тем же ключом."""
+    return music_etag(f"{key}#adts", size)
+
+
+async def _adts_disk_response(
+    file_path: str, request: Request, max_age: Optional[int]
+) -> Optional[Response]:
+    """ADTS из MP4-объекта прямо с диска — без ffmpeg и без ожидания конца
+    закачки: первый байт уходит, как только докачан moov. None — объект не
+    переложить или диска нет; тогда старый путь (ffmpeg по файлу целиком)."""
+    if not _disk_cache_enabled():
+        return None
+    bucket, key = parse_object_path(file_path)
+    source = await _disk_source(bucket, key, file_path, None)
+    if source is None:
+        return None
+    cache_key = (bucket, key, source.size)
+    if cache_key in _ADTS_INDEXES:
+        _ADTS_INDEXES.move_to_end(cache_key)
+        index = _ADTS_INDEXES[cache_key]
+    else:
+        index = await _build_adts_index(source)
+        _ADTS_INDEXES[cache_key] = index
+        while len(_ADTS_INDEXES) > _ADTS_INDEX_MAX:
+            _ADTS_INDEXES.popitem(last=False)
+    if index is None:
+        return None
+    from app import adts
+
+    return adts.adts_response(
+        index,
+        request,
+        adts_etag(key, source.size),
+        source.iter,
+        cache_control=f"private, max-age={max_age}" if max_age is not None else None,
     )
 
 
@@ -1572,7 +1807,22 @@ async def minio_range_response_async(
 
     from app import adts
 
-    if not adts.wants_adts(request):
+    # ?fmt=adts (PWA на iOS) перекладывает только MP4: MP3 и FLAC Safari и так
+    # играет с первых байт, им нужен обычный дисковый кэш. Раньше ADTS-запросы
+    # шли мимо него все — а это 4 из 10 треков архива (Deezer-MP3): каждый
+    # Range-запрос Safari ждал первый байт прямо из bucket.ru.
+    convert = adts.wants_adts(request) and adts.is_mp4_audio(file_path, db_content_type)
+    if convert:
+        try:
+            response = await _adts_disk_response(file_path, request, max_age)
+        except ObjectMissing:
+            raise
+        except Exception:  # noqa: BLE001 — перекладка по старому пути ниже
+            logger.warning("ADTS с диска не вышел для %s", file_path, exc_info=True)
+            response = None
+        if response is not None:
+            return response
+    else:
         cached_response = await _disk_cached_response(file_path, request, max_age, db_content_type)
         if cached_response is not None:
             return cached_response
@@ -1582,7 +1832,7 @@ async def minio_range_response_async(
         and S3_ENDPOINT
         and not db_size
         and _stat_cache_get(*parse_object_path(file_path)) is None
-        and not adts.wants_adts(request)
+        and not convert
     ):
         ranged = await _ranged_get_with_stat(file_path, request)
         if ranged is not None:
