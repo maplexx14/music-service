@@ -1967,30 +1967,19 @@ def _favorite_collection_candidates(
     Здесь — его песни строками коллекции, хиты чаще (место в каталоге площадки,
     _rank_weighted_shuffle), не больше ``_FAVORITE_COLLECTION_PER_ARTIST``.
 
-    Повторы держат правила лайков: дизлайк, бан артиста и
-    ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания или скипа любой копии
-    песни. Кулдаун показанного и provider id очереди сверяет вызывающий.
+    Отсекаются дизлайк (любой копии песни) и бан артиста. Повторы держит
+    только кулдаун показанного в волне — его и provider id очереди сверяет
+    вызывающий. Прослушивание вне волны (поиск, альбом) песню не остужает:
+    правило владельца, 2026-10-14 — сам слушал хиты, а волна их неделю прятала.
     """
     names = [artist for artist in favorite_ranks if artist_key(artist)]
     if not names:
         return []
     exclude_ids = exclude_ids or set()
     rows = (
-        db.query(
-            Track,
-            user_track_plays.c.last_played,
-            user_track_skips.c.last_skipped,
-            user_track_skips.c.disliked,
-        )
+        db.query(Track, user_track_skips.c.disliked)
         .join(playlist_tracks, playlist_tracks.c.track_id == Track.id)
         .join(Playlist, Playlist.id == playlist_tracks.c.playlist_id)
-        .outerjoin(
-            user_track_plays,
-            and_(
-                user_track_plays.c.track_id == Track.id,
-                user_track_plays.c.user_id == profile["user_id"],
-            ),
-        )
         .outerjoin(
             user_track_skips,
             and_(
@@ -2013,31 +2002,25 @@ def _favorite_collection_candidates(
         .all()
     )
     # Одна песня бывает несколькими строками (два плейлиста, копии с разных
-    # площадок): кулдаун и дизлайк любой копии — на всю песню.
+    # площадок): дизлайк любой копии — на всю песню.
     songs: dict = {}
-    for track, last_played, last_skipped, disliked in rows:
+    for track, disliked in rows:
         effective_artist, effective_title = effective_track_artist_title(track)
         owner = next((name for name in names if names_whole_artist(name, effective_artist)), None)
         if owner is None:
             continue
         song = songs.setdefault(
             (owner, _norm_text(effective_title)),
-            {"tracks": {}, "touched": float("-inf"), "blocked": False},
+            {"tracks": {}, "blocked": False},
         )
         song["tracks"][track.id] = track
-        song["touched"] = max(
-            song["touched"], _touched_seconds(last_played), _touched_seconds(last_skipped)
-        )
         song["blocked"] |= bool(disliked) or track.id in exclude_ids or bool(
             profile["banned_artists"]
             and artist_key(effective_artist) in profile["banned_artists"]
         )
-    cooldown_before = (
-        datetime.now(timezone.utc) - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS)
-    ).timestamp()
     by_artist: dict = {}
     for (owner, title), song in songs.items():
-        if song["blocked"] or song["touched"] > cooldown_before:
+        if song["blocked"]:
             continue
         track = next((t for t in song["tracks"].values() if _media_available(t)), None)
         if track is not None:
@@ -4673,9 +4656,12 @@ async def _compute_flow(
         liked_identities.add(_item_identity(t))
         origin_by_identity.setdefault(_item_identity(t), "liked")
     # Песни доказанных любимых из своей коллекции — каталог любимого артиста,
-    # как и провайдерский (origin favorite). Сверка как у лайков выше (очередь,
-    # provider id недавнего и уже отданного), плюс кулдаун показанного: квота
-    # лайков его не видит, а здесь без него хиты любимого шли бы по кругу.
+    # как и провайдерский (origin favorite). Повторы держит кулдаун показанного
+    # в волне и уже отданное, а не прослушанное вне её (recent_video_ids):
+    # сам слушал хиты через поиск — волна их от этого не прячет.
+    favorite_excl_videos = (
+        liked_excl_videos - set(profile.get("recent_video_ids") or [])
+    ) | set(client_yt_videos)
     taken_keys = {_norm_key(*effective_track_artist_title(t)) for t in liked_candidates}
     shown_ids = set() if relax else set(profile.get("shown_ids") or ())
     shown_external_ids = set() if relax else set(profile.get("shown_external_ids") or ())
@@ -4686,7 +4672,7 @@ async def _compute_flow(
         if t.id in queued_ids or t.id in shown_ids or key in shown_keys or key in taken_keys:
             continue
         if t.external_id and (
-            t.external_id in liked_excl_videos
+            t.external_id in favorite_excl_videos
             or f"{t.source}:{t.external_id}" in shown_external_ids
         ):
             continue

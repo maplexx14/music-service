@@ -2140,14 +2140,11 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     _imported_playlist(
         db, user, [("ProvenArtist", f"импорт {i}") for i in range(3)]
     )
-    # Свои песни артиста только что слушали — коллекция на кулдауне
+    # Свои песни артиста уже стоят в очереди фронта — коллекция не предлагается
     # (_favorite_collection_candidates), здесь проверяется провайдерский каталог.
-    now = datetime.now(timezone.utc)
-    db.execute(user_track_plays.insert(), [
-        {"user_id": user.id, "track_id": track.id, "play_count": 1, "last_played": now}
-        for track in db.query(Track).filter(Track.artist == "ProvenArtist")
-    ])
-    db.commit()
+    queued = ",".join(
+        str(track.id) for track in db.query(Track).filter(Track.artist == "ProvenArtist")
+    )
 
     # Монотонная метрика: популярный хвост каталога отличить от головы легко.
     catalog = [_popular("ProvenArtist", i, 1000 - i * 10) for i in range(20)]
@@ -2159,7 +2156,7 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
 
     resp = client.get(
-        "/api/recommendations/flow?limit=5",
+        f"/api/recommendations/flow?limit=5&exclude={queued}",
         headers=auth_headers(client, username="proven-artist-user"),
     )
     assert resp.status_code == 200, resp.text
@@ -2444,8 +2441,9 @@ def test_favorite_artist_survives_a_collection_full_of_his_hits(client, db, monk
 
 
 def test_favorite_collection_offers_own_songs_hits_first_with_cooldowns(db):
-    """Песни доказанного любимого из своей коллекции: хиты чаще; дизлайкнутое,
-    недавно сыгранное или скипнутое (любой копией) и стоящее в очереди — нет."""
+    """Песни доказанного любимого из своей коллекции: хиты чаще; дизлайкнутое
+    (любой копией) и стоящее в очереди — нет. Прослушивание и скип вне волны
+    песню не остужают — повторы держит кулдаун показанного."""
     from app.routers.flow import (
         _FAVORITE_COLLECTION_PER_ARTIST,
         _favorite_collection_candidates,
@@ -2459,8 +2457,8 @@ def test_favorite_collection_offers_own_songs_hits_first_with_cooldowns(db):
         [("FavArtist", title) for title in (*hits, "hated", "played", "skipped", "queued")]
         + [("Other", "other song")],
     )
-    # Вторая копия песни в другом плейлисте: кулдаун первой — на всю песню.
-    _imported_playlist(db, user, [("FavArtist", "played")], name="Second")
+    # Вторая копия песни в другом плейлисте: дизлайк первой — на всю песню.
+    _imported_playlist(db, user, [("FavArtist", "hated")], name="Second")
     tracks = {}
     for track in db.query(Track).filter(Track.artist == "FavArtist").order_by(Track.id):
         tracks.setdefault(track.title, track)
@@ -2483,7 +2481,15 @@ def test_favorite_collection_offers_own_songs_hits_first_with_cooldowns(db):
     queued = {tracks["queued"].id}
     picked = _favorite_collection_candidates(db, profile, favorite, "ctx", queued)
     assert len(picked) == _FAVORITE_COLLECTION_PER_ARTIST
-    assert {track.title for track in picked} <= set(hits), [t.title for t in picked]
+    assert not {track.title for track in picked} & {"hated", "queued"}, [t.title for t in picked]
+    f = flow_router
+    f_limit = f._FAVORITE_COLLECTION_PER_ARTIST
+    f._FAVORITE_COLLECTION_PER_ARTIST = 100
+    try:
+        everything = {t.title for t in _favorite_collection_candidates(db, profile, favorite, "ctx", queued)}
+    finally:
+        f._FAVORITE_COLLECTION_PER_ARTIST = f_limit
+    assert everything == {*hits, "played", "skipped"}, everything
 
     first = Counter(
         _favorite_collection_candidates(db, profile, favorite, f"ctx{i}", queued)[0].title
