@@ -10,6 +10,10 @@
 нет: у ``local`` и у части радио play_count пуст, и «0» значил одновременно
 «непопулярный» и «неизвестно».
 
+Незнакомому юзеру артисту планка выше — только ``NOVEL_TOP_TRACKS`` первых
+(правило владельца, 2026-10-14): первое знакомство с артистом — его самые
+известные песни.
+
 Ответ по артисту кэшируется на неделю (известность и топ меняются медленно).
 Запросы, не успевшие к сроку, продолжают работать в фоне и греют кэш; пока
 ответа нет, трек считается не доказанным хитом.
@@ -30,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 MIN_ARTIST_LISTENERS = 50_000
 TOP_TRACKS = 10
+NOVEL_TOP_TRACKS = 3
 _API_URL = "https://ws.audioscrobbler.com/2.0/"
 _CACHE_KEY = "mainstream:artist:v1:{}"
 _SIMILAR_KEY = "mainstream:similar:v1:{}"
@@ -205,14 +210,14 @@ def is_famous(info: Optional[dict]) -> bool:
     return bool(info) and int(info.get("listeners") or 0) >= MIN_ARTIST_LISTENERS
 
 
-def is_hit(info: Optional[dict], title_key: str, norm_title) -> bool:
-    """Трек — хит известного артиста? ``norm_title`` нормализует название из топа
-    так же, как ``title_key`` у кандидата."""
+def is_hit(info: Optional[dict], title_key: str, norm_title, top: int = TOP_TRACKS) -> bool:
+    """Трек — хит известного артиста, из первых ``top`` его топа? ``norm_title``
+    нормализует название из топа так же, как ``title_key`` у кандидата."""
     if not is_famous(info):
         return False
     if not title_key:
         return False
-    for name in info.get("top") or []:
+    for name in (info.get("top") or [])[:top]:
         top_key = norm_title(name)
         if not top_key:
             continue
@@ -236,6 +241,7 @@ def gate(
     norm_title,
     limit: int,
     popularity,
+    top_of=None,
 ) -> tuple[list, dict[int, bool]]:
     """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
 
@@ -243,6 +249,7 @@ def gate(
     прошедших меньше ``limit``, добирает отсеянных по убыванию ``popularity``:
     пустая выдача хуже нарушения правила. Возвращает (оставленные в исходном
     порядке, {id(item): хит ли}) — второе только для проверенных, в телеметрию.
+    ``top_of(item)`` — глубина топа для кандидата (по умолчанию ``TOP_TRACKS``).
     """
     hit_by_item: dict[int, bool] = {}
     kept, reserve = [], []
@@ -250,7 +257,8 @@ def gate(
         if exempt(item):
             kept.append(item)
             continue
-        hit = is_hit(infos.get(artist_of(item)), title_of(item), norm_title)
+        top = top_of(item) if top_of else TOP_TRACKS
+        hit = is_hit(infos.get(artist_of(item)), title_of(item), norm_title, top)
         hit_by_item[id(item)] = hit
         (kept if hit else reserve).append(item)
     if len(kept) < limit and reserve:

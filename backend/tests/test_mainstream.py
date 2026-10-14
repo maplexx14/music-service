@@ -113,3 +113,24 @@ def test_similar_artists_cached_and_not_found(monkeypatch):
     assert asyncio.run(mainstream.similar_artists("ghost")) == []
     assert asyncio.run(mainstream.similar_artists("ghost")) == []
     assert calls == ["Three Days Grace", "ghost"]
+
+
+def test_novel_artist_gets_only_top_three():
+    info = {"listeners": 500_000, "top": ["One", "Two", "Three", "Fourth Song", "Fifth Song"]}
+    assert mainstream.is_hit(info, "three", _norm, mainstream.NOVEL_TOP_TRACKS)
+    assert not mainstream.is_hit(info, "fourth song", _norm, mainstream.NOVEL_TOP_TRACKS)
+    assert mainstream.is_hit(info, "fourth song", _norm)
+
+    items = [("Known", "Fourth Song"), ("New", "Fourth Song"), ("New", "Two")]
+    kept, hit_by_item = mainstream.gate(
+        items,
+        infos={"known": info, "new": info},
+        exempt=lambda item: False,
+        artist_of=lambda item: item[0].lower(),
+        title_of=lambda item: item[1].lower(),
+        norm_title=_norm,
+        limit=0,
+        popularity=lambda item: 0,
+        top_of=lambda item: mainstream.NOVEL_TOP_TRACKS if item[0] == "New" else mainstream.TOP_TRACKS,
+    )
+    assert kept == [("Known", "Fourth Song"), ("New", "Two")]
