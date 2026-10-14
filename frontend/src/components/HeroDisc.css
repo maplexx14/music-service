@@ -81,9 +81,9 @@
        Кнопка потока центрирована без него, диск — тоже, иначе они
        разъезжаются. */
     bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-    /* Сверху hero заходит под шапку (safe-area + 56, Home.css) — диск
+    /* Сверху hero заходит под шапку (safe-area + 68, Home.css) — диск
        центрируется ниже неё, как и кнопка, иначе он уезжал вверх. */
-    top: calc(env(safe-area-inset-top, 0px) + 56px);
+    top: calc(env(safe-area-inset-top, 0px) + 68px);
   }
 }
 
