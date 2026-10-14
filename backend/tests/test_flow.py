@@ -2575,6 +2575,36 @@ def test_skip_is_not_squeezed_out_of_the_taste_window(db):
     assert expired.id not in profile["skipped_ids"], "старый скип должен отпускать трек"
 
 
+
+def test_shown_tracks_cool_down_regardless_of_outcome(db):
+    """Показанное в волне за _SHOWN_COOLDOWN_DAYS не возвращается, даже если
+    его дослушали до середины или не тронули (прод, 2026-10-14: 28% повторов)."""
+    from app.models import recommendation_impressions
+    from app.routers.flow import _SHOWN_COOLDOWN_DAYS
+
+    user = create_user(db, username="shown-cooldown-user")
+    now = datetime.now(timezone.utc)
+    rows = [
+        # (external_id, artist, title, visible, давность в днях)
+        ("shownvid001", "Shown Artist", "Shown Song", True, 1),
+        ("hiddenvid01", "Hidden Artist", "Hidden Song", False, 1),
+        ("oldvid00001", "Old Artist", "Old Song", True, _SHOWN_COOLDOWN_DAYS + 1),
+    ]
+    for external_id, artist, title, visible, days in rows:
+        db.execute(recommendation_impressions.insert().values(
+            user_id=user.id, source="ytmusic", external_id=external_id, artist=artist,
+            title=title, surface="flow", position=0, request_id="r1", visible=visible,
+            shown_at=now - timedelta(days=days),
+        ))
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert "ytmusic:shownvid001" in profile["shown_external_ids"]
+    assert any("shown song" in key[1] for key in profile["shown_keys"])
+    assert "ytmusic:hiddenvid01" not in profile["shown_external_ids"], "невидимое не показывали"
+    assert "ytmusic:oldvid00001" not in profile["shown_external_ids"], "кулдаун истёк"
+
+
 def test_external_dislike_keeps_the_track_out_of_the_flow(client, db, monkeypatch):
     """Дизлайк внешнего трека действует и без материализации.
 

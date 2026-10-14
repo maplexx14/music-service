@@ -340,6 +340,14 @@ _TASTE_QUERY_LIMIT = 300
 # выпадал из окна на следующий день и снова приходил в волну (до 30–50% показов
 # волны были повторами уже скипнутого за последние трое суток).
 _SKIP_EXCLUDE_DAYS = 60
+# Сколько дней ПОКАЗАННЫЙ в волне трек не возвращается, чем бы ни кончился
+# показ. Скип исключается выше на 60 дней, а прослушанное лишь последней
+# сотней прослушиваний (_RECENT_PLAYS_EXCLUDE) — у активного слушателя это
+# несколько часов. Прод, 2026-10-14: повторы — 28% видимой волны владельца,
+# из 226 за 36 ч у 119 первый показ кончился на 25–55%, у 44 — без событий.
+# Лайки сюда не входят: у них свой кулдаун (_LIKED_REPLAY_COOLDOWN_DAYS).
+# Второй проход порции (relax) кулдаун не применяет — пустая волна хуже.
+_SHOWN_COOLDOWN_DAYS = 3
 # Штраф артисту за ЯВНЫЙ дизлайк трека: сильнее лайка (+3.0) и плейлиста
 # (+4.0 — курирование всё же перевешивает один дизлайк), без затухания по
 # времени. Осознанное «не нравится» должно убирать артиста из волны сразу,
@@ -1268,6 +1276,34 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         | {t.external_id for t in pl_tracks if t.external_id}
     )
 
+    # Показанное в волне за _SHOWN_COOLDOWN_DAYS — по id и по песне.
+    shown_cutoff = datetime.now(timezone.utc) - timedelta(days=_SHOWN_COOLDOWN_DAYS)
+    shown_rows = db.execute(
+        select(
+            recommendation_impressions.c.track_id,
+            recommendation_impressions.c.source,
+            recommendation_impressions.c.external_id,
+            recommendation_impressions.c.artist,
+            recommendation_impressions.c.title,
+        )
+        .where(
+            recommendation_impressions.c.user_id == user_id,
+            recommendation_impressions.c.surface == "flow",
+            recommendation_impressions.c.visible.is_(True),
+            recommendation_impressions.c.shown_at >= shown_cutoff,
+        )
+        .distinct()
+    ).all()
+    shown_ids, shown_external_ids, shown_keys = set(), set(), set()
+    for track_id, source, external_id, artist, title in shown_rows:
+        if track_id:
+            shown_ids.add(track_id)
+        if source and external_id:
+            shown_external_ids.add(f"{source}:{external_id}")
+        key = _norm_key(artist or "", title or "")
+        if all(key):
+            shown_keys.add(key)
+
     # Холодный старт: нет НИ сидов, НИ курированных артистов — берём популярные
     # ytmusic-треки сервиса. НЕ фиксированный топ-5 (тогда у ВСЕХ бессидовых
     # юзеров волна одинаковая — одни и те же сиды → один и тот же radio-пул), а
@@ -1511,6 +1547,9 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "recent_keys": recent_keys,
         "recent_video_ids": recent_video_ids,
         "skipped_external_ids": skipped_external_ids,
+        "shown_ids": shown_ids,
+        "shown_external_ids": shown_external_ids,
+        "shown_keys": shown_keys,
         "collection_keys": collection_keys,
         "collection_external_ids": collection_external_ids,
         "acoustic_profile": weighted_centroid(acoustic_rows),
@@ -3947,6 +3986,12 @@ async def _compute_flow(
     # seen_keys не проверяет — иначе отсеял бы каждый лайк до единого.
     seen_keys.update(tuple(key) for key in profile.get("liked_keys") or [])
     seen_keys.update(profile.get("collection_keys") or set())
+    # Кулдаун показанного (_SHOWN_COOLDOWN_DAYS). Квота лайков его не видит:
+    # она сверяется с queued_ids, снятым выше, и не проверяет seen_keys.
+    if not relax:
+        excl_ids |= set(profile.get("shown_ids") or ())
+        external_exclude |= set(profile.get("shown_external_ids") or ())
+        seen_keys.update(profile.get("shown_keys") or ())
 
     # --- разведка: радио YT Music от сидов + поиск SoundCloud по любимым артистам ---
     # Не у каждого videoId есть радио, поэтому перебираем сиды волнами по 2,
