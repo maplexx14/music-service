@@ -208,3 +208,42 @@ def test_split_top_empty_when_nothing_matches():
 
     assert top == []
     assert yt_rest == yt
+
+
+def test_split_top_puts_originals_before_remixes():
+    """Пользователь: «в приоритете всегда оригиналы, а не ремиксы»."""
+    from app.routers.aggregate import split_top
+
+    yt = [
+        _ext("ytmusic", "Numb (DJ Remix)", "Linkin Park"),
+        _ext("ytmusic", "Numb (sped up)", "Linkin Park"),
+        _ext("ytmusic", "Numb", "Linkin Park"),
+    ]
+    top, _, _ = split_top(yt, [], "linkin park numb")
+    assert top[0].title == "Numb", _titles(top)
+
+    # Запрос сам просит ремикс — порядок провайдера.
+    top, _, _ = split_top(yt, [], "numb remix")
+    assert top[0].title == "Numb (DJ Remix)", _titles(top)
+
+
+def test_originals_first_keeps_provider_order_inside_groups():
+    from app.routers.aggregate import originals_first
+
+    tracks = [_ext("ytmusic", t) for t in ("A (Remix)", "B", "C (Nightcore)", "D")]
+    assert _titles(originals_first(tracks, "artist")) == ["B", "D", "A (Remix)", "C (Nightcore)"]
+    assert _titles(originals_first(tracks, "artist remix")) == _titles(tracks)
+
+
+def test_local_search_puts_originals_before_remixes(client, db):
+    _add_tracks(
+        db,
+        ("Numb (Remix)", "Linkin Park", 500),
+        ("Numb", "Linkin Park", 1),
+    )
+
+    resp = client.get("/api/search", params={"q": "numb", "limit": 50})
+
+    assert resp.status_code == 200, resp.text
+    titles = [t["title"] for t in resp.json()["tracks"]]
+    assert titles == ["Numb", "Numb (Remix)"], titles

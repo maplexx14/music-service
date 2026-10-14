@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, case, or_
 from app.database import get_db
+from app.artist_utils import is_derivative_title
 from app.cache import get_cache, set_cache
 from app.models import Track, Playlist, User
 from app.schemas import SearchResponse, TrackResponse, PlaylistSummaryResponse
@@ -73,6 +74,9 @@ def search(
         .limit(limit)
         .all()
     )
+    # Оригиналы раньше ремиксов и ускорений, если запрос сам не просит версию.
+    if not is_derivative_title(q):
+        tracks.sort(key=lambda t: is_derivative_title(t.title))
 
     # Search playlists (summary-схема без треков — выдача их не рендерит).
     # Публичные — всем; приватные — только их владельцу.

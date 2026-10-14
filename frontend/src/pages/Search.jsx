@@ -46,6 +46,15 @@ const relevance = (track, qNorm, tokens) => {
   return tokens.every((token) => words.has(token)) ? 2 : 0
 }
 
+// Ремикс, ускорение, кавер — как artist_utils.is_derivative_title на бэке.
+// При равном счёте оригинал идёт раньше, если запрос сам не просит версию.
+const DERIVATIVE_ANYWHERE =
+  /remix|ремикс|\brmx\b|mash\s*-?\s*up|мэшап|мешап|bootleg|бутлег|sped\s*up|speed\s*up|ускор|slowed|замедл|nightcore|найткор|karaoke|караоке|\b8d\b|bass\s*boost|\bvip\s*mix|\brework\b/i
+const DERIVATIVE_TAGGED =
+  /(?:[([]|\s[-–—|]\s)[^()[\]]*?(?:\bcover\b|кавер|instrumental|инструментал|(?<!\p{L})минус(?!\p{L})|reverb|реверб|\bflip\b|\bedit\b(?<!radio edit))/iu
+const isDerivativeTitle = (title) =>
+  DERIVATIVE_ANYWHERE.test(title || '') || DERIVATIVE_TAGGED.test(title || '')
+
 // Тот же трек в медиатеке и во внешней выдаче — как aggregate.dedup_key.
 const sameTrackKey = (track) =>
   `${normalizeText(track.artist)}|${normalizeText((track.title || '').replace(/\bfeat\.?\b.*$/i, ''))}`
@@ -58,10 +67,12 @@ const mergeTopTracks = (query, libraryTracks, externalTop) => {
   const qNorm = normalizeText(query)
   const tokens = qNorm.split(' ').filter(Boolean)
   if (tokens.length === 0) return externalTop
+  const wantDerivative = isDerivativeTitle(query)
+  const derivative = (track) => (!wantDerivative && isDerivativeTitle(track.title) ? 1 : 0)
   const library = libraryTracks
     .map((track) => ({ track, score: relevance(track, qNorm, tokens) }))
     .filter((item) => item.score >= 2)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || derivative(a.track) - derivative(b.track))
     .slice(0, LIBRARY_TOP_LIMIT)
   // Внешний топ бэк отобрал со счётом не ниже 2; заново считаем, только чтобы
   // поднять точные совпадения (clean_title бэка тут нет — отсюда max).
@@ -71,7 +82,7 @@ const mergeTopTracks = (query, libraryTracks, externalTop) => {
   }))
   const seen = new Set()
   return [...library, ...external]
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || derivative(a.track) - derivative(b.track))
     .filter(({ track }) => {
       const key = sameTrackKey(track)
       if (seen.has(key)) return false

@@ -7,6 +7,7 @@ from typing import List, Tuple
 from fastapi import APIRouter, Query, Request
 
 from app import censorship
+from app.artist_utils import is_derivative_title
 from app.cache import get_cache_async, set_cache_async
 from app.routers import soulseek, soundcloud, ytdlp
 from app.routers.ytdlp import clean_title
@@ -259,6 +260,17 @@ _CATALOG_MIN_WAIT = 1.2
 _CATALOG_GRACE = 0.25
 
 
+def originals_first(tracks: list, q: str) -> list:
+    """Оригинальные записи раньше ремиксов, ускорений и каверов.
+
+    Сортировка стабильная: внутри групп порядок провайдера. Запрос, который
+    сам просит версию («numb remix», «sped up»), выдачу не переставляет.
+    """
+    if is_derivative_title(q):
+        return list(tracks)
+    return sorted(tracks, key=lambda t: is_derivative_title(getattr(t, "title", "")))
+
+
 def _relevance(track: ExternalTrackResponse, q_norm: str, tokens: List[str]) -> int:
     """Насколько трек совпал с запросом: 3 — точно название или «артист название»,
     2 — все слова запроса есть в артисте/названии, 0 — совпало лишь частично."""
@@ -294,8 +306,13 @@ def split_top(
     scored = [
         (_relevance(t, q_norm, tokens), t) for t in [*ytmusic, *soundcloud]
     ]
+    want_derivative = is_derivative_title(q)
     best = sorted(
-        (item for item in scored if item[0] >= 2), key=lambda item: -item[0]
+        (item for item in scored if item[0] >= 2),
+        key=lambda item: (
+            -item[0],
+            not want_derivative and is_derivative_title(item[1].title),
+        ),
     )[:limit]
     top = [t for _, t in best]
     ids = {id(t) for t in top}
@@ -342,7 +359,8 @@ async def search_external(
     # app/censorship.py), — до склейки: иначе оригинал из SoundCloud не
     # схлопнулся бы с ними как дубль.
     sources = [
-        _prefer_uncensored(await censorship.apply_overrides(tracks)) for tracks in sources
+        originals_first(_prefer_uncensored(await censorship.apply_overrides(tracks)), q)
+        for tracks in sources
     ]
     return _merge_sources(sources, limit)
 
@@ -417,8 +435,8 @@ async def search_external_grouped(
     # Цензура: см. replace_censored. Замещённые clean-версии уже не clean,
     # поэтому хвостовая сортировка — после замены.
     ytmusic, sc_rest = replace_censored(ytmusic, _collapse_versions(ok(sc)))
-    ytmusic = sorted(ytmusic, key=lambda t: t.is_clean)
-    soundcloud_tracks = dedup_sequential(sc_rest, limit)
+    ytmusic = originals_first(sorted(ytmusic, key=lambda t: t.is_clean), q)
+    soundcloud_tracks = originals_first(dedup_sequential(sc_rest, limit), q)
 
     top, ytmusic, soundcloud_tracks = split_top(ytmusic, soundcloud_tracks, q)
 
