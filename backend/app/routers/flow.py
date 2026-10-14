@@ -2494,6 +2494,33 @@ def _by_service_popularity(pool) -> List[ExternalTrackResponse]:
     ]
 
 
+# Насколько каталог любимого артиста смещён к хитам (_popular_first_shuffle):
+# вес места r в его топе — exp(-r / _DEEP_CUT_SCALE). При 6 в первые 10
+# предложенных треков ~70% приходят из топ-10 артиста и ~5% — глубже топ-20
+# (симуляция на каталоге из 40). Прод, 2026-10-14, 21 день: раньше порядок был
+# равномерно случайным, и малопопулярные треки любимых артистов шли почти
+# половиной источника при good 3.1% у владельца и 4.3% у остальных против 6.7%
+# и 21–23% у популярных.
+_DEEP_CUT_SCALE = 6.0
+
+
+def _popular_first_shuffle(pool, context: str, salt: str, identity_of) -> list:
+    """Случайный порядок каталога, взвешенный местом трека в топе артиста.
+
+    Выборка без возвращения (Efraimidis–Spirakis, ключ log(u) / w),
+    детерминированная контекстом подгрузки.
+    """
+    ranked = _by_service_popularity(pool)
+
+    def key(pair):
+        rank, item = pair
+        weight = math.exp(-rank / _DEEP_CUT_SCALE)
+        u = max(stable_jitter(context, f"{salt}:{identity_of(item)}"), 1e-12)
+        return math.log(u) / weight
+
+    return [item for _rank, item in sorted(enumerate(ranked), key=key, reverse=True)]
+
+
 def _interleave(pools):
     """Круговой обход пулов: сначала головы каждого, а не весь первый целиком."""
     pools = [list(pool) for pool in pools]
@@ -4072,23 +4099,19 @@ async def _compute_flow(
     def _favorite_order(artist: str, pool) -> List[ExternalTrackResponse]:
         """В каком порядке любимый артист предлагает свой каталог ранкеру.
 
-        Доказавший «любимость» артист отдаёт ЛЮБОЙ свой трек: порядок
-        стабильно-псевдослучайный по контексту подгрузки, поэтому от запроса к
-        запросу всплывают разные вещи из глубины каталога, а внутри одного
-        ответа выдача детерминирована. Непроверенный артист предлагает сначала
-        популярное на своей площадке — его ещё представляют слушателю.
+        Доказавший «любимость» артист отдаёт ЛЮБОЙ свой трек, но хиты чаще
+        (_popular_first_shuffle): от запроса к запросу всплывают и вещи из
+        глубины каталога, а внутри одного ответа выдача детерминирована.
+        Непроверенный артист предлагает сначала популярное на своей площадке —
+        его ещё представляют слушателю.
 
         Здесь только ПОРЯДОК: сколько треков артиста дойдёт до ранкера, решает
         accept_limit в _add_explore, уже после исключений.
         """
         if artist_weights.get(artist_key(artist), 0.0) < _ARTIST_PROVEN_WEIGHT:
             return _by_service_popularity(pool)
-        return sorted(
-            pool,
-            key=lambda t: stable_jitter(
-                ranking_context, f"favorite-any:{artist}:{_item_identity(t)}"
-            ),
-            reverse=True,
+        return _popular_first_shuffle(
+            pool, ranking_context, f"favorite-any:{artist}", _item_identity
         )
 
     def _needs_more_pools() -> bool:

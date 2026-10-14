@@ -227,3 +227,23 @@ def test_collab_with_a_familiar_member_is_familiar():
     assert _artist_affinity("Journey feat. Steve Perry", weights) == 2.0
     assert _artist_affinity("Journey", weights) == 2.0
     assert _artist_affinity("Muse", weights) is None
+
+
+def test_favorite_catalog_prefers_the_artists_hits():
+    """Любимый артист отдаёт в основном хиты, глубокие треки — изредка."""
+    from types import SimpleNamespace
+
+    from app.routers.flow import _popular_first_shuffle
+
+    pool = [SimpleNamespace(id=i, play_count=1000 - i) for i in range(40)]
+    top = deep = 0
+    for context in range(300):
+        order = _popular_first_shuffle(pool, f"ctx{context}", "s", lambda t: t.id)
+        assert sorted(t.id for t in order) == list(range(40))
+        top += sum(1 for t in order[:10] if t.id < 10)
+        deep += sum(1 for t in order[:10] if t.id >= 20)
+    assert top / 3000 > 0.6
+    assert 0 < deep / 3000 < 0.15
+    # Детерминирован контекстом.
+    first = _popular_first_shuffle(pool, "same", "s", lambda t: t.id)
+    assert first == _popular_first_shuffle(pool, "same", "s", lambda t: t.id)
