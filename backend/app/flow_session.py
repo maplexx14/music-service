@@ -169,21 +169,43 @@ def _greedy_gap(ranked: list, artist_of, limit: int, previous: Iterable[str], mi
     return picked
 
 
-def _apply_cap(chosen: list, rest: list, capped, cap: Optional[int]) -> list:
-    """Не больше ``cap`` кандидатов ``capped`` в выдаче: лишние заменяются
-    следующими по порядку из ``rest``; заменить нечем — остаются (мягко)."""
-    if capped is None or cap is None:
+def _apply_caps(chosen: list, rest: list, caps: list) -> list:
+    """Потолки ``caps`` — пары (признак, сколько можно) — разом: лишний
+    кандидат заменяется первым из ``rest``, кто не пробивает НИ ОДИН потолок;
+    заменить нечем — остаётся (мягко).
+
+    По очереди нельзя: лишний лайк менялся на следующий не-лайк, не глядя на
+    новизну, и потолок новых пробивался (прод, 2026-10-14: при потолке 1–2
+    новых в порциях 6/8 выходило 3–4, 40% новых в волне при ползунке 0.2).
+    Место под потолками сначала получают выбранные — по порядку, — и только
+    остаток идёт заменам: иначе замена занимала место, и выбранный ниже
+    пробивал потолок уже сам.
+    """
+    caps = [(test, cap) for test, cap in caps if test is not None and cap is not None]
+    if not caps:
         return chosen
-    spare = [item for item in rest if not capped(item)]
-    result = []
-    used = 0
-    for item in chosen:
-        if capped(item):
-            if used >= cap and spare:
-                result.append(spare.pop(0))
-                continue
-            used += 1
-        result.append(item)
+    used = [0] * len(caps)
+
+    def fits(item) -> bool:
+        return all(used[i] < cap or not test(item) for i, (test, cap) in enumerate(caps))
+
+    def take(item):
+        for i, (test, _cap) in enumerate(caps):
+            if test(item):
+                used[i] += 1
+        return item
+
+    result = [take(item) if fits(item) else None for item in chosen]
+    spare = list(rest)
+    for position, item in enumerate(chosen):
+        if result[position] is not None:
+            continue
+        replacement = next((other for other in spare if fits(other)), None)
+        if replacement is None:
+            replacement = item
+        else:
+            spare.remove(replacement)
+        result[position] = take(replacement)
     return result
 
 
@@ -219,13 +241,17 @@ def select(
     def is_liked(item) -> bool:
         return (features.get(identity_of(item)) or {}).get("origin") == "liked"
 
+    def is_capped(item) -> bool:
+        return capped is not None and bool(capped(item))
+
     def apply_caps(chosen: list, rest: list) -> list:
-        chosen = _apply_cap(chosen, rest, capped, capped_max)
-        chosen = _apply_cap(chosen, [i for i in rest if i not in chosen], is_novel, novel_max)
         # Квота лайков считается на весь пул (на несколько выдач), а ранкер
         # ставит лайки выше всего — без потолка на выдачу они уходили в первые
         # порции пачкой (прод, 2026-10-14: 2–3 лайка из 6 при квоте 1).
-        return _apply_cap(chosen, [i for i in rest if i not in chosen], is_liked, liked_max)
+        return _apply_caps(
+            chosen, rest,
+            [(capped, capped_max), (is_novel, novel_max), (is_liked, liked_max)],
+        )
 
     if arm != "session":
         chosen = apply_caps(list(pool[:limit]), list(pool[limit:]))
@@ -279,14 +305,19 @@ def select(
     chosen = apply_caps(chosen, [item for item in ranked if item not in chosen])
     # Разведка: место отдаётся случайному кандидату из невыбранной части пула
     # ТОГО ЖЕ класса (новый артист на нового, знакомый на знакомого, лайк на
-    # лайк) — иначе разведка раздувала бы долю новых или лайков сверх квот.
+    # лайк, хит жанра на хит жанра) — иначе разведка раздувала бы долю новых,
+    # лайков или жанра сверх квот.
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]
+
+    def kind_of(item) -> tuple:
+        return is_novel(item), is_liked(item), is_capped(item)
+
     for position in range(len(chosen)):
         if rng.random() >= EXPLORE_RATE:
             continue
-        kind = (is_novel(chosen[position]), is_liked(chosen[position]))
-        same = [item for item in rest if (is_novel(item), is_liked(item)) == kind]
+        kind = kind_of(chosen[position])
+        same = [item for item in rest if kind_of(item) == kind]
         if not same:
             continue
         pick = same[rng.randrange(len(same))]

@@ -358,6 +358,55 @@ def test_delivery_liked_cap_holds_when_ranker_prefers_likes():
         assert sum(1 for item in chosen if features[item["id"]]["origin"] == "liked") == 1
 
 
+def _kinds_pool(kinds):
+    pool = _pool([f"{kind}{index}" for index, kind in enumerate(kinds)])
+    features = {
+        index: {"origin": "liked" if kind == "liked" else "radio", "novel": kind == "novel"}
+        for index, kind in enumerate(kinds)
+    }
+    return pool, features
+
+
+def test_liked_cap_replacement_keeps_the_novel_cap():
+    # Прод, 2026-10-14: лишний лайк менялся на следующий не-лайк — нового
+    # артиста, — и при потолке 1 новых в порции выходило 3.
+    pool, features = _kinds_pool(
+        ["liked", "liked", "liked", "fam", "novel", "fam", "novel", "novel", "fam", "fam"]
+    )
+    for arm in ("control", "session"):
+        rng = random.Random(0)
+        rng.random = lambda: 0.99  # без разведки
+        chosen, _extra = _select(
+            pool, features, flow_session.SessionState([], {}.get), arm=arm, rng=rng,
+            limit=6, novel_max=1, liked_max=1,
+        )
+        ids = [item["id"] for item in chosen]
+        assert len(ids) == 6
+        assert sum(1 for i in ids if features[i]["novel"]) == 1
+        assert sum(1 for i in ids if features[i]["origin"] == "liked") == 1
+
+
+def test_caps_keep_room_for_items_chosen_first():
+    # Замена лишнего лайка не занимает место нового, выбранного выше по порядку.
+    pool, features = _kinds_pool(["liked", "liked", "fam", "novel", "fam", "fam", "novel", "fam"])
+    chosen, _extra = _select(pool, features, arm="control", limit=6, novel_max=1, liked_max=1)
+    ids = [item["id"] for item in chosen]
+    assert ids == [0, 7, 2, 3, 4, 5]
+
+
+def test_exploration_keeps_the_genre_cap():
+    pool = _pool([f"g{i}" for i in range(5)] + [f"a{i}" for i in range(5)])
+    features = {i: {"origin": "genre" if i < 5 else "radio"} for i in range(10)}
+    rng = random.Random(0)
+    rng.random = lambda: 0.0  # каждое место — разведка
+    chosen, extra = _select(
+        pool, features, flow_session.SessionState([], {}.get), rng=rng, limit=4,
+        capped=lambda item: features[item["id"]]["origin"] == "genre", capped_max=1,
+    )
+    assert sum(1 for item in chosen if item["artist"].startswith("g")) == 1
+    assert any(row.get("explore") for row in extra.values())
+
+
 def test_liked_cap_matches_compute_quota():
     from app.routers.flow import _liked_cap
 
