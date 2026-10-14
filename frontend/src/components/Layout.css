@@ -95,8 +95,10 @@
     --main-pad-top: env(safe-area-inset-top, 0px);
   }
 
+  /* Под плавающей «Назад» (safe-area + 6 + 44) — место, чтобы она не
+     наезжала на заголовок экрана. Полосы нет: отступ прозрачный. */
   .screen-scroll.has-mobile-topbar {
-    --main-pad-top: calc(env(safe-area-inset-top, 0px) + 56px);
+    --main-pad-top: calc(env(safe-area-inset-top, 0px) + 58px);
   }
 
   /* Шапка и подложка статус-бара — часть экрана (ScreenStack.jsx): едут
@@ -115,49 +117,43 @@
     pointer-events: none;
   }
 
+  /* «Назад» — плавающая капсула в стилистике таб-бара (.mobile-nav-global):
+     сплошной тёмный фон, светлое градиентное кольцо. Сплошной чёрной
+     полосы через весь экран больше нет — контент виден под кнопкой. */
   .mobile-topbar {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: calc(env(safe-area-inset-top, 0px) + 52px);
-    padding-top: env(safe-area-inset-top, 0px);
-    display: grid;
-    grid-template-columns: 52px 1fr 52px;
-    align-items: center;
-    padding-left: 8px;
-    padding-right: 8px;
-    /* Без backdrop-filter по той же причине, что и у .mobile-status-scrim:
-       блюр под 85%-затемнением не читался, а стоил перерисовки на каждом
-       кадре прокрутки. */
-    background: rgba(0, 0, 0, 0.92);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    top: calc(env(safe-area-inset-top, 0px) + 6px);
+    left: 10px;
     z-index: 1003;
+    pointer-events: none;
   }
 
   .mobile-back-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.06);
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: none;
+    background: #0a0a0e;
     color: var(--text-primary);
     display: grid;
     place-items: center;
     cursor: pointer;
+    pointer-events: auto;
   }
 
-  .mobile-topbar-title {
-    text-align: center;
-    font-size: var(--text-base);
-    color: rgba(255, 255, 255, 0.7);
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-  }
-
-  .mobile-topbar-spacer {
-    width: 40px;
-    height: 40px;
+  .mobile-back-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
   }
 
   /* Геометрия один в один с iOS-приложением (MainTabView.swift): высота 72,

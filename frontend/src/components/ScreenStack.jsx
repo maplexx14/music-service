@@ -143,7 +143,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   const topbar = isMobile && !isTabRoot(path)
   // Подложка под статус-бар: контент уезжает под часы не «голым», а под
   // матовую полосу. Главной не нужна — её hero заходит под статус-бар.
-  const safeTop = isMobile && path !== '/' && !topbar
+  const safeTop = isMobile && path !== '/'
   useDetailScrollRestoration(scrollerRef, location, isDetailId(id))
 
   return (
@@ -159,14 +159,12 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
           <button type="button" className="mobile-back-btn" onClick={onBack} aria-label="Назад">
             <ArrowLeft size={20} />
           </button>
-          <div className="mobile-topbar-title" aria-hidden="true" />
-          <div className="mobile-topbar-spacer" />
         </div>
       )}
       {safeTop && <div className="mobile-status-scrim" aria-hidden="true" />}
       <div
         ref={scrollerRef}
-        className={`screen-scroll${topbar ? ' has-mobile-topbar' : ''}${safeTop ? ' has-safe-top' : ''}`}
+        className={`screen-scroll${topbar ? ' has-mobile-topbar' : safeTop ? ' has-safe-top' : ''}`}
       >
         <RouteContext.Provider value={ROOT_ROUTE_CONTEXT}>
           <LocationContext.Provider value={locationContext}>

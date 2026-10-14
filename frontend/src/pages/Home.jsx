@@ -437,10 +437,7 @@ function Home() {
         root={() => scrollerRef?.current ?? null}
       />
       <div className="mobile-header">
-        
-        <span href = "">
-          <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
-        </span>
+        <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
         <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
           <TasteAvatar user={user} className="mobile-avatar-img" />
         </Link>

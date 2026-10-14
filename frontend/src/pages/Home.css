@@ -654,16 +654,25 @@
     font-size: 14px;
   }
 
+  /* Шапка как раньше — логотип слева, аватар справа, во всю ширину от самого
+     верха экрана, — но чуть ниже и со скруглёнными нижними углами: под ней
+     виден градиент «потока». Чёрный — в тон фона логотипа (logoBolt1.webp),
+     его прямоугольник не виден. Высота: safe-area + 8 + логотип 40 + 8. */
   .mobile-header {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    /* Учитываем статус-бар / чёлку, чтобы шапка не обрезалась сверху. */
-    padding: calc(env(safe-area-inset-top, 0px) + 12px) 0 8px;
+    margin: 0 -16px;
+    padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px;
+    border-radius: 0 0 24px 24px;
+    background: #000;
   }
 
   .mobile-logo-img {
-    height: 48px;
+    display: block;
+    height: 40px;
     width: auto;
     object-fit: contain;
   }
@@ -673,16 +682,20 @@
     flex-direction: column;
     /* Снизу — место под нижнюю навигацию (72px, Layout.css): волна
        центрируется в видимой над ней части экрана. */
-    padding: 32px 16px calc(32px + 72px + env(safe-area-inset-bottom, 0px));
-    margin: 0 -16px 24px;
+    /* Градиент заходит под шапку (safe-area + 56): в её скруглённых нижних
+       углах виден он, а не чёрный фон страницы. Высота шапки возвращена
+       отступом сверху. */
+    padding: calc(32px + env(safe-area-inset-top, 0px) + 56px) 16px
+      calc(32px + 72px + env(safe-area-inset-bottom, 0px));
+    margin: calc(-1 * (env(safe-area-inset-top, 0px) + 56px)) -16px 24px;
     width: calc(100% + 32px);
-    /* Поток — на весь первый экран, до самого низа (за вычетом шапки:
-       safe-area + 12 + логотип 48 + 8). Иначе при запуске прямо над нижней
+    /* Поток — на весь первый экран, до самого низа (шапка лежит
+       поверх него). Иначе при запуске прямо над нижней
        навигацией торчал переключатель Главная ⇄ История — две одинаковые
        капсулы подряд. Теперь он ниже края экрана и виден после прокрутки.
        svh — видимая высота при показанных панелях Safari. */
-    min-height: calc(100vh - env(safe-area-inset-top, 0px) - 68px);
-    min-height: calc(100svh - env(safe-area-inset-top, 0px) - 68px);
+    min-height: 100vh;
+    min-height: 100svh;
     max-height: none;
     border-radius: 0;
     align-items: center;
