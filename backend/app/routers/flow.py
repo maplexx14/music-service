@@ -245,6 +245,15 @@ def _novel_cap(limit: int, ratio: float) -> int:
     if ratio > DEFAULT_DISCOVERY_RATIO:
         return discovery_slots(limit, ratio)
     return max(0, round(limit * ratio))
+
+
+def _liked_cap(limit: int, ratio: float) -> int:
+    """Потолок лайков в выдаче из готового пула — та же квота, что и в
+    _compute_flow, но на ``limit`` выдачи, а не на весь пул."""
+    discovery_target = (
+        discovery_slots(limit, ratio) if ratio > DEFAULT_DISCOVERY_RATIO else 0
+    )
+    return min(liked_slots(limit, ratio), max(0, limit - discovery_target))
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -3967,9 +3976,7 @@ async def _compute_flow(
     # волна должна оставаться волной, а не повтором плейлиста лайков.
     # Зажимаем целью разведки: две квоты не должны вместе съесть всю порцию,
     # и приоритет у явно попрошенных новых имён.
-    liked_target = min(
-        liked_slots(limit, explore_ratio), max(0, limit - discovery_target)
-    )
+    liked_target = _liked_cap(limit, explore_ratio)
 
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
@@ -4838,6 +4845,7 @@ async def _session_select(
             }
         model = await asyncio.to_thread(learned_ranker.load, user_id)
         learned = learned_ranker.scorer(model)
+    ratio = _pool_discovery_ratio(pool, features)
     chosen, extra = flow_session.select(
         pool,
         limit=limit,
@@ -4851,7 +4859,8 @@ async def _session_select(
         previous_artists=history.get("artists") or [],
         capped=lambda item: (features.get(_flow_item_identity(item)) or {}).get("origin") == "genre",
         capped_max=_genre_cap(limit),
-        novel_max=_novel_cap(limit, _pool_discovery_ratio(pool, features)),
+        novel_max=_novel_cap(limit, ratio),
+        liked_max=_liked_cap(limit, ratio),
     )
     merged = dict(features)
     for identity, row in extra.items():

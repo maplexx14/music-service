@@ -202,6 +202,7 @@ def select(
     capped: Optional[Callable[[dict], bool]] = None,
     capped_max: Optional[int] = None,
     novel_max: Optional[int] = None,
+    liked_max: Optional[int] = None,
 ) -> tuple[list, dict]:
     """Порция из пула для варианта ``arm``: (items, {identity: доп. признаки}).
 
@@ -214,9 +215,16 @@ def select(
     def is_novel(item) -> bool:
         return bool((features.get(identity_of(item)) or {}).get("novel"))
 
+    def is_liked(item) -> bool:
+        return (features.get(identity_of(item)) or {}).get("origin") == "liked"
+
     def apply_caps(chosen: list, rest: list) -> list:
         chosen = _apply_cap(chosen, rest, capped, capped_max)
-        return _apply_cap(chosen, [i for i in rest if i not in chosen], is_novel, novel_max)
+        chosen = _apply_cap(chosen, [i for i in rest if i not in chosen], is_novel, novel_max)
+        # Квота лайков считается на весь пул (на несколько выдач), а ранкер
+        # ставит лайки выше всего — без потолка на выдачу они уходили в первые
+        # порции пачкой (прод, 2026-10-14: 2–3 лайка из 6 при квоте 1).
+        return _apply_cap(chosen, [i for i in rest if i not in chosen], is_liked, liked_max)
 
     if arm != "session":
         chosen = apply_caps(list(pool[:limit]), list(pool[limit:]))
@@ -269,14 +277,15 @@ def select(
         )
     chosen = apply_caps(chosen, [item for item in ranked if item not in chosen])
     # Разведка: место отдаётся случайному кандидату из невыбранной части пула
-    # ТОГО ЖЕ класса (новый артист на нового, знакомый на знакомого) — иначе
-    # разведка раздувала бы долю новых сверх ползунка.
+    # ТОГО ЖЕ класса (новый артист на нового, знакомый на знакомого, лайк на
+    # лайк) — иначе разведка раздувала бы долю новых или лайков сверх квот.
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]
     for position in range(len(chosen)):
         if rng.random() >= EXPLORE_RATE:
             continue
-        same = [item for item in rest if is_novel(item) == is_novel(chosen[position])]
+        kind = (is_novel(chosen[position]), is_liked(chosen[position]))
+        same = [item for item in rest if (is_novel(item), is_liked(item)) == kind]
         if not same:
             continue
         pick = same[rng.randrange(len(same))]

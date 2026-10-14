@@ -263,6 +263,29 @@ def test_delivery_novel_cap_and_same_class_exploration():
     assert any(row.get("explore") for row in extra.values())
 
 
+def test_delivery_liked_cap_holds_when_ranker_prefers_likes():
+    # Пул на несколько выдач с квотой лайков на весь пул: ранкер тянет лайки
+    # вперёд, а в выдачу их проходит не больше liked_max.
+    pool = _pool([f"l{i}" for i in range(4)] + [f"f{i}" for i in range(6)])
+    features = {i: ({"origin": "liked"} if i < 4 else {"origin": "favorite"}) for i in range(10)}
+    for arm in ("control", "session"):
+        rng = random.Random(0)
+        rng.random = lambda: 0.0  # каждое место — разведка
+        chosen, _extra = _select(
+            pool, features, flow_session.SessionState([], {}.get),
+            arm=arm, rng=rng, limit=6, liked_max=1,
+        )
+        assert sum(1 for item in chosen if features[item["id"]]["origin"] == "liked") == 1
+
+
+def test_liked_cap_matches_compute_quota():
+    from app.routers.flow import _liked_cap
+
+    assert _liked_cap(6, 0.2) == 1
+    assert _liked_cap(30, 0.2) == 6
+    assert _liked_cap(6, 1.0) == 0
+
+
 def test_core_artists_get_most_favorite_catalog_slots():
     from collections import Counter
 
