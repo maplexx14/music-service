@@ -423,6 +423,14 @@ _LIKED_WINDOW_PER_ARTIST = 2
 # сыгранное, и ни один лайк сквозь него не проходил бы. 2 дня — выбор
 # владельца продукта, 2026-10-10.
 _LIKED_REPLAY_COOLDOWN_DAYS = 2
+# Маленькой коллекции кулдаун растягивается (см. _liked_cooldown_days): квота
+# берёт около лайка на шесть треков, и при 2 днях 4–11 лайков крутились по
+# кругу — прод, 2026-10-15: у юзеров с 4 и 11 лайками каждый третий-второй
+# показ лайка был повтором, good 0% / bad 90% (у владельца с 379 — 41% / 35%).
+# _LIKED_ROTATION_TRACKS / размер коллекции дней, от 2 до 7: 50+ лайков — 2,
+# 20 — 5, 14 и меньше — неделя. Недобранную квоту занимают обычные кандидаты.
+_LIKED_ROTATION_TRACKS = 100
+_LIKED_REPLAY_COOLDOWN_MAX_DAYS = 7
 # Похожесть на уровне ТРЕКА по названию (Last.fm через клиент beets, см.
 # beets_similar) — ОСНОВНОЙ источник разведки. Все остальные внешние источники
 # засеяны ИМЕНЕМ АРТИСТА: граф YT Music отдаёт соседей артиста, SoundCloud —
@@ -1842,6 +1850,17 @@ def _touched_seconds(moment) -> float:
     return moment.timestamp()
 
 
+def _liked_cooldown_days(liked_count: int) -> float:
+    """Сколько дней лайк остывает после прослушивания или скипа при
+    коллекции из ``liked_count`` лайков (см. _LIKED_ROTATION_TRACKS)."""
+    if liked_count <= 0:
+        return _LIKED_REPLAY_COOLDOWN_DAYS
+    return min(
+        _LIKED_REPLAY_COOLDOWN_MAX_DAYS,
+        max(_LIKED_REPLAY_COOLDOWN_DAYS, _LIKED_ROTATION_TRACKS / liked_count),
+    )
+
+
 def _liked_candidates(
     db: Session,
     profile: dict,
@@ -1857,7 +1876,7 @@ def _liked_candidates(
     поток НИКОГДА, ни на каком положении ползунка. Здесь задача обратная:
     достать именно их, оставив в силе только те исключения, которые к лайкам
     применимы, — дизлайки, очередь фронта, забаненные артисты и кулдаун
-    ``_LIKED_REPLAY_COOLDOWN_DAYS`` после прослушивания или скипа.
+    ``_liked_cooldown_days`` после прослушивания или скипа.
 
     Скип лайка — «не сейчас», а не «никогда», поэтому ``skipped_ids`` (все
     скипы за ``_SKIP_EXCLUDE_DAYS``) здесь не применяется. Прод, 2026-10-10:
@@ -1906,7 +1925,8 @@ def _liked_candidates(
     )
 
     cooldown_before = (
-        datetime.now(timezone.utc) - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS)
+        datetime.now(timezone.utc)
+        - timedelta(days=_liked_cooldown_days(len(liked_ids)))
     ).timestamp()
     banned = profile["banned_artists"]
     ordered: List[tuple] = []

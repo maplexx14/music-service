@@ -31,6 +31,8 @@ from app.routers import flow as flow_router
 from app.routers.flow import (
     _FRESH_CLUSTER_DAYS,
     _LIKED_REPLAY_COOLDOWN_DAYS,
+    _LIKED_REPLAY_COOLDOWN_MAX_DAYS,
+    _liked_cooldown_days,
     _favorite_artist_pool,
     _liked_candidates,
     _local_candidates,
@@ -622,13 +624,14 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
                 "user_id": user.id,
                 "track_id": tracks["inside-cooldown"].id,
                 "play_count": 1,
-                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS - 1),
+                # Шесть лайков — кулдаун неделя, а не базовые два дня.
+                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_MAX_DAYS - 1),
             },
             {
                 "user_id": user.id,
                 "track_id": tracks["cooled-down"].id,
                 "play_count": 1,
-                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_DAYS + 1),
+                "last_played": now - timedelta(days=_LIKED_REPLAY_COOLDOWN_MAX_DAYS + 1),
             },
         ],
     )
@@ -644,6 +647,16 @@ def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
     assert "skipped-recently" not in titles, titles
     # Ни разу не игранный лайк — впереди, дальше от давно не звучавшего.
     assert titles == ["never-played", "skipped-long-ago", "cooled-down"], titles
+
+
+def test_liked_cooldown_grows_for_small_collections():
+    """Прод, 2026-10-15: при 4–11 лайках двухдневный кулдаун крутил их по
+    кругу. Маленькой коллекции — неделя, большой — прежние два дня."""
+    assert _liked_cooldown_days(0) == _LIKED_REPLAY_COOLDOWN_DAYS
+    assert _liked_cooldown_days(4) == _LIKED_REPLAY_COOLDOWN_MAX_DAYS
+    assert _liked_cooldown_days(11) == _LIKED_REPLAY_COOLDOWN_MAX_DAYS
+    assert _liked_cooldown_days(20) == 5
+    assert _liked_cooldown_days(379) == _LIKED_REPLAY_COOLDOWN_DAYS
 
 
 def _liked_playlist(db, user, tracks):
@@ -672,7 +685,8 @@ def test_liked_window_caps_tracks_per_artist(db, monkeypatch):
     # «Same» ни разу не играли — без потолка они заняли бы всё окно.
     db.execute(user_track_plays.insert(), [
         {"user_id": user.id, "track_id": track.id, "play_count": 1,
-         "last_played": datetime.now(timezone.utc) - timedelta(days=5)}
+         "last_played": datetime.now(timezone.utc)
+         - timedelta(days=_LIKED_REPLAY_COOLDOWN_MAX_DAYS + 1)}
         for track in tracks[6:]
     ])
     db.commit()
