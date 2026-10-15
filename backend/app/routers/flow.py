@@ -362,6 +362,17 @@ _DISLIKE_ARTIST_PENALTY = 3.5
 # остаётся знакомым и не попадает в banned_artists. Сродни весу одного
 # импортированного трека недельной давности — в ротации, но не в голове.
 _FAVORITE_SKIP_FLOOR = 0.5
+# Артист, отвергнутый в волне: от _ARTIST_REJECT_MIN_BAD плохих песен за
+# _SKIP_EXCLUDE_DAYS и плохих не меньше чем в _ARTIST_REJECT_BAD_PER_GOOD раз
+# больше хороших (песни коллекции считаются хорошими). Штраф в artist_weight
+# этого не ловил: он видит только последние _TASTE_QUERY_LIMIT скипов (у
+# активного слушателя — сутки) и не видит скипов нематериализованных треков,
+# а один лайк (+3.0) перевешивает два свежих скипа. Артист с одним
+# понравившимся треком, остальные которого юзер скипает сразу, через день
+# снова приходил в волну с каталогом. Мягкий бан: второй проход порции его
+# снимает, лайкнутые треки артиста остаются в ротации лайков.
+_ARTIST_REJECT_MIN_BAD = 3
+_ARTIST_REJECT_BAD_PER_GOOD = 3
 # Мягкий бан для второго прохода порции (см. _compute_flow, relax): артист
 # остаётся в бане, только если вес ниже этого (скип одного трека даёт около
 # -1.04, то есть это примерно три скипнутых трека), дизлайкнут или исключён.
@@ -689,6 +700,46 @@ def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List
     }
     deep.update(primary_artist_key(name) for name in preferred)
     return sorted(artist for artist in deep if artist and artist not in excluded)
+
+
+def flow_rejected_artist_keys(event_rows, collection_counts=None) -> set:
+    """Артисты, чьи песни в волне юзер раз за разом отвергает.
+
+    ``event_rows`` — (event_type, value, artist, title, source) событий волны
+    в порядке времени; исход размечается по песне (app.feedback_labels), так
+    что повторные показы одной песни и её локальная/внешняя копии — один
+    голос. Коллабы не считаются: по строке «A, B» не понять, кого отвергли.
+    ``collection_counts`` — {artist_key: песен в коллекции}, это хорошие.
+    """
+    by_song: dict[tuple, OutcomeTracker] = {}
+    for event_type, value, artist, title, source in event_rows:
+        if not artist or not title:
+            continue
+        effective_artist, effective_title = effective_artist_title(
+            title, artist, source=source or ""
+        )
+        if len(artist_part_keys(effective_artist)) != 1:
+            continue
+        song = _norm_key(effective_artist, effective_title)
+        if not all(song):
+            continue
+        by_song.setdefault(
+            (artist_key(effective_artist), song), OutcomeTracker()
+        ).add(event_type, value)
+    good: Counter = Counter(collection_counts or {})
+    bad: Counter = Counter()
+    for (key, _song), state in by_song.items():
+        if state.good:
+            good[key] += 1
+        elif state.bad:
+            bad[key] += 1
+    return {
+        key
+        for key, n_bad in bad.items()
+        if key
+        and n_bad >= _ARTIST_REJECT_MIN_BAD
+        and n_bad >= _ARTIST_REJECT_BAD_PER_GOOD * good[key]
+    }
 
 
 def fresh_collection_artist_keys(db: Session, user_id: int, now=None) -> List[str]:
@@ -1123,6 +1174,22 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             )
             skipped_keys.add(_norm_key(skipped_artist, skipped_title))
 
+    # Исходы волны за то же окно — для flow_rejected_artist_keys ниже.
+    flow_outcome_rows = db.execute(
+        select(
+            recommendation_events.c.event_type,
+            recommendation_events.c.value,
+            recommendation_events.c.artist,
+            recommendation_events.c.title,
+            recommendation_events.c.source,
+        ).where(
+            recommendation_events.c.user_id == user_id,
+            recommendation_events.c.surface == "flow",
+            recommendation_events.c.event_type.in_(FEEDBACK_EVENT_TYPES),
+            recommendation_events.c.occurred_at >= skip_cutoff,
+        ).order_by(recommendation_events.c.occurred_at, recommendation_events.c.id)
+    ).all()
+
     # Дизлайк — не вкусовой признак, а запрет («не нравится, больше не
     # показывать»), поэтому окном _TASTE_QUERY_LIMIT он НЕ ограничен: тот же
     # довод, что у collection_rows выше. Скипы пишутся автоматически (фронт шлёт
@@ -1363,6 +1430,10 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         if key not in disliked_artist_keys and artist_weight.get(key, 0.0) < _FAVORITE_SKIP_FLOOR:
             artist_weight[key] = _FAVORITE_SKIP_FLOOR
             artist_display.setdefault(key, key)
+    # Любимых (deep catalog и выбранных в настройках) защищает пол выше.
+    flow_rejected_artists = flow_rejected_artist_keys(
+        flow_outcome_rows, collection_song_counts(collection_rows)
+    ) - set(deep_keys)
 
     has_own_signal = any(w > 0 for w in artist_weight.values())
     if not seeds and not curated_artist_keys and not has_own_signal:
@@ -1395,7 +1466,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     top_artists = [artist_display.get(a, a) for a in topartist_keys]
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
-    banned_artists |= excluded_artists
+    banned_artists |= excluded_artists | flow_rejected_artists
     hard_banned_artists = {
         a for a, w in artist_weight.items() if w <= -_RELAXED_BAN_WEIGHT
     } | disliked_artist_keys | excluded_artists
@@ -1405,7 +1476,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         curated_artist_keys[:] = [a for a in curated_artist_keys if a != key]
         catalog_artist_keys[:] = [a for a in catalog_artist_keys if a != key]
         playlist_artist_keys[:] = [a for a in playlist_artist_keys if a != key]
-    topartist_keys = [key for key in topartist_keys if key not in excluded_artists]
+    catalog_artist_keys[:] = [a for a in catalog_artist_keys if a not in flow_rejected_artists]
+    topartist_keys = [
+        key for key in topartist_keys
+        if key not in excluded_artists and key not in flow_rejected_artists
+    ]
     top_artists = [artist_display.get(key, key) for key in topartist_keys]
 
     # Плейлистные артисты для SoundCloud-генерации: свежие первыми,
@@ -1567,6 +1642,11 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "banned_artists": banned_artists,
         # Бан второго прохода, когда обычный не набрал порцию (_compute_flow).
         "hard_banned_artists": hard_banned_artists,
+        # Часть banned_artists, которую ротация лайков не исключает: только
+        # отвергнутые в волне, не ушедшие в минус по весу и не исключённые.
+        "flow_rejected_artists": flow_rejected_artists - {
+            a for a, w in artist_weight.items() if w < 0
+        } - excluded_artists - disliked_artist_keys,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         # (доля кириллицы, сколько текстов) — априор языка в волне
         # (discovery_feedback.language_terms).
@@ -1928,7 +2008,8 @@ def _liked_candidates(
         datetime.now(timezone.utc)
         - timedelta(days=_liked_cooldown_days(len(liked_ids)))
     ).timestamp()
-    banned = profile["banned_artists"]
+    # Отвергнутый в волне артист теряет каталог, но не лайкнутые треки.
+    banned = set(profile["banned_artists"]) - set(profile.get("flow_rejected_artists") or ())
     ordered: List[tuple] = []
     for track, last_played, last_skipped, disliked in rows:
         if disliked:
@@ -4671,13 +4752,16 @@ async def _compute_flow(
     ) | set(client_yt_videos)
     liked_candidates: List[Track] = []
     liked_identities: set[str] = set()
+    liked_banned = set(profile["banned_artists"]) - set(
+        profile.get("flow_rejected_artists") or ()
+    )
     for t in liked_pool:
         effective_artist, _effective_title = effective_track_artist_title(t)
         if t.id in queued_ids:
             continue
         if t.external_id and t.external_id in liked_excl_videos:
             continue
-        if profile["banned_artists"] and artist_key(effective_artist) in profile["banned_artists"]:
+        if liked_banned and artist_key(effective_artist) in liked_banned:
             continue
         excl_ids.add(t.id)
         liked_candidates.append(t)

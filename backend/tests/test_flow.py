@@ -3136,6 +3136,78 @@ def test_skips_do_not_ban_favorite_artist_but_dislike_does(db, disliked):
     assert {track.id for track in skipped} <= profile["skipped_ids"]
 
 
+def _flow_events(db, user, artist, outcomes, source="ytmusic"):
+    """События волны по песням артиста: "s" — скип, "c" — дослушал."""
+    now = datetime.now(timezone.utc)
+    db.execute(recommendation_events.insert(), [
+        {"user_id": user.id, "source": source, "external_id": f"{artist}-{i}",
+         "title": f"{artist} song {i}", "artist": artist, "surface": "flow",
+         "event_type": "skip" if code == "s" else "listen",
+         "value": None if code == "s" else 0.9,
+         "occurred_at": now - timedelta(minutes=len(outcomes) - i)}
+        for i, code in enumerate(outcomes)
+    ])
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    "rows, rejected",
+    [
+        # Один понравился, остальные три скипнуты — отвергнут.
+        ([("listen", 0.9, "A", "hit", ""), *[("skip", None, "A", f"s{i}", "") for i in range(3)]],
+         {"a"}),
+        # Два скипа — ещё не повод.
+        ([("skip", None, "A", f"s{i}", "") for i in range(2)], set()),
+        # Повторные скипы одной песни — один голос.
+        ([("skip", None, "A", "same", "") for _ in range(5)], set()),
+        # Скипнул, а потом дослушал — песня хорошая.
+        ([*[("skip", None, "A", f"s{i}", "") for i in range(3)],
+          ("listen", 0.9, "A", "s0", "")], set()),
+        # Коллаб не считается ни за кого.
+        ([("skip", None, "A, B", f"s{i}", "") for i in range(4)], set()),
+    ],
+)
+def test_flow_rejected_artist_keys(rows, rejected):
+    assert flow_router.flow_rejected_artist_keys(rows) == rejected
+
+
+def test_flow_rejected_artist_keys_counts_collection_as_good():
+    rows = [("skip", None, "A", f"s{i}", "") for i in range(4)]
+
+    assert flow_router.flow_rejected_artist_keys(rows, {"a": 1}) == {"a"}
+    assert flow_router.flow_rejected_artist_keys(rows, {"a": 2}) == set()
+
+
+def test_artist_rejected_in_flow_loses_catalog_but_keeps_liked(db):
+    """Один лайкнутый трек артиста, остальные его песни юзер скипает сразу.
+    Штраф веса видит только последние 300 скипов и не видит внешних — артист
+    возвращался в волну с каталогом."""
+    user = create_user(db, username="rejected-artist-user")
+    _playlist, liked = _liked(db, user, artist="OneHit", title="the hit")
+    liked.source, liked.external_id = "ytmusic", "vid-onehit"
+    db.commit()
+    _flow_events(db, user, "OneHit", "sss")
+
+    profile = _taste_profile(db, user.id)
+
+    assert "onehit" in profile["banned_artists"]
+    assert "onehit" not in profile["hard_banned_artists"]
+    assert "onehit" in profile["flow_rejected_artists"]
+    assert "OneHit" not in profile["catalog_artists"]
+    assert "OneHit" not in profile["artists"]
+    assert liked.id in {t.id for t in _liked_candidates(db, profile, 5)}
+
+
+def test_favorite_artist_is_not_rejected_by_flow_skips(db):
+    user = create_user(db, username="rejected-favorite-user")
+    _collection(db, user, "FavArtist", [f"song {i}" for i in range(5)])
+    _flow_events(db, user, "FavArtist", "s" * 20)
+
+    profile = _taste_profile(db, user.id)
+
+    assert "favartist" not in profile["banned_artists"]
+
+
 def test_favorite_pool_does_not_complete_collection_name(monkeypatch):
     """Ник «who» из коллекции не открывает каталог The Who — и в том числе
     из кэша, собранного прежней, мягкой сверкой."""
