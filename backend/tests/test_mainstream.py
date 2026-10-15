@@ -119,3 +119,37 @@ def test_hit_is_only_top_three():
     info = {"listeners": 500_000, "top": ["One", "Two", "Three", "Fourth Song", "Fifth Song"]}
     assert mainstream.is_hit(info, "three", _norm)
     assert not mainstream.is_hit(info, "fourth song", _norm)
+
+
+def test_gate_refills_by_artist_fame_not_play_count():
+    """У внешних кандидатов play_count пуст — добор по нему шёл в случайном
+    порядке и пускал нишевых артистов с малоизвестными песнями."""
+    infos = {
+        "big": {"listeners": 2_000_000, "top": ["A", "B", "C", "Deep Hit", "E"]},
+        "mid": {"listeners": 300_000, "top": ["X", "Y", "Z"]},
+        "niche": {"listeners": 4_000, "top": ["Obscure"]},
+    }
+    items = [
+        {"artist": "niche", "title": "obscure", "play_count": 0},
+        {"artist": "mid", "title": "album track", "play_count": 0},
+        {"artist": "big", "title": "deep hit", "play_count": 0},
+        {"artist": "big", "title": "a", "play_count": 0},
+    ]
+
+    kept, hits = mainstream.gate(
+        items,
+        infos=infos,
+        exempt=lambda item: False,
+        artist_of=lambda item: item["artist"],
+        title_of=lambda item: item["title"],
+        norm_title=_norm,
+        limit=3,
+        popularity=lambda item: item["play_count"],
+    )
+
+    # Хит первым, затем топ-10 известного, затем по слушателям; нишевый —
+    # только если места останутся.
+    assert [(i["artist"], i["title"]) for i in kept] == [
+        ("big", "a"), ("big", "deep hit"), ("mid", "album track"),
+    ]
+    assert sum(hits.values()) == 1

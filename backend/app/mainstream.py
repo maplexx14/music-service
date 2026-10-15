@@ -245,9 +245,13 @@ def gate(
     """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
 
     ``infos`` — ответ ``artist_hits`` по ключам ``artist_of(item)``. Если
-    прошедших меньше ``limit``, добирает отсеянных по убыванию ``popularity``:
-    пустая выдача хуже нарушения правила. Возвращает (оставленные в исходном
-    порядке, {id(item): хит ли}) — второе только для проверенных, в телеметрию.
+    прошедших меньше ``limit``, добирает отсеянных в хвост: пустая выдача хуже
+    нарушения правила. Первыми идут песни из топ-``TOP_TRACKS`` известного
+    артиста, затем по числу слушателей артиста и только потом по
+    ``popularity``: у внешних кандидатов play_count почти всегда пуст, и добор
+    по нему одному шёл в случайном порядке — нишевые артисты с малоизвестными
+    песнями. Возвращает (оставленные в исходном порядке, {id(item): хит ли}) —
+    второе только для проверенных, в телеметрию.
     """
     hit_by_item: dict[int, bool] = {}
     kept, reserve = [], []
@@ -259,6 +263,14 @@ def gate(
         hit_by_item[id(item)] = hit
         (kept if hit else reserve).append(item)
     if len(kept) < limit and reserve:
-        reserve.sort(key=lambda item: popularity(item) or 0, reverse=True)
+        def _fame(item):
+            info = infos.get(artist_of(item))
+            return (
+                is_hit(info, title_of(item), norm_title, top=TOP_TRACKS),
+                int((info or {}).get("listeners") or 0),
+                popularity(item) or 0,
+            )
+
+        reserve.sort(key=_fame, reverse=True)
         kept.extend(reserve[: limit - len(kept)])
     return kept, hit_by_item

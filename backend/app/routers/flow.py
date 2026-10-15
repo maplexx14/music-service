@@ -4844,7 +4844,10 @@ async def _compute_flow(
     # Мейнстрим-фильтр: у артиста не из любимых (deep_catalog_artist_keys) в
     # волну идут только его хиты, топ-3 по Last.fm — см. app/mainstream.py.
     # Свои лайки юзера фильтр не трогает. Если доказанных хитов меньше порции, добираем самыми
-    # популярными из отсеянных: пустая волна хуже нарушения правила.
+    # популярными из отсеянных: пустая волна хуже нарушения правила. Добор —
+    # до ПОРЦИИ (request_limit), а не до пула: с v18 limit здесь — размер пула
+    # (30+), и добор до него пускал в каждую порцию не-хиты нишевых артистов
+    # (жалоба владельца 2026-10-15). Недобранный пул warmer пересчитает раньше.
     if mainstream.available():
         stage_started = loop.time()
         deep_ok = set(profile.get("deep_catalog_artist_keys") or [])
@@ -4874,7 +4877,7 @@ async def _compute_flow(
             artist_of=_gate_artist,
             title_of=lambda item: _norm_key(*_item_artist_title(item))[1],
             norm_title=lambda name: _norm_key("", name)[1],
-            limit=limit,
+            limit=request_limit,
             popularity=lambda item: (
                 item.get("play_count", 0)
                 if isinstance(item, dict)
