@@ -79,6 +79,8 @@ function Settings() {
     toggleRememberPlayer,
     brushIcons,
     toggleBrushIcons,
+    vinylDisc,
+    toggleVinylDisc,
   } = useUiSettingsStore()
   const { user, updatePreferences, logout } = useAuthStore()
   const [gifError, setGifError] = useState('')
@@ -535,6 +537,24 @@ function Settings() {
                       checked={brushIcons}
                       onChange={toggleBrushIcons}
                       aria-label="Иконки кистью"
+                    />
+                    <span className="settings-toggle-slider" />
+                  </label>
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <div className="settings-label">Диск-пластинка</div>
+                    <div className="settings-hint">
+                      Обложка трека на виниле. Выключите — диск целиком из обложки, как раньше
+                    </div>
+                  </div>
+                  <label className="settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={vinylDisc}
+                      onChange={toggleVinylDisc}
+                      aria-label="Диск-пластинка"
                     />
                     <span className="settings-toggle-slider" />
                   </label>

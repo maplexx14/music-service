@@ -137,8 +137,13 @@
   position: relative;
   overflow: hidden;
   gap: 32px;
-  /* Диаметр пластинки (HeroDisc.css). Ниже 54vh, чем раньше, — над диском
-     теперь стоит заголовок «поток», и он должен влезть в hero. */
+  /* Диаметр диска (HeroDisc.css): ~77% высоты hero, 520px — потолок на
+     очень широких окнах. */
+  --disc-size: min(520px, 34vw, 54vh);
+}
+
+/* Пластинка меньше: над ней стоит заголовок «поток», он должен влезть в hero. */
+.hero-section:has(.hero-disc.is-vinyl) {
   --disc-size: min(440px, 30vw, 42vh);
 }
 
@@ -229,10 +234,10 @@
   user-select: none;
 }
 
-/* Играет трек — в центре пластинка, и заголовок встаёт над ней, а не на
+/* Играет трек и диск-пластинка — заголовок встаёт над ней, а не на
    наклейку. Отступ от низа .wave-center: половина её высоты (центр кнопки
    = центр диска) плюс радиус диска и зазор. */
-.hero-section:has(.hero-disc) .wave-heading {
+.hero-section:has(.hero-disc.is-vinyl) .wave-heading {
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
@@ -719,7 +724,11 @@
   }
 
   .hero-section {
-    /* Замер с макета: диск — 75% ширины экрана, заголовок на ~43px выше. */
+    --disc-size: min(350px, 80vw, 60vh);
+  }
+
+  /* Замер с макета: пластинка — 75% ширины экрана, заголовок на ~43px выше. */
+  .hero-section:has(.hero-disc.is-vinyl) {
     --disc-size: min(360px, 75vw, 50svh);
     --heading-gap: 42px;
   }

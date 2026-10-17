@@ -25,7 +25,6 @@
      быстром повороте тень на вращающемся слое читалась бы как артефакт. */
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   outline: none;
-  background: #0d0d0d;
   overflow: hidden;
   isolation: isolate;
 }
@@ -35,8 +34,16 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   pointer-events: none;
+}
+
+.hero-disc.is-vinyl {
+  background: #0d0d0d;
+}
+
+.hero-disc.is-vinyl::after {
+  border-color: rgba(0, 0, 0, 0.5);
 }
 
 .hero-disc.is-dragging {
@@ -56,12 +63,15 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: url('../assets/vinyl-disc.webp') center / cover no-repeat;
   /* Вращение — Web Animation на композиторе (см. HeroDisc.jsx): слой
      промотирован заранее, поворот не трогает ни раскладку, ни главный поток. */
   will-change: transform;
   /* События указателя слушает корень. */
   pointer-events: none;
+}
+
+.is-vinyl .hero-disc-spin {
+  background: url('../assets/vinyl-disc.webp') center / cover no-repeat;
 }
 
 /* Свет лампы с фото: белый слой с альфой, стоит на месте, пока пластинка
@@ -77,17 +87,30 @@
 }
 
 .hero-disc-cover {
-  /* Наклейка: обложка в центре, 61% диаметра — замер с макета. */
+  /* Без пластинки обложка — размытый фон под заголовком и кнопкой потока: на
+     чёткой картинке белый текст терялся. Размытие на краях подмешивает
+     прозрачность, поэтому картинка на 8% шире диска — блеклый ободок уходит
+     за обрезку корня. */
   position: absolute;
-  inset: 19.5%;
-  width: 61%;
-  height: 61%;
+  inset: -4%;
+  width: 108%;
+  height: 108%;
+  filter: blur(4px) brightness(0.88);
   display: block;
   border-radius: 50%;
   object-fit: cover;
   -webkit-user-drag: none;
   /* Её собственный drag-and-drop в браузере перебивал бы поворот. */
   pointer-events: none;
+}
+
+/* Пластинка: обложка — чёткая наклейка в центре, 61% диаметра (замер с
+   макета). Заголовок стоит над диском, размывать незачем. */
+.is-vinyl .hero-disc-cover {
+  inset: 19.5%;
+  width: 61%;
+  height: 61%;
+  filter: none;
 }
 
 @media (max-width: 768px) {

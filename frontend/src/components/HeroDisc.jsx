@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScreen } from '../hooks/useScreen'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { PLAYBACK_ANIMATION_ID } from '../utils/frameMeter'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -54,6 +55,7 @@ function HeroDisc() {
   // duration — только для первичной отрисовки aria-атрибутов; в кадре
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => s.duration)
+  const vinyl = useUiSettingsStore((s) => s.vinylDisc)
   const rootRef = useRef(null)
   // Главная скрыта (открыта другая вкладка) — вращение не крутим.
   const { active: screenActive } = useScreen()
@@ -301,7 +303,7 @@ function HeroDisc() {
   return (
     <div
       ref={rootRef}
-      className={`hero-disc${isDragging ? ' is-dragging' : ''}`}
+      className={`hero-disc${vinyl ? ' is-vinyl' : ''}${isDragging ? ' is-dragging' : ''}`}
       // Поворот диска — не pull-to-refresh: жест не должен тянуть обновление
       // главной, когда страница проскроллена в самый верх.
       data-no-pull=""
@@ -318,7 +320,8 @@ function HeroDisc() {
     >
       {/* Вращается винил вместе с обложкой-наклейкой: пылинки на виниле
           показывают, что пластинка крутится. Свет лампы — отдельный
-          неподвижный слой поверх. */}
+          неподвижный слой поверх. Без пластинки (настройка) крутится та же
+          обёртка, а обложка занимает весь круг. */}
       <div ref={platterRef} className="hero-disc-spin">
         <img
           className="hero-disc-cover"
@@ -333,7 +336,7 @@ function HeroDisc() {
           onError={handleCoverError}
         />
       </div>
-      <div className="hero-disc-light" />
+      {vinyl && <div className="hero-disc-light" />}
     </div>
   )
 }

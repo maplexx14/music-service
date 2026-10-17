@@ -28,11 +28,14 @@ const defaultQualityMode = () => 'high'
 // rememberPlayer — запоминать очередь и позицию между запусками
 // (services/playerPersist). Включает сам юзер в настройках.
 // brushIcons — иконки кистью логотипа (фильтр #brush-icon в index.html).
+// vinylDisc — диск на главной в виде пластинки; выключено — прежний диск
+// из размытой обложки (HeroDisc).
 const defaultSettings = () => ({
   liteMode: false,
   streamQuality: defaultQualityMode(),
   rememberPlayer: false,
   brushIcons: true,
+  vinylDisc: true,
 })
 
 const loadSettings = () => {
@@ -51,6 +54,7 @@ const loadSettings = () => {
         : fallback.streamQuality,
       rememberPlayer: parsed.rememberPlayer === true,
       brushIcons: typeof parsed.brushIcons === 'boolean' ? parsed.brushIcons : fallback.brushIcons,
+      vinylDisc: typeof parsed.vinylDisc === 'boolean' ? parsed.vinylDisc : fallback.vinylDisc,
     }
   } catch {
     return fallback
@@ -81,6 +85,7 @@ const useUiSettingsStore = create((set) => ({
   },
   toggleRememberPlayer: () => set((state) => ({ rememberPlayer: !state.rememberPlayer })),
   toggleBrushIcons: () => set((state) => ({ brushIcons: !state.brushIcons })),
+  toggleVinylDisc: () => set((state) => ({ vinylDisc: !state.vinylDisc })),
 }))
 
 if (typeof window !== 'undefined') {
@@ -95,6 +100,7 @@ if (typeof window !== 'undefined') {
           streamQuality: state.streamQuality,
           rememberPlayer: state.rememberPlayer,
           brushIcons: state.brushIcons,
+          vinylDisc: state.vinylDisc,
         })
       )
     } catch {
