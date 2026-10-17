@@ -1,15 +1,14 @@
-/* Диск-пластинка в hero главной: обложка текущего трека на фоне градиента.
-   Лежит между фоновым Grainient (z-index 0) и кнопкой потока (z-index 2),
-   поэтому кнопка оказывается в центре диска, как на макете. */
+/* Диск-пластинка в hero главной: чёрный винил с бороздками, в центре —
+   обложка текущего трека вместо бумажной наклейки. Лежит между фоном
+   (z-index 0) и кнопкой потока (z-index 2), поэтому кнопка оказывается в
+   центре наклейки, как на макете. Размер — --disc-size с .hero-section
+   (Home.css): от него же отсчитан отступ заголовка над диском. */
 
 .hero-disc {
   position: absolute;
   inset: 0;
   margin: auto;
-  /* Размер взят с макета: диск занимает ~77% высоты hero (34vw на широком
-     экране). 54vh — потолок по высоте hero (70vh минус паддинги), иначе
-     диск обрезался бы по краям; 520px — потолок на очень широких окнах. */
-  width: min(520px, 34vw, 54vh);
+  width: var(--disc-size);
   aspect-ratio: 1;
   border-radius: 50%;
   z-index: 1;
@@ -24,11 +23,9 @@
   -webkit-touch-callout: none;
   /* Тень и кант живут на некрутящемся корне: вращать их незачем, а при
      быстром повороте тень на вращающемся слое читалась бы как артефакт. */
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   outline: none;
-  /* Обложка размыта (см. .hero-disc-cover) и шире корня — обрезаем её по
-     кругу корня, чтобы край диска остался чётким. isolation — чтобы Safari
-     не выпускал повёрнутый слой за скругление. */
+  background: #0d0d0d;
   overflow: hidden;
   isolation: isolate;
 }
@@ -38,7 +35,7 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
 
@@ -52,31 +49,49 @@
     0 0 0 3px rgba(255, 255, 255, 0.55);
 }
 
-.hero-disc-cover {
-  /* Обложка — размытый фон под заголовком и кнопкой потока: на чёткой
-     картинке белый текст терялся. Размытие на краях подмешивает прозрачность,
-     поэтому картинка на 8% шире диска — блеклый ободок уходит за обрезку
-     корня. */
+.hero-disc-spin {
+  /* Винил — бороздки, снятые с фото пластинки по радиусу, плюс пылинки и
+     пара царапин (assets/vinyl-disc.webp). Без единого блика: свет с фото
+     вынесен в .hero-disc-light, иначе он крутился бы вместе с пластинкой. */
   position: absolute;
-  inset: -4%;
-  width: 108%;
-  height: 108%;
-  filter: blur(4px) brightness(0.88);
-  display: block;
+  inset: 0;
   border-radius: 50%;
-  object-fit: cover;
+  background: url('../assets/vinyl-disc.webp') center / cover no-repeat;
   /* Вращение — Web Animation на композиторе (см. HeroDisc.jsx): слой
      промотирован заранее, поворот не трогает ни раскладку, ни главный поток. */
   will-change: transform;
+  /* События указателя слушает корень. */
+  pointer-events: none;
+}
+
+/* Свет лампы с фото: белый слой с альфой, стоит на месте, пока пластинка
+   крутится. На наклейку не ложится — маска открывает только винил. */
+.hero-disc-light {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: url('../assets/vinyl-light.webp') center / cover no-repeat;
+  -webkit-mask: radial-gradient(circle closest-side, transparent 60.5%, #000 62%);
+  mask: radial-gradient(circle closest-side, transparent 60.5%, #000 62%);
+  pointer-events: none;
+}
+
+.hero-disc-cover {
+  /* Наклейка: обложка в центре, 61% диаметра — замер с макета. */
+  position: absolute;
+  inset: 19.5%;
+  width: 61%;
+  height: 61%;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
   -webkit-user-drag: none;
-  /* События указателя слушает корень: на картинке они не нужны, а её
-     собственный drag-and-drop в браузере перебивал бы поворот. */
+  /* Её собственный drag-and-drop в браузере перебивал бы поворот. */
   pointer-events: none;
 }
 
 @media (max-width: 768px) {
   .hero-disc {
-    width: min(350px, 80vw, 60vh);
     /* Нижний паддинг hero больше верхнего — под нижнюю навигацию (Home.css).
        Кнопка потока центрирована без него, диск — тоже, иначе они
        разъезжаются. */

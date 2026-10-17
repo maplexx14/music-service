@@ -57,7 +57,7 @@ function HeroDisc() {
   const rootRef = useRef(null)
   // Главная скрыта (открыта другая вкладка) — вращение не крутим.
   const { active: screenActive } = useScreen()
-  const coverRef = useRef(null)
+  const platterRef = useRef(null)
   const dragRef = useRef(null)
   // Управление вращением для жеста: hold() останавливает анимацию и отдаёт
   // позицию, на которой диск стоит на экране; resume(сек) запускает её
@@ -80,7 +80,7 @@ function HeroDisc() {
   // секунду), и переставляет её, если разошлись.
   useEffect(() => {
     if (!trackKey || !screenActive) return undefined
-    const el = coverRef.current
+    const el = platterRef.current
     if (!el || typeof el.animate !== 'function') return undefined
     // prefers-reduced-motion: постоянное вращение — декор, его убираем.
     // Ручной поворот (жест) остаётся: это прямое управление, а не анимация.
@@ -252,7 +252,7 @@ function HeroDisc() {
     drag.progress = drag.base + drag.accum / 360
     // Во время жеста угол ведёт палец, а не анимация: перемотка применяется
     // с задержкой, и диск отставал бы от руки.
-    if (coverRef.current) coverRef.current.style.transform = `rotate(${drag.progress * 360}deg)`
+    if (platterRef.current) platterRef.current.style.transform = `rotate(${drag.progress * 360}deg)`
 
     if (Math.abs(drag.accum) >= SEEK_MIN_DEG) drag.turned = true
     if (!drag.turned) return
@@ -316,19 +316,24 @@ function HeroDisc() {
       onPointerCancel={finishDrag}
       onKeyDown={handleKeyDown}
     >
-      <img
-        ref={coverRef}
-        className="hero-disc-cover"
-        // Диск крупный (до 520px), а обложки YouTube приходят 120×120 —
-        // просим у CDN увеличенную версию, как полноэкранный плеер. Но только
-        // после старта звука (heavyCoverTrackId): до него — card, иначе
-        // крупная картинка качалась бы наперегонки с первыми байтами трека.
-        src={resolveCoverUrl(currentTrack.cover_url, heavyCover ? 'full' : 'card') || defaultCover}
-        alt=""
-        draggable={false}
-        decoding="async"
-        onError={handleCoverError}
-      />
+      {/* Вращается винил вместе с обложкой-наклейкой: пылинки на виниле
+          показывают, что пластинка крутится. Свет лампы — отдельный
+          неподвижный слой поверх. */}
+      <div ref={platterRef} className="hero-disc-spin">
+        <img
+          className="hero-disc-cover"
+          // Диск крупный (до 520px), а обложки YouTube приходят 120×120 —
+          // просим у CDN увеличенную версию, как полноэкранный плеер. Но только
+          // после старта звука (heavyCoverTrackId): до него — card, иначе
+          // крупная картинка качалась бы наперегонки с первыми байтами трека.
+          src={resolveCoverUrl(currentTrack.cover_url, heavyCover ? 'full' : 'card') || defaultCover}
+          alt=""
+          draggable={false}
+          decoding="async"
+          onError={handleCoverError}
+        />
+      </div>
+      <div className="hero-disc-light" />
     </div>
   )
 }

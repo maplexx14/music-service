@@ -1,0 +1,40 @@
+.hero-hearts {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Небо в тон обложки (--hero-c* приходят инлайном с .hero-section):
+     сверху тёмный угол палитры почти в чёрный, к низу — основной тон,
+     приглушённый. Сердца — светлый тон. */
+  --sky-top: color-mix(in oklab, var(--hero-c3) 80%, #06060f);
+  --sky-bottom: color-mix(in oklab, var(--hero-c2) 75%, #0c0c1c);
+  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 100%);
+  transition: --hero-c1 0.8s ease, --hero-c2 0.8s ease, --hero-c3 0.8s ease;
+}
+
+/* Регистрация цветов палитры — без неё градиент при смене трека
+   перескакивает, а не перетекает. */
+@property --hero-c1 { syntax: '<color>'; inherits: true; initial-value: #b070ff; }
+@property --hero-c2 { syntax: '<color>'; inherits: true; initial-value: #8929ff; }
+@property --hero-c3 { syntax: '<color>'; inherits: true; initial-value: #440f85; }
+
+/* Сверху сердца тусклее — заголовок «поток» и шапка читаются чище. */
+.hero-hearts::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--sky-top) 70%, transparent) 0%, transparent 45%);
+}
+
+.hero-heart {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 46px;
+  height: 46px;
+  background-color: var(--hero-c1);
+  opacity: 0.55;
+  -webkit-mask: var(--heart-img) center / contain no-repeat;
+  mask: var(--heart-img) center / contain no-repeat;
+}

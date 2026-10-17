@@ -137,14 +137,9 @@
   position: relative;
   overflow: hidden;
   gap: 32px;
-  /* Цвета градиента hero. Дефолт совпадает с палитрой Grainient по умолчанию
-     (DEFAULT_HERO_COLORS в utils/coverColor.js); главная переопределяет их
-     инлайном под доминирующий тон обложки текущего трека (см. useCoverColors) —
-     это нужно CSS-заглушке, которая рисуется в lite mode и на время загрузки
-     WebGL. */
-  --hero-c1: #b070ff;
-  --hero-c2: #8929ff;
-  --hero-c3: #440f85;
+  /* Диаметр пластинки (HeroDisc.css). Ниже 54vh, чем раньше, — над диском
+     теперь стоит заголовок «поток», и он должен влезть в hero. */
+  --disc-size: min(440px, 30vw, 42vh);
 }
 
 .hero-grainient {
@@ -232,6 +227,13 @@
   text-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   user-select: none;
+}
+
+/* Играет трек — в центре пластинка, и заголовок встаёт над ней, а не на
+   наклейку. Отступ от низа .wave-center: половина её высоты (центр кнопки
+   = центр диска) плюс радиус диска и зазор. */
+.hero-section:has(.hero-disc) .wave-heading {
+  bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
 /* Кнопка потока — сплошной круг акцентного цвета с одной иконкой в центре
@@ -677,12 +679,16 @@
     object-fit: contain;
   }
 
+  .hero-grainient {
+    border-radius: 0;
+  }
+
   .hero-section {
     z-index: 1;
     flex-direction: column;
     /* Снизу — место под нижнюю навигацию (72px, Layout.css): волна
        центрируется в видимой над ней части экрана. */
-    /* Градиент заходит под шапку (safe-area + 68): в её скруглённых нижних
+    /* Фон заходит под шапку (safe-area + 68): в её скруглённых нижних
        углах виден он, а не чёрный фон страницы. Высота шапки возвращена
        отступом сверху. */
     padding: calc(32px + env(safe-area-inset-top, 0px) + 68px) 16px
@@ -702,10 +708,6 @@
     justify-content: center;
   }
 
-  .hero-grainient {
-    border-radius: 0;
-  }
-
   .wave-gif-button img {
     width: min(180px, 55vw);
     height: min(180px, 55vw);
@@ -714,6 +716,12 @@
   .wave-title {
     width: 84px;
     height: 84px;
+  }
+
+  .hero-section {
+    /* Замер с макета: диск — 75% ширины экрана, заголовок на ~43px выше. */
+    --disc-size: min(360px, 75vw, 50svh);
+    --heading-gap: 42px;
   }
 
   .wave-heading {

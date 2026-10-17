@@ -20,16 +20,17 @@ import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import HeroDisc from '../components/HeroDisc'
-import HeroBolts from '../components/HeroBolts'
+import HeroHearts from '../components/HeroHearts'
 import TasteAvatar from '../components/TasteAvatar'
-import { isSoftwareRendering } from '../utils/gpu'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
+import { isSoftwareRendering } from '../utils/gpu'
 import { toast } from '../store/toastStore'
 import './Home.css'
 
 // Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
 const Grainient = lazy(() => import('../components/Grainient'))
+
 const SOUNDCLOUD_PLAYLIST_LIMIT = 12
 const SOUNDCLOUD_SEED_LIMIT = 3
 // Главная живёт смонтированной, пока юзер ходит по вкладкам, — без этого
@@ -199,24 +200,16 @@ function Home() {
   const currentCoverUrl = usePlayerStore((s) => s.currentTrack?.cover_url)
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
-  // В облегчённом режиме фон всегда стандартный: обложку не разбираем вовсе
-  // (сеть, декод картинки и canvas на каждый трек) — вспышки на фиолетовом
-  // фоне логотипа и так смотрятся цельно.
-  const coverColors = useCoverColors(liteMode ? null : currentCoverUrl)
+  // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
+  // и они тоже красятся в тон трека. Разбор — один thumb на трек, дёшево.
+  const coverColors = useCoverColors(currentCoverUrl)
   // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
-  // дефолтная фиолетовая пара, как было зашито в hero раньше.
-  const heroColors = (!liteMode && coverColors) || DEFAULT_HERO_COLORS
+  // дефолтная фиолетовая палитра.
+  const heroColors = coverColors || DEFAULT_HERO_COLORS
   const waveGif = useWaveSettingsStore((s) => s.waveGif)
   // Без аппаратного ускорения WebGL-шейдер на весь hero считается на CPU —
-  // вместо него статичный CSS-градиент тех же цветов.
+  // вместо него тот же лёгкий фон, что в облегчённом режиме.
   const noGpu = isSoftwareRendering()
-  // Аватар в верхней шапке — вход в профиль и настройки на мобильных
-  // (сайдбар скрыт, в нижней навигации профиля нет). Выход — там же.
-  const user = useAuthStore((s) => s.user)
-
-  useEffect(() => {
-    fetchData()
-  }, [])
 
   // Разбор обложки следующего трека — заранее. Разбор идёт через сеть и декод
   // картинки, поэтому без прогрева фон докрашивался бы уже во время трека, а на
@@ -224,10 +217,17 @@ function Home() {
   // из очереди, а кэш разбора общий с useCoverColors — так что в момент смены
   // трека палитра уже готова и берётся синхронно.
   useEffect(() => {
-    if (liteMode) return
     const next = usePlayerStore.getState().getNextTrack(1)
     prefetchCoverColors(next?.cover_url)
-  }, [currentTrackId, liteMode])
+  }, [currentTrackId])
+
+  // Аватар в верхней шапке — вход в профиль и настройки на мобильных
+  // (сайдбар скрыт, в нижней навигации профиля нет). Выход — там же.
+  const user = useAuthStore((s) => s.user)
+
+  useEffect(() => {
+    fetchData()
+  }, [])
 
   // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
   // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
@@ -444,10 +444,8 @@ function Home() {
       </div>
       <div
         className="hero-section"
-        // Цвета градиента hero: тройка под доминирующий тон обложки текущего
-        // трека. Здесь они нужны ради CSS-заглушки (.hero-grainient-static —
-        // lite mode и фолбэк Suspense), сам WebGL-градиент получает те же
-        // цвета пропсами ниже.
+        // Палитра под обложку текущего трека: WebGL-градиент получает её
+        // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
         style={{
           '--hero-c1': heroColors[0],
           '--hero-c2': heroColors[1],
@@ -456,10 +454,7 @@ function Home() {
       >
         <div className="hero-grainient">
           {liteMode || noGpu ? (
-            <>
-              <div className="hero-grainient-static" />
-              <HeroBolts active={isWavePlaying} />
-            </>
+            <HeroHearts />
           ) : (
             <Suspense fallback={<div className="hero-grainient-static" />}>
               <Grainient
