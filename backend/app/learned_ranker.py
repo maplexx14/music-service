@@ -40,6 +40,13 @@ _GLOBAL_KEY = f"flow:ranker:v{MODEL_VERSION}:global"
 _USER_KEY = f"flow:ranker:v{MODEL_VERSION}:user:{{}}"
 _MODEL_TTL = 7 * 24 * 60 * 60
 WINDOW_DAYS = 30
+# Личная модель учится только на последней неделе. Признаки и сама волна
+# меняются с каждым релизом (v18 2026-10-14: hit = топ-3, script, потолки), и
+# на 30 днях модель владельца выучила старый режим: 2026-10-18 AUC 0.544
+# против ручного 0.682 на последних 20%, отклонена. Неделя на срезах 10-09…
+# 10-18 обходила ручной скор на каждом (0.71–0.81 против 0.43–0.73), 30 дней —
+# проигрывала на двух последних. Глобальной нужны редкие юзеры — у неё 30 дней.
+USER_WINDOW_DAYS = 7
 MIN_ROWS = 300
 USER_MIN_ROWS = 800
 MIN_AUC = 0.55
@@ -333,7 +340,9 @@ def train_and_store(db, user_ids: Iterable[int], now: Optional[datetime] = None)
     _store(_GLOBAL_KEY, global_model)
     if global_model is not None:
         report["global"] = {k: global_model[k] for k in ("n", "auc", "baseline_auc")}
+    user_since = (now - timedelta(days=USER_WINDOW_DAYS)).timestamp()
     for user_id, samples in per_user.items():
+        samples = [row for row in samples if row[2] >= user_since]
         model = train(samples, prior=global_model) if len(samples) >= USER_MIN_ROWS else None
         _store(_USER_KEY.format(user_id), model)
         if model is not None:

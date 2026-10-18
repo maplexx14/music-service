@@ -536,3 +536,43 @@ def test_artist_run_limit_is_soft_without_other_artists():
     pool = _pool(["a", "a", "a"])
     order = flow_session.limit_artist_runs(pool, lambda item: item["artist"])
     assert [item["id"] for item in order] == [0, 1, 2]
+
+
+def test_user_model_learns_from_the_last_week_only(monkeypatch):
+    """Старый режим волны не перевешивает свежий: личная модель — по неделе.
+
+    Прод, 2026-10-18: на 30 днях модель владельца выучила волну до v18 и на
+    свежих исходах проигрывала ручному скору (0.544 против 0.682).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    rng = random.Random(11)
+
+    def rows(count, days_ago, cyr_is_good):
+        out = []
+        for index in range(count):
+            cyr = rng.random() < 0.5
+            good = rng.random() < (0.6 if cyr == cyr_is_good else 0.05)
+            out.append({
+                "good": good, "bad": not good, "strong": False,
+                "features": {"components": {"affinity": rng.random()}, **({"script": "cyr"} if cyr else {})},
+                "shown_at": now - timedelta(days=days_ago, minutes=index),
+            })
+        return out
+
+    history = rows(2500, 20, cyr_is_good=True) + rows(1000, 3, cyr_is_good=False)
+    monkeypatch.setattr(
+        "app.discovery_feedback.delivery_outcomes", lambda _db, _user_id, since: history
+    )
+    stored = {}
+    monkeypatch.setattr(learned_ranker, "_store", lambda key, model: stored.__setitem__(key, model))
+
+    learned_ranker.train_and_store(None, [1], now=now)
+
+    model = stored[learned_ranker._USER_KEY.format(1)]
+    assert model is not None and model["n"] == 1000
+    score = learned_ranker.scorer(model)
+    assert score({"components": {"affinity": 0.5}}) > score(
+        {"components": {"affinity": 0.5}, "script": "cyr"}
+    )
