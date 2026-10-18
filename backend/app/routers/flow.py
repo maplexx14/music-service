@@ -245,6 +245,26 @@ def _novel_cap(limit: int, ratio: float) -> int:
     return max(0, round(limit * ratio))
 
 
+def _mix_by_ratio(items: list, is_novel, ratio: float) -> list:
+    """Новые и знакомые вперемешку в доле ползунка, каждые в своём порядке.
+
+    Добор мейнстрим-гейта: резерв отсортирован по известности, и знакомые
+    артисты (их топ-10) шли первыми — при ползунке 1.0 в пул добирались почти
+    одни знакомые (прод 2026-10-18). Кончился один класс — дальше другой.
+    """
+    novel = [item for item in items if is_novel(item)]
+    familiar = [item for item in items if not is_novel(item)]
+    out, n_novel = [], 0
+    while novel or familiar:
+        want_novel = n_novel < ratio * (len(out) + 1)
+        if novel and (want_novel or not familiar):
+            out.append(novel.pop(0))
+            n_novel += 1
+        else:
+            out.append(familiar.pop(0))
+    return out
+
+
 def _liked_cap(limit: int, ratio: float) -> int:
     """Потолок лайков в выдаче из готового пула — та же квота, что и в
     _compute_flow, но на ``limit`` выдачи, а не на весь пул."""
@@ -4844,11 +4864,15 @@ async def _compute_flow(
 
     # Мейнстрим-фильтр: у артиста не из любимых (deep_catalog_artist_keys) в
     # волну идут только его хиты, топ-3 по Last.fm — см. app/mainstream.py.
-    # Свои лайки юзера фильтр не трогает. Если доказанных хитов меньше порции, добираем самыми
-    # популярными из отсеянных: пустая волна хуже нарушения правила. Добор —
-    # до ПОРЦИИ (request_limit), а не до пула: с v18 limit здесь — размер пула
-    # (30+), и добор до него пускал в каждую порцию не-хиты нишевых артистов
-    # (жалоба владельца 2026-10-15). Недобранный пул warmer пересчитает раньше.
+    # Свои лайки юзера фильтр не трогает. Если доказанных хитов меньше, чем мест
+    # пула для кандидатов под фильтром, добираем самыми известными из отсеянных
+    # (топ-10 известного артиста, потом по слушателям): пустая волна хуже
+    # нарушения правила. Места считаются без лайков (их квота) и без прочих
+    # exempt — жанра (до его потолка) и любимых артистов, а порог сравнивается
+    # только с проверенными (count_exempt=False). Прод 2026-10-18: порог
+    # request_limit закрывали сами exempt, добор не включался вовсе — из 90–102
+    # внешних проходили 3 хита, пул был 7–14 вместо 30, новых ровно 6 при любом
+    # ползунке, и ползунок 0–0.35 давал ~половину новых: заменить было нечем.
     if mainstream.available():
         stage_started = loop.time()
         deep_ok = set(profile.get("deep_catalog_artist_keys") or [])
@@ -4871,6 +4895,16 @@ async def _compute_flow(
         )
         gated_ids = {_item_identity(c) for c in gated}
         before = len(unified_candidates)
+        exempt_other = [
+            c
+            for c in unified_candidates
+            if _item_identity(c) not in gated_ids
+            and _item_identity(c) not in liked_identities
+        ]
+        exempt_genre = sum(1 for c in exempt_other if _item_identity(c) in genre_identities)
+        exempt_slots = len(exempt_other) - exempt_genre + min(exempt_genre, _genre_cap(limit))
+        gate_limit = max(request_limit, limit - liked_target - exempt_slots)
+        gate_familiar = profile.get("artist_weight") or {}
         kept, hit_by_item = mainstream.gate(
             unified_candidates,
             infos=hits,
@@ -4878,11 +4912,17 @@ async def _compute_flow(
             artist_of=_gate_artist,
             title_of=lambda item: _norm_key(*_item_artist_title(item))[1],
             norm_title=lambda name: _norm_key("", name)[1],
-            limit=request_limit,
+            limit=gate_limit,
             popularity=lambda item: (
                 item.get("play_count", 0)
                 if isinstance(item, dict)
                 else getattr(item, "play_count", 0)
+            ),
+            count_exempt=False,
+            arrange_reserve=lambda reserve: _mix_by_ratio(
+                reserve,
+                lambda item: _artist_affinity(_item_artist_title(item)[0], gate_familiar) is None,
+                explore_ratio,
             ),
         )
         for candidate in unified_candidates:
@@ -4890,9 +4930,10 @@ async def _compute_flow(
                 hit_by_identity[_item_identity(candidate)] = hit_by_item[id(candidate)]
         hits_count = sum(hit_by_item.values())
         logger.debug(
-            "flow mainstream user=%s gated=%d hits=%d reserve_used=%d",
+            "flow mainstream user=%s gated=%d limit=%d hits=%d reserve_used=%d",
             user_id,
             len(gated),
+            gate_limit,
             hits_count,
             len(kept) - (before - len(gated)) - hits_count,
         )
