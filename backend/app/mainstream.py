@@ -241,8 +241,6 @@ def gate(
     norm_title,
     limit: int,
     popularity,
-    count_exempt: bool = True,
-    arrange_reserve=None,
 ) -> tuple[list, dict[int, bool]]:
     """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
 
@@ -254,24 +252,17 @@ def gate(
     по нему одному шёл в случайном порядке — нишевые артисты с малоизвестными
     песнями. Возвращает (оставленные в исходном порядке, {id(item): хит ли}) —
     второе только для проверенных, в телеметрию.
-
-    ``count_exempt=False`` — ``limit`` относится только к проверенным: сколько
-    мест пула должны занять кандидаты под фильтром. Иначе exempt (лайки, жанр,
-    любимые) закрывали порог сами, и добор не включался никогда.
     """
     hit_by_item: dict[int, bool] = {}
     kept, reserve = [], []
-    exempt_count = 0
     for item in items:
         if exempt(item):
             kept.append(item)
-            exempt_count += 1
             continue
         hit = is_hit(infos.get(artist_of(item)), title_of(item), norm_title)
         hit_by_item[id(item)] = hit
         (kept if hit else reserve).append(item)
-    counted = len(kept) if count_exempt else len(kept) - exempt_count
-    if counted < limit and reserve:
+    if len(kept) < limit and reserve:
         def _fame(item):
             info = infos.get(artist_of(item))
             return (
@@ -281,7 +272,5 @@ def gate(
             )
 
         reserve.sort(key=_fame, reverse=True)
-        if arrange_reserve is not None:
-            reserve = arrange_reserve(reserve)
-        kept.extend(reserve[: limit - counted])
+        kept.extend(reserve[: limit - len(kept)])
     return kept, hit_by_item
