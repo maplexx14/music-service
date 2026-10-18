@@ -8,6 +8,7 @@ import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted, safeNextPath } from './services/navigation'
 import { lazyWithReload } from './services/staleBuild'
+import { needsOnboarding } from './services/onboarding'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
 const appHistory = createAppHistory()
@@ -209,7 +210,11 @@ function App() {
           path="/*"
           element={
             isAuthenticated ? (
-              <Layout renderRoutes={renderScreenRoutes} />
+              needsOnboarding(user) ? (
+                <Navigate to="/onboarding" replace />
+              ) : (
+                <Layout renderRoutes={renderScreenRoutes} />
+              )
             ) : (
               <GuestRoutes />
             )

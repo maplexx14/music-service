@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Download, Link2 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { markOnboardingSeen } from '../services/onboarding'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import defaultCover from '../assets/default-cover.webp'
 import GenreSelect from '../components/GenreSelect'
@@ -37,7 +38,10 @@ const STEPS = [
 
 function PreferencesOnboarding() {
   const navigate = useNavigate()
-  const { updatePreferences } = useAuthStore()
+  const { updatePreferences, user } = useAuthStore()
+
+  // Показан — больше сам не открывается (см. services/onboarding.js).
+  useEffect(() => markOnboardingSeen(user?.id), [user?.id])
 
   const [step, setStep] = useState(0)
   const [genres, setGenres] = useState([])
