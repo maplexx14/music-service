@@ -80,13 +80,11 @@ from app.discovery import (
     DEFAULT_DISCOVERY_RATIO,
     discovery_ratio,
     discovery_slots,
-    effective_discovery_ratio,
     liked_slots,
 )
 from app.discovery_feedback import (
     cached_outcome_stats,
     cached_population_stats,
-    discovery_acceptance,
     language_terms,
     origin_terms,
     source_posteriors,
@@ -4012,16 +4010,11 @@ async def _compute_flow(
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
     if relax:
         profile = {**profile, "banned_artists": set(profile.get("hard_banned_artists") or ())}
-    # Ползунок — потолок новизны, а фактическая доля зависит от того, как юзер
-    # принимает новых артистов (см. app/discovery_feedback.py). Тонкий профиль
-    # защищён: там фактор не применяется.
-    acceptance = await asyncio.to_thread(
-        discovery_acceptance,
-        db,
-        user_id,
-        len(profile.get("artist_weight") or {}),
-    )
-    explore_ratio = effective_discovery_ratio(requested_ratio, acceptance)
+    # Ползунок отдаётся как есть. Раньше его часть выше дефолта сжималась
+    # фактором приёма новых артистов (discovery_feedback.acceptance_factor), и
+    # на проде 2026-10-18 у владельца 0.85 становилось 0.56: ползунок почти не
+    # менял волну. Явно попрошенная новизна — просьба, а не prior.
+    explore_ratio = requested_ratio
     # Исходы юзера и всех юзеров по источнику и письменности (часовой кэш).
     outcomes = await asyncio.to_thread(cached_outcome_stats, db, user_id)
     population_outcomes = await asyncio.to_thread(
@@ -4173,6 +4166,7 @@ async def _compute_flow(
                 else {}
             ),
             "novel": _artist_affinity(artist, profile.get("artist_weight") or {}) is None,
+            **({"in_collection": True} if identity in liked_identities else {}),
             **(
                 {"fresh_cluster": True}
                 if primary_artist_key(artist)
@@ -4293,6 +4287,9 @@ async def _compute_flow(
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
     origin_by_identity: dict[str, str] = {}
+    # Песни из коллекции юзера: лайки и песни любимых артистов из своих
+    # плейлистов (favorite_collection). Все под одной квотой лайков — см. отбор.
+    liked_identities: set[str] = set()
     # primary_artist_key -> близость к любимым артистам (см. _artist_proximity).
     proximity_by_artist: dict[str, float] = {}
     # Прошёл ли кандидат мейнстрим-фильтр (только для проверенных) — в телеметрию.
@@ -4751,7 +4748,6 @@ async def _compute_flow(
         excl_videos - set(profile.get("collection_external_ids") or [])
     ) | set(client_yt_videos)
     liked_candidates: List[Track] = []
-    liked_identities: set[str] = set()
     liked_banned = set(profile["banned_artists"]) - set(
         profile.get("flow_rejected_artists") or ()
     )
@@ -4791,6 +4787,11 @@ async def _compute_flow(
         taken_keys.add(key)
         excl_ids.add(t.id)
         favorite_collection.append(t)
+        # Это уже лайк по сути — песня лежит в коллекции юзера. Без своей квоты
+        # такие песни шли мимо потолка лайков общим рейтингом: прод, 2026-10-18,
+        # у владельца при ползунке 0.85 — 37 из 105 видимых треков волны
+        # (origin favorite) сверх 18 лайков, итого 53% волны из коллекции.
+        liked_identities.add(_item_identity(t))
         origin_by_identity.setdefault(_item_identity(t), "favorite")
     local_candidates: List[Track] = []
     for t in local:

@@ -2583,6 +2583,45 @@ def test_favorite_collection_songs_cool_down_after_a_show(client, db, monkeypatc
     assert not delivered & set(titles[:9]), delivered
 
 
+def test_favorite_collection_songs_share_the_liked_quota(client, db, monkeypatch):
+    """Песни любимого артиста из своей коллекции — под квотой лайков.
+
+    Прод, 2026-10-18: они приходили как origin favorite мимо потолка лайков, и
+    у владельца при ползунке 0.85 53% видимой волны было из его коллекции.
+    """
+    from app.routers.flow import _liked_cap
+
+    user = create_user(db, username="collected-quota-user")
+    titles = [f"хит {i}" for i in range(10)]
+    _imported_playlist(db, user, [("FavArtist", title) for title in titles])
+    db.add_all([
+        Track(title=f"новый {i}", artist="FavArtist", duration=100, source="local",
+              file_path=f"minio://music/quota-fresh-{i}.mp3")
+        for i in range(10)
+    ])
+    user.discovery_ratio = 0.0
+    db.commit()
+
+    async def _favorite(request, artist):
+        return []
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    # Коллекция выше любого добора — без квоты взяла бы всю порцию.
+    monkeypatch.setattr(
+        "app.routers.flow.score_track",
+        lambda item, **kwargs: 10.0 if getattr(item, "title", "").startswith("хит") else 0.0,
+    )
+    resp = client.get(
+        "/api/recommendations/flow?limit=5",
+        headers=auth_headers(client, username="collected-quota-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    delivered = [track["title"] for track in resp.json()]
+    assert len(delivered) == 5, delivered
+    collected = [title for title in delivered if title in titles]
+    assert len(collected) <= _liked_cap(5, 0.0), delivered
+
+
 def _dislike_event(db, user, external_id, *, event_type="dislike", surface="flow",
                    artist="SeedArtist", title=None, minutes_ago=0):
     """Событие дизлайка/снятия из плеера — путь ДО материализации трека."""
@@ -2810,15 +2849,14 @@ def test_undislike_lets_the_track_back_into_the_flow(client, db, monkeypatch):
 
 
 
-def test_flow_discovery_quota_shrinks_when_new_artists_are_rejected(
+def test_flow_discovery_slider_is_not_shrunk_by_acceptance(
     client, db, monkeypatch
 ):
-    """Ползунок — потолок: при плохом приёме новых артистов их квота сжимается.
+    """Ползунок отдаётся как есть, даже если новых юзер принимает плохо.
 
-    Замер на проде: при ползунке 0.55 новые артисты занимали ~43% волны и
-    дослушивались в 3 раза реже знакомых. Здесь приём новых в 5 раз хуже
-    (фактор 0.2): вместо 15 новых из 15 порция отдаёт 5 — discovery_slots от
-    эффективной доли 0.2 + 0.8 * 0.2 = 0.36.
+    Прод, 2026-10-18: фактор приёма 0.55 превращал ползунок владельца 0.85 в
+    0.56, и ползунок почти не менял волну. Ползунок 1.0 — вся порция новым
+    артистам (с фактором 0.2 было 5 из 15).
     """
     from sqlalchemy import select
     from app.models import recommendation_impressions
@@ -2838,9 +2876,6 @@ def test_flow_discovery_quota_shrinks_when_new_artists_are_rejected(
         ]
 
     monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
-    monkeypatch.setattr(
-        "app.discovery_feedback.cached_acceptance_factor", lambda _db, _user_id: 0.2
-    )
 
     def _score(item, **_kwargs):
         artist = getattr(item, "artist", "")
@@ -2857,7 +2892,7 @@ def test_flow_discovery_quota_shrinks_when_new_artists_are_rejected(
     familiar = {f"ownartist{i}" for i in range(10)} | {"goodartist"}
     novel = [track for track in tracks if track["artist"].lower() not in familiar]
     assert len(tracks) == 15
-    assert len(novel) == 5, [track["artist"] for track in tracks]
+    assert len(novel) == 15, [track["artist"] for track in tracks]
 
     rows = db.execute(
         select(recommendation_impressions.c.artist, recommendation_impressions.c.features)
@@ -2866,80 +2901,11 @@ def test_flow_discovery_quota_shrinks_when_new_artists_are_rejected(
     assert len(rows) == 15
     for artist, features in rows:
         assert features["discovery_requested"] == 1.0
-        assert features["discovery_effective"] == 0.36
+        assert features["discovery_effective"] == 1.0
         assert features["novel"] == (artist.lower() not in familiar)
         assert "affinity" in features["components"]
         if features["novel"]:
             assert features["origin"] == "artist_graph"
-
-
-def test_flow_thin_profile_keeps_requested_discovery(client, db, monkeypatch):
-    """Тонкий профиль (4 артиста) защищён от сжатия новизны.
-
-    «Знакомые» у такого юзера — горстка выбранных им самим имён, и плохой приём
-    первых новинок говорит о бедности профиля, а не о нелюбви к новому. Даже
-    при факторе 0.2 ползунок 1.0 отдаёт всю порцию новым артистам.
-    """
-    from sqlalchemy import select
-    from app.models import recommendation_impressions
-
-    user = create_user(db, username="thin-profile-user")
-    _liked(db, user)
-    liked_pl = db.query(Playlist).filter_by(owner_id=user.id, is_liked=True).first()
-    for index in range(3):
-        seed = Track(
-            title=f"тонкий сид {index}", artist=f"OwnArtist{index}", duration=100,
-            source="local", file_path=f"minio://music/thin{index}.mp3",
-        )
-        db.add(seed)
-        db.commit()
-        db.execute(playlist_tracks.insert().values(
-            playlist_id=liked_pl.id, track_id=seed.id, position=10 + index))
-        for track_index in range(2):
-            db.add(Track(
-                title=f"тонкий трек {index}-{track_index}", artist=f"OwnArtist{index}",
-                duration=100, source="local",
-                file_path=f"minio://music/thin{index}_{track_index}.mp3",
-            ))
-    user.discovery_ratio = 1.0
-    db.commit()
-
-    async def _similar(artist):
-        return [
-            _external(
-                f"NeighbourArtist-{artist}-{index}",
-                f"новый трек {artist}-{index}",
-                f"thin-new-{artist}-{index}",
-            )
-            for index in range(10)
-        ]
-
-    monkeypatch.setattr("app.routers.flow._similar_pool", _similar)
-    monkeypatch.setattr(
-        "app.discovery_feedback.cached_acceptance_factor", lambda _db, _user_id: 0.2
-    )
-
-    def _score(item, **_kwargs):
-        artist = getattr(item, "artist", "")
-        return 100.0 if artist.startswith(("OwnArtist", "GoodArtist")) else 0.0
-
-    monkeypatch.setattr("app.routers.flow.score_track", _score)
-
-    response = client.get(
-        "/api/recommendations/flow?limit=15",
-        headers=auth_headers(client, username="thin-profile-user"),
-    )
-    assert response.status_code == 200, response.text
-    tracks = response.json()
-    familiar = {f"ownartist{i}" for i in range(3)} | {"goodartist"}
-    novel = [track for track in tracks if track["artist"].lower() not in familiar]
-    assert len(tracks) == 15
-    assert len(novel) == 15, [track["artist"] for track in tracks]
-    effective = db.execute(
-        select(recommendation_impressions.c.features)
-        .where(recommendation_impressions.c.user_id == user.id)
-    ).scalars().all()
-    assert effective and all(f["discovery_effective"] == 1.0 for f in effective)
 
 
 def test_first_portion_opens_with_instant_track(monkeypatch):

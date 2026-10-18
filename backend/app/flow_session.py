@@ -265,7 +265,10 @@ def select(
         return bool((features.get(identity_of(item)) or {}).get("novel"))
 
     def is_liked(item) -> bool:
-        return (features.get(identity_of(item)) or {}).get("origin") == "liked"
+        # in_collection — ещё и песни любимых из своей коллекции (origin
+        # favorite): они под той же квотой, что и лайки.
+        row = features.get(identity_of(item)) or {}
+        return row.get("origin") == "liked" or bool(row.get("in_collection"))
 
     def is_capped(item) -> bool:
         return capped is not None and bool(capped(item))

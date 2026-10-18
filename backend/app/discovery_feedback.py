@@ -4,15 +4,17 @@
 показала, что при ползунке 0.55 новые артисты занимали ~43% порции и
 дослушивались в 3 раза реже знакомых. Здесь считается отношение долей
 «хороших» исходов (дослушал до ``GOOD_COMPLETION`` или лайкнул) у новых и
-знакомых артистов за последние ``WINDOW_DAYS``; ``effective_discovery_ratio``
-сжимает им запрошенную новизну.
+знакомых артистов за последние ``WINDOW_DAYS`` — для отчёта
+(scripts/recommendation_report.py). Ползунок этим фактором больше не сжимается:
+на проде 2026-10-18 у владельца 0.85 превращалось в 0.56, и ползунок почти не
+менял волну.
 
 Новизна берётся из ``recommendation_impressions.features["novel"]`` — так её
 видел ранкер в момент отдачи. У строк до появления features её восстанавливаем
 по истории: был ли у юзера положительный сигнал по артисту раньше показа.
 
 Оценка сглажена к общей доле хороших исходов с весом ``PRIOR_WEIGHT``: пока
-исходов мало, фактор близок к 1 и ползунок работает как раньше.
+исходов мало, фактор близок к 1.
 """
 from __future__ import annotations
 
@@ -42,12 +44,6 @@ logger = logging.getLogger(__name__)
 WINDOW_DAYS = 30
 PRIOR_WEIGHT = 50.0
 MIN_FACTOR = 0.2
-# Меньше знакомых артистов — фактор не применяется. У тонкого профиля
-# «знакомые» — это горстка имён, выбранных самим юзером, и сравнение с ними
-# нечестно: новинки подобраны плохо просто потому, что угадывать не из чего.
-# Сжатие новизны здесь закрыло бы юзеру ровно тот путь, которым профиль растёт.
-MIN_FAMILIAR_ARTISTS = 10
-_CACHE_KEY = "discovery:acceptance:v1:{}"
 _CACHE_TTL = 3600
 # Априор источника кандидата (features.origin) по фактическому приёму. На проде
 # (2026-10-01, 14 дней) источники расходились в 20 раз: liked 12.5% «хорошо»,
@@ -245,24 +241,6 @@ def acceptance_factor(counts: dict) -> float:
     return max(MIN_FACTOR, min(1.0, novel_rate / familiar_rate))
 
 
-def cached_acceptance_factor(db: Session, user_id: int) -> float:
-    """``acceptance_factor`` с часовым кэшем: история меняется медленно."""
-    key = _CACHE_KEY.format(user_id)
-    cached = get_cache(key)
-    if isinstance(cached, (int, float)):
-        return float(cached)
-    try:
-        factor = acceptance_factor(acceptance_counts(db, user_id))
-    except Exception:  # noqa: BLE001 — телеметрия не должна ронять выдачу
-        # Упавший запрос оставляет транзакцию Postgres в aborted-состоянии, а
-        # сессией дальше пользуется вызывающий код.
-        db.rollback()
-        logger.exception("discovery acceptance failed user=%s", user_id)
-        return 1.0
-    set_cache(key, factor, expire=_CACHE_TTL)
-    return factor
-
-
 def origin_counts(db: Session, user_id: int, now: Optional[datetime] = None) -> dict:
     """Исходы по источникам кандидатов: {origin: [good, n]} за ``WINDOW_DAYS``."""
     now = _utc(now) or datetime.now(timezone.utc)
@@ -319,13 +297,6 @@ def origin_terms(counts: dict, seed: str) -> dict[str, float]:
         ratio = math.log(sample / pooled)
         terms[origin] = ORIGIN_TERM_WEIGHT * max(low, min(high, ratio))
     return terms
-
-
-def discovery_acceptance(db: Session, user_id: int, familiar_artist_count: int) -> float:
-    """Фактор приёма новизны с защитой тонкого профиля (см. MIN_FAMILIAR_ARTISTS)."""
-    if familiar_artist_count < MIN_FAMILIAR_ARTISTS:
-        return 1.0
-    return cached_acceptance_factor(db, user_id)
 
 
 # --- Источники кандидатов и язык: исходы и сэмплирование Томпсона ---

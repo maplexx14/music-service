@@ -1,16 +1,12 @@
-"""Оценка приёма новых артистов и эффективный ползунок новизны."""
+"""Оценка приёма новых артистов (для отчёта) и исходы по источникам."""
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.cache import clear_pattern
-from app.discovery import effective_discovery_ratio
 from app.discovery_feedback import (
     acceptance_counts,
     acceptance_factor,
-    cached_acceptance_factor,
-    discovery_acceptance,
 )
 from app.models import (
     Playlist,
@@ -21,21 +17,6 @@ from app.models import (
 )
 
 from tests.conftest import create_user
-
-
-@pytest.fixture(autouse=True)
-def _clear_acceptance_cache():
-    clear_pattern("discovery:acceptance:*")
-    yield
-    clear_pattern("discovery:acceptance:*")
-
-
-def test_effective_ratio_scales_only_the_part_above_default():
-    assert effective_discovery_ratio(0.1, 0.2) == 0.1
-    assert effective_discovery_ratio(0.2, 0.2) == 0.2
-    assert effective_discovery_ratio(1.0, 1.0) == 1.0
-    assert effective_discovery_ratio(1.0, 0.2) == pytest.approx(0.36)
-    assert effective_discovery_ratio(0.55, 0.5) == pytest.approx(0.375)
 
 
 def test_acceptance_factor_is_neutral_without_evidence():
@@ -107,11 +88,6 @@ def test_acceptance_counts_use_logged_novelty_and_history_fallback(db):
     }
 
 
-def test_cached_acceptance_factor_is_neutral_for_new_user(db):
-    user = create_user(db, username="acceptance-empty-user")
-    assert cached_acceptance_factor(db, user.id) == 1.0
-
-
 def test_recommendation_report_prints_segments(db, monkeypatch, capsys):
     import sys
 
@@ -150,15 +126,6 @@ def test_recommendation_report_prints_segments(db, monkeypatch, capsys):
     assert "radio" in out and "favorite" in out
     assert "affinity" in out
     assert "hybrid-v8" in out
-
-
-def test_discovery_acceptance_skips_thin_profiles(db, monkeypatch):
-    monkeypatch.setattr(
-        "app.discovery_feedback.cached_acceptance_factor", lambda _db, _user_id: 0.3
-    )
-    assert discovery_acceptance(db, 1, familiar_artist_count=4) == 1.0
-    assert discovery_acceptance(db, 1, familiar_artist_count=9) == 1.0
-    assert discovery_acceptance(db, 1, familiar_artist_count=10) == 0.3
 
 
 def test_origin_terms_follow_acceptance_and_stay_bounded():

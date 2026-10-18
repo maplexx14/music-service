@@ -81,8 +81,7 @@ def test_liked_slots_shrink_as_the_slider_moves_to_new():
 
     assert discovery.liked_slots(15, 0.0) == 4
     assert discovery.liked_slots(15, DEFAULT_DISCOVERY_RATIO) == 3
-    # Ползунок владельца 0.6 даёт фактически ~0.47 (см. effective_discovery_ratio):
-    # 3 лайка из 15 было много, выбрано 2 (2026-10-10).
+    # 3 лайка из 15 при ползунке владельца 0.6 было много, выбрано 2 (2026-10-10).
     assert discovery.liked_slots(15, 0.47) == 2
     assert discovery.liked_slots(15, 0.6) == 2
     # Попросил только новое — своих лайков в порции не будет вообще.
