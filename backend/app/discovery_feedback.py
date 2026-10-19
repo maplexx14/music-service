@@ -477,12 +477,20 @@ def thompson_source_order(
     window: int,
     max_share: float = MAX_SOURCE_SHARE,
     explore: float = SOURCE_EXPLORE,
+    score_of=None,
+    max_gap: Optional[float] = None,
 ) -> list:
     """Переставить кандидатов так, чтобы каждое место доставалось источнику
     сэмплом Томпсона; внутри источника порядок ``items`` (рейтинг) сохраняется.
 
     В каждом окне из ``window`` мест один источник занимает не больше
     ``max_share``. Пустые ``posteriors`` — порядок без изменений.
+
+    С ``score_of`` и ``max_gap`` место разыгрывают только источники, чей
+    лучший оставшийся кандидат отстаёт от лучшего вообще не больше чем на
+    ``max_gap``: сэмпл выбирает между сравнимыми, а не вытаскивает вперёд
+    заведомо слабое (прод, 2026-10-19: radio-хит со score 0.74 на 3-м месте
+    порции, любимый артист со score 2.67 — за пределами видимой части).
     """
     if not posteriors or not items:
         return list(items)
@@ -501,6 +509,10 @@ def thompson_source_order(
         if len(ordered) % window == 0:
             used = {}
         available = list(buckets)
+        if score_of is not None and max_gap is not None:
+            heads = {origin: score_of(buckets[origin][-1]) for origin in available}
+            best = max(heads.values())
+            available = [origin for origin in available if heads[origin] >= best - max_gap]
         allowed = [origin for origin in available if used.get(origin, 0) < cap] or available
         if len(allowed) == 1:
             origin = allowed[0]

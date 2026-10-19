@@ -315,6 +315,11 @@ _ARTIST_HISTORY = 45
 # артистах выполнимо единственным способом — ротацией, поэтому за порядок
 # отвечает контекстный взвешенный выбор в diversity.interleave_artists.
 _MIN_ARTIST_GAP = 4
+# Насколько лучший кандидат источника может отставать по score от лучшего
+# вообще, чтобы сэмпл Томпсона мог отдать место этому источнику (см.
+# discovery_feedback.thompson_source_order). Радио-хит артиста, который лишь
+# мелькнул в коллекции (affinity на полу), отстаёт от любимых на 1.3–1.9.
+_SOURCE_SCORE_GAP = 1.0
 # Штраф в ранкере за каждое появление артиста среди последних _ARTIST_HISTORY
 # отданных треков. Разнос выше меняет только ПОРЯДОК: отбор решает score, а у
 # знакомых артистов близость (до 2.4) даёт ~2.3 против ~0.6 у новых, и в каждую
@@ -4040,6 +4045,11 @@ async def _compute_flow(
         cyr_share,
         lang_texts_count,
     )
+    # Ядро коллекции поправку за письменность не получает: доля письменности
+    # считается по всей коллекции, и у юзера с 569 артистами, где русских
+    # меньшинство, штраф бил по его же топу (прод, 2026-10-19: «Дайте танк (!)»,
+    # 56 треков и вес 63 — language −0.26, в видимую волну не попал).
+    core_artist_keys = _core_artist_keys(profile)
     # Тоже через to_thread: синхронный Session блокирует event loop, а воркер в
     # dev'е один — на время этих запросов замирали ВСЕ параллельные запросы.
     # Последовательно, а не в gather: Session не потокобезопасна, и обе функции
@@ -4139,8 +4149,12 @@ async def _compute_flow(
                 _artist_affinity(artist, profile.get("artist_weight") or {}),
             ),
         )
-        language_term = language_term_by_script.get(script_of(artist, title), 0.0)
-        score += discovery_term + repeat_term + origin_term + language_term
+        language_term = (
+            0.0
+            if _is_core_artist(artist, core_artist_keys)
+            else language_term_by_script.get(script_of(artist, title), 0.0)
+        )
+        score +=discovery_term + repeat_term + origin_term + language_term
         score_by_item[score_key] = score
         # Компоненты считаются только для отданных позиций (см. телеметрию
         # ниже) — входы запоминаем, а не пересчитываем весь пул.
@@ -4968,6 +4982,8 @@ async def _compute_flow(
                     source_posterior,
                     seed=f"source:{flag}:{ranking_context}",
                     window=limit,
+                    score_of=_flow_score,
+                    max_gap=_SOURCE_SCORE_GAP,
                 )
             )
             for flag in (True, False)

@@ -85,7 +85,7 @@ def test_session_arm_keeps_artist_gap_with_previous_portion():
 
 
 def test_without_session_terms_pool_order_is_kept_as_interleaved():
-    pool = _pool(["a", "a", "b", "c", "d"])
+    pool = _pool(["a", "b", "c", "d", "e"])
     rng = random.Random(0)
     rng.random = lambda: 0.99
     chosen, _extra = _select(
@@ -576,3 +576,30 @@ def test_user_model_learns_from_the_last_week_only(monkeypatch):
     assert score({"components": {"affinity": 0.5}}) > score(
         {"components": {"affinity": 0.5}, "script": "cyr"}
     )
+
+
+def test_neighbours_need_a_confident_signal():
+    """Одно «дослушал от 55%» соседей не строит; лайк, «очень» или два хороших — да."""
+    meta = {"1": {"artist": "seed"}, "2": {"artist": "seed"}, "3": {"artist": "other"}}
+    once = flow_session.SessionState(flow_session.parse_session("c1"), meta.get)
+    assert once.positive_artists == []
+    twice = flow_session.SessionState(flow_session.parse_session("c1,c2"), meta.get)
+    assert twice.positive_artists == ["seed"]
+    strong = flow_session.SessionState(flow_session.parse_session("c3,f1"), meta.get)
+    assert strong.positive_artists == ["seed"]
+
+
+def test_portion_holds_one_track_per_artist():
+    """A _ _ _ A проходит разнос, но в порции из 8 это повтор (прод, 2026-10-19)."""
+    pool = _pool(["a", "b", "c", "d", "a", "e", "f", "g", "h", "i"])
+    for arm in ("control", "session"):
+        chosen, _extra = _select(pool, {}, arm=arm, limit=8)
+        artists = [item["artist"] for item in chosen]
+        assert len(artists) == 8 and len(set(artists)) == 8, arm
+        assert artists[:4] == ["a", "b", "c", "d"]
+
+
+def test_one_per_artist_is_soft_without_other_artists():
+    pool = _pool(["a", "b", "a"])
+    chosen, _extra = _select(pool, {}, arm="control", limit=3)
+    assert [item["artist"] for item in chosen] == ["a", "b", "a"]

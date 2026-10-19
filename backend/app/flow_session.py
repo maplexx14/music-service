@@ -45,6 +45,10 @@ _ARTIST_WEIGHTS = {"n": -1.0, "s": -0.8, "d": -2.5, "l": 0.6, "c": 0.4, "f": 0.6
 # Сила поправок в единицах «мест» исходного порядка (см. _BASE_STEP).
 ARTIST_TERM = 1.6
 NEIGHBOUR_TERM = 0.5
+# Соседи Last.fm строятся от артиста с лайком / «очень понравился» или с
+# NEIGHBOUR_MIN_POSITIVES хорошими исходами в сессии (см. SessionState).
+STRONG_POSITIVE_CODES = frozenset("lf")
+NEIGHBOUR_MIN_POSITIVES = 2
 ORIGIN_TERM = 1.2
 NOVELTY_TERM = 1.0
 SCRIPT_TERM = 0.6
@@ -90,6 +94,9 @@ class SessionState:
         self.script_pos = Counter()
         self.script_neg = Counter()
         self.positive_artists: list[str] = []
+        positive_counts = Counter()
+        strong_artists = set()
+        recent_positive: list[str] = []
         self.pos = 0.0
         self.neg = 0.0
         self.count = 0
@@ -113,12 +120,26 @@ class SessionState:
                 target[2][meta["script"]] += weight
             if good:
                 self.pos += weight
-                if artist and artist not in self.positive_artists:
-                    self.positive_artists.append(artist)
+                if artist:
+                    positive_counts[artist] += 1
+                    if code in STRONG_POSITIVE_CODES:
+                        strong_artists.add(artist)
+                    if artist not in recent_positive:
+                        recent_positive.append(artist)
             else:
                 self.neg += weight
             self.count += 1
             weight *= SESSION_DECAY
+        # Сиды соседей — только артисты с уверенным сигналом: лайк, дослушал от
+        # 80% или несколько хороших исходов. Одно «дослушал от 55%» разворачивало
+        # волну: прод, 2026-10-19, новичок дослушал Foo Fighters на 77% (2 трека
+        # в коллекции), и следующая порция ушла в Green Day / Linkin Park /
+        # Three Days Grace — их он скипал до звука.
+        self.positive_artists = [
+            artist
+            for artist in recent_positive
+            if artist in strong_artists or positive_counts[artist] >= NEIGHBOUR_MIN_POSITIVES
+        ]
 
     @property
     def empty(self) -> bool:
@@ -193,6 +214,30 @@ def _greedy_gap(ranked: list, artist_of, limit: int, previous: Iterable[str], mi
         picked.append(item)
         recent.append(artist_of(item))
     return picked
+
+
+def _one_per_artist(chosen: list, rest: list, artist_of) -> list:
+    """Второй трек артиста в порции меняется на первого из ``rest`` с артистом,
+    которого в порции ещё нет; заменить нечем — остаётся (мягко).
+
+    Разнос MIN_ARTIST_GAP допускает A _ _ _ A в порции из 8: прод, 2026-10-19,
+    Mac DeMarco на 3-м и 7-м месте, TV Girl на 0-м и 5-м из 6.
+    """
+    seen = set()
+    spare = list(rest)
+    result = []
+    for item in chosen:
+        artist = artist_of(item)
+        if artist and artist in seen:
+            taken = seen | {artist_of(other) for other in chosen}
+            replacement = next((other for other in spare if artist_of(other) not in taken), None)
+            if replacement is not None:
+                spare.remove(replacement)
+                item = replacement
+                artist = artist_of(item)
+        seen.add(artist)
+        result.append(item)
+    return result
 
 
 def _apply_caps(chosen: list, rest: list, caps: list) -> list:
@@ -282,8 +327,12 @@ def select(
             [(capped, capped_max), (is_novel, novel_max), (is_liked, liked_max)],
         )
 
+    def primary_of(item) -> str:
+        return primary_artist_key(artist_of(item))
+
     if arm != "session":
-        chosen = apply_caps(list(pool[:limit]), list(pool[limit:]))
+        chosen = _one_per_artist(list(pool[:limit]), list(pool[limit:]), primary_of)
+        chosen = apply_caps(chosen, [item for item in pool if item not in chosen])
         for item in chosen:
             extra[identity_of(item)] = {"arm": arm}
         return chosen, extra
@@ -331,6 +380,7 @@ def select(
             previous_artists,
             MIN_ARTIST_GAP,
         )
+    chosen = _one_per_artist(chosen, [item for item in ranked if item not in chosen], primary_of)
     chosen = apply_caps(chosen, [item for item in ranked if item not in chosen])
     # Разведка: место отдаётся случайному кандидату из невыбранной части пула
     # ТОГО ЖЕ класса (новый артист на нового, знакомый на знакомого, лайк на
@@ -346,7 +396,11 @@ def select(
         if rng.random() >= EXPLORE_RATE:
             continue
         kind = kind_of(chosen[position])
-        same = [item for item in rest if kind_of(item) == kind]
+        in_portion = {primary_of(item) for item in chosen}
+        same = [
+            item for item in rest
+            if kind_of(item) == kind and primary_of(item) not in in_portion
+        ]
         if not same:
             continue
         pick = same[rng.randrange(len(same))]

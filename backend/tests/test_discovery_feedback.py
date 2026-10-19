@@ -258,3 +258,22 @@ def test_language_terms_prior_from_library_and_fade_with_evidence():
     # Исходы показывают, что латиницу принимают не хуже, — поправка сходит на нет.
     accepted = {"cyr": [5, 100, 30.0], "lat": [20, 400, 120.0]}
     assert language_terms(accepted, population, 0.82, 11).get("lat", 0.0) > -0.1
+
+
+def test_thompson_source_order_keeps_far_weaker_sources_back():
+    """Сэмпл выбирает между сравнимыми: radio-хит со score 0.7 не обгоняет
+    любимых около 2.6, пока они не кончились (прод, 2026-10-19)."""
+    from app.discovery_feedback import source_posteriors, thompson_source_order
+
+    posteriors = source_posteriors({}, _prod_like_population())
+    scores = {("favorite", 0): 2.7, ("favorite", 1): 2.6, ("radio", 0): 0.7, ("radio", 1): 2.2}
+    items = [("favorite", 0), ("favorite", 1), ("radio", 0), ("radio", 1)]
+    for seed in range(50):
+        order = thompson_source_order(
+            items, lambda item: item[0], posteriors, seed=f"s{seed}", window=4,
+            score_of=scores.get, max_gap=1.0,
+        )
+        assert order.index(("radio", 0)) > order.index(("favorite", 1))
+    # Без порога поведение прежнее.
+    assert thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=4) == \
+        thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=4, score_of=scores.get)
