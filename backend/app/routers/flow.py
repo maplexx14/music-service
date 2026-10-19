@@ -320,6 +320,11 @@ _MIN_ARTIST_GAP = 4
 # discovery_feedback.thompson_source_order). Радио-хит артиста, который лишь
 # мелькнул в коллекции (affinity на полу), отстаёт от любимых на 1.3–1.9.
 _SOURCE_SCORE_GAP = 1.0
+# Сколько треков одного артиста радио может дать за подгрузку. Радио YT Music
+# у нишевого артиста — его же дискография: прод, 2026-10-19, один лайк
+# «Качалки» Сереги Пирата → 16 его треков из радио в пуле из 30. Его каталог
+# приходит отдельно (origin favorite), радио нужно ради других имён.
+_RADIO_PER_ARTIST = 2
 # Штраф в ранкере за каждое появление артиста среди последних _ARTIST_HISTORY
 # отданных треков. Разнос выше меняет только ПОРЯДОК: отбор решает score, а у
 # знакомых артистов близость (до 2.4) даёт ~2.3 против ~0.6 у новых, и в каждую
@@ -4318,6 +4323,7 @@ async def _compute_flow(
         *,
         accept_limit: Optional[int] = None,
         origin: str,
+        per_artist_limit: Optional[int] = None,
     ) -> None:
         # Дедуп и исключения применяем СРАЗУ при добавлении: решение «нужна ли
         # ещё волна радио» должно приниматься по числу свежих кандидатов.
@@ -4331,10 +4337,16 @@ async def _compute_flow(
         # уже лежит в коллекции пользователя, и предварительно обрезанное окно
         # целиком уходило в исключения, а артист исчезал из потока.
         accepted = 0
+        per_artist: Counter = Counter()
         for t in tracks:
             if accept_limit is not None and accepted >= accept_limit:
                 break
             effective_artist, effective_title = effective_track_artist_title(t)
+            if (
+                per_artist_limit is not None
+                and per_artist[primary_artist_key(effective_artist)] >= per_artist_limit
+            ):
+                continue
             key = _norm_key(effective_artist, effective_title)
             external_key = f"{t.source}:{t.external_id}"
             if (
@@ -4370,6 +4382,7 @@ async def _compute_flow(
             (explore if target is None else target).append(t)
             origin_by_identity.setdefault(_item_identity(t), origin)
             accepted += 1
+            per_artist[primary_artist_key(effective_artist)] += 1
 
     # Пик фонового сравнения — первым, до сетевых источников: он уже посчитан,
     # и при совпадении с тем же треком от радио/графа в пул должна попасть
@@ -4613,6 +4626,8 @@ async def _compute_flow(
                 if _matches_related(t)
             ),
             origin="radio",
+            # Во втором проходе потолок снят: неполная порция хуже повтора.
+            per_artist_limit=None if relax else _RADIO_PER_ARTIST,
         )
 
     # Граф артистов YT Music — дополнительный генератор кандидатов. Его можно

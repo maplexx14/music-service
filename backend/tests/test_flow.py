@@ -4093,5 +4093,71 @@ def test_flow_falls_back_to_remixes_when_nothing_else(client, db, monkeypatch):
     assert any(i.startswith("remix") for i in ids), ids
 
 
+def test_radio_gives_at_most_two_tracks_of_an_artist(client, db, monkeypatch):
+    """Радио нишевого артиста — его же дискография: один лайк заливал пул его
+    песнями (прод, 2026-10-19, 16 из 30). Из радио — не больше двух на артиста."""
+    from app.cache import get_cache
+
+    async def _radio(seed_video_id):
+        return [
+            *(_external("Pirate", f"song-{i}", f"radio-pirate{i}") for i in range(12)),
+            *(_external(f"Other{i}", f"other-{i}", f"other{i}") for i in range(6)),
+        ]
+
+    monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
+    monkeypatch.setattr(
+        "app.routers.flow._artist_seed_videos", lambda *a, **k: _async(["seed"])
+    )
+    from app.cache import redis_client
+
+    user = create_user(db, username="radio-cap-user")
+    # Лайк делает артиста знакомым — квота новизны его не режет, как у Felix.
+    now = datetime.now(timezone.utc)
+    _liked_at(db, user, [("LovedArtist", "liked-song", now), ("Pirate", "Liked Song", now)])
+
+    async def _favorite(request, artist):
+        # Как у Felix: каталог Пирата в пул не попал, его песни шли из радио.
+        if artist == "Pirate":
+            return []
+        return [
+            _external(artist, f"catalog-{i}", f"{artist.lower()}-catalog-{i}")
+            for i in range(30)
+        ]
+
+    monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
+    redis_client.delete(flow_router._PC_QUEUE, flow_router._PC_QUEUED)
+    first = client.get(
+        "/api/recommendations/flow?limit=5", headers=auth_headers(client, username="radio-cap-user")
+    )
+    assert first.status_code == 200, first.text
+    # Порцию повтор и так разносит — проверяем пул на несколько выдач.
+    assert _precompute(user.id) is True
+    pool = get_cache(f"flow:ready:{user.id}")["items"]
+    ids = [str(t.get("external_id") or "") for t in pool]
+    assert any(i.startswith("other") for i in ids), ids
+    assert sum(i.startswith("radio-pirate") for i in ids) <= 2, ids
+
+
+def test_radio_artist_cap_is_lifted_when_nothing_else(client, db, monkeypatch):
+    """Кроме одного артиста радио ничего не дало — лучше повтор, чем тишина."""
+    user = create_user(db, username="radio-only-artist-user")
+    _liked(db, user, artist="LovedArtist")
+
+    async def _radio(seed_video_id):
+        return [_external("Pirate", f"song-{i}", f"radio-pirate{i}") for i in range(12)]
+
+    monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
+    monkeypatch.setattr(
+        "app.routers.flow._artist_seed_videos", lambda *a, **k: _async(["seed"])
+    )
+    resp = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="radio-only-artist-user"),
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [str(t.get("external_id") or "") for t in resp.json()]
+    assert sum(i.startswith("radio-pirate") for i in ids) > 2, ids
+
+
 async def _async(value):
     return value
