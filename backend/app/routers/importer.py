@@ -34,8 +34,8 @@ from app.cache import get_cache_async, redis_client, set_cache, set_cache_async
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, playlist_tracks
-from app.recommendation_cache import invalidate_recommendation_cache
-from app.routers import soundcloud, spotify, ytdlp
+from app.recommendation_cache import invalidate_flow_ready, invalidate_recommendation_cache
+from app.routers import flow, soundcloud, spotify, ytdlp
 from app.routers.tracks import get_or_create_external_track
 from app.recommendation_telemetry import link_materialized_deliveries
 from app.schemas import (
@@ -1134,7 +1134,7 @@ async def _import_yandex_profile(
             detail="Не удалось сделать играбельным ни один трек из профиля",
         )
 
-    invalidate_recommendation_cache(user.id)
+    await _refresh_flow_after_import(user.id, request)
     await progress.update(
         stage="done",
         collections_done=len(collections),
@@ -1149,6 +1149,17 @@ async def _import_yandex_profile(
         imported=imported,
         matched=matched,
         skipped=skipped,
+    )
+
+
+async def _refresh_flow_after_import(user_id: int, request: Request) -> None:
+    """Коллекция поменяла вкус: сбросить выдачу и сразу пересчитать порцию
+    волны. Импорт в онбординге (53-й на проде, 145 с) заканчивается прямо
+    перед первой волной — без этого её считали бы вживую."""
+    invalidate_recommendation_cache(user_id)
+    await asyncio.to_thread(invalidate_flow_ready, user_id)
+    await asyncio.to_thread(
+        flow.request_precompute_blocking, user_id, str(request.base_url).rstrip("/")
     )
 
 
@@ -1241,7 +1252,7 @@ async def _import(
         imports,
         progress.saved_step,
     )
-    invalidate_recommendation_cache(current_user.id)
+    await _refresh_flow_after_import(current_user.id, request)
     await progress.update(
         stage="done",
         done=progress.state["total"],

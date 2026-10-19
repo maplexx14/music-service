@@ -3517,6 +3517,40 @@ def _enqueue_precompute_blocking(user_id: int, meta: dict) -> None:
         redis_client.rpush(_PC_QUEUE, user_id)
 
 
+# Порция первой выдачи (playerStore.FLOW_START_LIMIT): мета ещё не записана.
+_PC_START_LIMIT = 8
+
+
+def request_precompute_blocking(
+    user_id: int, base_url: str, hour: Optional[int] = None
+) -> None:
+    """Попросить flow-warmer посчитать порцию сейчас, не дожидаясь выдачи.
+
+    Звать после смены того, из чего считается поток (онбординг, импорт).
+    Обычно юзер встаёт в очередь только после выдачи /flow, поэтому первая
+    волна новичка всегда считалась вживую: прод 2026-10-19, 47/52/53/54 —
+    4.5–5.6 с (``path=live ready=none``), а warmer доходил до 54-го, когда тот
+    уже ушёл. От сохранения онбординга до главной проходит 10–40 с — порция
+    успевает. Не успела — выдача посчитает вживую, как раньше.
+    """
+    if not _FLOW_PRECOMPUTE:
+        return
+    try:
+        raw = redis_client.get(_pc_meta_key(user_id))
+        meta = json.loads(raw) if raw else {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("limit", _PC_START_LIMIT)
+        if hour is not None:
+            meta["hour_offset"] = (hour - datetime.now(timezone.utc).hour) % 24
+        meta["base_url"] = base_url
+        # Юзер вот-вот откроет волну: warmer заодно ставит матчи источников.
+        meta["at"] = time.time()
+        _enqueue_precompute_blocking(user_id, meta)
+    except Exception:  # noqa: BLE001 — без предрасчёта поток работает живым путём
+        logger.warning("flow precompute request failed user=%s", user_id, exc_info=True)
+
+
 async def _enqueue_precompute(user_id: int, meta: dict) -> None:
     if not _FLOW_PRECOMPUTE:
         return

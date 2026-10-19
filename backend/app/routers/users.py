@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
@@ -17,6 +17,7 @@ from app import lastfm_genres
 from app.genre_keywords import GENRE_KEYWORDS, resolve_internal_key
 from app.dependencies import get_current_active_user, get_current_admin_user
 from app.trusted_devices import device_label_from_user_agent
+from app.routers import flow
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
 from app.artist_utils import artist_key
@@ -219,6 +220,8 @@ def get_detected_taste(
 @router.put("/me/preferences", response_model=UserResponse)
 def update_preferences(
     prefs: UserPreferencesUpdate,
+    request: Request,
+    hour: Optional[int] = Query(None, ge=0, le=23),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -266,6 +269,10 @@ def update_preferences(
     # пятиминутную выдачу, построенную до сохранения предпочтений.
     invalidate_recommendation_cache(current_user.id)
     invalidate_flow_ready(current_user.id)
+    # Новичок идёт из онбординга прямо в волну — порция должна быть готова.
+    flow.request_precompute_blocking(
+        current_user.id, str(request.base_url).rstrip("/"), hour
+    )
     return current_user
 
 
