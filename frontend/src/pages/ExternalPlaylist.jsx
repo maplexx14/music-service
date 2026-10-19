@@ -168,16 +168,17 @@ function ExternalPlaylist() {
     return null
   }
 
+  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у
+  // шапки в CSS свои дефолты, унаследованные она бы перекрыла.
+  const heroStyle = {
+    '--hero-c1': heroColors[0],
+    '--hero-c2': heroColors[1],
+    '--hero-c3': heroColors[2],
+  }
+
   return (
-    <div className="page-container">
-      <header
-        className="artist-hero"
-        style={{
-          '--hero-c1': heroColors[0],
-          '--hero-c2': heroColors[1],
-          '--hero-c3': heroColors[2],
-        }}
-      >
+    <div className="page-container hero-page" style={heroStyle}>
+      <header className="artist-hero" style={heroStyle}>
         {playlist.cover_url && (
           <img
             src={resolveCoverUrl(playlist.cover_url, 'thumb') || resolveCoverUrl(playlist.cover_url)}
@@ -231,7 +232,7 @@ function ExternalPlaylist() {
         </div>
       </div>
 
-      <div className="playlist-tracks">
+      <div className="playlist-tracks hero-page-sheet">
         {tracks.length > 0 ? (
           <table className="tracks-table">
             <thead>

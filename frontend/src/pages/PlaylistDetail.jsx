@@ -189,16 +189,17 @@ function PlaylistDetail() {
     return null
   }
 
+  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у
+  // шапки в CSS свои дефолты, унаследованные она бы перекрыла.
+  const heroStyle = {
+    '--hero-c1': heroColors[0],
+    '--hero-c2': heroColors[1],
+    '--hero-c3': heroColors[2],
+  }
+
   return (
-    <div className="page-container">
-      <header
-        className="artist-hero"
-        style={{
-          '--hero-c1': heroColors[0],
-          '--hero-c2': heroColors[1],
-          '--hero-c3': heroColors[2],
-        }}
-      >
+    <div className="page-container hero-page" style={heroStyle}>
+      <header className="artist-hero" style={heroStyle}>
         {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
         {playlist.cover_url && (
           <img
@@ -272,7 +273,7 @@ function PlaylistDetail() {
         </div>
       </div>
 
-      <div className="playlist-tracks">
+      <div className="playlist-tracks hero-page-sheet">
         {playlist.tracks && playlist.tracks.length > 0 ? (
           <table className="tracks-table">
             <thead>
