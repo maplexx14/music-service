@@ -27,6 +27,8 @@ from app.schemas import (
     PasswordResetConfirm,
     PasswordResetRequest,
     PendingRegistrationResponse,
+    RegistrationClaimRequest,
+    RegistrationClaimResponse,
     RevokeAllDevicesResponse,
     Token,
     TrustedDeviceResponse,
@@ -54,10 +56,13 @@ from app.email_verification import (
     RegistrationNotPending,
     VerificationUnavailable,
     consume_pending_token,
+    consume_registration_claim,
     consume_token,
     create_pending_registration,
     delete_pending_registration,
     get_pending_registration,
+    grant_registration_claim,
+    issue_registration_claim,
     issue_token,
     reissue_pending_token,
     restore_pending_token,
@@ -91,6 +96,8 @@ from app.trusted_devices import (
     current_device_id,
     is_trusted_device,
     list_devices,
+    note_verified_ip,
+    recently_verified_ip,
     remember_device,
     revoke_all_devices,
     revoke_device,
@@ -159,6 +166,11 @@ def _pending_response(username: str, email: str) -> PendingRegistrationResponse:
         full_name=None,
         email_verified=False,
     )
+
+
+def _client_ip(request: Request) -> str | None:
+    # За nginx: uvicorn берёт адрес из X-Forwarded-For (--forwarded-allow-ips).
+    return request.client.host if request.client else None
 
 
 def _issue_access_token(user: User, device_token: str | None = None) -> dict:
@@ -249,7 +261,40 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
         )
 
     send_verification_email(pending.email, pending.username, token)
-    return _pending_response(pending.username, pending.email)
+    response = _pending_response(pending.username, pending.email)
+    response.claim_token = issue_registration_claim(pending)
+    return response
+
+
+@router.post("/register/claim", response_model=RegistrationClaimResponse)
+@limiter.limit("60/minute")
+def claim_registration(
+    payload: RegistrationClaimRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Вход вкладки, где регистрировались, после перехода по ссылке в любом
+    браузере (см. email_verification.CLAIM_TTL_SEC). Вкладка поллит, пока
+    видна; verified=False — почту ещё не подтвердили.
+
+    Секрет знает только вкладка, задавшая пароль, а почту подтвердили ссылкой —
+    это тот же второй фактор, поэтому браузер запоминается без кода."""
+    try:
+        user_id = consume_registration_claim(payload.claim_token)
+    except VerificationUnavailable:
+        raise HTTPException(
+            status_code=503, detail="Email verification temporarily unavailable"
+        )
+    user = db.get(User, user_id) if user_id is not None else None
+    if user is None or not user.is_active:
+        return RegistrationClaimResponse(verified=False)
+    device_token = remember_device(
+        db,
+        user.id,
+        request.headers.get("user-agent"),
+        request.headers.get(DEVICE_TOKEN_HEADER),
+    )
+    return RegistrationClaimResponse(verified=True, **_issue_access_token(user, device_token))
 
 
 @router.post("/login", response_model=LoginResult)
@@ -292,6 +337,17 @@ def login(
     # вызывает /auth/mfa/verify. Иначе пришлось бы хранить сессию шага.
     device_token = request.headers.get(DEVICE_TOKEN_HEADER)
     new_device = not is_trusted_device(db, user.id, device_token)
+    # Тот же телефон, другое хранилище: PWA на iOS, браузер почтового
+    # приложения. С этого IP минуты назад прошли код или ссылку из письма —
+    # второй раз код не спрашиваем (см. RECENT_VERIFY_WINDOW_SEC). Включённую
+    # самим юзером 2FA это не обходит.
+    if (
+        new_device
+        and not user.email_2fa_enabled
+        and recently_verified_ip(user.id, _client_ip(request))
+    ):
+        device_token = remember_device(db, user.id, request.headers.get("user-agent"))
+        return _issue_access_token(user, device_token)
     # Своя 2FA задаёт способы подтверждения; без неё — код на почту (адрес
     # подтверждён, проверено выше).
     methods = _login_methods(user) if new_device else []
@@ -412,6 +468,8 @@ def verify_email(
                 logger.exception("could not restore registration token %s", pending.id)
             raise
         delete_pending_registration(pending)
+        grant_registration_claim(pending, user.id)
+        note_verified_ip(user.id, _client_ip(request))
         # Переход по ссылке из письма — то же доказательство владения почтой,
         # что и код на новом устройстве, и этот браузер сразу получает вход.
         # Без запоминания следующий вход по паролю с него же считался бы
@@ -600,6 +658,7 @@ def verify_mfa(
             request.headers.get("user-agent"),
             request.headers.get(DEVICE_TOKEN_HEADER),
         )
+        note_verified_ip(user.id, _client_ip(request))
         return _issue_access_token(user, device_token)
 
     try:

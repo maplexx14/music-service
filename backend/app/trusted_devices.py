@@ -16,6 +16,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+from app.cache import redis_client
 from app.models import user_trusted_devices
 
 logger = logging.getLogger("trusted_devices")
@@ -33,6 +34,43 @@ DEVICE_TRUST_DAYS = int(os.getenv("DEVICE_TRUST_DAYS", "180"))
 # лимита каждый новый браузер копит строки без конца. При превышении вытесняем
 # самое давно не использованное устройство.
 MAX_DEVICES_PER_USER = int(os.getenv("MAX_TRUSTED_DEVICES", "10"))
+
+# Сколько после подтверждения почты или кода вход по паролю с ТОГО ЖЕ IP не
+# просит код, даже если браузер новый. Прод 2026-10-19: на iPhone ссылка из
+# письма открывается в браузере почтового приложения, а PWA после «На экран
+# Домой» живёт со своим localStorage — новичок вводил код 2–4 раза за полчаса
+# на одном телефоне, и для сервера это каждый раз «новое устройство».
+# Одного пароля по-прежнему мало: нужен ещё тот же внешний IP в эти минуты.
+# 0 — выключено.
+RECENT_VERIFY_WINDOW_SEC = int(os.getenv("RECENT_VERIFY_WINDOW_SEC", str(30 * 60)))
+
+
+def _recent_verify_key(user_id: int, ip: str) -> str:
+    # IP хэшем: ключи Redis видны в мониторинге, адреса юзеров там не нужны.
+    return f"auth:verified_ip:{user_id}:{hashlib.sha256(ip.encode()).hexdigest()[:32]}"
+
+
+def note_verified_ip(user_id: int, ip: str | None) -> None:
+    """Отметить, что с этого IP юзер только что прошёл второй фактор.
+
+    Звать только после настоящего подтверждения (код, ссылка из письма), а не
+    после входа, пропущенного по этой же отметке: иначе окно продлевало бы
+    само себя без единого кода."""
+    if not ip or RECENT_VERIFY_WINDOW_SEC <= 0:
+        return
+    try:
+        redis_client.setex(_recent_verify_key(user_id, ip), RECENT_VERIFY_WINDOW_SEC, "1")
+    except Exception:  # noqa: BLE001 — без отметки просто спросим код
+        logger.warning("could not note verified ip for user %s", user_id)
+
+
+def recently_verified_ip(user_id: int, ip: str | None) -> bool:
+    if not ip or RECENT_VERIFY_WINDOW_SEC <= 0:
+        return False
+    try:
+        return bool(redis_client.exists(_recent_verify_key(user_id, ip)))
+    except Exception:  # noqa: BLE001 — Redis недоступен: безопасный путь, с кодом
+        return False
 
 
 def generate_device_token() -> str:

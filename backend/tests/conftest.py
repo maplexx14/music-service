@@ -75,6 +75,20 @@ def _flow_arm_control(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_recent_verify_window(monkeypatch):
+    """Вход без кода с того же IP после подтверждения (trusted_devices.
+    RECENT_VERIFY_WINDOW_SEC): у TestClient все запросы с одного адреса, и
+    тесты нового устройства шли бы мимо кода. Включают явно своим monkeypatch."""
+    from app import trusted_devices
+    from app.cache import clear_pattern
+
+    monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 0)
+    clear_pattern("auth:verified_ip:*")
+    yield
+    clear_pattern("auth:verified_ip:*")
+
+
+@pytest.fixture(autouse=True)
 def _reset_email_verification_tokens():
     """Токены и незавершённые регистрации живут 24 ч в общем Redis."""
     from app.cache import clear_pattern

@@ -13,6 +13,8 @@ function Register() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
+  // Секрет этой вкладки: по нему входим сами, когда почту подтвердят.
+  const [claimToken, setClaimToken] = useState(null)
   const [resendState, setResendState] = useState('')
   // Каптча: настройки приходят с бэка, пока их нет — виджет не рисуем.
   const [captcha, setCaptcha] = useState({ loaded: false, required: false, siteKey: '' })
@@ -22,7 +24,37 @@ function Register() {
   // Смена nonce перерисовывает виджет: токен одноразовый, и после любой
   // неудачной отправки старый уже негоден.
   const [captchaNonce, setCaptchaNonce] = useState(0)
-  const { register, resendVerification, fetchCaptchaConfig } = useAuthStore()
+  const { register, resendVerification, fetchCaptchaConfig, claimRegistration } = useAuthStore()
+
+  // Ссылку из письма часто открывают не здесь: на iPhone — в браузере
+  // почтового приложения, и раньше эта вкладка просила пароль и код заново.
+  // Пока экран «проверьте почту» виден, спрашиваем бэк, подтверждена ли
+  // почта; вход переведёт роутер в онбординг. Чаще всего возвращаются сюда
+  // из почты — проверяем сразу на возврате, не дожидаясь таймера.
+  useEffect(() => {
+    if (!sent || !claimToken) return undefined
+    let stopped = false
+    let inFlight = false
+    const check = async () => {
+      if (stopped || inFlight || document.hidden) return
+      inFlight = true
+      const result = await claimRegistration(claimToken)
+      inFlight = false
+      if (result.success) stopped = true
+    }
+    const timer = window.setInterval(check, 3000)
+    const onVisible = () => {
+      if (!document.hidden) check()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [sent, claimToken, claimRegistration])
 
   useEffect(() => {
     let cancelled = false
@@ -103,6 +135,7 @@ function Register() {
     setLoading(false)
 
     if (result.success) {
+      setClaimToken(result.claimToken)
       setSent(true)
     } else {
       setError(result.error)
@@ -127,6 +160,7 @@ function Register() {
             <p>
               Отправили ссылку для подтверждения на <strong>{formData.email}</strong>.
               Ссылка действует 24 часа.
+              {claimToken && ' Откройте её где удобно — здесь войдём сами.'}
             </p>
           </div>
 

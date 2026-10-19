@@ -58,6 +58,22 @@ class UserResponse(UserBase):
 class PendingRegistrationResponse(UserBase):
     """Заявка принята, но строки в users до подтверждения ещё нет."""
     email_verified: bool = False
+    # Секрет вкладки регистрации: по нему она сама получает вход, когда почту
+    # подтвердят в любом браузере (POST /auth/register/claim). Только в ответе
+    # /register; None — выдать не удалось, вход тогда по паролю.
+    claim_token: Optional[str] = None
+
+
+class RegistrationClaimRequest(BaseModel):
+    claim_token: str
+
+
+class RegistrationClaimResponse(BaseModel):
+    """verified=False — почту ещё не подтвердили, вкладка поллит дальше."""
+    verified: bool = False
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
+    device_token: Optional[str] = None
 
 
 class UserPreferencesUpdate(BaseModel):
@@ -122,6 +138,9 @@ class LoginResult(BaseModel):
     new_device: bool = False
     # Куда ушёл код (маскированный адрес) — для текста на экране ввода.
     email_masked: Optional[str] = None
+    # Вход без кода с нового браузера на том же IP сразу после подтверждения
+    # (см. trusted_devices.RECENT_VERIFY_WINDOW_SEC): браузер запоминается.
+    device_token: Optional[str] = None
 
 
 class TrustedDeviceResponse(BaseModel):

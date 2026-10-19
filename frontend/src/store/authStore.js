@@ -75,6 +75,12 @@ const useAuthStore = create((set, get) => ({
             }
           }
 
+          // Вход без кода с нового браузера сразу после подтверждения на этом
+          // же IP (PWA на iOS, браузер почтового приложения): бэк запомнил
+          // устройство — следующий вход отсюда тоже без кода.
+          if (response.data?.device_token) {
+            setDeviceToken(response.data.device_token)
+          }
           return await useAuthStore.getState().finalizeLogin(response.data.access_token)
         } catch (error) {
           // 403 = почта не подтверждена. Отдельный флаг, чтобы форма показала
@@ -273,16 +279,21 @@ const useAuthStore = create((set, get) => ({
 
       register: async (username, email, password, captchaToken) => {
         try {
-          await api.post('/auth/register', {
+          const response = await api.post('/auth/register', {
             username,
             email,
             password,
             captcha_token: captchaToken || null,
           })
 
-          // Авто-входа больше нет: бэк не пускает до подтверждения почты.
-          // Форма показывает экран "проверьте письмо".
-          return { success: true, verificationRequired: true }
+          // Бэк не пускает до подтверждения почты: форма показывает экран
+          // «проверьте письмо» и по claimToken сама входит, когда ссылку
+          // откроют в любом браузере (см. claimRegistration).
+          return {
+            success: true,
+            verificationRequired: true,
+            claimToken: response.data?.claim_token || null,
+          }
         } catch (error) {
           const status = error.response?.status
           const detail = error.response?.data?.detail
@@ -305,6 +316,25 @@ const useAuthStore = create((set, get) => ({
         }
       },
       
+      // Вход вкладки регистрации после перехода по ссылке из письма — даже
+      // если ссылка открылась в другом браузере (на iPhone — в браузере
+      // почтового приложения). verified: false — почту ещё не подтвердили.
+      claimRegistration: async (claimToken) => {
+        try {
+          const response = await api.post('/auth/register/claim', {
+            claim_token: claimToken,
+          }, { skipErrorToast: true, skipAuthRedirect: true })
+          if (!response.data?.verified) return { success: false, verified: false }
+          if (response.data.device_token) {
+            setDeviceToken(response.data.device_token)
+          }
+          const result = await useAuthStore.getState().finalizeLogin(response.data.access_token)
+          return { ...result, verified: true }
+        } catch {
+          return { success: false, verified: false }
+        }
+      },
+
       // --- Двухфакторка по почте ---
       setupEmailTwoFactor: async () => {
         try {
@@ -469,6 +499,9 @@ const useAuthStore = create((set, get) => ({
             ...(Number.isFinite(discoveryRatio)
               ? { discovery_ratio: discoveryRatio }
               : {}),
+          }, {
+            // Бэк сразу считает первую порцию волны — под час юзера.
+            params: { hour: new Date().getHours() },
           })
           const newUser = response.data
           set({ user: newUser })

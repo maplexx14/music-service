@@ -255,6 +255,73 @@ def restore_pending_token(pending: PendingRegistration, token: str) -> None:
         raise VerificationUnavailable(str(exc)) from exc
 
 
+# Вкладка, где регистрировались, получает вход сама, когда почту подтвердили
+# где угодно: на iPhone ссылка из письма открывается в браузере почтового
+# приложения, и исходная вкладка раньше требовала пароль и код заново (прод
+# 2026-10-19, юзеры 49 и 54). Вкладке при регистрации выдаётся секрет (claim),
+# по нему после подтверждения она забирает вход ровно один раз. Подтверждённый
+# claim живёт полчаса: вкладка поллит, пока видна, и при возврате на неё.
+CLAIM_TTL_SEC = int(os.getenv("REGISTRATION_CLAIM_TTL_SEC", str(30 * 60)))
+
+
+def _claim_for_key(registration_id: str) -> str:
+    return f"email:registration:claim-for:{registration_id}"
+
+
+def _claim_key(digest: str) -> str:
+    return f"email:registration:claim:{digest}"
+
+
+def issue_registration_claim(pending: PendingRegistration) -> str | None:
+    """Секрет вкладки регистрации. None — Redis недоступен: регистрация
+    работает и без него, просто вход после ссылки будет по паролю."""
+    claim = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(claim.encode()).hexdigest()
+    try:
+        redis_client.setex(_claim_for_key(pending.id), VERIFY_TOKEN_TTL_SEC, digest)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not issue registration claim %s", pending.id)
+        return None
+    return claim
+
+
+def grant_registration_claim(pending: PendingRegistration, user_id: int) -> None:
+    """Почта подтверждена — claim этой заявки теперь открывает вход."""
+    try:
+        digest = redis_client.get(_claim_for_key(pending.id))
+        if not digest:
+            return
+        if isinstance(digest, bytes):
+            digest = digest.decode()
+        redis_client.setex(_claim_key(digest), CLAIM_TTL_SEC, str(user_id))
+        redis_client.delete(_claim_for_key(pending.id))
+    except Exception:  # noqa: BLE001 — вкладка войдёт по паролю
+        logger.warning("could not grant registration claim %s", pending.id)
+
+
+def consume_registration_claim(claim: str) -> int | None:
+    """id юзера, если почту уже подтвердили; claim гаснет. None — ещё нет
+    (или claim чужой/протух — снаружи эти случаи не различаем)."""
+    if not claim:
+        return None
+    digest = hashlib.sha256(claim.encode()).hexdigest()
+    script = """
+    local value = redis.call('get', KEYS[1])
+    if value then redis.call('del', KEYS[1]) end
+    return value
+    """
+    try:
+        raw = redis_client.eval(script, 1, _claim_key(digest))
+    except Exception as exc:  # noqa: BLE001
+        raise VerificationUnavailable(str(exc)) from exc
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def delete_pending_registration(pending: PendingRegistration) -> None:
     try:
         current = redis_client.get(_registration_current_token_key(pending.id))
