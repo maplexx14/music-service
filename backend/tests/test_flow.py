@@ -3814,10 +3814,8 @@ def test_flow_sources_follow_acceptance(client, db, monkeypatch):
     }
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
     monkeypatch.setattr(flow_router, "cached_population_stats", lambda db, build: population)
-    # Свои исходы есть (SOURCE_MIN_USER_OUTCOMES) — иначе источники не переставляются.
-    own = {"local": stats(15, 0.01, 0.85), "favorite": stats(15, 0.15, 0.4)}
     monkeypatch.setattr(
-        flow_router, "cached_outcome_stats", lambda db, uid: {"origin": own, "script": {}}
+        flow_router, "cached_outcome_stats", lambda db, uid: {"origin": {}, "script": {}}
     )
 
     def portion_origins():
@@ -3833,7 +3831,7 @@ def test_flow_sources_follow_acceptance(client, db, monkeypatch):
         )
 
     with_bandit = portion_origins()
-    monkeypatch.setattr(flow_router, "source_posteriors", lambda user, population, **kw: {})
+    monkeypatch.setattr(flow_router, "source_posteriors", lambda user, population: {})
     by_rank = portion_origins()
     assert by_rank["local"] >= 3, by_rank
     assert with_bandit["local"] < by_rank["local"], (with_bandit, by_rank)

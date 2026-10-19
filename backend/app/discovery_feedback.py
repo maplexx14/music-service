@@ -316,11 +316,17 @@ def origin_terms(counts: dict, seed: str) -> dict[str, float]:
 NEUTRAL_REWARD = 0.5
 GOOD_REWARD = 0.8
 _OUTCOME_CACHE_KEY = "discovery:outcomes:v1:{}"
-_POPULATION_CACHE_KEY = "discovery:outcomes:population:v1"
+_POPULATION_CACHE_KEY = "discovery:outcomes:population:v2"
 # Сколько юзеров (последних по показам) складывать в популяционный априор и
 # скольким из них за одну сборку разрешено считать исходы заново (без кэша).
 POPULATION_USERS = 200
 POPULATION_FRESH_COMPUTE = 20
+# Сколько исходов одного юзера (на группу origin/script) идёт в априор; больше —
+# масштабируется вниз. Без потолка априор был вкусом владельца (85–96% исходов),
+# а у остальных источники принимаются наоборот (прод, 2026-10-19: liked 0.41
+# у владельца и 0.04 у остальных, radio 0.33 и 0.14, favorite 0.25 у обоих):
+# новичку радио отдавало 19 из 30 мест пула против 7 у выбранных им артистов.
+POPULATION_USER_CAP = 300
 # Вес априора в псевдо-исходах: у юзера с 20 исходами источника его данные и
 # популяция весят поровну.
 SOURCE_PRIOR_WEIGHT = 20.0
@@ -333,12 +339,6 @@ SOURCE_EVIDENCE_CAP = 30.0
 # Без стольких исходов в популяции сэмплирование не включается: равные
 # апостериоры перемешали бы источники случайно, а это хуже рейтинга.
 SOURCE_MIN_POPULATION = 200
-# Без стольких СВОИХ исходов источники юзера не переставляются: порядок решает
-# рейтинг. Популяция — это почти целиком владелец (85–96% исходов), и его
-# «favorite» (давний deep catalog, Pixies 0/15) — не то же, что артисты,
-# которых новичок только что выбрал в онбординге: прод, 2026-10-19, у новичка
-# radio 19 из 30 мест пула против 7 у его выбранных артистов.
-SOURCE_MIN_USER_OUTCOMES = 20
 # Один источник — не больше этой доли порции; и с этой вероятностью место
 # достаётся случайному источнику: иначе слабый источник не получал бы показов
 # и не смог бы показать, что исправился.
@@ -405,6 +405,19 @@ def cached_outcome_stats(db: Session, user_id: int) -> dict:
     return stats
 
 
+def add_population_stats(total: dict, stats: dict, cap: int = POPULATION_USER_CAP) -> None:
+    """Прибавить исходы одного юзера к априору, не больше ``cap`` на группу."""
+    for group in ("origin", "script"):
+        rows = stats.get(group) or {}
+        user_n = sum(n for _good, n, _reward in rows.values())
+        scale = min(1.0, cap / user_n) if user_n else 1.0
+        for key, (good, n, reward) in rows.items():
+            bucket = total[group].setdefault(key, [0, 0, 0.0])
+            bucket[0] += good * scale
+            bucket[1] += n * scale
+            bucket[2] += reward * scale
+
+
 def cached_population_stats(db: Session, build: bool = True) -> dict:
     """Сумма ``outcome_stats`` последних по показам юзеров волны — априор.
 
@@ -437,12 +450,7 @@ def cached_population_stats(db: Session, build: bool = True) -> dict:
                     continue
                 fresh += 1
                 stats = cached_outcome_stats(db, user_id)
-            for group in ("origin", "script"):
-                for key, (good, n, reward) in (stats.get(group) or {}).items():
-                    bucket = total[group].setdefault(key, [0, 0, 0.0])
-                    bucket[0] += good
-                    bucket[1] += n
-                    bucket[2] += reward
+            add_population_stats(total, stats)
     except Exception:  # noqa: BLE001
         db.rollback()
         logger.exception("population outcome stats failed")
@@ -451,14 +459,9 @@ def cached_population_stats(db: Session, build: bool = True) -> dict:
     return total
 
 
-def source_posteriors(
-    user: dict, population: dict, *, min_user: int = 0
-) -> dict[str, tuple[float, float]]:
+def source_posteriors(user: dict, population: dict) -> dict[str, tuple[float, float]]:
     """Beta(alpha, beta) награды каждого источника: исходы юзера поверх
-    популяционной доли с весом SOURCE_PRIOR_WEIGHT. Пусто — популяция мала
-    или у юзера меньше ``min_user`` своих исходов."""
-    if sum(n for _good, n, _reward in user.values()) < min_user:
-        return {}
+    популяционной доли с весом SOURCE_PRIOR_WEIGHT. Пусто — популяция мала."""
     population_n = sum(n for _good, n, _reward in population.values())
     if population_n < SOURCE_MIN_POPULATION:
         return {}

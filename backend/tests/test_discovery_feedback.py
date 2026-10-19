@@ -279,15 +279,28 @@ def test_thompson_source_order_keeps_far_weaker_sources_back():
         thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=4, score_of=scores.get)
 
 
-def test_source_posteriors_wait_for_the_users_own_outcomes():
-    """Популяция — почти целиком владелец: новичку источники не переставляются,
-    пока у него нет своих исходов (прод, 2026-10-19: radio 19 из 30 у новичка)."""
-    from app.discovery_feedback import SOURCE_MIN_USER_OUTCOMES, source_posteriors
+def test_population_caps_each_users_outcomes():
+    """Один тяжёлый юзер не задаёт априор всем: прод, 2026-10-19, владелец —
+    85–96% исходов, а у остальных radio и liked принимаются наоборот."""
+    from app.discovery_feedback import add_population_stats, source_posteriors
 
-    population = _prod_like_population()
-    newbie = {"radio": [1, 1, 1.0]}
-    assert source_posteriors(newbie, population, min_user=SOURCE_MIN_USER_OUTCOMES) == {}
-    regular = {"radio": [5, 15, 6.0], "favorite": [3, 10, 4.0]}
-    assert source_posteriors(regular, population, min_user=SOURCE_MIN_USER_OUTCOMES)
-    # По умолчанию — прежнее поведение.
-    assert source_posteriors(newbie, population)
+    owner = {"origin": {"radio": [300, 1000, 330.0], "favorite": [130, 1000, 250.0]}, "script": {}}
+    newbies = [
+        {"origin": {"radio": [2, 20, 3.0], "favorite": [6, 20, 5.0]}, "script": {}}
+        for _ in range(10)
+    ]
+    total = {"origin": {}, "script": {}}
+    for stats in (owner, *newbies):
+        add_population_stats(total, stats, cap=300)
+    # Владелец — 300 исходов из 2000, а не 2000 из 2400.
+    assert sum(n for _g, n, _r in total["origin"].values()) == 300 + 400
+    post = source_posteriors({}, total["origin"])
+    mean = {k: a / (a + b) for k, (a, b) in post.items()}
+    assert mean["favorite"] > mean["radio"]
+    # Без потолка — вкус владельца.
+    uncapped = {"origin": {}, "script": {}}
+    for stats in (owner, *newbies):
+        add_population_stats(uncapped, stats, cap=10**9)
+    post = source_posteriors({}, uncapped["origin"])
+    mean = {k: a / (a + b) for k, (a, b) in post.items()}
+    assert mean["radio"] > mean["favorite"]
