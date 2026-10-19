@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Heart, Play, Shuffle } from 'lucide-react'
+import { Heart, Play, Share, Shuffle } from 'lucide-react'
 import api from '../services/api'
 import { peekCache, writeCache, PLAYLIST_PAGE_SIZE } from '../services/pageCache'
 import Spinner from '../components/Spinner'
@@ -11,6 +11,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
+import { shareLink } from '../utils/shareLink'
 import { useCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
@@ -171,6 +172,25 @@ function LikedSongs() {
     return null
   }
 
+  // «Понравившиеся» создаются приватными — по ссылке их открывает только
+  // владелец. Делиться — значит открыть доступ, но только у того, кто нажал.
+  // Шторку открываем сразу, не дожидаясь запроса: Safari пускает share()
+  // только прямо из тапа (см. utils/shareLink).
+  const handleShare = () => {
+    shareLink({
+      title: playlist.name,
+      text: playlist.name,
+      url: `${window.location.origin}/playlists/${playlist.id}`,
+    })
+    if (playlist.is_public) return
+    api.put(`/playlists/${playlist.id}`, { is_public: true }, { skipErrorToast: true })
+      .then(() => setPlaylist((prev) => (prev ? { ...prev, is_public: true } : prev)))
+      .catch((error) => {
+        console.error('Error making liked playlist public:', error)
+        toast.error('Не удалось открыть доступ по ссылке')
+      })
+  }
+
   // Цвета нужны и шапке, и свечению под ней (.liked-page::before): у шапки
   // в CSS свои дефолты, унаследованные она бы перекрыла.
   const heroStyle = {
@@ -243,6 +263,15 @@ function LikedSongs() {
           >
             <Shuffle size={20} />
             <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
+          </button>
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
+            onClick={handleShare}
+            aria-label="Поделиться"
+            title="Поделиться"
+          >
+            <Share size={20} />
+            <span className="round-actions__label">Поделиться</span>
           </button>
         </div>
       </div>
