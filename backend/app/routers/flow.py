@@ -83,6 +83,7 @@ from app.discovery import (
     liked_slots,
 )
 from app.discovery_feedback import (
+    SOURCE_MIN_USER_OUTCOMES,
     cached_outcome_stats,
     cached_population_stats,
     language_terms,
@@ -4037,9 +4038,12 @@ async def _compute_flow(
         {origin: stats[:2] for origin, stats in user_origin_outcomes.items()},
         f"origin:{ranking_context}",
     )
-    # Места порции — источникам по их приёму (thompson_source_order ниже).
+    # Места порции — источникам по их приёму (thompson_source_order ниже);
+    # новичку — по рейтингу, пока своих исходов мало (SOURCE_MIN_USER_OUTCOMES).
     source_posterior = source_posteriors(
-        user_origin_outcomes, population_outcomes.get("origin") or {}
+        user_origin_outcomes,
+        population_outcomes.get("origin") or {},
+        min_user=SOURCE_MIN_USER_OUTCOMES,
     )
     # Понижающая поправка за письменность, которую юзер не принимает: априор
     # из коллекции, апостериор из исходов (discovery_feedback.language_terms).

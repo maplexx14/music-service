@@ -277,3 +277,17 @@ def test_thompson_source_order_keeps_far_weaker_sources_back():
     # Без порога поведение прежнее.
     assert thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=4) == \
         thompson_source_order(items, lambda i: i[0], posteriors, seed="x", window=4, score_of=scores.get)
+
+
+def test_source_posteriors_wait_for_the_users_own_outcomes():
+    """Популяция — почти целиком владелец: новичку источники не переставляются,
+    пока у него нет своих исходов (прод, 2026-10-19: radio 19 из 30 у новичка)."""
+    from app.discovery_feedback import SOURCE_MIN_USER_OUTCOMES, source_posteriors
+
+    population = _prod_like_population()
+    newbie = {"radio": [1, 1, 1.0]}
+    assert source_posteriors(newbie, population, min_user=SOURCE_MIN_USER_OUTCOMES) == {}
+    regular = {"radio": [5, 15, 6.0], "favorite": [3, 10, 4.0]}
+    assert source_posteriors(regular, population, min_user=SOURCE_MIN_USER_OUTCOMES)
+    # По умолчанию — прежнее поведение.
+    assert source_posteriors(newbie, population)

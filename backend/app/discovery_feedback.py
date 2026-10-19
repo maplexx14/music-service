@@ -333,6 +333,12 @@ SOURCE_EVIDENCE_CAP = 30.0
 # Без стольких исходов в популяции сэмплирование не включается: равные
 # апостериоры перемешали бы источники случайно, а это хуже рейтинга.
 SOURCE_MIN_POPULATION = 200
+# Без стольких СВОИХ исходов источники юзера не переставляются: порядок решает
+# рейтинг. Популяция — это почти целиком владелец (85–96% исходов), и его
+# «favorite» (давний deep catalog, Pixies 0/15) — не то же, что артисты,
+# которых новичок только что выбрал в онбординге: прод, 2026-10-19, у новичка
+# radio 19 из 30 мест пула против 7 у его выбранных артистов.
+SOURCE_MIN_USER_OUTCOMES = 20
 # Один источник — не больше этой доли порции; и с этой вероятностью место
 # достаётся случайному источнику: иначе слабый источник не получал бы показов
 # и не смог бы показать, что исправился.
@@ -445,9 +451,14 @@ def cached_population_stats(db: Session, build: bool = True) -> dict:
     return total
 
 
-def source_posteriors(user: dict, population: dict) -> dict[str, tuple[float, float]]:
+def source_posteriors(
+    user: dict, population: dict, *, min_user: int = 0
+) -> dict[str, tuple[float, float]]:
     """Beta(alpha, beta) награды каждого источника: исходы юзера поверх
-    популяционной доли с весом SOURCE_PRIOR_WEIGHT. Пусто — популяция мала."""
+    популяционной доли с весом SOURCE_PRIOR_WEIGHT. Пусто — популяция мала
+    или у юзера меньше ``min_user`` своих исходов."""
+    if sum(n for _good, n, _reward in user.values()) < min_user:
+        return {}
     population_n = sum(n for _good, n, _reward in population.values())
     if population_n < SOURCE_MIN_POPULATION:
         return {}
