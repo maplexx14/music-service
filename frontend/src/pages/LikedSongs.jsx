@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Shuffle } from 'lucide-react'
+import { Heart, Play, Shuffle } from 'lucide-react'
 import api from '../services/api'
 import { peekCache, writeCache, PLAYLIST_PAGE_SIZE } from '../services/pageCache'
 import Spinner from '../components/Spinner'
@@ -171,16 +171,17 @@ function LikedSongs() {
     return null
   }
 
+  // Цвета нужны и шапке, и свечению под ней (.liked-page::before): у шапки
+  // в CSS свои дефолты, унаследованные она бы перекрыла.
+  const heroStyle = {
+    '--hero-c1': heroColors[0],
+    '--hero-c2': heroColors[1],
+    '--hero-c3': heroColors[2],
+  }
+
   return (
-    <div className="page-container">
-      <header
-        className="artist-hero"
-        style={{
-          '--hero-c1': heroColors[0],
-          '--hero-c2': heroColors[1],
-          '--hero-c3': heroColors[2],
-        }}
-      >
+    <div className="page-container liked-page" style={heroStyle}>
+      <header className="artist-hero" style={heroStyle}>
         {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
         {playlist.cover_url && (
           <img
@@ -195,13 +196,21 @@ function LikedSongs() {
           />
         )}
         <div className="artist-hero-content">
-          <img
-            src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-            alt={playlist.name}
-            decoding="async"
-            className="artist-avatar playlist-hero-cover"
-            onError={handleCoverError}
-          />
+          {/* Своей обложки у «Понравившихся» обычно нет, а заглушка с нотой —
+              чёрный квадрат. Вместо неё — сердце на градиенте шапки. */}
+          {playlist.cover_url ? (
+            <img
+              src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+              alt={playlist.name}
+              decoding="async"
+              className="artist-avatar playlist-hero-cover"
+              onError={handleCoverError}
+            />
+          ) : (
+            <div className="artist-avatar playlist-hero-cover liked-hero-cover" aria-hidden="true">
+              <Heart size="42%" fill="currentColor" strokeWidth={0} />
+            </div>
+          )}
           <div className="artist-hero-info">
             <div className="artist-kicker">Плейлист</div>
             <h1 className="artist-name" style={titleFitStyle(playlist.name)}>{playlist.name}</h1>

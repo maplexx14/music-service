@@ -70,6 +70,63 @@
   border-radius: var(--radius-lg);
 }
 
+/* «Понравившиеся» без своей обложки: сердце на градиенте в тон шапки. */
+.liked-hero-cover {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background:
+    radial-gradient(90% 90% at 30% 20%, color-mix(in srgb, var(--hero-c1) 90%, #fff 10%), transparent 70%),
+    linear-gradient(135deg, var(--hero-c2) 0%, var(--hero-c3) 100%);
+}
+
+/* На телефоне фон шапки «Понравившихся» рисует сама страница одним
+   градиентом: у шапки фона нет, иначе на её нижнем крае два градиента
+   сходились швом. Тон держится до низа шапки и по ease-out (промежуточные
+   стопы — линейный спад читается как край) тает к списку, а список лежит на
+   фоне как на ПК (.main-content, Layout.css), а не на почти чёрном мобильном. */
+@media (max-width: 768px) {
+  .liked-page {
+    position: relative;
+    isolation: isolate;
+    background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+  }
+
+  .liked-page::before {
+    content: '';
+    position: absolute;
+    /* Шапка заходит под плавающую панель (Artist.css) — фон туда же. */
+    top: calc(-1 * var(--main-pad-top, 0px));
+    left: 0;
+    right: 0;
+    height: calc(780px + var(--main-pad-top, 0px));
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 420px at 0% 0%, color-mix(in srgb, var(--hero-c1) 55%, transparent), transparent 60%),
+      linear-gradient(
+        180deg,
+        var(--hero-c2) 0,
+        var(--hero-c3) 300px,
+        color-mix(in srgb, var(--hero-c3) 82%, transparent) 360px,
+        color-mix(in srgb, var(--hero-c3) 62%, transparent) 430px,
+        color-mix(in srgb, var(--hero-c3) 42%, transparent) 500px,
+        color-mix(in srgb, var(--hero-c3) 24%, transparent) 570px,
+        color-mix(in srgb, var(--hero-c3) 11%, transparent) 640px,
+        color-mix(in srgb, var(--hero-c3) 3%, transparent) 710px,
+        transparent 100%
+      );
+  }
+
+  .liked-page .artist-hero {
+    background: none;
+  }
+
+  .liked-page .artist-hero::after {
+    content: none;
+  }
+}
+
 .playlist-hero-description {
   font-size: var(--text-base);
   color: rgba(255, 255, 255, 0.8);
