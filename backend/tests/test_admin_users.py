@@ -219,3 +219,30 @@ def test_now_playing_admin_only(client, db):
     create_user(db, "plain")
     resp = client.get("/api/users/admin/now-playing", headers=auth_headers(client, "plain"))
     assert resp.status_code == 403
+
+
+def test_last_heard_shown_without_counted_play(client, db):
+    """Новичок послушал полминуты и ушёл: засчитанного play нет, но админка
+    видит, что он включал трек, а пауза последний трек не затирает."""
+    from app.cache import redis_client
+
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+    paused = create_user(db, "paused")
+    for user in (listener, paused):
+        redis_client.delete(f"users:last_heard:{user.id}")
+
+    base = {"track_id": "ytmusic:abc", "title": "Song", "artist": "Band", "position": 30, "duration": 166}
+    client.put("/api/users/me/now-playing", json={**base, "is_playing": True},
+               headers=auth_headers(client, "listener"))
+    client.put("/api/users/me/now-playing", json={**base, "title": "Other", "is_playing": False},
+               headers=auth_headers(client, "listener"))
+    client.put("/api/users/me/now-playing", json={**base, "is_playing": False},
+               headers=auth_headers(client, "paused"))
+
+    resp = client.get("/api/users/admin/users?taste=false", headers=auth_headers(client, "admin"))
+    profiles = {p["username"]: p for p in resp.json()["users"]}
+    assert profiles["listener"]["last_track"] is None
+    assert profiles["listener"]["last_heard"]["title"] == "Song"
+    assert profiles["listener"]["last_heard"]["played_at"]
+    assert profiles["paused"]["last_heard"] is None

@@ -408,10 +408,33 @@ def _admin_users_page(
     total = query.count()
     users = query.limit(limit).offset(offset).all()
     last_tracks = _admin_last_tracks(db, [user.id for user in users])
-    return total, [
-        _admin_profile(db, user, online_ids, with_taste, last_tracks.get(user.id))
-        for user in users
-    ]
+    last_heard = _admin_last_heard([user.id for user in users if user.id not in last_tracks])
+    profiles = []
+    for user in users:
+        profile = _admin_profile(db, user, online_ids, with_taste, last_tracks.get(user.id))
+        profile["last_heard"] = last_heard.get(user.id)
+        profiles.append(profile)
+    return total, profiles
+
+
+def _admin_last_heard(user_ids: List[int]) -> Dict[int, dict]:
+    """Последний игравший трек из пульса now-playing (см. LAST_HEARD_TTL) —
+    для юзеров без засчитанных прослушиваний."""
+    if not user_ids:
+        return {}
+    try:
+        raw = redis_client.mget([f"{_LAST_HEARD_PREFIX}{uid}" for uid in user_ids])
+    except Exception:
+        return {}
+    result: Dict[int, dict] = {}
+    for uid, value in zip(user_ids, raw):
+        if not value:
+            continue
+        try:
+            result[uid] = json.loads(value)
+        except ValueError:
+            continue
+    return result
 
 
 @router.get("/admin/dashboard")
@@ -488,6 +511,12 @@ def get_admin_users_taste(
 # presence-маркером users:online:*.
 NOW_PLAYING_TTL = 90
 _NOW_PLAYING_PREFIX = "users:now_playing:"
+# Последний трек, который реально играл (is_playing в пульсе), — для карточки
+# админки. user_track_plays пишется только после порога прослушивания (60 с
+# или половина трека), и новичок, послушавший полминуты, выглядел бы как
+# «ещё ничего не слушал».
+LAST_HEARD_TTL = 30 * 24 * 3600
+_LAST_HEARD_PREFIX = "users:last_heard:"
 
 
 class NowPlayingPayload(BaseModel):
@@ -511,6 +540,17 @@ def update_now_playing(
     state = payload.model_dump()
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}", state, expire=NOW_PLAYING_TTL)
+    if payload.is_playing:
+        set_cache(
+            f"{_LAST_HEARD_PREFIX}{current_user.id}",
+            {
+                "title": payload.title,
+                "artist": payload.artist,
+                "position": payload.position,
+                "played_at": state["updated_at"],
+            },
+            expire=LAST_HEARD_TTL,
+        )
     return {"ok": True}
 
 

@@ -284,6 +284,7 @@ function DeveloperMessages({ onCount }) {
 function UserCard({ user, nowPlaying }) {
   const [expanded, setExpanded] = useState(false)
   const lastTrack = user.last_track
+  const lastHeard = user.last_heard
 
   return (
     <div className={`admin-user${expanded ? ' is-expanded' : ''}`}>
@@ -310,7 +311,9 @@ function UserCard({ user, nowPlaying }) {
           <span className="admin-user-last-track">
             {lastTrack
               ? `${lastTrack.title}${lastTrack.artist ? ` — ${lastTrack.artist}` : ''} · ${formatLastSeen(lastTrack.played_at)}`
-              : 'ещё ничего не слушал(а)'}
+              : lastHeard
+                ? `включал(а): ${lastHeard.title}${lastHeard.artist ? ` — ${lastHeard.artist}` : ''} · ${formatLastSeen(lastHeard.played_at)}, не дослушал(а)`
+                : 'ещё ничего не слушал(а)'}
           </span>
         )}
       </div>
