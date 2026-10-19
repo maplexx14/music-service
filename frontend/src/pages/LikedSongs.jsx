@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Heart, Play, Share, Shuffle } from 'lucide-react'
+import { Play, Share, Shuffle } from 'lucide-react'
 import api from '../services/api'
 import { peekCache, writeCache, PLAYLIST_PAGE_SIZE } from '../services/pageCache'
 import Spinner from '../components/Spinner'
@@ -9,6 +9,7 @@ import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
+import logoHeart from '../assets/loader-heart.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
 import { shareLink } from '../utils/shareLink'
@@ -191,7 +192,7 @@ function LikedSongs() {
       })
   }
 
-  // Цвета нужны и шапке, и свечению под ней (.liked-page::before): у шапки
+  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у шапки
   // в CSS свои дефолты, унаследованные она бы перекрыла.
   const heroStyle = {
     '--hero-c1': heroColors[0],
@@ -200,7 +201,7 @@ function LikedSongs() {
   }
 
   return (
-    <div className="page-container liked-page" style={heroStyle}>
+    <div className="page-container hero-page" style={heroStyle}>
       <header className="artist-hero" style={heroStyle}>
         {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
         {playlist.cover_url && (
@@ -217,7 +218,8 @@ function LikedSongs() {
         )}
         <div className="artist-hero-content">
           {/* Своей обложки у «Понравившихся» обычно нет, а заглушка с нотой —
-              чёрный квадрат. Вместо неё — сердце на градиенте шапки. */}
+              чёрный квадрат. Вместо неё — сердце из логотипа на градиенте
+              шапки. */}
           {playlist.cover_url ? (
             <img
               src={resolveCoverUrl(playlist.cover_url) || defaultCover}
@@ -228,7 +230,7 @@ function LikedSongs() {
             />
           ) : (
             <div className="artist-avatar playlist-hero-cover liked-hero-cover" aria-hidden="true">
-              <Heart size="42%" fill="currentColor" strokeWidth={0} />
+              <img src={logoHeart} alt="" decoding="async" />
             </div>
           )}
           <div className="artist-hero-info">
@@ -276,7 +278,7 @@ function LikedSongs() {
         </div>
       </div>
 
-      <div className="playlist-tracks">
+      <div className="playlist-tracks hero-page-sheet">
         {playlist.tracks && playlist.tracks.length > 0 ? (
           <table className="tracks-table">
             <thead>

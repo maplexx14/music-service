@@ -118,30 +118,32 @@ function Artist() {
   // Шапка красится в тон аватара — как hero на главной по обложке трека. До
   // разбора (и без аватара) — фирменная палитра, чтобы не мигать серым.
   const heroColors = useCoverColors(artist?.cover_url) || DEFAULT_HERO_COLORS
-  // Имя в шапке ушло под верхнюю панель — на мобильном показываем компактную
-  // полосу с именем и кнопкой воспроизведения (см. .artist-compact-bar).
-  // Элемент в state, а не в ref: имя появляется только после загрузки, и
-  // наблюдатель должен подписаться именно тогда.
-  const [nameEl, setNameEl] = useState(null)
-  const [nameHidden, setNameHidden] = useState(false)
+  // Шапка скрылась — на мобильном показываем компактную полосу с именем и
+  // кнопкой воспроизведения (см. .artist-compact-bar). Следим не за самим
+  // именем, а за маячком перед карточкой релизов: шапка отстаёт от прокрутки
+  // (параллакс, .hero-page в Artist.css) и закрывается карточкой, а не уходит
+  // за край экрана. Элемент в state, а не в ref: маячок появляется только
+  // после загрузки, и наблюдатель должен подписаться именно тогда.
+  const [sheetMarkerEl, setSheetMarkerEl] = useState(null)
+  const [heroHidden, setHeroHidden] = useState(false)
 
   useEffect(() => {
-    if (!nameEl || typeof IntersectionObserver === 'undefined') return undefined
+    if (!sheetMarkerEl || typeof IntersectionObserver === 'undefined') return undefined
     // Отступ сверху ≈ высота мобильной верхней панели (Layout.css, 52px +
-    // safe-area). Считаем имя скрытым, только когда оно ушло ВВЕРХ — ниже
-    // экрана оно не бывает, но на всякий случай не путаем стороны.
+    // safe-area). Считаем шапку скрытой, только когда маячок ушёл ВВЕРХ — ниже
+    // экрана он не бывает, но на всякий случай не путаем стороны.
     const observer = new IntersectionObserver(
       ([entry]) => {
         const above = entry.rootBounds
           ? entry.boundingClientRect.bottom < entry.rootBounds.top
           : false
-        setNameHidden(!entry.isIntersecting && above)
+        setHeroHidden(!entry.isIntersecting && above)
       },
       { rootMargin: '-64px 0px 0px 0px' },
     )
-    observer.observe(nameEl)
+    observer.observe(sheetMarkerEl)
     return () => observer.disconnect()
-  }, [nameEl])
+  }, [sheetMarkerEl])
 
   // Каталог исполнителя (библиотека + оба внешних источника) приходит одним
   // ответом и легко переваливает за сотню строк — рисуем партиями по мере
@@ -330,7 +332,6 @@ function Artist() {
 
   if (!artist) return null
 
-  const libraryCount = artist.tracks?.length || 0
   // Альбомы и всё остальное (синглы, EP) — двумя каруселями: в одной ленте
   // сингл выглядит таким же релизом, как двойной альбом.
   const fullAlbums = albums.filter((a) => (a.album_type || '').toLowerCase() === 'album')
@@ -342,15 +343,19 @@ function Artist() {
       ? 'Открыть в медиатеке'
       : 'Добавить в медиатеку'
 
+  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у
+  // шапки в CSS свои дефолты, унаследованные она бы перекрыла.
+  const heroStyle = {
+    '--hero-c1': heroColors[0],
+    '--hero-c2': heroColors[1],
+    '--hero-c3': heroColors[2],
+  }
+
   return (
-    <div className="page-container">
+    <div className="page-container hero-page" style={heroStyle}>
       <header
         className="artist-hero"
-        style={{
-          '--hero-c1': heroColors[0],
-          '--hero-c2': heroColors[1],
-          '--hero-c3': heroColors[2],
-        }}
+        style={heroStyle}
       >
         {/* Размытый аватар — фактура под градиентом: сплошная заливка тоном
             смотрится плоско. Декоративный, поэтому alt пустой. */}
@@ -379,7 +384,7 @@ function Artist() {
           />
           <div className="artist-hero-info">
             <div className="artist-kicker">Исполнитель</div>
-            <h1 className="artist-name" ref={setNameEl} style={titleFitStyle(artist.name)}>
+            <h1 className="artist-name" style={titleFitStyle(artist.name)}>
               {artist.name}
             </h1>
             <ul className="artist-stats">
@@ -387,7 +392,6 @@ function Artist() {
               {albums.length > 0 && (
                 <li>{albums.length} {plural(albums.length, 'релиз', 'релиза', 'релизов')}</li>
               )}
-              {libraryCount > 0 && <li>{libraryCount} в медиатеке</li>}
             </ul>
           </div>
         </div>
@@ -396,8 +400,8 @@ function Artist() {
       {/* Компактная полоса поверх мобильной верхней панели: имя и play, пока
           шапка прокручена. На десктопе скрыта стилями. */}
       <div
-        className={`artist-compact-bar${nameHidden ? ' visible' : ''}`}
-        aria-hidden={!nameHidden}
+        className={`artist-compact-bar${heroHidden ? ' visible' : ''}`}
+        aria-hidden={!heroHidden}
       >
         <span className="artist-compact-name">{artist.name}</span>
         <button
@@ -405,7 +409,7 @@ function Artist() {
           className="artist-compact-play"
           onClick={handlePlayToggle}
           disabled={tracks.length === 0}
-          tabIndex={nameHidden ? 0 : -1}
+          tabIndex={heroHidden ? 0 : -1}
           aria-label={playLabel}
         >
           {isArtistPlaying ? (
@@ -477,60 +481,65 @@ function Artist() {
         </div>
       </div>
 
-      <AlbumsRow title="Альбомы" albums={fullAlbums} />
-      <AlbumsRow title="Синглы и EP" albums={shortReleases} />
+      {/* Маячок компактной полосы: карточка доехала до верхней панели. */}
+      <div ref={setSheetMarkerEl} aria-hidden="true" />
+      {/* Серая карточка под шапкой и кнопками: релизы и треки. */}
+      <div className="hero-page-sheet">
+        <AlbumsRow title="Альбомы" albums={fullAlbums} />
+        <AlbumsRow title="Синглы и EP" albums={shortReleases} />
 
-      <div className="playlist-tracks">
-        {/* Заголовок нужен только когда выше есть карусели: иначе таблица и так
-            единственный блок страницы, и подписывать её нечем. */}
-        {albums.length > 0 && <SectionTitle count={tracks.length}>Треки</SectionTitle>}
-        {tracks.length > 0 ? (
-          <table className="tracks-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Название</th>
-                <th>Альбом</th>
-                <th>Длительность</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTracks.map((track, index) => {
-                const isCurrent = currentTrackId === track.id
-                const dbId =
-                  typeof track.id === 'number'
-                    ? track.id
-                    : typeof track.db_id === 'number'
-                      ? track.db_id
-                      : null
-                const isLiked =
-                  (dbId !== null && likedSet.has(dbId)) ||
-                  pendingLikeKeys.includes(trackLikeKey(track))
-                return (
-                  <TrackTableRow
-                    key={track.id}
-                    track={track}
-                    index={index}
-                    isCurrent={isCurrent}
-                    isPlaying={isCurrent && isPlaying}
-                    isLiked={isLiked}
-                    showBadges
-                    showInlineMeta
-                    actionsRef={rowActions}
-                  />
-                )
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <div className="empty-playlist">
-            <p>Треков этого исполнителя не нашлось</p>
-          </div>
-        )}
-        {/* Маячок догрузки — после таблицы: внутри <tbody> лежать может только
-            строка, произвольный div туда браузер не пустит. */}
-        <div ref={tracksSentinelRef} aria-hidden="true" />
+        <div className="playlist-tracks">
+          {/* Заголовок нужен только когда выше есть карусели: иначе таблица и так
+              единственный блок страницы, и подписывать её нечем. */}
+          {albums.length > 0 && <SectionTitle count={tracks.length}>Треки</SectionTitle>}
+          {tracks.length > 0 ? (
+            <table className="tracks-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Название</th>
+                  <th>Альбом</th>
+                  <th>Длительность</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTracks.map((track, index) => {
+                  const isCurrent = currentTrackId === track.id
+                  const dbId =
+                    typeof track.id === 'number'
+                      ? track.id
+                      : typeof track.db_id === 'number'
+                        ? track.db_id
+                        : null
+                  const isLiked =
+                    (dbId !== null && likedSet.has(dbId)) ||
+                    pendingLikeKeys.includes(trackLikeKey(track))
+                  return (
+                    <TrackTableRow
+                      key={track.id}
+                      track={track}
+                      index={index}
+                      isCurrent={isCurrent}
+                      isPlaying={isCurrent && isPlaying}
+                      isLiked={isLiked}
+                      showBadges
+                      showInlineMeta
+                      actionsRef={rowActions}
+                    />
+                  )
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty-playlist">
+              <p>Треков этого исполнителя не нашлось</p>
+            </div>
+          )}
+          {/* Маячок догрузки — после таблицы: внутри <tbody> лежать может только
+              строка, произвольный div туда браузер не пустит. */}
+          <div ref={tracksSentinelRef} aria-hidden="true" />
+        </div>
       </div>
     </div>
   )

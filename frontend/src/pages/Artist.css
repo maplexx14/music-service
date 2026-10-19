@@ -234,6 +234,121 @@
   display: none;
 }
 
+/* --- Страница в два слоя (исполнитель, «Понравившиеся») ---
+   Сверху фон в тон шапки, его рисует сама страница одним градиентом: у шапки
+   своего фона нет, иначе на её нижнем крае два градиента сходились швом.
+   Ниже — содержимое (.hero-page-sheet) отдельной карточкой с закруглённым
+   верхом, на сером фоне как у остальных экранов на ПК (.main-content,
+   Layout.css). Цвета --hero-c* страница получает инлайном, как и шапка. */
+.hero-page {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--hero-c3) 55%, var(--bg-app));
+}
+
+.hero-page::before {
+  content: '';
+  position: absolute;
+  /* На телефоне шапка заходит под плавающую панель — фон туда же. */
+  top: calc(-1 * var(--main-pad-top, 0px));
+  left: 0;
+  right: 0;
+  height: calc(560px + var(--main-pad-top, 0px));
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 420px at 0% 0%, color-mix(in srgb, var(--hero-c1) 55%, transparent), transparent 60%),
+    linear-gradient(
+      180deg,
+      var(--hero-c2) 0,
+      var(--hero-c3) 300px,
+      color-mix(in srgb, var(--hero-c3) 55%, var(--bg-app)) 100%
+    );
+}
+
+.hero-page .artist-hero {
+  background: none;
+}
+
+.hero-page .artist-hero::after {
+  content: none;
+}
+
+/* Размытое фото под шапкой обрезано её рамкой: без заливки шапки на ПК
+   оно торчало прямоугольником посреди общего фона. */
+.hero-page .artist-hero-backdrop {
+  display: none;
+}
+
+/* Без своей заливки шапке на ПК не нужен большой верхний отступ карточки
+   (72px, .artist-hero): вместе с полем страницы выходила пустая полоса. */
+@media (min-width: 769px) {
+  .hero-page .artist-hero {
+    padding-top: 24px;
+  }
+}
+
+/* Карточка во всю ширину до низа экрана: съедает нижние отступы страницы
+   (.page-container, Home.css) и прокрутки (--main-pad-bottom, Layout.css —
+   под плеер) и сама держит их внутри, иначе под ней полоса фона страницы. */
+.hero-page-sheet {
+  flex: 1;
+  margin: 32px -32px calc(-32px - var(--main-pad-bottom, 0px));
+  padding: 16px 32px calc(32px + var(--main-pad-bottom, 0px));
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+}
+
+@media (max-width: 768px) {
+  .hero-page-sheet {
+    margin: 20px -16px calc(-150px - var(--main-pad-bottom, 0px));
+    padding: 8px 16px calc(150px + var(--main-pad-bottom, 0px));
+  }
+}
+
+@media (max-width: 380px) {
+  .hero-page-sheet {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}
+
+/* Верхний отступ задаёт карточка: у первого блока внутри (карусель альбомов
+   или список треков) свой margin-top лишний. */
+.hero-page-sheet > :first-child {
+  margin-top: 0;
+}
+
+/* Параллакс: шапка, кнопки и фон под ними на первых 600px прокрутки едут
+   вниз на половину пути — то есть отстают от прокрутки вдвое, — а карточка
+   идёт с обычной скоростью и наезжает на них сверху. Анимация по прокрутке
+   (scroll-timeline) считается на композиторе, без JS и слушателей скролла.
+   Где её нет или движение просили убрать — обычная прокрутка. */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-page::before,
+    .hero-page .artist-hero,
+    .hero-page .artist-toolbar {
+      animation: hero-page-parallax linear both;
+      animation-timeline: scroll(nearest block);
+      animation-range: 0px 600px;
+    }
+
+    .hero-page-sheet {
+      position: relative;
+      z-index: 1;
+    }
+  }
+}
+
+@keyframes hero-page-parallax {
+  to {
+    transform: translateY(300px);
+  }
+}
+
 /* --- Мобильная адаптация --- */
 @media (max-width: 768px) {
   /* Шапка на всю ширину экрана, как карусели ниже (Carousel.css): карточка
