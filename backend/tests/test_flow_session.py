@@ -603,3 +603,50 @@ def test_one_per_artist_is_soft_without_other_artists():
     pool = _pool(["a", "b", "a"])
     chosen, _extra = _select(pool, {}, arm="control", limit=3)
     assert [item["artist"] for item in chosen] == ["a", "b", "a"]
+
+
+def _gate_plan_profile(deep, tail):
+    weights = {key: 0.5 for key in deep}
+    weights.update({key: 1.5 for key in tail})
+    return {
+        "playlist_seeds": [], "seeds": [], "fresh_seeds": [], "artists": [],
+        "trusted_artist_keys": [], "liked_artists": [], "playlist_artists": [],
+        "catalog_artists": [k.title() for k in deep] + [k.title() for k in tail],
+        "artist_weight": weights, "deep_catalog_artist_keys": list(deep),
+        "collection_song_counts": {**{k: 6 for k in deep}, **{k: 2 for k in tail}},
+        "seed_tracks": [], "fresh_seed_tracks": [], "title_tags": [], "genres": [],
+        "explicit_genres": [],
+    }
+
+
+def test_with_mainstream_gate_catalog_slots_go_to_deep_artists(monkeypatch):
+    """Каталог не-deep артиста гейт режет до топ-3 хитов — качать его, пока
+    есть deep, незачем (прод, 2026-10-19: 64 знакомых до фильтра, 0 после)."""
+    from collections import Counter
+
+    from app import mainstream
+    from app.routers.flow import _external_plan
+
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    kwargs = dict(limit=6, last_picked={}, recent_artist_counts=Counter(), now_ts=0.0)
+
+    few = _gate_plan_profile([f"deep{i}" for i in range(3)], [f"tail{i}" for i in range(200)])
+    for context in range(20):
+        picked = _external_plan(few, f"ctx{context}", **kwargs)["favorite_artists"]
+        assert len(picked) == 12
+        assert {f"Deep{i}" for i in range(3)} <= set(picked)
+
+    many = _gate_plan_profile([f"deep{i}" for i in range(25)], [f"tail{i}" for i in range(50)])
+    many["artist_weight"]["deep0"] = 269.0
+    counts = Counter()
+    for context in range(60):
+        picked = _external_plan(many, f"ctx{context}", **kwargs)["favorite_artists"]
+        assert len(picked) == 12 and all(a.startswith("Deep") for a in picked)
+        counts.update(picked)
+    # Вес по-прежнему решает: тяжёлый почти всегда, лёгкие — меньше половины раз.
+    assert counts["Deep0"] >= 55
+    assert sum(counts[f"Deep{i}"] for i in range(1, 25)) / 24 < 30
+
+    # Ни одного deep — хвост берётся, волна не пустеет.
+    none = _gate_plan_profile([], [f"tail{i}" for i in range(20)])
+    assert len(_external_plan(none, "ctx", **kwargs)["favorite_artists"]) == 12

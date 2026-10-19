@@ -3211,18 +3211,30 @@ def _external_plan(
     # прошедшие исключения), а места в ответе по-прежнему не закреплены ни за
     # одним источником: каталог каждого артиста конкурирует со всеми остальными
     # кандидатами в общей модели.
-    # Ядро коллекции — выбранные в настройках, любимые (5+ песен) и самые
-    # слушаемые — получает большую часть мест, хвост — остальное (см.
-    # _CORE_FAVORITE_SHARE).
+    # Без мейнстрим-фильтра ядро коллекции — выбранные в настройках, любимые
+    # (5+ песен) и самые слушаемые — получает большую часть мест, хвост —
+    # остальное (см. _CORE_FAVORITE_SHARE).
     weights = profile.get("artist_weight") or {}
-    core_keys = _core_artist_keys(profile)
-    core = [a for a in catalog_artists if _is_core_artist(a, core_keys)]
-    tail = [a for a in catalog_artists if not _is_core_artist(a, core_keys)]
     # От размера выдачи, а не пула предрасчёта: с пулом 30 (hybrid-v18) брались
     # 23 артиста ядра из 25 — почти все, и вес на выбор уже не влиял (прод,
     # 2026-10-14: Limp Bizkit, вес 269, показан реже Queen и Pixies с весом 0.5).
     total = max(_FAVORITE_EXPLORE_ARTISTS, min(len(catalog_artists), favorite_limit or limit))
-    core_limit = min(len(core), math.ceil(total * _CORE_FAVORITE_SHARE))
+    if mainstream.available():
+        # Мейнстрим-фильтр (_compute_flow, mainstream.gate) пропускает артиста
+        # не из deep catalog только топ-3 хитами — его каталог качался и
+        # выбрасывался целиком: прод, 2026-10-19, у владельца 64 знакомых
+        # кандидата до фильтра и 0 после (Drowning Pool, Powerwolf, Любэ), пул
+        # 11 вместо 30, лайки сверх квоты — заменить нечем. Места — тем, кого
+        # фильтр не режет (тот же ключ, что у гейта); хвост — только остаток.
+        deep_keys = set(profile.get("deep_catalog_artist_keys") or [])
+        core = [a for a in catalog_artists if primary_artist_key(a) in deep_keys]
+        tail = [a for a in catalog_artists if primary_artist_key(a) not in deep_keys]
+        core_limit = min(len(core), total)
+    else:
+        core_keys = _core_artist_keys(profile)
+        core = [a for a in catalog_artists if _is_core_artist(a, core_keys)]
+        tail = [a for a in catalog_artists if not _is_core_artist(a, core_keys)]
+        core_limit = min(len(core), math.ceil(total * _CORE_FAVORITE_SHARE))
     pick = functools.partial(
         _pick_favorite_artists,
         artist_weights=weights,
