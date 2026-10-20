@@ -35,9 +35,14 @@ export const PLAYER_PERSIST_KEY = 'bolt-player-v1'
 const KEEP_BEFORE = 50
 const KEEP_AFTER = 250
 const SAVE_DEBOUNCE_MS = 800
-// Сервер получает снимок реже, чем localStorage: позиция тикает каждые 5 с,
-// а ради неё одной гонять в БД очередь из сотен треков незачем. Уход в фон
-// отправляет сразу, мимо троттлинга.
+// Сервер получает снимок только на событиях — смена трека, очереди, режимов,
+// пауза — и при уходе в фон (сразу, мимо троттлинга). Позиция тикает каждые
+// 5 с, но ради неё одной снимок с очередью из сотен треков (десятки КБ) на
+// сервер не уходит: раньше он уходил раз в 15 с, пока играет, а в фоне на
+// мобильной сети каждый такой запрос посреди трека будил модем. Позицию
+// сервер узнаёт с ближайшим событием или уходом в фон; локальная копия по-
+// прежнему пишет её по тикам. Троттлинг склеивает пачку событий подряд
+// (смена трека тянет за собой правку очереди).
 const SERVER_PUSH_MS = 15000
 // Короткий уход в фон (глянуть уведомление) не повод спрашивать сервер.
 const SERVER_PULL_AFTER_HIDDEN_MS = 60000
@@ -53,6 +58,8 @@ let installed = false
 let pushTimer = null
 let lastPushAt = 0
 let lastPushedKey = null
+// Было событие, о котором серверу стоит узнать (см. SERVER_PUSH_MS).
+let pushPending = false
 // savedAt последнего снимка, который это устройство записало или применило —
 // серверная запись свежее него пришла с другого устройства.
 let localSavedAt = 0
@@ -106,12 +113,13 @@ function saveNow() {
     // переполнение квоты / приватный режим — без сохранения, плеер работает
   }
   noteSpan('плеер: сохранение очереди', performance.now() - startedAt)
-  schedulePush()
+  if (pushPending) schedulePush()
 }
 
 function pushNow() {
   clearTimeout(pushTimer)
   pushTimer = null
+  pushPending = false
   if (!enabled()) return
   const data = snapshot()
   if (!data) return
@@ -151,6 +159,7 @@ function forget() {
   clearTimeout(saveTimer)
   clearTimeout(pushTimer)
   saveTimer = pushTimer = null
+  pushPending = false
   lastPushedKey = null
   try {
     localStorage.removeItem(PLAYER_PERSIST_KEY)
@@ -174,14 +183,18 @@ function install() {
     }
   })
   usePlayerStore.subscribe((state, prev) => {
-    if (
+    const changed =
       state.currentTrack !== prev.currentTrack ||
       state.queue !== prev.queue ||
       state.isShuffle !== prev.isShuffle ||
       state.isRepeatOne !== prev.isRepeatOne
-    ) {
-      if (state.currentTrack?.id !== prev.currentTrack?.id) position = 0
-      if (!applying) scheduleSave()
+    if (changed && state.currentTrack?.id !== prev.currentTrack?.id) position = 0
+    // Пауза — тоже событие: с ней уходит позиция, на которой продолжат на
+    // другом устройстве.
+    const paused = prev.isPlaying && !state.isPlaying
+    if ((changed || paused) && !applying) {
+      pushPending = true
+      scheduleSave()
     }
   })
   // Уход в фон и выгрузка — последний шанс записать позицию: дальше страницу
@@ -303,6 +316,7 @@ export function restorePlayer(currentUserId) {
     clearTimeout(saveTimer)
     clearTimeout(pushTimer)
     saveTimer = pushTimer = null
+    pushPending = false
     lastPushedKey = null
     localSavedAt = 0
     restoredTrackId = null

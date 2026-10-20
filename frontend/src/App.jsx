@@ -102,6 +102,10 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return undefined
     const heartbeat = () => {
+      // Только на экране. С погашенным экраном на мобильной сети каждый запрос
+      // посреди трека будит модем на ~5–10 с, а онлайн слушателя в фоне
+      // админка видит по играющему now-playing (бэкенд _online_user_ids).
+      if (document.hidden) return
       api.get('/users/me', { skipErrorToast: true, dedupe: false }).catch(() => {})
       // Приложение (особенно PWA) держат открытым неделями — продлеваем
       // сессию и без перезапуска; чаще раза в несколько часов не ходит.
@@ -109,7 +113,12 @@ function App() {
     }
     heartbeat()
     const interval = window.setInterval(heartbeat, 60000)
-    return () => window.clearInterval(interval)
+    // Вернулись на экран — отмечаемся сразу, не дожидаясь тика.
+    document.addEventListener('visibilitychange', heartbeat)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', heartbeat)
+    }
   }, [isAuthenticated])
   useNowPlayingReporter(isAuthenticated)
 

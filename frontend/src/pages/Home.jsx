@@ -346,22 +346,24 @@ function Home() {
   // и нажатие ждало расчёта рекомендаций на бэке — секунды без отклика.
   // Пока главная на экране, освежаем предзагрузку раз в минуту и при
   // возврате в приложение; preloadFlow сам пропускает свежий список, летящий
-  // запрос и уже играющий поток, так что лишних запросов нет.
+  // запрос и уже играющий поток, так что лишних запросов нет. С погашенным
+  // экраном не освежаем: нажать на поток там нельзя, а запрос посреди трека
+  // будит модем (и считает рекомендации на бэке) зря — возврат на экран
+  // освежит список сам.
   useEffect(() => {
     if (!screenActive) return undefined
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
     const cancel = window.cancelIdleCallback ?? clearTimeout
-    const preload = () => usePlayerStore.getState().preloadFlow()
+    const preload = () => {
+      if (!document.hidden) usePlayerStore.getState().preloadFlow()
+    }
     const handle = idle(preload)
     const timer = setInterval(preload, 60 * 1000)
-    const onVisible = () => {
-      if (!document.hidden) preload()
-    }
-    document.addEventListener('visibilitychange', onVisible)
+    document.addEventListener('visibilitychange', preload)
     return () => {
       cancel(handle)
       clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisible)
+      document.removeEventListener('visibilitychange', preload)
     }
   }, [screenActive])
 
