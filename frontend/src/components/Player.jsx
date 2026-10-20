@@ -702,12 +702,20 @@ function PlayerInner() {
       }
     }
     // Троттлинг timeupdate до ~1 раза/сек: браузер шлёт событие ~4 раза/сек,
-    // но прогресс-бару и системному виджету хватает секундной точности —
-    // минус 3/4 store-апдейтов и React-рендеров во время воспроизведения.
-    // В скрытой вкладке setCurrentTime пропускаем совсем (прогресс не виден,
-    // рендеры в фоне жгут CPU/батарею зря), а syncPositionState оставляем —
-    // он питает виджет на экране блокировки. При возврате на вкладку
-    // позиция синхронизируется через visibilitychange ниже.
+    // но прогресс-бару хватает секундной точности — минус 3/4 store-апдейтов
+    // и React-рендеров во время воспроизведения. В скрытой вкладке
+    // setCurrentTime пропускаем совсем (прогресс не виден, рендеры в фоне
+    // жгут CPU/батарею зря). При возврате на вкладку позиция синхронизируется
+    // через visibilitychange ниже.
+    //
+    // Виджету экрана блокировки секундные тики не нужны: позицию система
+    // экстраполирует сама по playbackRate от последнего setPositionState, а
+    // события (playing, pause, seeked, ratechange, смена длительности) ставят
+    // её заново. Раньше вызов шёл на каждом тике — межпроцессное обновление
+    // Now Playing (экран блокировки, часы, CarPlay) раз в секунду весь трек.
+    // Редкая сверка остаётся от расхождения: оценочная позиция ADTS плывёт
+    // на 1–2% от реального времени.
+    const POSITION_RESYNC_SEC = 15
     let lastTickSecond = -1
     const updateTime = () => {
       if (!isLive()) return
@@ -717,7 +725,7 @@ function PlayerInner() {
       lastTickSecond = sec
       if (sec % 5 === 0) notePosition(audio.currentTime)
       if (!document.hidden) setCurrentTime(audio.currentTime)
-      syncPositionState()
+      if (sec % POSITION_RESYNC_SEC === 0) syncPositionState()
       maybePreloadNext(audio)
     }
     // Прогрев следующего трека во ВТОРОЙ <audio> — то, ради чего затевался
@@ -930,6 +938,10 @@ function PlayerInner() {
     const handlePause = () => {
       if (!isLive()) return
       pausedAtRef.current = Date.now()
+      // Позиция виджета обновляется событиями, не тиками (см. updateTime):
+      // на паузе ставим точную, чтобы экран блокировки не застыл на прошлой
+      // сверке.
+      syncPositionState()
       syncSystemPlaybackState(currentTrack ? 'paused' : 'none')
     }
     // Источник сменился (audio.src = ... / load()) — элемент сброшен и ещё
