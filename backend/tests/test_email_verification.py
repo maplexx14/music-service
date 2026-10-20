@@ -37,13 +37,20 @@ def test_register_does_not_create_user_before_confirmation(client, db):
     assert db.query(User).filter(User.username == "bob").first() is None
 
 
-def test_login_fails_until_user_is_created_by_confirmation(client, db):
+def test_login_before_confirmation_asks_to_confirm_email(client, db):
+    """Прод, 2026-10-19: на 401 «неверный пароль» человек регистрировался
+    заново. Верный пароль от заявки — 403, как у неподтверждённого юзера:
+    фронт показывает кнопку повторной отправки письма."""
+    from app.routers.auth import EMAIL_NOT_VERIFIED
+
     _register(client)
-    resp = client.post(
-        "/api/auth/login", data={"username": "bob", "password": "password123"}
-    )
-    assert resp.status_code == 401
-    assert resp.json()["detail"] == "Incorrect username or password"
+    for login in ("bob", "bob@example.com", "Bob@Example.com"):
+        resp = client.post(
+            "/api/auth/login", data={"username": login, "password": "password123"}
+        )
+        assert resp.status_code == 403, (login, resp.text)
+        assert resp.json()["detail"] == EMAIL_NOT_VERIFIED
+    assert db.query(User).filter(User.username == "bob").first() is None
 
 
 def test_wrong_password_on_unverified_user_says_password(client, db):
@@ -107,14 +114,20 @@ def test_verify_email_remembers_device(client, db):
     assert login.json()["access_token"]
 
 
-def test_token_is_single_use(client, db):
+def test_token_logs_in_only_once(client, db):
+    """Повторный переход (браузер почты, потом Safari) — «почта подтверждена»,
+    но без нового входа: его даёт только первый переход."""
     _register(client)
     token = _token_for("bob")
 
-    assert client.post("/api/auth/verify-email", json={"token": token}).status_code == 200
+    first = client.post("/api/auth/verify-email", json={"token": token})
+    assert first.status_code == 200
+    assert first.json()["access_token"]
     second = client.post("/api/auth/verify-email", json={"token": token})
-    assert second.status_code == 400
-    assert second.json()["detail"] == "Invalid or expired verification link"
+    assert second.status_code == 200, second.text
+    assert second.json()["email_verified"] is True
+    assert second.json()["access_token"] is None
+    assert second.json()["device_token"] is None
 
 
 def test_legacy_verification_link_does_not_bypass_login(client, db):
@@ -146,12 +159,41 @@ def test_resend_invalidates_previous_token(client, db):
 def test_pending_username_and_email_are_reserved(client, db):
     assert _register(client, username="bob", email="bob@example.com").status_code == 201
 
-    same_username = _register(client, username="bob", email="other@example.com")
-    same_email = _register(client, username="other", email="bob@example.com")
+    same_username = _register(
+        client, username="bob", email="other@example.com", password="another-pass"
+    )
+    same_email = _register(
+        client, username="other", email="bob@example.com", password="another-pass"
+    )
 
     assert same_username.status_code == 400
     assert same_email.status_code == 400
     assert db.query(User).count() == 0
+
+
+def test_reregistering_with_own_password_replaces_the_pending(client, db):
+    """Письмо не дошло или в почте опечатка: тот же человек (тот же пароль)
+    регистрируется заново — новая заявка вместо «уже занято»."""
+    assert _register(client, username="bob", email="typo@example.con").status_code == 201
+    first = _token_for("bob")
+
+    again = _register(client, username="bob", email="bob@example.com")
+    assert again.status_code == 201, again.text
+    assert again.json()["claim_token"]
+
+    pending = get_pending_registration("bob")
+    assert pending.email == "bob@example.com"
+    assert client.post("/api/auth/verify-email", json={"token": first}).status_code == 400
+    assert _register(client, username="other", email="typo@example.con").status_code == 201
+
+
+def test_resend_finds_the_pending_by_email(client, db):
+    _register(client)
+    resp = client.post(
+        "/api/auth/resend-verification",
+        json={"username": "bob@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 200, resp.text
 
 
 def test_resend_requires_correct_password(client, db):

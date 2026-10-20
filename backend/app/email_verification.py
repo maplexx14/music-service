@@ -138,11 +138,9 @@ def create_pending_registration(
     return pending, token
 
 
-def get_pending_registration(username: str) -> PendingRegistration | None:
+def _pending_by(field: str, value: str) -> PendingRegistration | None:
     try:
-        registration_id = redis_client.get(
-            _registration_index_key("username", username)
-        )
+        registration_id = redis_client.get(_registration_index_key(field, value))
         if not registration_id:
             return None
         if not redis_client.exists(_registration_current_token_key(registration_id)):
@@ -150,6 +148,22 @@ def get_pending_registration(username: str) -> PendingRegistration | None:
         return _decode_pending(redis_client.get(_registration_key(registration_id)))
     except Exception as exc:  # noqa: BLE001
         raise VerificationUnavailable(str(exc)) from exc
+
+
+def get_pending_registration(username: str) -> PendingRegistration | None:
+    return _pending_by("username", username)
+
+
+def find_pending_registration(login: str) -> PendingRegistration | None:
+    """Заявка по имени или почте — как вход: юзер вводит то, что помнит.
+
+    Почта в индексе лежит в том виде, как её ввели при регистрации, поэтому
+    пробуем и строку как есть, и в нижнем регистре."""
+    for field, value in (("username", login), ("email", login), ("email", login.lower())):
+        pending = _pending_by(field, value)
+        if pending is not None:
+            return pending
+    return None
 
 
 def reissue_pending_token(pending: PendingRegistration) -> str:
@@ -318,6 +332,37 @@ def consume_registration_claim(claim: str) -> int | None:
         return None
     try:
         return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+# Ссылка из письма одноразовая, но её открывают дважды: на iPhone сначала во
+# встроенном браузере почты, потом в Safari (прод, 2026-10-19: трое из пяти
+# новичков через 1–4 мин после подтверждения видели «ссылка недействительна»).
+# Использованная ссылка помнится сутки: повторный переход говорит «почта уже
+# подтверждена» — без нового входа, его даёт только первый переход.
+def _used_token_key(token: str) -> str:
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    return f"email:registration:used:{digest}"
+
+
+def mark_token_used(token: str, user_id: int) -> None:
+    try:
+        redis_client.setex(_used_token_key(token), VERIFY_TOKEN_TTL_SEC, str(user_id))
+    except Exception:  # noqa: BLE001 — повтор ссылки просто получит 400
+        logger.warning("could not remember used verification link for user %s", user_id)
+
+
+def used_token_user(token: str) -> int | None:
+    """id юзера, если по этой ссылке уже подтверждали почту."""
+    if not token:
+        return None
+    try:
+        raw = redis_client.get(_used_token_key(token))
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return int(raw) if raw else None
     except (TypeError, ValueError):
         return None
 

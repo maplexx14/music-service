@@ -60,13 +60,15 @@ from app.email_verification import (
     consume_token,
     create_pending_registration,
     delete_pending_registration,
-    get_pending_registration,
+    find_pending_registration,
     grant_registration_claim,
     issue_registration_claim,
     issue_token,
+    mark_token_used,
     reissue_pending_token,
     restore_pending_token,
     send_verification_email,
+    used_token_user,
 )
 from app.email_2fa import (
     EMAIL_CODE_RESEND_COOLDOWN_SEC,
@@ -247,9 +249,24 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
     # username/email живут в Redis ровно столько же, сколько ссылка.
     hashed_password = get_password_hash(user_data.password)
     try:
-        pending, token = create_pending_registration(
-            user_data.username, user_data.email, hashed_password
-        )
+        try:
+            pending, token = create_pending_registration(
+                user_data.username, user_data.email, hashed_password
+            )
+        except RegistrationAlreadyPending:
+            # Имя или почта заняты своей же незавершённой заявкой: письмо не
+            # дошло или в почте опечатка, и человек регистрируется заново
+            # (прод, 2026-10-19: iOS, 5 заявок и 4 отказа «уже занято» за 40
+            # мин, так и не вошёл). Тот же пароль — это он: старая заявка
+            # заменяется новой. Чужой пароль — по-прежнему «занято».
+            if not _replace_own_pending(user_data):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Username or email already registered",
+                )
+            pending, token = create_pending_registration(
+                user_data.username, user_data.email, hashed_password
+            )
     except RegistrationAlreadyPending:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -264,6 +281,23 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
     response = _pending_response(pending.username, pending.email)
     response.claim_token = issue_registration_claim(pending)
     return response
+
+
+def _replace_own_pending(user_data: UserCreate) -> bool:
+    """Удаляет заявки, занявшие имя или почту, если все они с этим паролем."""
+    conflicts = {}
+    for login in (user_data.username, user_data.email):
+        pending = find_pending_registration(login)
+        if pending is not None:
+            conflicts[pending.id] = pending
+    if not conflicts or not all(
+        verify_password(user_data.password, pending.hashed_password)
+        for pending in conflicts.values()
+    ):
+        return False
+    for pending in conflicts.values():
+        delete_pending_registration(pending)
+    return True
 
 
 @router.post("/register/claim", response_model=RegistrationClaimResponse)
@@ -297,6 +331,19 @@ def claim_registration(
     return RegistrationClaimResponse(verified=True, **_issue_access_token(user, device_token))
 
 
+def _reject_pending_login(login: str, password: str) -> None:
+    """Вход в ещё не подтверждённую регистрацию — 403 «подтвердите почту», а
+    не 401 «неверный пароль»: с ним человек решал, что ошибся паролем, и
+    регистрировался заново (прод, 2026-10-19). Как и для юзеров в SQL — только
+    после верного пароля, чтобы ответ не выдавал существование заявки."""
+    try:
+        pending = find_pending_registration(login)
+    except VerificationUnavailable:
+        return
+    if pending is not None and verify_password(password, pending.hashed_password):
+        raise HTTPException(status_code=403, detail=EMAIL_NOT_VERIFIED)
+
+
 @router.post("/login", response_model=LoginResult)
 @limiter.limit("10/minute")
 def login(
@@ -313,6 +360,8 @@ def login(
         user = db.query(User).filter(
             func.lower(User.email) == form_data.username.lower()
         ).first()
+    if not user:
+        _reject_pending_login(form_data.username, form_data.password)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -424,9 +473,10 @@ def verify_email(
 ):
     """Переход по ссылке из письма.
 
-    Токен одноразовый: повторный переход по той же ссылке — 400, «ссылка
-    неверна или протухла». Не уточняем, что именно, чтобы не подсказывать
-    переборщику, существует ли аккаунт.
+    Токен одноразовый: вход даёт только первый переход. Повторный в течение
+    суток (ссылку открыли и в браузере почты, и в Safari) отвечает «почта
+    подтверждена» без токена — фронт ведёт на вход. Неизвестная ссылка — 400,
+    «неверна или протухла», без уточнений для переборщика.
     """
     try:
         pending = consume_pending_token(payload.token)
@@ -468,6 +518,7 @@ def verify_email(
                 logger.exception("could not restore registration token %s", pending.id)
             raise
         delete_pending_registration(pending)
+        mark_token_used(payload.token, user.id)
         grant_registration_claim(pending, user.id)
         note_verified_ip(user.id, _client_ip(request))
         # Переход по ссылке из письма — то же доказательство владения почтой,
@@ -497,6 +548,11 @@ def verify_email(
         )
 
     if user_id is None:
+        used_by = used_token_user(payload.token)
+        if used_by is not None:
+            used_user = db.get(User, used_by)
+            if used_user is not None and used_user.email_verified:
+                return EmailVerifyResponse(email_verified=True)
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     user = db.query(User).filter(User.id == user_id).first()
@@ -535,7 +591,7 @@ def resend_verification(
         return _pending_response(user.username, user.email)
 
     try:
-        pending = get_pending_registration(payload.username)
+        pending = find_pending_registration(payload.username)
     except VerificationUnavailable:
         raise HTTPException(
             status_code=503, detail="Email verification temporarily unavailable"
