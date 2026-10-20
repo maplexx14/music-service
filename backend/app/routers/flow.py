@@ -4952,6 +4952,9 @@ async def _compute_flow(
     # до ПОРЦИИ (request_limit), а не до пула: с v18 limit здесь — размер пула
     # (30+), и добор до него пускал в каждую порцию не-хиты нишевых артистов
     # (жалоба владельца 2026-10-15). Недобранный пул warmer пересчитает раньше.
+    # Места знакомых (пул без квоты лайков и потолка новых) отдельно добираются
+    # не-хитами знакомых артистов — их выбрал владелец 2026-10-20, когда пул
+    # из 10 треков вместо 30 отдавал лайки через один.
     if mainstream.available():
         stage_started = loop.time()
         deep_ok = set(profile.get("deep_catalog_artist_keys") or [])
@@ -4974,6 +4977,7 @@ async def _compute_flow(
         )
         gated_ids = {_item_identity(c) for c in gated}
         before = len(unified_candidates)
+        gate_weights = profile.get("artist_weight") or {}
         kept, hit_by_item = mainstream.gate(
             unified_candidates,
             infos=hits,
@@ -4987,6 +4991,9 @@ async def _compute_flow(
                 if isinstance(item, dict)
                 else getattr(item, "play_count", 0)
             ),
+            familiar=lambda item: _item_identity(item) not in liked_identities
+            and _artist_affinity(_item_artist_title(item)[0], gate_weights) is not None,
+            familiar_slots=max(0, limit - liked_target - _novel_cap(limit, explore_ratio)),
         )
         for candidate in unified_candidates:
             if id(candidate) in hit_by_item:

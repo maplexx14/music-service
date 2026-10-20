@@ -153,3 +153,36 @@ def test_gate_refills_by_artist_fame_not_play_count():
         ("big", "a"), ("big", "deep hit"), ("mid", "album track"),
     ]
     assert sum(hits.values()) == 1
+
+
+def test_gate_refills_familiar_slots_with_familiar_non_hits():
+    """Знакомых хитов на места знакомых не хватает — недостающие добираются
+    отсеянными знакомыми (сначала топ-10), новые не-хиты в добор не идут.
+    Прод, 2026-10-20: пул волны 10 из 30, и места знакомых занимали лайки."""
+    infos = {
+        "known": {"listeners": 2_000_000, "top": ["A", "B", "C", "D", "E"]},
+        "new": {"listeners": 900_000, "top": ["N1", "N2", "N3"]},
+    }
+    items = [
+        {"artist": "liked", "title": "x", "familiar": False},  # лайк — exempt
+        {"artist": "known", "title": "a", "familiar": True},  # хит — проходит
+        {"artist": "known", "title": "album track", "familiar": True},
+        {"artist": "known", "title": "d", "familiar": True},  # топ-10, не топ-3
+        {"artist": "new", "title": "b-side", "familiar": False},
+        {"artist": "known", "title": "rarity", "familiar": True},
+    ]
+    kept, _hits = mainstream.gate(
+        items,
+        infos=infos,
+        exempt=lambda item: item["artist"] == "liked",
+        artist_of=lambda item: item["artist"],
+        title_of=lambda item: item["title"],
+        norm_title=_norm,
+        limit=1,
+        popularity=lambda item: 0,
+        familiar=lambda item: item["familiar"],
+        familiar_slots=3,
+    )
+    assert [(i["artist"], i["title"]) for i in kept] == [
+        ("liked", "x"), ("known", "a"), ("known", "d"), ("known", "album track"),
+    ]

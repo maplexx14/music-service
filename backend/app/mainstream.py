@@ -241,6 +241,8 @@ def gate(
     norm_title,
     limit: int,
     popularity,
+    familiar=None,
+    familiar_slots: int = 0,
 ) -> tuple[list, dict[int, bool]]:
     """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
 
@@ -252,6 +254,12 @@ def gate(
     по нему одному шёл в случайном порядке — нишевые артисты с малоизвестными
     песнями. Возвращает (оставленные в исходном порядке, {id(item): хит ли}) —
     второе только для проверенных, в телеметрию.
+
+    ``familiar`` — признак знакомого кандидата, ``familiar_slots`` — сколько
+    мест под знакомых нужно выдаче. Если прошедших знакомых меньше, недостающие
+    добираются отсеянными знакомыми тем же порядком известности. Иначе места
+    знакомых занимали лайки: прод, 2026-10-20, в пуле волны владельца 10
+    треков из 30, лайки через один.
     """
     hit_by_item: dict[int, bool] = {}
     kept, reserve = [], []
@@ -262,15 +270,22 @@ def gate(
         hit = is_hit(infos.get(artist_of(item)), title_of(item), norm_title)
         hit_by_item[id(item)] = hit
         (kept if hit else reserve).append(item)
-    if len(kept) < limit and reserve:
-        def _fame(item):
-            info = infos.get(artist_of(item))
-            return (
-                is_hit(info, title_of(item), norm_title, top=TOP_TRACKS),
-                int((info or {}).get("listeners") or 0),
-                popularity(item) or 0,
-            )
 
-        reserve.sort(key=_fame, reverse=True)
-        kept.extend(reserve[: limit - len(kept)])
+    def _fame(item):
+        info = infos.get(artist_of(item))
+        return (
+            is_hit(info, title_of(item), norm_title, top=TOP_TRACKS),
+            int((info or {}).get("listeners") or 0),
+            popularity(item) or 0,
+        )
+
+    reserve.sort(key=_fame, reverse=True)
+    if len(kept) < limit and reserve:
+        taken = limit - len(kept)
+        kept.extend(reserve[:taken])
+        reserve = reserve[taken:]
+    if familiar is not None and familiar_slots > 0 and reserve:
+        missing = familiar_slots - sum(1 for item in kept if familiar(item))
+        if missing > 0:
+            kept.extend([item for item in reserve if familiar(item)][:missing])
     return kept, hit_by_item
