@@ -37,6 +37,13 @@ def _claim(client, claim_token):
     return resp.json()
 
 
+def _same_ip_window(monkeypatch):
+    monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 1800)
+    # TestClient старой Starlette (0.35, в requirements) не задаёт адрес
+    # клиента: request.client = None, и окно по IP молча выключалось бы.
+    monkeypatch.setattr("app.routers.auth._client_ip", lambda request: "203.0.113.7")
+
+
 def _login(client, device_token=None):
     headers = {DEVICE_TOKEN_HEADER: device_token} if device_token else {}
     resp = client.post(
@@ -71,7 +78,7 @@ def test_claim_of_other_registration_does_not_log_in(client, db):
 
 
 def test_new_browser_on_same_ip_skips_code_right_after_verification(client, db, monkeypatch):
-    monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 1800)
+    _same_ip_window(monkeypatch)
     _register(client)
     _verify(client)
 
@@ -82,7 +89,7 @@ def test_new_browser_on_same_ip_skips_code_right_after_verification(client, db, 
 
 
 def test_new_browser_without_recent_verification_still_needs_code(client, db, monkeypatch):
-    monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 1800)
+    _same_ip_window(monkeypatch)
     monkeypatch.setattr("app.routers.auth.send_email_code", lambda *a, **k: True)
     create_user(db, "bob")
     body = _login(client)
@@ -90,7 +97,7 @@ def test_new_browser_without_recent_verification_still_needs_code(client, db, mo
 
 
 def test_own_email_2fa_is_not_skipped_on_same_ip(client, db, monkeypatch):
-    monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 1800)
+    _same_ip_window(monkeypatch)
     monkeypatch.setattr("app.routers.auth.send_email_code", lambda *a, **k: True)
     _register(client)
     _verify(client)
