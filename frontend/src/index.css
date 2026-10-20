@@ -675,27 +675,46 @@ html.brush-icons:not(.no-gpu) .screen-scroll :is(
    - тени на снапшотах перехода экрана: полноэкранная размытая тень едет
      вместе со снапшотом и растеризуется каждый кадр;
    - переходы width/height/margin/left: это раскладка всей страницы на
-     каждом кадре; без GPU они дёргаются, поэтому применяются сразу. */
+     каждом кадре; без GPU они дёргаются, поэтому применяются сразу.
+
+   Размытие и плотные фоны действуют и в энергосбережении устройства (класс
+   power-save ставит utils/powerSave.js): blur под панелью пересчитывается на
+   каждом кадре прокрутки и анимаций под ней и с GPU. */
 html.no-gpu *,
 html.no-gpu *::before,
-html.no-gpu *::after {
+html.no-gpu *::after,
+html.power-save *,
+html.power-save *::before,
+html.power-save *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
 @media (max-width: 768px) {
-  html.no-gpu .mobile-status-scrim {
+  html.no-gpu .mobile-status-scrim,
+  html.power-save .mobile-status-scrim {
     background: rgba(5, 5, 5, 0.94);
   }
-  html.no-gpu .mobile-topbar {
+  html.no-gpu .mobile-topbar,
+  html.power-save .mobile-topbar {
     background: rgba(0, 0, 0, 0.95);
   }
-  html.no-gpu .player {
+  html.no-gpu .player,
+  html.power-save .player {
     background: rgba(18, 18, 22, 0.96);
   }
-  html.no-gpu .mobile-player {
+  html.no-gpu .mobile-player,
+  html.power-save .mobile-player {
     background: rgba(10, 10, 12, 0.94);
   }
+}
+
+/* Энергосбережение: эквалайзер у играющего трека замирает — бесконечная
+   анимация держит композитор на кадрах, пока строка на экране. Столбики на
+   всю высоту против 40% на паузе — играет или нет, по-прежнему видно.
+   WebGL-фон, диск и полосу прогресса гасит JS (utils/powerSave). */
+html.power-save .now-playing-bars span {
+  animation: none;
 }
 
 html.no-gpu .artist-hero-backdrop {

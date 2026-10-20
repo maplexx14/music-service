@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScreen } from '../hooks/useScreen'
+import { usePowerSave } from '../hooks/usePowerSave'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { PLAYBACK_ANIMATION_ID } from '../utils/frameMeter'
 import defaultCover from '../assets/default-cover.webp'
@@ -56,6 +57,7 @@ function HeroDisc() {
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => s.duration)
   const vinyl = useUiSettingsStore((s) => s.vinylDisc)
+  const powerSave = usePowerSave()
   const rootRef = useRef(null)
   // Главная скрыта (открыта другая вкладка) — вращение не крутим.
   const { active: screenActive } = useScreen()
@@ -86,8 +88,11 @@ function HeroDisc() {
     if (!el || typeof el.animate !== 'function') return undefined
     // prefers-reduced-motion: постоянное вращение — декор, его убираем.
     // Ручной поворот (жест) остаётся: это прямое управление, а не анимация.
+    // В энергосбережении устройства (utils/powerSave) — так же: анимация
+    // держит композитор на кадрах весь трек, а угол и без неё догоняет звук
+    // по тикам стора (сверка ниже), шагом раз в секунду.
     const reduced =
-      window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+      powerSave || (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false)
     let anim = null
     // Позиция (сек), с которой стартовала анимация, и длительность трека.
     let anchor = { time: 0, dur: 0 }
@@ -186,14 +191,17 @@ function HeroDisc() {
       }
     })
     // Буферизация: позиция в сторе стоит, событий нет — проверяем по таймеру.
-    const stallTimer = setInterval(() => sync(usePlayerStore.getState()), 500)
+    // В скрытой вкладке диск не виден, а стор позицию не обновляет вовсе.
+    const stallTimer = setInterval(() => {
+      if (!document.hidden) sync(usePlayerStore.getState())
+    }, 500)
     return () => {
       unsubscribe()
       clearInterval(stallTimer)
       spinRef.current = null
       anim?.cancel()
     }
-  }, [trackKey, screenActive])
+  }, [trackKey, screenActive, powerSave])
 
   // Угол указателя относительно центра диска. Центр берём у корня, а не у
   // картинки: картинка вращается, и её rect описывал бы повёрнутый квадрат.

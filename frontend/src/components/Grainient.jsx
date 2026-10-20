@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Renderer, Program, Mesh, Triangle } from 'ogl';
 import './Grainient.css';
 import { heavyAnimationsHeld, onHeavyAnimationsHold } from '../services/navigation';
+import { isPowerSave, onPowerSaveChange } from '../utils/powerSave';
 import { useScreen } from '../hooks/useScreen';
 
 const hexToRgb = hex => {
@@ -466,6 +467,9 @@ const Grainient = ({
     // SCROLL_IDLE_MS после последнего события прокрутки.
     let scrolling = false;
     let held = heavyAnimationsHeld();
+    // Режим энергосбережения устройства (utils/powerSave): фон — статичный
+    // кадр, как при reduced motion. Палитра под обложку при этом меняется.
+    let powerSave = isPowerSave();
     let onScreen = screenActiveRef.current;
     let scrollIdleTimer = 0;
     const SCROLL_IDLE_MS = 180;
@@ -478,7 +482,7 @@ const Grainient = ({
     let slowTicks = 0;
 
     const startLoop = () => {
-      if (running || reducedMotion || tier.frozen) return;
+      if (running || reducedMotion || tier.frozen || powerSave) return;
       if (!pageVisible || !inViewport || scrolling || held || !onScreen) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
@@ -633,6 +637,13 @@ const Grainient = ({
       else startLoop();
     });
 
+    // Остановка оставляет на canvas последний кадр — он и будет статичным.
+    const offPowerSave = onPowerSaveChange((value) => {
+      powerSave = value;
+      if (powerSave) stopLoop();
+      else startLoop();
+    });
+
     const io = new IntersectionObserver((entries) => {
       inViewport = entries[0]?.isIntersecting ?? true;
       if (inViewport) startLoop();
@@ -648,7 +659,7 @@ const Grainient = ({
 
     // Статичный кадр и на скрытой при монтировании главной: иначе под пальцем
     // при свайпе на неё был бы пустой canvas.
-    if (reducedMotion || tier.frozen || !onScreen) {
+    if (reducedMotion || tier.frozen || !onScreen || powerSave) {
       // Один статичный кадр вместо бесконечного цикла.
       renderer.render({ scene: mesh });
     } else {
@@ -663,6 +674,7 @@ const Grainient = ({
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('scroll', onScroll, { capture: true });
       offHold();
+      offPowerSave();
       clearTimeout(scrollIdleTimer);
       io.disconnect();
       ro.disconnect();

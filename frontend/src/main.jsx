@@ -13,11 +13,13 @@ import { installPressFeedback } from './services/pressFeedback'
 import { installTouchGuard } from './services/touchGuard'
 import { installFastTap } from './services/fastTap'
 import { applyGpuClass } from './utils/gpu'
+import { installPowerSaveWatch } from './utils/powerSave'
 import { diag } from './utils/playerDiag'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
 applyGpuClass()
 diag('app:start', { build: import.meta.env.VITE_BUILD_TIME })
+installPowerSaveWatch()
 installPressFeedback()
 installImageFade()
 installFrameMeter()

@@ -15,6 +15,7 @@ import { resolveCoverUrl, handleCoverError, isCoverReady, preloadCover } from '.
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
+import { usePowerSave } from '../hooks/usePowerSave'
 import { noteSpan } from '../utils/frameMeter'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import { openCensorDialog } from '../store/censorDialogStore'
@@ -274,8 +275,11 @@ function PlayerProgress({ audioRef, seekable }) {
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime)
   // Облегчённый режим: полоса шагает раз в секунду, по тикам стора, без
   // анимации. На слабом железе (и на интеловском маке с Firefox, где кадр
-  // окна дорогой) каждый кадр полосы заметно грел процессор.
+  // окна дорогой) каждый кадр полосы заметно грел процессор. Так же — в
+  // энергосбережении устройства (utils/powerSave): анимация полосы держит
+  // композитор на кадрах всё время, пока играет.
   const liteMode = useUiSettingsStore((s) => s.liteMode)
+  const powerSave = usePowerSave()
   const surfaceRef = useRef(null)
   const fillRef = useRef(null)
   const headRef = useRef(null)
@@ -285,7 +289,7 @@ function PlayerProgress({ audioRef, seekable }) {
       { ref: fillRef, frame: progressShift },
       { ref: headRef, frame: progressShift },
     ],
-    { stepped: liteMode || NO_GPU },
+    { stepped: liteMode || NO_GPU || powerSave },
   )
 
   const handleSeek = (e) => {

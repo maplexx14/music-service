@@ -536,8 +536,11 @@ export function formatFrameMeter() {
     /* неизвестно */
   }
   const lite = document.documentElement.classList.contains('lite-mode') ? 'да' : 'нет'
+  // В энергосбережении rAF урезан до 30 Гц (utils/powerSave) — кадры там
+  // считаются иначе, без этой пометки отчёт не сравнить.
+  const powerSave = document.documentElement.classList.contains('power-save') ? 'да' : 'нет'
   const lines = [
-    `Замер ${minutes} мин, ${screen.width}×${screen.height}@${window.devicePixelRatio}, лёгкий режим: ${lite}, уровень фона: ${tier}`,
+    `Замер ${minutes} мин, ${screen.width}×${screen.height}@${window.devicePixelRatio}, лёгкий режим: ${lite}, энергосбережение: ${powerSave}, уровень фона: ${tier}`,
     `Всего: ${total.frames} кадров, рывков ${pct(total.janky, total.frames)}, пропущено кадров ${pct(total.missed, total.frames + total.missed)}`,
     '',
     'ситуация | кадров | рывков | пропущено | >50мс | худший',
