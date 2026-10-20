@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import api from '../services/api'
+import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
 
 function shuffleArray(arr) {
   const result = [...arr]
@@ -44,6 +45,33 @@ function trackLikeKey(track) {
 function isTrackResolved(track) {
   const key = prefetchKeyFor(track)
   return !key || resolvedPrefetchKeys.has(key)
+}
+
+// Кэш страницы «Понравившиеся» (services/pageCache) следует за лайками,
+// поставленными где угодно: иначе возврат на неё сперва рисовал прошлый
+// список, и свежий трек появлялся только после фонового запроса. Лайкнутый
+// трек ставится в начало — там же его ставит бэк (position = max+1).
+function syncLikedPageCache(trackId, liked, track = null) {
+  const cached = peekCache(LIKED_CACHE_KEY)
+  if (!cached) return
+  const rest = cached.playlist.tracks.filter((t) => t.id !== trackId)
+  const removed = cached.playlist.tracks.length - rest.length
+  const known = track && (track.id === trackId || track.db_id === trackId)
+  if (liked && !known) {
+    // Нечего нарисовать — пусть страница честно сходит в сеть.
+    invalidateCache(LIKED_CACHE_KEY)
+    return
+  }
+  patchCache(LIKED_CACHE_KEY, {
+    playlist: {
+      ...cached.playlist,
+      tracks: liked ? [{ ...track, id: trackId }, ...rest] : rest,
+    },
+    // Снятие трека за первой страницей total не трогает: открытая страница
+    // уже вычла его сама и записала в кэш, второй раз вычесть нельзя, а
+    // остальное поправит фоновый запрос (X-Total-Count).
+    total: liked ? cached.total + (removed ? 0 : 1) : Math.max(0, cached.total - removed),
+  })
 }
 
 // Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
@@ -294,6 +322,10 @@ const usePlayerStore = create((set, get) => ({
   isShuffle: false,
   likedTrackIds: [],
   likedTracksLoaded: false,
+  // Момент, когда бэк подтвердил новый лайк: страница «Понравившиеся» по нему
+  // перезапрашивает список. По оптимистичному likedTrackIds рано — запрос
+  // обгонял POST и приходил без трека.
+  likeConfirmedAt: 0,
   likedTracksLoading: false,
   // Ключи внешних треков (trackLikeKey), чей лайк сейчас «летит»: трек ещё не
   // материализован в БД, но сердечко уже должно быть залито. Пустеет по
@@ -460,6 +492,8 @@ const usePlayerStore = create((set, get) => ({
         await api.post(`/tracks/${trackId}/like`)
       }
       const context = trackContext || get().currentTrack
+      syncLikedPageCache(trackId, !wasLiked, context)
+      if (!wasLiked) set({ likeConfirmedAt: Date.now() })
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, wasLiked ? 'unlike' : 'like')
         if (!wasLiked) get()._noteFlowSignal(context, 'l')
@@ -507,6 +541,7 @@ const usePlayerStore = create((set, get) => ({
         await api.post(`/tracks/${trackId}/dislike`)
       }
       const context = trackContext || get().currentTrack
+      if (!wasDisliked && likedTrackIds.includes(trackId)) syncLikedPageCache(trackId, false)
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, wasDisliked ? 'undislike' : 'dislike')
         if (!wasDisliked) get()._noteFlowSignal(context, 'd')
@@ -526,6 +561,7 @@ const usePlayerStore = create((set, get) => ({
     set({ likedTrackIds: likedTrackIds.filter((id) => id !== trackId) })
     try {
       await api.delete(`/tracks/${trackId}/like`)
+      syncLikedPageCache(trackId, false)
       const context = get().currentTrack
       if (context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, 'unlike')

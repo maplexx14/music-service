@@ -110,6 +110,7 @@ export const prefetchArtist = (name) =>
   prefetchCache(artistCacheKey(name), '/artists', { params: { name }, maxAgeMs: 5 * 60000 })
 
 export const PLAYLIST_PAGE_SIZE = 20
+export const LIKED_CACHE_KEY = 'playlist:liked'
 export const playlistCacheKey = (id) => `playlist:${id}`
 export const prefetchPlaylist = (id) =>
   prefetchCache(playlistCacheKey(id), `/playlists/${id}`, {

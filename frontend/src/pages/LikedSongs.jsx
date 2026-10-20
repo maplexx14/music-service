@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Share, Shuffle } from 'lucide-react'
 import api from '../services/api'
-import { peekCache, writeCache, PLAYLIST_PAGE_SIZE } from '../services/pageCache'
+import { peekCache, writeCache, PLAYLIST_PAGE_SIZE, LIKED_CACHE_KEY } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
@@ -20,7 +20,6 @@ import './PlaylistDetail.css'
 import './Artist.css'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
-const LIKED_CACHE_KEY = 'playlist:liked'
 
 // «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
 // интерфейс страницы полностью повторяет PlaylistDetail.
@@ -48,6 +47,8 @@ function LikedSongs() {
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
+  const likedTracksLoaded = usePlayerStore((s) => s.likedTracksLoaded)
+  const likeConfirmedAt = usePlayerStore((s) => s.likeConfirmedAt)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
 
@@ -55,6 +56,30 @@ function LikedSongs() {
     fetchPlaylist()
     fetchLikedTracks()
   }, [])
+
+  // Лайки меняются и мимо этой страницы — сердцем в плеере, дизлайком. Снятый
+  // убираем из списка сразу, а новый тянем свежей первой страницей, когда бэк
+  // его подтвердил: данных трека тут нет, а встаёт он в начало.
+  // null — id ещё не загружены: их первая загрузка не изменение лайков.
+  const prevLikedIds = useRef(likedTracksLoaded ? likedTrackIds : null)
+  useEffect(() => {
+    if (!likedTracksLoaded) return
+    const prevIds = prevLikedIds.current
+    prevLikedIds.current = likedTrackIds
+    if (!prevIds || prevIds === likedTrackIds) return
+    const next = new Set(likedTrackIds)
+    const removed = prevIds.filter((id) => !next.has(id))
+    if (removed.length) {
+      const gone = new Set(removed)
+      setPlaylist((p) => (p ? { ...p, tracks: p.tracks.filter((t) => !gone.has(t.id)) } : p))
+      setTotalTracks((n) => Math.max(0, n - removed.length))
+    }
+  }, [likedTrackIds, likedTracksLoaded])
+
+  const mountLikeConfirmedAt = useRef(likeConfirmedAt)
+  useEffect(() => {
+    if (likeConfirmedAt !== mountLikeConfirmedAt.current) fetchPlaylist()
+  }, [likeConfirmedAt])
 
   // Кэш следует за списком (в том числе за снятыми здесь лайками), но хранит
   // только первую страницу — остальное догружается прокруткой.
@@ -72,12 +97,15 @@ function LikedSongs() {
         params: { skip: 0, limit: TRACKS_PAGE_SIZE },
       })
       const fresh = response.data
-      // Фоновое обновление не схлопывает уже догруженные страницы.
-      setPlaylist((prev) =>
-        prev && prev.tracks.length > fresh.tracks.length
-          ? { ...fresh, tracks: [...fresh.tracks, ...prev.tracks.slice(fresh.tracks.length)] }
-          : fresh
-      )
+      // Фоновое обновление не схлопывает уже догруженные страницы. Хвост —
+      // всё, чего нет в свежей странице: новые лайки сдвигают список, и срез
+      // по длине терял треки с конца первой страницы.
+      setPlaylist((prev) => {
+        if (!prev || prev.tracks.length <= fresh.tracks.length) return fresh
+        const freshIds = new Set(fresh.tracks.map((t) => t.id))
+        const tail = prev.tracks.filter((t) => !freshIds.has(t.id))
+        return { ...fresh, tracks: [...fresh.tracks, ...tail] }
+      })
       setTotalTracks(Number(response.headers['x-total-count']) || fresh.tracks.length)
     } catch (error) {
       console.error('Error fetching liked playlist:', error)
@@ -142,12 +170,8 @@ function LikedSongs() {
   const handleToggleLike = async (track, e) => {
     e.stopPropagation()
     try {
+      // Строку убирает подписка на likedTrackIds выше — сразу, до ответа сети.
       await toggleTrackLike(track.id)
-      setPlaylist((prev) => ({
-        ...prev,
-        tracks: prev.tracks.filter((t) => t.id !== track.id),
-      }))
-      setTotalTracks((prev) => Math.max(0, prev - 1))
     } catch (error) {
       console.error('Error toggling like:', error)
       toast.error('Не удалось обновить понравившиеся')
