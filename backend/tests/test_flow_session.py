@@ -605,6 +605,23 @@ def test_one_per_artist_is_soft_without_other_artists():
     assert [item["artist"] for item in chosen] == ["a", "b", "a"]
 
 
+def test_weak_artist_gets_at_most_two_tracks_in_a_portion():
+    """Прод, 2026-10-20: пул из каталога скипаемого артиста — 6 Boston из 8
+    (affinity 0.18). Ядро вкуса повторяться может: узкий вкус не режем."""
+    pool = _pool(["p", "l", "b", "b", "b", "b", "b", "b"])
+    for strong, expected in ((0.18, 2), (2.4, 6)):
+        features = {
+            item["id"]: {"components": {"affinity": strong if item["artist"] == "b" else 2.0}}
+            for item in pool
+        }
+        for arm in ("control", "session"):
+            chosen, extra = _select(pool, features, arm=arm, limit=8)
+            artists = [item["artist"] for item in chosen]
+            assert artists.count("b") == expected, (arm, artists)
+            assert {"p", "l"} <= set(artists)
+            assert set(extra) == {item["id"] for item in chosen}
+
+
 def _gate_plan_profile(deep, tail):
     weights = {key: 0.5 for key in deep}
     weights.update({key: 1.5 for key in tail})

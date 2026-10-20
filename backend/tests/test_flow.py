@@ -216,11 +216,16 @@ def test_flow_caps_the_share_of_freshly_liked_artists(client, db, monkeypatch):
     получает не больше _FRESH_CLUSTER_SHARE порции, даже с лучшим score."""
     user = create_user(db, username="fresh-cluster-user")
     now = datetime.now(timezone.utc)
+    # Ядро — давно и много лайков: один старый лайк затухает ниже свежего, и
+    # такое «ядро» потолок слабого артиста в порции резал бы до двух мест.
     _liked_at(
         db,
         user,
         [
-            ("CoreArtist", "core-liked", now - timedelta(days=_FRESH_CLUSTER_DAYS + 30)),
+            *(
+                ("CoreArtist", f"core-liked-{i}", now - timedelta(days=_FRESH_CLUSTER_DAYS + 30))
+                for i in range(8)
+            ),
             ("FreshArtist", "fresh-liked", now),
         ],
     )
@@ -2023,8 +2028,12 @@ def test_tag_search_requires_the_searched_words_not_just_the_language(
     assert "tag-off-topic" not in delivered, delivered
 
 
-def test_flow_sparse_pool_keeps_relevant_repeats(client, db, monkeypatch):
-    """Мягкая диверсификация не делает бедный пул искусственно коротким."""
+def test_flow_sparse_pool_caps_an_unknown_artist(client, db, monkeypatch):
+    """Бедный пул из одного незнакомого артиста не забивает им порцию: не
+    больше flow_session.MAX_ARTIST_PER_PORTION, порция короче. Прод,
+    2026-10-20: 6 треков скипаемого артиста из 8 подряд."""
+    from app import flow_session
+
     user = create_user(db, username="discovery-cap-user")
     _liked(db, user)
 
@@ -2039,8 +2048,7 @@ def test_flow_sparse_pool_keeps_relevant_repeats(client, db, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     artists = [track["artist"] for track in resp.json()]
-    assert len(artists) == 8, artists
-    assert artists.count("Solo") > 4, artists
+    assert artists.count("Solo") == flow_session.MAX_ARTIST_PER_PORTION, artists
 
 
 def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):
@@ -3443,11 +3451,12 @@ def test_ready_portion_drops_fresh_skips_and_queue(client, db, monkeypatch):
     user, headers, first = _ready_setup(client, db, monkeypatch, "ready-skip")
     assert _precompute(user.id) is True
     payload = get_cache(f"flow:ready:{user.id}")
-    # Управляемая порция: три артиста по четыре трека.
+    # Управляемая порция: четыре артиста по три трека (больше двух треков
+    # незнакомого артиста порция не берёт — flow_session.MAX_ARTIST_PER_PORTION).
     payload["items"] = [
         dict(_external(f"Artist{a}", f"song-{a}-{i}", f"rs-{a}-{i}").model_dump())
-        for a in range(3)
-        for i in range(4)
+        for a in range(4)
+        for i in range(3)
     ]
     payload["limit"] = 5
     set_cache(f"flow:ready:{user.id}", payload, expire=600)
@@ -3476,7 +3485,7 @@ def test_ready_portion_drops_fresh_skips_and_queue(client, db, monkeypatch):
     served = second.json()
     assert not {t["artist"] for t in served} & {"Artist0"}
     assert queued["external_id"] not in {t["external_id"] for t in served}
-    # Из 12 осталось 12 - 4 - 1 = 7: выдача берёт limit, остаток (2) меньше
+    # Из 12 осталось 12 - 3 - 1 = 8: выдача берёт limit, остаток (3) меньше
     # порции — его не храним, свежий пул считает flow-warmer.
     assert len(served) == 5
     assert get_cache(f"flow:ready:{user.id}") is None
@@ -4139,12 +4148,17 @@ def test_radio_gives_at_most_two_tracks_of_an_artist(client, db, monkeypatch):
 
 
 def test_radio_artist_cap_is_lifted_when_nothing_else(client, db, monkeypatch):
-    """Кроме одного артиста радио ничего не дало — лучше повтор, чем тишина."""
+    """Кроме одного артиста радио ничего не дало — лучше повтор, чем тишина.
+
+    Радио нишевого артиста — его же дискография (прод, 2026-10-19, лайк
+    «Качалки» Сереги Пирата). Артист лайкнут, то есть ядро вкуса: потолок
+    слабого артиста в порции (flow_session) его повтор не режет.
+    """
     user = create_user(db, username="radio-only-artist-user")
     _liked(db, user, artist="LovedArtist")
 
     async def _radio(seed_video_id):
-        return [_external("Pirate", f"song-{i}", f"radio-pirate{i}") for i in range(12)]
+        return [_external("LovedArtist", f"song-{i}", f"radio-pirate{i}") for i in range(12)]
 
     monkeypatch.setattr("app.routers.flow._radio_pool", _radio)
     monkeypatch.setattr(

@@ -174,6 +174,18 @@ class SessionState:
 
 
 MAX_ARTIST_RUN = 2
+# Потолок треков одного артиста в порции — лишние остаются в пуле. Прод,
+# 2026-10-20: пул юзера 51 к концу состоял из каталога выбранного в
+# онбординге, но скипаемого артиста (остальное ушло в скипы и баны), мягкий
+# _one_per_artist менять было не на что, и порция из 8 вышла с 6 Boston
+# (affinity 0.18 при 2.38 у PHARAOH) подряд. Короткая порция лучше: фронт
+# раньше попросит следующую, а warmer к тому времени пересчитает пул. Ядро
+# вкуса под потолок не попадает — артист с членом affinity в score не ниже
+# STRONG_ARTIST_SHARE от лучшего в пуле: узкий вкус из пары любимых не должен
+# становиться искусственно коротким. Порог относительный — абсолютные веса у
+# новичка и у юзера с годом истории несравнимы.
+MAX_ARTIST_PER_PORTION = 2
+STRONG_ARTIST_SHARE = 0.5
 
 
 def limit_artist_runs(
@@ -238,6 +250,53 @@ def _one_per_artist(chosen: list, rest: list, artist_of) -> list:
         seen.add(artist)
         result.append(item)
     return result
+
+
+def _cap_artist_count(
+    chosen: list, rest: list, artist_of, affinity_of, kind_of, cap: int = MAX_ARTIST_PER_PORTION
+) -> list:
+    """Не больше ``cap`` треков слабого артиста в порции.
+
+    Лишний меняется на первого из ``rest`` того же класса (``kind_of`` —
+    новизна, лайк, жанр: квоты не должны съехать), чей артист в порции ещё
+    не упёрся в потолок; заменить нечем — выкидывается, порция короче.
+    Артист сильный, если хоть у одного его трека член affinity не ниже
+    STRONG_ARTIST_SHARE от лучшего в пуле, — его повтор остаётся, как раньше.
+    """
+    pool = list(chosen) + list(rest)
+    top = max((affinity_of(item) or 0.0 for item in pool), default=0.0)
+    strong = {
+        artist_of(item)
+        for item in pool
+        if top > 0 and (affinity_of(item) or 0.0) >= STRONG_ARTIST_SHARE * top
+    }
+
+    def fits(item, counts) -> bool:
+        artist = artist_of(item)
+        return not artist or artist in strong or counts[artist] < cap
+
+    counts = Counter()
+    result = []
+    for item in chosen:
+        if fits(item, counts):
+            counts[artist_of(item)] += 1
+            result.append(item)
+        else:
+            result.append(None)
+    spare = list(rest)
+    for position, item in enumerate(chosen):
+        if result[position] is not None:
+            continue
+        kind = kind_of(item)
+        replacement = next(
+            (other for other in spare if kind_of(other) == kind and fits(other, counts)), None
+        )
+        if replacement is None:
+            continue
+        spare.remove(replacement)
+        counts[artist_of(replacement)] += 1
+        result[position] = replacement
+    return [item for item in result if item is not None]
 
 
 def _apply_caps(chosen: list, rest: list, caps: list) -> list:
@@ -318,6 +377,9 @@ def select(
     def is_capped(item) -> bool:
         return capped is not None and bool(capped(item))
 
+    def kind_of(item) -> tuple:
+        return is_novel(item), is_liked(item), is_capped(item)
+
     def apply_caps(chosen: list, rest: list) -> list:
         # Квота лайков считается на весь пул (на несколько выдач), а ранкер
         # ставит лайки выше всего — без потолка на выдачу они уходили в первые
@@ -330,9 +392,17 @@ def select(
     def primary_of(item) -> str:
         return primary_artist_key(artist_of(item))
 
+    def affinity_of(item) -> Optional[float]:
+        components = (features.get(identity_of(item)) or {}).get("components") or {}
+        value = components.get("affinity")
+        return float(value) if isinstance(value, (int, float)) else None
+
     if arm != "session":
         chosen = _one_per_artist(list(pool[:limit]), list(pool[limit:]), primary_of)
         chosen = apply_caps(chosen, [item for item in pool if item not in chosen])
+        chosen = _cap_artist_count(
+            chosen, [item for item in pool if item not in chosen], primary_of, affinity_of, kind_of
+        )
         for item in chosen:
             extra[identity_of(item)] = {"arm": arm}
         return chosen, extra
@@ -389,9 +459,6 @@ def select(
     explored: dict = {}
     rest = [item for item in ranked if item not in chosen]
 
-    def kind_of(item) -> tuple:
-        return is_novel(item), is_liked(item), is_capped(item)
-
     for position in range(len(chosen)):
         if rng.random() >= EXPLORE_RATE:
             continue
@@ -407,6 +474,9 @@ def select(
         rest.remove(pick)
         explored[identity_of(pick)] = round(EXPLORE_RATE / len(same), 5)
         chosen[position] = pick
+    chosen = _cap_artist_count(
+        chosen, [item for item in ranked if item not in chosen], primary_of, affinity_of, kind_of
+    )
     for item in chosen:
         identity = identity_of(item)
         row = {"arm": arm}
