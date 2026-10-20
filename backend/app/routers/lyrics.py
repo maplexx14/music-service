@@ -6,6 +6,7 @@
 С сервера тот же поиск занимает доли секунды, клиенту уходит только
 выбранный текст, а Redis-кэш делает повторный запрос мгновенным для всех.
 """
+import asyncio
 import logging
 import re
 
@@ -21,6 +22,12 @@ router = APIRouter()
 
 _LRCLIB = "https://lrclib.net/api"
 _TIMEOUT = httpx.Timeout(8.0, connect=4.0)
+# lrclib просит представляться. С дефолтным python-httpx Cloudflare перед ним
+# отвечал 429 уже на 4–5-м запросе подряд (прод, 2026-10-20: 17% /api/lyrics
+# уходили в 502), с UA приложения на той же серии 429 нет.
+_HEADERS = {"User-Agent": "bolt-music/1.0 (https://boltmusic.lat)"}
+# Пауза перед повтором после 429/5xx: сразу повторять лимит смысла нет.
+_RETRY_DELAY_SEC = 0.5
 # Расхождение длительности (сек), при котором синхронный текст из поиска ещё
 # считается той же записью: live- и радио-версии расходятся по таймингам на
 # секунды. /api/get сверяет длительность сам, ±2 с.
@@ -62,16 +69,17 @@ def _pick_from_search(results, duration: int) -> dict:
 
 
 async def _fetch(client: httpx.AsyncClient, path: str, params: dict) -> httpx.Response:
-    # lrclib время от времени отвечает 503 на ровном месте; второй запрос
-    # обычно проходит.
+    # lrclib время от времени отвечает 503 на ровном месте, а на всплеске —
+    # 429; второй запрос после короткой паузы обычно проходит.
     response = await client.get(f"{_LRCLIB}/{path}", params=params)
-    if response.status_code >= 500:
+    if response.status_code >= 500 or response.status_code == 429:
+        await asyncio.sleep(_RETRY_DELAY_SEC)
         response = await client.get(f"{_LRCLIB}/{path}", params=params)
     return response
 
 
 async def _lookup(artist: str, title: str, duration: int) -> dict:
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
         params = {"artist_name": artist, "track_name": title}
         if duration > 0:
             params["duration"] = str(duration)

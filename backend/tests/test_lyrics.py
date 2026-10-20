@@ -53,3 +53,31 @@ def test_lyrics_provider_failure_is_not_cached(client, monkeypatch):
     response = client.get("/api/lyrics", params={"artist": "Down", "title": "Song"})
     assert response.status_code == 502
     assert redis_client.get("lyrics:v1:down|song|0") is None
+
+
+def test_lrclib_429_is_retried_with_app_user_agent(monkeypatch):
+    """Прод, 2026-10-20: lrclib за Cloudflare отвечал 429 на дефолтный UA
+    python-httpx, и 17% текстов уходили в 502."""
+    import asyncio
+
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("user-agent"))
+        if len(seen) == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, json={"syncedLyrics": "[00:01.00] hi"})
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(lyrics.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(lyrics, "_RETRY_DELAY_SEC", 0)
+
+    assert asyncio.run(lyrics._lookup("Artist", "Song", 200)) == {"synced": "[00:01.00] hi"}
+    assert len(seen) == 2
+    assert all(ua and ua.startswith("bolt-music/") for ua in seen)
