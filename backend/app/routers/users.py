@@ -1,7 +1,7 @@
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -291,15 +291,28 @@ def get_user_count(
 
 
 def _online_user_ids() -> set:
-    """Id юзеров с живым presence-маркером в Redis (TTL 120 с, см. dependencies)."""
+    """Id юзеров онлайн: живой presence-маркер в Redis (TTL 120 с, см.
+    dependencies) или играющий now-playing.
+
+    Второе — ради фона: слушатель с погашенным экраном ходит на сервер только
+    на смене трека (пульсов нет, см. update_now_playing), то есть реже, чем
+    живёт маркер, и без now-playing мигал бы «не в сети» посреди трека.
+    """
     try:
-        return {
+        ids = {
             int(key.rsplit(":", 1)[-1])
             for key in redis_client.scan_iter(match="users:online:*")
         }
     except Exception:
         logger.exception("failed to read online markers")
-        return set()
+        ids = set()
+    for user_id, state in _now_playing_states().items():
+        if isinstance(state, dict) and state.get("is_playing"):
+            try:
+                ids.add(int(user_id))
+            except ValueError:
+                continue
+    return ids
 
 
 # Профиль вкуса для карточки админки живёт в Redis: _taste_profile — это
@@ -335,7 +348,7 @@ def _admin_last_tracks(db: Session, user_ids: List[int]) -> Dict[int, dict]:
     """Последний прослушанный трек каждого юзера страницы — одним запросом.
 
     Берётся из агрегата user_track_plays (last_played обновляется на каждом
-    прослушивании), а не из now-playing: тот живёт в Redis 90 с и у
+    прослушивании), а не из now-playing: тот живёт в Redis до конца трека и у
     офлайн-юзеров пуст.
     """
     if not user_ids:
@@ -402,16 +415,17 @@ def _admin_profile(
 def _admin_users_page(
     db: Session, online_ids: set, limit: int, offset: int, with_taste: bool = True
 ) -> tuple:
-    """Страница профилей, отсортированных по последнему онлайну.
+    """Страница профилей: сначала онлайн, дальше по последнему онлайну.
 
-    Онлайн-юзеры попадают наверх без отдельной сортировки: presence-маркер
-    живёт 120 с, а last_seen пишется минимум раз в минуту, так что у всех
-    кто в сети, он свежее, чем у остальных. NULL (никогда не заходил после
-    появления колонки) — в конце.
+    Онлайн поднимаем явно: last_seen пишется на запросах, а слушатель с
+    погашенным экраном ходит на сервер только на смене трека — его last_seen
+    отстаёт на трек, и ушедший минуту назад оказался бы выше него. NULL
+    (никогда не заходил после появления колонки) — в конце.
     """
-    query = db.query(User).order_by(
-        User.last_seen.desc().nullslast(), User.created_at.desc()
-    )
+    order = [User.last_seen.desc().nullslast(), User.created_at.desc()]
+    if online_ids:
+        order.insert(0, case((User.id.in_(online_ids), 0), else_=1))
+    query = db.query(User).order_by(*order)
     total = query.count()
     users = query.limit(limit).offset(offset).all()
     last_tracks = _admin_last_tracks(db, [user.id for user in users])
@@ -425,7 +439,7 @@ def _admin_users_page(
 
 
 def _admin_last_heard(user_ids: List[int]) -> Dict[int, dict]:
-    """Последний игравший трек из пульса now-playing (см. LAST_HEARD_TTL) —
+    """Последний игравший трек из событий now-playing (см. LAST_HEARD_TTL) —
     для юзеров без засчитанных прослушиваний."""
     if not user_ids:
         return {}
@@ -511,14 +525,29 @@ def get_admin_users_taste(
     return {"profiles": {str(uid): _admin_taste(db, uid) for uid in user_ids}}
 
 
-# «Что сейчас играет» — эфемерное состояние плеера, в БД ему не место: клиент
-# шлёт его на смене трека/паузе и пульсом раз в NOW_PLAYING_HEARTBEAT с, ключ
-# живёт NOW_PLAYING_TTL. Закрытая вкладка просто перестаёт пульсировать, и
-# юзер пропадает из «сейчас слушает» без явного запроса на выход — как с
-# presence-маркером users:online:*.
-NOW_PLAYING_TTL = 90
+# «Что сейчас играет» — эфемерное состояние плеера, в БД ему не место. Клиент
+# шлёт его только на событиях: смена трека, play/pause, перемотка (frontend
+# hooks/useNowPlayingReporter). Пульса нет: большую часть прослушивания экран
+# погашен, а на мобильной сети каждый запрос посреди трека будит модем на
+# ~5–10 с, и пульс раз в 30 с держал радио включённым весь трек. Поэтому ключ
+# играющего трека живёт до его конца с запасом (_now_playing_ttl): следующий
+# трек придёт событием раньше, чем ключ истечёт, а позицию между событиями
+# админка досчитывает сама по updated_at. Закрытую вкладку клиент снимает на
+# pagehide; выгруженная из памяти PWA (iOS события не шлёт) висит в «сейчас
+# слушает» до конца своего трека.
+NOW_PLAYING_MIN_TTL = 90
+# Запас к остатку трека: буферизация и неточная длительность (позиция в ADTS
+# плывёт на 1–2%) сдвигают реальный конец позже расчётного.
+NOW_PLAYING_GRACE = 60
+# Длительность неизвестна — ключ на типичную длину трека.
+NOW_PLAYING_UNKNOWN_TTL = 10 * 60
+# Потолок для многочасовых миксов.
+NOW_PLAYING_MAX_TTL = 3 * 3600
+# Пауза: вкладка могла остаться открытой, а могла уйти в фон и замолчать
+# насовсем (iOS замораживает PWA без звука) — без пульса их не отличить.
+NOW_PLAYING_PAUSED_TTL = 10 * 60
 _NOW_PLAYING_PREFIX = "users:now_playing:"
-# Последний трек, который реально играл (is_playing в пульсе), — для карточки
+# Последний трек, который реально играл (is_playing в событии), — для карточки
 # админки. user_track_plays пишется только после порога прослушивания (60 с
 # или половина трека), и новичок, послушавший полминуты, выглядел бы как
 # «ещё ничего не слушал».
@@ -539,6 +568,16 @@ class NowPlayingPayload(BaseModel):
     is_playing: bool = True
 
 
+def _now_playing_ttl(payload: NowPlayingPayload) -> int:
+    """Сколько живёт ключ now-playing до следующего события (см. выше)."""
+    if not payload.is_playing:
+        return NOW_PLAYING_PAUSED_TTL
+    if payload.duration <= 0:
+        return NOW_PLAYING_UNKNOWN_TTL
+    remaining = max(0.0, payload.duration - payload.position)
+    return int(min(NOW_PLAYING_MAX_TTL, max(NOW_PLAYING_MIN_TTL, remaining + NOW_PLAYING_GRACE)))
+
+
 @router.put("/me/now-playing")
 def update_now_playing(
     payload: NowPlayingPayload,
@@ -546,7 +585,7 @@ def update_now_playing(
 ):
     state = payload.model_dump()
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    set_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}", state, expire=NOW_PLAYING_TTL)
+    set_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}", state, expire=_now_playing_ttl(payload))
     if payload.is_playing:
         set_cache(
             f"{_LAST_HEARD_PREFIX}{current_user.id}",
@@ -632,19 +671,14 @@ def delete_player_state(
     return {"ok": True}
 
 
-@router.get("/admin/now-playing")
-def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
-    """Текущее состояние плееров всех, у кого живой now-playing ключ.
-
-    Ответ — {user_id: state}; панель опрашивает его часто и вливает в уже
-    показанные карточки, поэтому здесь только Redis, без запросов в БД.
-    """
+def _now_playing_states() -> Dict[str, dict]:
+    """{user_id: state} всех живых now-playing ключей — только Redis."""
     try:
         keys = list(redis_client.scan_iter(match=f"{_NOW_PLAYING_PREFIX}*", count=200))
         values = redis_client.mget(keys) if keys else []
     except Exception:
         logger.exception("failed to read now-playing states")
-        return {"now_playing": {}}
+        return {}
     result = {}
     for key, raw in zip(keys, values):
         if not raw:
@@ -653,7 +687,17 @@ def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
             result[key.rsplit(":", 1)[-1]] = json.loads(raw)
         except ValueError:
             continue
-    return {"now_playing": result}
+    return result
+
+
+@router.get("/admin/now-playing")
+def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
+    """Текущее состояние плееров всех, у кого живой now-playing ключ.
+
+    Ответ — {user_id: state}; панель опрашивает его часто и вливает в уже
+    показанные карточки, поэтому здесь только Redis, без запросов в БД.
+    """
+    return {"now_playing": _now_playing_states()}
 
 
 @router.get("/{user_id}", response_model=UserResponse)

@@ -65,8 +65,9 @@ function formatClock(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-// Позиция приходит со снимком из пульса (раз в 30 с) — у играющего трека
-// досчитываем прошедшее с updated_at, чтобы время не стояло между опросами.
+// Позиция приходит со снимком только на событиях (смена трека, пауза,
+// перемотка — пульса нет, см. hooks/useNowPlayingReporter) — у играющего трека
+// досчитываем прошедшее с updated_at, иначе время стояло бы весь трек.
 function livePosition(state) {
   if (!state.is_playing) return state.position
   const elapsed = (Date.now() - new Date(state.updated_at).getTime()) / 1000

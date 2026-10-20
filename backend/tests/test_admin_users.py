@@ -246,3 +246,68 @@ def test_last_heard_shown_without_counted_play(client, db):
     assert profiles["listener"]["last_heard"]["title"] == "Song"
     assert profiles["listener"]["last_heard"]["played_at"]
     assert profiles["paused"]["last_heard"] is None
+
+
+def test_now_playing_lives_until_track_end(client, db):
+    """Пульса нет — клиент шлёт состояние только на событиях, поэтому ключ
+    играющего трека живёт до конца трека с запасом, а не 90 с."""
+    from app.cache import redis_client
+    from app.routers import users as users_router
+
+    listener = create_user(db, "listener")
+    headers = auth_headers(client, "listener")
+    key = f"users:now_playing:{listener.id}"
+    base = {"track_id": "ytmusic:abc", "title": "Song", "artist": "Band"}
+
+    def ttl_after(**state):
+        resp = client.put("/api/users/me/now-playing", json={**base, **state}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        return redis_client.ttl(key)
+
+    assert abs(ttl_after(position=20, duration=200, is_playing=True)
+               - (180 + users_router.NOW_PLAYING_GRACE)) <= 2
+    # У самого конца — не меньше минимума: событие следующего трека должно
+    # успеть прийти, пока ключ жив.
+    assert abs(ttl_after(position=199, duration=200, is_playing=True)
+               - users_router.NOW_PLAYING_MIN_TTL) <= 2
+    assert abs(ttl_after(position=0, duration=0, is_playing=True)
+               - users_router.NOW_PLAYING_UNKNOWN_TTL) <= 2
+    assert ttl_after(position=0, duration=6 * 3600, is_playing=True) <= users_router.NOW_PLAYING_MAX_TTL
+    assert abs(ttl_after(position=20, duration=200, is_playing=False)
+               - users_router.NOW_PLAYING_PAUSED_TTL) <= 2
+
+
+def test_background_listener_stays_online(client, db):
+    """С погашенным экраном клиент ходит на сервер только на смене трека:
+    маркер онлайна (120 с) истекает посреди трека, last_seen отстаёт на трек.
+    Онлайн держит играющий now-playing, пауза — нет, и онлайн идёт наверх
+    списка раньше тех, кто заходил позже, но уже ушёл."""
+    from app.cache import redis_client
+
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+    paused = create_user(db, "paused")
+    recent = create_user(db, "recent")
+
+    base = {"track_id": "ytmusic:abc", "title": "Song", "position": 10, "duration": 200}
+    client.put("/api/users/me/now-playing", json={**base, "is_playing": True},
+               headers=auth_headers(client, "listener"))
+    client.put("/api/users/me/now-playing", json={**base, "is_playing": False},
+               headers=auth_headers(client, "paused"))
+    for user in (listener, paused):
+        redis_client.delete(f"users:online:{user.id}")
+        _set_last_seen(db, user, datetime.utcnow() - timedelta(minutes=4))
+    _set_last_seen(db, recent, datetime.utcnow() - timedelta(minutes=1))
+
+    resp = client.get("/api/users/admin/dashboard?taste=false", headers=auth_headers(client, "admin"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    profiles = {p["username"]: p for p in body["users"]}
+    usernames = [p["username"] for p in body["users"]]
+    assert profiles["listener"]["is_online"] is True
+    assert profiles["paused"]["is_online"] is False
+    assert profiles["recent"]["is_online"] is False
+    assert usernames.index("listener") < usernames.index("recent")
+    assert usernames.index("recent") < usernames.index("paused")
+    # admin (свой запрос) и слушатель.
+    assert body["online_users_count"] == 2
