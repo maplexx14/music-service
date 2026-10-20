@@ -205,6 +205,19 @@
   color: var(--brand-accent-text);
 }
 
+/* Ход фонового импорта — над содержимым любого шага. */
+.onboarding-import-status {
+  display: flex;
+  justify-content: center;
+  margin: -16px 0 20px;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.onboarding-import-status.error {
+  color: var(--text-secondary);
+}
+
 .onboarding-skip {
   flex-shrink: 0;
 }

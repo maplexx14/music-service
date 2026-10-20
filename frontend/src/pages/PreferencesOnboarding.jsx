@@ -11,7 +11,8 @@ import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
 } from '../components/ImportCollectionPicker'
-import { useImportStore } from '../store/importStore'
+import { useImportStore, importIsFinal, newImportId } from '../store/importStore'
+import { stageCounter } from '../components/ImportProgressModal'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import './PreferencesOnboarding.css'
@@ -19,22 +20,29 @@ import './PreferencesOnboarding.css'
 /**
  * Необязательный онбординг после регистрации, три шага:
  *
- * 1. любимые жанры (каталог — теги Last.fm, см. backend/app/lastfm_genres.py);
- * 2. любимые артисты — подсказки зависят от жанров шага 1 (tag.getTopArtists),
- *    плюс поиск по каталогу и YouTube Music;
- * 3. импорт профилей и плейлистов из других сервисов (тот же /import, что и на
- *    странице «Медиатека»).
+ * 1. импорт профилей и плейлистов из других сервисов (тот же /import, что и на
+ *    странице «Медиатека»);
+ * 2. любимые жанры (каталог — теги Last.fm, см. backend/app/lastfm_genres.py);
+ * 3. любимые артисты — подсказки зависят от жанров шага 2 (tag.getTopArtists),
+ *    плюс поиск по каталогу и YouTube Music.
+ *
+ * Импорт первым: из новичков возвращаются в основном те, кто перенёс свою
+ * музыку, а большая коллекция переносится минутами. Он идёт на сервере, пока
+ * юзер выбирает жанры и артистов, и не держит его на месте; по готовности
+ * подсказки «по прослушиваниям» перечитываются уже с импортом.
  *
  * Пропустить можно ЛЮБОЙ шаг: онбординг остаётся необязательным, всё то же
- * есть в настройках. Предпочтения сохраняются при уходе со второго шага —
- * дальше идёт импорт, который к ним не относится, и терять уже сделанный выбор
- * из-за него нельзя.
+ * есть в настройках. Предпочтения сохраняются на выходе с последнего шага.
  */
 const STEPS = [
+  { title: 'Перенесите свою музыку', hint: 'Вставьте ссылку на профиль, плейлист, альбом или избранное — SoundCloud, Yandex Music или Spotify. Перенос пойдёт в фоне, пока вы выбираете жанры и артистов.' },
   { title: 'Что вы любите слушать?', hint: 'Выберите жанры — мы соберём поток под ваш вкус. Это можно изменить в настройках в любой момент.' },
   { title: 'Любимые артисты', hint: 'Подсказки собраны по выбранным жанрам. Нужного нет — найдите поиском.' },
-  { title: 'Перенести музыку', hint: 'Вставьте ссылку на профиль, плейлист, альбом или избранное — SoundCloud, Yandex Music или Spotify.' },
 ]
+
+const IMPORT_STEP = 0
+const GENRE_STEP = 1
+const ARTIST_STEP = 2
 
 function PreferencesOnboarding() {
   const navigate = useNavigate()
@@ -54,14 +62,17 @@ function PreferencesOnboarding() {
   const [importUrl, setImportUrl] = useState('')
   const [preview, setPreview] = useState(null)
   const [previewing, setPreviewing] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [imported, setImported] = useState(0)
+  // Импорты, запущенные с этого экрана: их ход виден строкой на всех шагах.
+  const [importIds, setImportIds] = useState([])
+  const imports = useImportStore((s) => s.imports)
+  const importsCompleted = useImportStore((s) => s.completed)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
   const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
 
   // Вкус, выведенный из прослушиваний: у пришедшего по инвайту юзера история
-  // может быть уже не пустой (импорт, лайки до онбординга).
+  // может быть уже не пустой (импорт, лайки до онбординга). Закончился импорт —
+  // перечитываем: перенесённая коллекция и есть лучшая подсказка.
   useEffect(() => {
     let active = true
     api
@@ -78,11 +89,11 @@ function PreferencesOnboarding() {
     return () => {
       active = false
     }
-  }, [])
+  }, [importsCompleted])
 
   const finish = () => navigate('/')
 
-  /** Сохраняет выбор и уводит на шаг импорта. Пустой выбор не сохраняем:
+  /** Сохраняет выбор перед уходом с онбординга. Пустой выбор не сохраняем:
    *  PUT со пустыми списками затёр бы предпочтения, если юзер уже что-то
    *  выбирал раньше и просто прошёл онбординг мимо. */
   const savePreferences = async () => {
@@ -101,29 +112,15 @@ function PreferencesOnboarding() {
   }
 
   const goNext = async () => {
-    if (step === 0) {
-      setStep(1)
+    if (step < ARTIST_STEP) {
+      setStep(step + 1)
       return
     }
-    if (step === 1) {
-      if (await savePreferences()) setStep(2)
-      return
-    }
-    finish()
+    if (await savePreferences()) finish()
   }
 
-  const skipStep = async () => {
-    if (step === 0) {
-      setStep(1)
-      return
-    }
-    if (step === 1) {
-      // Пропуск артистов не отменяет уже выбранные жанры.
-      if (await savePreferences()) setStep(2)
-      return
-    }
-    finish()
-  }
+  // Пропуск артистов не отменяет уже выбранные жанры.
+  const skipStep = goNext
 
   const handlePreview = async () => {
     const url = importUrl.trim()
@@ -141,38 +138,40 @@ function PreferencesOnboarding() {
     }
   }
 
-  const handleImport = async () => {
+  /** Запускает импорт и сразу ведёт дальше: ждать его на этом экране не
+   *  нужно, ход виден строкой статуса, ошибку покажет стор тостом. */
+  const handleImport = () => {
     const url = importUrl.trim()
-    if (!url || importing) return
-    setImporting(true)
-    // Ход и итог — в окне импорта (ImportTracker), оно же сообщает об ошибке.
-    const { accepted, data } = await useImportStore.getState().start({
+    if (!url) return
+    const id = newImportId()
+    useImportStore.getState().start({
+      id,
       url,
       collections: isProfilePreview ? [...selectedCollections] : undefined,
       title: preview?.title,
+      openModal: false,
     })
-    if (data) setImported((count) => count + (data.imported || 0))
-    if (accepted) {
-      setImportUrl('')
-      setPreview(null)
-    }
-    setImporting(false)
+    setImportIds((ids) => [...ids, id])
+    setImportUrl('')
+    setPreview(null)
+    setStep(GENRE_STEP)
   }
 
   const nextLabel = () => {
-    if (step === 0) return genres.length ? `Далее (${genres.length})` : 'Далее'
-    if (step === 1) {
+    if (step === GENRE_STEP) return genres.length ? `Далее (${genres.length})` : 'Далее'
+    if (step === ARTIST_STEP) {
       if (saving) return 'Сохранение...'
-      return artists.length ? `Далее (${artists.length})` : 'Далее'
+      return artists.length ? `Готово (${artists.length})` : 'Готово'
     }
-    return 'Готово'
+    return 'Далее'
   }
 
-  const busy = saving || importing || previewing
+  const busy = saving || previewing
+  const ownImports = importIds.map((id) => imports[id]).filter(Boolean)
 
   return (
     <div className="onboarding-container">
-      <div className={`onboarding-card ${step < 2 ? 'wide' : ''}`}>
+      <div className={`onboarding-card ${step !== IMPORT_STEP ? 'wide' : ''}`}>
         <div className="onboarding-steps" aria-label={`Шаг ${step + 1} из ${STEPS.length}`}>
           {STEPS.map((_, index) => (
             <span
@@ -192,11 +191,13 @@ function PreferencesOnboarding() {
           <p>{STEPS[step].hint}</p>
         </div>
 
-        {step === 0 && (
+        {ownImports.length > 0 && <ImportStatus imports={ownImports} />}
+
+        {step === GENRE_STEP && (
           <GenreSelect selected={genres} detected={detected.genres} onChange={setGenres} />
         )}
 
-        {step === 1 && (
+        {step === ARTIST_STEP && (
           <ArtistSelect
             selected={artists}
             excluded={excludedArtists}
@@ -211,7 +212,7 @@ function PreferencesOnboarding() {
           />
         )}
 
-        {step === 2 && (
+        {step === IMPORT_STEP && (
           <div className="onboarding-import">
             <div className="onboarding-import-input">
               <Link2 size={18} />
@@ -271,29 +272,20 @@ function PreferencesOnboarding() {
                     collections={preview.collections}
                     selected={selectedCollections}
                     onChange={setSelectedCollections}
-                    disabled={importing}
                   />
                 )}
                 <button
                   type="button"
                   className="btn btn--primary onboarding-import-btn"
                   onClick={handleImport}
-                  disabled={importing || (isProfilePreview && !selectedCollections.size)}
+                  disabled={isProfilePreview && !selectedCollections.size}
                 >
                   <Download size={16} />
-                  {importing
-                    ? 'Импортируем...'
-                    : isProfilePreview
-                      ? `Импортировать (${selectedTrackCount(preview, selectedCollections)} треков)`
-                      : 'Импортировать'}
+                  {isProfilePreview
+                    ? `Перенести (${selectedTrackCount(preview, selectedCollections)} треков) и дальше`
+                    : 'Перенести и дальше'}
                 </button>
               </div>
-            )}
-
-            {imported > 0 && (
-              <p className="onboarding-imported">
-                <Check size={14} /> Перенесено треков: {imported}. Можно вставить ещё одну ссылку.
-              </p>
             )}
           </div>
         )}
@@ -328,6 +320,33 @@ function PreferencesOnboarding() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Ход импортов, запущенных с онбординга, — видна на всех шагах. Окно
+ *  прогресса здесь не открываем: оно закрыло бы выбор жанров. */
+function ImportStatus({ imports }) {
+  const running = imports.filter((e) => !importIsFinal(e.state))
+  const done = imports.filter((e) => e.state.stage === 'done')
+  const failed = imports.length - running.length - done.length
+  const total = done.reduce((sum, e) => sum + (e.state.imported || 0), 0)
+
+  let text
+  if (running.length) {
+    const counter = stageCounter(running[0].state)
+    text = counter
+      ? `Переносим музыку: ${counter[0]} из ${counter[1]}. Можно продолжать.`
+      : 'Переносим музыку… Можно продолжать.'
+  } else if (done.length) {
+    text = `Перенесено треков: ${total}. Подсказки ниже учитывают вашу музыку.`
+  } else {
+    text = 'Перенос не удался — его можно повторить в «Медиатеке».'
+  }
+
+  return (
+    <p className={`onboarding-imported onboarding-import-status ${failed && !running.length && !done.length ? 'error' : ''}`} role="status">
+      {running.length ? <Download size={14} /> : <Check size={14} />} {text}
+    </p>
   )
 }
 

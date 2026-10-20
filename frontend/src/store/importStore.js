@@ -102,15 +102,16 @@ const useImportStore = create((set, get) => {
     /**
      * Запустить импорт. → { accepted, data }: accepted — сервер принял импорт
      * (готов или ещё идёт после обрыва связи), data — ответ POST, если дошёл.
+     * id — свой, чтобы следить за импортом, не дожидаясь ответа; openModal:
+     * false — без окна прогресса (онбординг показывает ход сам).
      */
-    start: async ({ url, collections, title }) => {
-      const id = newImportId()
+    start: async ({ url, collections, title, id = newImportId(), openModal = true }) => {
       set((s) => ({
         imports: {
           ...s.imports,
           [id]: { id, title, state: { stage: 'fetching', total: 0, done: 0, started_at: Date.now() / 1000 } },
         },
-        openId: id,
+        openId: openModal ? id : s.openId,
       }))
       schedule()
 

@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { AlertTriangle, Check, Download, X } from 'lucide-react'
 import { useImportStore, importIsFinal } from '../store/importStore'
 import ImportProgressModal, { stageCounter } from './ImportProgressModal'
@@ -29,6 +30,8 @@ function ImportTracker({ enabled }) {
   const openId = useImportStore((s) => s.openId)
   const open = useImportStore((s) => s.open)
   const dismiss = useImportStore((s) => s.dismiss)
+  // Онбординг показывает ход импорта сам, плашка закрыла бы его кнопки.
+  const onOnboarding = useLocation().pathname === '/onboarding'
 
   // После входа и перезагрузки — подхватить импорты, идущие на сервере.
   useEffect(() => {
@@ -45,7 +48,7 @@ function ImportTracker({ enabled }) {
   return (
     <>
       <ImportProgressModal />
-      {latest && !openId && (
+      {latest && !openId && !onOnboarding && (
         <div className="import-pill-container">
           <div className={`import-pill ${pillTone(latest.state)}`}>
             <button type="button" className="import-pill-main" onClick={() => open(latest.id)}>
