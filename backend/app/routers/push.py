@@ -33,6 +33,11 @@ class UnsubscribeIn(BaseModel):
     endpoint: str = Field(..., max_length=2048)
 
 
+class PrefsIn(BaseModel):
+    releases: bool
+    reminders: bool
+
+
 class OpenedIn(BaseModel):
     kind: str = Field(..., max_length=32)
 
@@ -42,7 +47,23 @@ def push_config(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    return {"public_key": push.public_key(db)}
+    return {
+        "public_key": push.public_key(db),
+        "releases": current_user.push_releases,
+        "reminders": current_user.push_reminders,
+    }
+
+
+@router.put("/prefs", status_code=204)
+def update_prefs(
+    body: PrefsIn,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, current_user.id)
+    user.push_releases = body.releases
+    user.push_reminders = body.reminders
+    db.commit()
 
 
 @router.post("/subscribe", status_code=204)

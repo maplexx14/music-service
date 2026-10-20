@@ -226,6 +226,10 @@ class User(Base):
     # User-Agent запроса, обновившего last_seen, — «с какого устройства
     # заходил последний раз» в админке. Пишется вместе с last_seen.
     last_user_agent = Column(String(512), nullable=True)
+    # Какие пуши слать (app/push.py): о новых релизах и напоминания про волну.
+    # На юзера, а не на устройство: выключил на телефоне — молчит везде.
+    push_releases = Column(Boolean, nullable=False, default=True, server_default="true")
+    push_reminders = Column(Boolean, nullable=False, default=True, server_default="true")
 
     # Relationships
     playlists = relationship("Playlist", back_populates="owner", cascade="all, delete-orphan")

@@ -15,19 +15,43 @@ const ENABLE_ERRORS = {
   error: 'Не удалось включить уведомления',
 }
 
-/** Переключатель уведомлений этого устройства (раздел «Уведомления»). */
+const KINDS = [
+  ['releases', 'Новые релизы', 'Когда у ваших артистов выходит сингл или альбом'],
+  ['reminders', 'Напоминания про волну', 'Если не заходили пару дней — не чаще раза в три дня'],
+]
+
+/**
+ * Раздел «Уведомления»: подписка этого устройства и какие виды слать.
+ * Виды хранятся на сервере у юзера и действуют на всех его устройствах.
+ */
 function PushSettings() {
   const [enabled, setEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [prefs, setPrefs] = useState(null)
   const supported = pushSupported()
 
   useEffect(() => {
     let active = true
     isPushEnabled().then((value) => active && setEnabled(value))
+    api
+      .get('/push/config')
+      .then(({ data }) => active && setPrefs({ releases: data.releases, reminders: data.reminders }))
+      .catch(() => {})
     return () => {
       active = false
     }
   }, [])
+
+  const toggleKind = async (kind) => {
+    const previous = prefs
+    const next = { ...prefs, [kind]: !prefs[kind] }
+    setPrefs(next)
+    try {
+      await api.put('/push/prefs', next)
+    } catch {
+      setPrefs(previous)
+    }
+  }
 
   const toggle = async () => {
     setBusy(true)
@@ -53,7 +77,7 @@ function PushSettings() {
     setBusy(false)
   }
 
-  let hint = 'Новые релизы любимых артистов и напоминание про волну — не чаще раза в день, вечером'
+  let hint = 'Не чаще раза в день, вечером'
   if (!supported) {
     hint = needsInstallForPush()
       ? 'На iPhone уведомления приходят только приложению: добавьте bolt на экран «Домой» и откройте оттуда'
@@ -80,6 +104,24 @@ function PushSettings() {
           <span className="settings-toggle-slider" />
         </label>
       </div>
+      {prefs &&
+        KINDS.map(([kind, label, kindHint]) => (
+          <div className="settings-row" key={kind}>
+            <div>
+              <div className="settings-label">{label}</div>
+              <div className="settings-hint">{kindHint}</div>
+            </div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={prefs[kind]}
+                onChange={() => toggleKind(kind)}
+                aria-label={label}
+              />
+              <span className="settings-toggle-slider" />
+            </label>
+          </div>
+        ))}
       {enabled && (
         <div className="settings-row">
           <div>

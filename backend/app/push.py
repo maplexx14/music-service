@@ -14,6 +14,8 @@
   напоминание про волну, не чаще раза в ``REENGAGE_EVERY_DAYS`` и не больше
   ``REENGAGE_MAX`` подряд без захода — дальше молчим, пока не вернётся.
 
+Каждый вид юзер выключает отдельно (users.push_releases / push_reminders).
+
 Ссылка уведомления несёт ``?push=<kind>``: фронт отмечает открытие
 (POST /api/push/opened), и в ``push:stats:<дата>`` видно sent/opened по видам.
 
@@ -345,14 +347,15 @@ async def notify_user(db: Session, user: User, now: datetime) -> Optional[str]:
         return None
 
     releases: List[dict] = []
-    for name in artists:
-        releases.extend(await artist_releases(name))
+    if user.push_releases:
+        for name in artists:
+            releases.extend(await artist_releases(name))
     fresh = fresh_releases(releases, now.date(), notified)
 
     kind = None
     if fresh:
         kind, payload = "release", release_message(fresh)
-    else:
+    elif user.push_reminders:
         state = await get_cache_async(_reengage_key(user.id)) or {}
         last_seen = user.last_seen
         if last_seen is not None and last_seen.tzinfo is None:

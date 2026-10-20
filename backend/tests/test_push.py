@@ -176,6 +176,34 @@ def test_notify_user_reengages_inactive_user(db, monkeypatch, _clean_push_keys):
     assert asyncio.run(push.notify_user(db, user, now + timedelta(days=3))) == "reengage"
 
 
+def test_prefs_turn_off_each_kind(client, db, monkeypatch, _clean_push_keys):
+    user = create_user(db)
+    headers = auth_headers(client)
+    assert client.get("/api/push/config", headers=headers).json()["releases"] is True
+    assert client.put("/api/push/prefs", json={"releases": False, "reminders": True}, headers=headers).status_code == 204
+    config = client.get("/api/push/config", headers=headers).json()
+    assert (config["releases"], config["reminders"]) == (False, True)
+
+    now = datetime(2026, 10, 21, 16, tzinfo=timezone.utc)
+    db.refresh(user)
+    user.last_seen = now - timedelta(days=3)
+    sent = []
+
+    async def releases(name):
+        return [_release(42, "2026-10-20", artist=name)]
+
+    monkeypatch.setattr(push, "favorite_artists", lambda db_, user_: ["Linkin Park"])
+    monkeypatch.setattr(push, "artist_releases", releases)
+    monkeypatch.setattr(push, "send_to_user", lambda db_, uid, payload: sent.append(payload) or 1)
+
+    # Релизы выключены — вместо них напоминание.
+    assert asyncio.run(push.notify_user(db, user, now)) == "reengage"
+    # Выключены оба — молчим.
+    user.push_reminders = False
+    assert asyncio.run(push.notify_user(db, user, now + timedelta(days=3))) is None
+    assert len(sent) == 1
+
+
 def test_opened_records_known_kinds_only(client, db, _clean_push_keys):
     create_user(db)
     headers = auth_headers(client)

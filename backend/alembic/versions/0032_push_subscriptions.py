@@ -1,4 +1,4 @@
-"""push_subscriptions и app_secrets: Web Push
+"""push_subscriptions, app_secrets и выбор видов пушей у юзера: Web Push
 
 Revision ID: 0032_push_subscriptions
 Revises: 0031_user_last_user_agent
@@ -38,9 +38,15 @@ def upgrade() -> None:
             sa.Column("value", sa.Text(), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         )
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("users")}
+    for name in ("push_releases", "push_reminders"):
+        if name not in columns:
+            op.add_column("users", sa.Column(name, sa.Boolean(), nullable=False, server_default=sa.true()))
 
 
 def downgrade() -> None:
+    op.drop_column("users", "push_reminders")
+    op.drop_column("users", "push_releases")
     op.drop_table("app_secrets")
     op.drop_index("ix_push_subscriptions_user_id", table_name="push_subscriptions")
     op.drop_table("push_subscriptions")
