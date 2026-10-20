@@ -94,6 +94,12 @@ def main() -> None:
                 if row["features"].get("arm") == "session" and not row["features"].get("explore")
             ]),
         ])
+    rescue_rows = [row for row in rows if row["features"].get("rescue")]
+    if rescue_rows:
+        # Порции после серии быстрых скипов: спасение против обычной выдачи.
+        _table("Выход из серии скипов (features.rescue: on / holdout)", sorted(
+            _group(rescue_rows, lambda row: row["features"]["rescue"]).items()
+        ))
     _table("Артист", [
         ("новый", [row for row in rows if row["novel"]]),
         ("знакомый", [row for row in rows if not row["novel"]]),

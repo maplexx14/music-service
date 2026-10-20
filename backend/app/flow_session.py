@@ -27,9 +27,15 @@
 следующие порции не идёт (``SessionState.rejected_artists``): прод,
 2026-10-20, трек скипнутого в сессии артиста в следующей порции скипали в
 64% (control) и 51% (session) против 42% у остальных.
+
+``rescue`` — выход из серии быстрых скипов (клиент просит после трёх подряд):
+порция из доказанного (``rescue_order``). На проде после 5+ промахов подряд
+следующий трек нравился в 6.5% случаев, и такие серии чаще всего кончались
+уходом из волны.
 """
 from __future__ import annotations
 
+import math
 import random
 from collections import Counter
 from typing import Callable, Iterable, Optional
@@ -63,11 +69,23 @@ LEARNED_TERM = 0.6
 _BASE_STEP = 0.08
 EXPLORE_RATE = 0.1
 MIN_ARTIST_GAP = 4
+# Доля запросов выхода из серии, которые получают обычную выдачу (holdout,
+# features.rescue = "holdout"): без неё не с чем сравнить порции спасения.
+RESCUE_HOLDOUT = 0.2
+# Потолок лайков и песен коллекции в порции спасения — выше обычной квоты,
+# но не вся порция: сплошные лайки тоже приедаются.
+RESCUE_LIKED_SHARE = 0.5
 
 
 def pick_arm(rng: Optional[random.Random] = None) -> str:
     rng = rng or random
     return "session" if rng.random() < SESSION_ARM_SHARE else "control"
+
+
+def pick_rescue(rng: Optional[random.Random] = None) -> bool:
+    """Отдать ли запросу после серии скипов порцию спасения (иначе holdout)."""
+    rng = rng or random
+    return rng.random() >= RESCUE_HOLDOUT
 
 
 def parse_session(raw: str) -> list[tuple[str, str]]:
@@ -159,6 +177,10 @@ class SessionState:
         и ни одного «понравилось». Лайк или дослушанный трек артиста снимает
         отказ — значит, не понравилась песня, а не он сам."""
         return {artist for artist, n in self.artist_neg.items() if n and not self.artist_pos[artist]}
+
+    def accepted_artists(self) -> set:
+        """Артисты, которых в этой сессии принимали не реже, чем отвергали."""
+        return {artist for artist, n in self.artist_pos.items() if n >= self.artist_neg[artist]}
 
     def _base(self) -> float:
         return (self.pos + 1.0) / (self.pos + self.neg + 2.0)
@@ -369,6 +391,40 @@ def _without_rejected(pool: list, rejected: set, artist_of, limit: int) -> list:
     return kept + [item for item in pool if artist_of(item) in rejected]
 
 
+def rescue_order(
+    pool: list,
+    *,
+    identity_of: Callable,
+    artist_of: Callable[[dict], str],
+    features: dict,
+    accepted: set,
+    hits: set,
+) -> list:
+    """Порядок пула для выхода из серии скипов: сначала доказанное.
+
+    Ступени: артист, принятый в этой сессии; лайк или песня коллекции; хит
+    знакомого артиста (топ-3 Last.fm); знакомый; новый. Внутри ступени —
+    порядок пула. На проде у владельца лучше всего принимались лайки и
+    недавно дослушанное (good 35–48%), хиты любимых — 26% против 9% у их
+    треков не из топ-10.
+    """
+
+    def tier(item) -> int:
+        row = features.get(identity_of(item)) or {}
+        if artist_of(item) in accepted:
+            return 0
+        if row.get("origin") == "liked" or row.get("in_collection"):
+            return 1
+        if row.get("novel"):
+            return 4
+        if identity_of(item) in hits or row.get("hit"):
+            return 2
+        return 3
+
+    ranked = sorted(enumerate(pool), key=lambda pair: (tier(pair[1]), pair[0]))
+    return [item for _index, item in ranked]
+
+
 def select(
     pool: list,
     *,
@@ -386,13 +442,17 @@ def select(
     capped_max: Optional[int] = None,
     novel_max: Optional[int] = None,
     liked_max: Optional[int] = None,
+    rescue: bool = False,
+    hits: Optional[set] = None,
 ) -> tuple[list, dict]:
     """Порция из пула для варианта ``arm``: (items, {identity: доп. признаки}).
 
     control — первые ``limit`` пула как есть (порядок предрасчёта). session —
     пул переставлен по сессии и ранкеру, разнос артистов жадно, плюс одно
-    место разведки с вероятностью ``EXPLORE_RATE`` на позицию. Отвергнутые в
-    сессии артисты уходят из пула в обоих вариантах.
+    место разведки с вероятностью ``EXPLORE_RATE`` на позицию. rescue —
+    выход из серии скипов поверх любого варианта (``rescue_order``); hits —
+    идентичности хитов пула для него. Отвергнутые в сессии артисты уходят
+    из пула во всех вариантах.
     """
     extra: dict = {}
 
@@ -437,6 +497,31 @@ def select(
     )
     reordered = len(filtered) != len(pool)
     pool = filtered
+
+    if rescue:
+        ranked = rescue_order(
+            pool,
+            identity_of=identity_of,
+            artist_of=primary_of,
+            features=features,
+            accepted=session.accepted_artists() if session is not None else set(),
+            hits=hits or set(),
+        )
+        chosen = _one_per_artist(list(ranked[:limit]), list(ranked[limit:]), primary_of)
+        chosen = _apply_caps(
+            chosen,
+            [item for item in ranked if item not in chosen],
+            [
+                (capped, capped_max),
+                (is_liked, max(liked_max or 0, math.ceil(limit * RESCUE_LIKED_SHARE))),
+            ],
+        )
+        chosen = _cap_artist_count(
+            chosen, [item for item in ranked if item not in chosen], primary_of, affinity_of, kind_of
+        )
+        for item in chosen:
+            extra[identity_of(item)] = {"arm": "rescue", "rescue": "on"}
+        return chosen, extra
 
     if arm != "session":
         chosen = _one_per_artist(list(pool[:limit]), list(pool[limit:]), primary_of)
@@ -559,5 +644,7 @@ __all__ = [
     "history_meta",
     "parse_session",
     "pick_arm",
+    "pick_rescue",
+    "rescue_order",
     "select",
 ]

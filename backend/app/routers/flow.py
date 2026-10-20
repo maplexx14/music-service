@@ -4026,6 +4026,7 @@ async def _compute_flow(
     prior: Optional[tuple] = None,
     pool_limit: Optional[int] = None,
     session: str = "",
+    rescue: bool = False,
     preload: bool = False,
 ):
     """Расчёт порции потока.
@@ -4043,9 +4044,13 @@ async def _compute_flow(
     pool_limit — сколько кандидатов отобрать в предрасчёте: пул на несколько выдач,
     из которого каждая берёт ``limit`` под сигналы сессии (app/flow_session.py).
     session — сигналы сессии от клиента (параметр sess) для живой выдачи.
-    preload — прогрев с главной (см. get_flow).
+    rescue — выход из серии скипов: пул как у предрасчёта, без новизны и с
+    квотой лайков RESCUE_LIKED_SHARE, порцию из него выбирает
+    flow_session.rescue_order. preload — прогрев с главной (см. get_flow).
     """
     precompute = mode == "precompute"
+    if rescue and not precompute and not pool_limit:
+        pool_limit = pool_size(limit)
     request_limit = limit
     if pool_limit:
         limit = max(limit, int(pool_limit))
@@ -4090,7 +4095,8 @@ async def _compute_flow(
     # фактором приёма новых артистов (discovery_feedback.acceptance_factor), и
     # на проде 2026-10-18 у владельца 0.85 становилось 0.56: ползунок почти не
     # менял волну. Явно попрошенная новизна — просьба, а не prior.
-    explore_ratio = requested_ratio
+    # Выход из серии скипов новых не ищет: после серии нужно доказанное.
+    explore_ratio = 0.0 if rescue else requested_ratio
     # Исходы юзера и всех юзеров по источнику и письменности (часовой кэш).
     outcomes = await asyncio.to_thread(cached_outcome_stats, db, user_id)
     population_outcomes = await asyncio.to_thread(
@@ -4368,6 +4374,8 @@ async def _compute_flow(
     # Зажимаем целью разведки: две квоты не должны вместе съесть всю порцию,
     # и приоритет у явно попрошенных новых имён.
     liked_target = _liked_cap(limit, explore_ratio)
+    if rescue:
+        liked_target = max(liked_target, math.ceil(limit * flow_session.RESCUE_LIKED_SHARE))
 
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
@@ -5172,7 +5180,7 @@ async def _compute_flow(
             request, response, request_limit, exclude, hour, current_user, db,
             mode=mode, history=history, schedule_matches=schedule_matches,
             relax=True, prior=(mix, scores_by_identity, features_by_identity),
-            pool_limit=pool_limit, session=session, preload=preload,
+            pool_limit=pool_limit, session=session, rescue=rescue, preload=preload,
         )
     if prior is not None:
         prior_mix, prior_scores, prior_features = prior
@@ -5231,6 +5239,7 @@ async def _compute_flow(
         user_id=user_id,
         history=history,
         session=session,
+        rescue=rescue,
     )
     return await _deliver_portion(
         request=request,
@@ -5271,12 +5280,18 @@ async def _session_select(
     history: dict,
     session: str,
     arm: Optional[str] = None,
+    rescue: bool = False,
 ) -> tuple[list, dict]:
     """Выдача ``limit`` из пула по варианту A/B и сигналам сессии.
 
     Возвращает (items, features) — к признакам отданных добавлены arm,
     поправки сессии, логит ранкера и пометка разведки (для телеметрии).
+    rescue — клиент просит выход из серии скипов (flow_session.rescue_order);
+    доля таких запросов (RESCUE_HOLDOUT) получает обычную выдачу с пометкой
+    rescue = "holdout" — для сравнения.
     """
+    holdout = rescue and not flow_session.pick_rescue()
+    rescue = rescue and not holdout
     arm = arm or flow_session.pick_arm()
     meta = history.get("meta") if isinstance(history.get("meta"), dict) else {}
     state = flow_session.SessionState(
@@ -5284,7 +5299,7 @@ async def _session_select(
     )
     neighbours: set = set()
     learned = None
-    if arm == "session":
+    if arm == "session" and not rescue:
         if state.positive_artists:
             lists = await asyncio.gather(
                 *(
@@ -5317,11 +5332,40 @@ async def _session_select(
         capped_max=_genre_cap(limit),
         novel_max=_novel_cap(limit, ratio),
         liked_max=_liked_cap(limit, ratio),
+        rescue=rescue,
+        hits=await _cached_hits(pool) if rescue else None,
     )
+    if holdout:
+        for row in extra.values():
+            row["rescue"] = "holdout"
     merged = dict(features)
     for identity, row in extra.items():
         merged[identity] = {**(features.get(identity) or {}), **row}
     return chosen, merged
+
+
+async def _cached_hits(pool: list) -> set:
+    """Идентичности хитов пула — топ-3 Last.fm артиста, только из кэша.
+
+    У любимых (deep catalog) признака hit нет: мейнстрим-фильтр их не
+    проверяет. Выходу из серии он нужен у всех знакомых, а сеть на этой
+    выдаче недопустима — кэш артистов наполняет предрасчёт.
+    """
+    if not pool:
+        return set()
+    artist_of = {
+        id(item): primary_artist_key(_flow_item_artist_title(item)[0]) for item in pool
+    }
+    infos = await mainstream.artist_hits(
+        set(artist_of.values()), timeout=0, fetch_missing=False
+    )
+    hits = set()
+    for item in pool:
+        info = infos.get(artist_of[id(item)])
+        title = _norm_key(*_flow_item_artist_title(item))[1]
+        if mainstream.is_hit(info, title, lambda name: _norm_key("", name)[1]):
+            hits.add(_flow_item_identity(item))
+    return hits
 
 
 def _pool_discovery_ratio(pool: list, features: dict) -> float:
@@ -5482,15 +5526,17 @@ async def get_flow(
     exclude: str = Query("", max_length=4000),
     hour: Optional[int] = Query(None, ge=0, le=23),
     sess: str = Query("", max_length=4000),
+    rescue: bool = Query(False),
     preload: bool = Query(False),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """Порция персонального потока. exclude — id уже находящихся в очереди,
     sess — что юзер сделал с последними треками волны (app/flow_session.py).
-    preload — прогрев с главной: его могут так и не включить, поэтому в
-    историю, которая исключает отданное из следующих порций, он не пишется
-    (_deliver_portion)."""
+    rescue — выход из серии быстрых скипов: порция из доказанного (её клиент
+    ставит в очередь вместо оставшейся). preload — прогрев с главной: его
+    могут так и не включить, поэтому в историю, которая исключает отданное
+    из следующих порций, он не пишется (_deliver_portion)."""
     global _live_network_inflight, _live_waiting
     # Ответ уникален для каждого запроса — кэшировать нельзя ни на секунду
     # (подробно — в _compute_flow).
@@ -5520,6 +5566,10 @@ async def get_flow(
             base_url=str(request.base_url).rstrip("/"),
         )
         timings.append(("take", time.perf_counter() - stage))
+        # Выходу из серии нужен выбор: из почти выбранного пула (серия скипов
+        # его и съела) лучше посчитать заново, живой путь берёт пул побольше.
+        if ready is not None and rescue and len(ready[0]) < 2 * limit:
+            ready, ready_state = None, "rescue"
         if ready is not None:
             pool, scores, features, matched, ready_payload = ready
             stage = time.perf_counter()
@@ -5530,6 +5580,7 @@ async def get_flow(
                 user_id=user_id,
                 history=history,
                 session=sess,
+                rescue=rescue,
             )
             timings.append(("select", time.perf_counter() - stage))
             chosen = {_flow_item_identity(item) for item in items}
@@ -5587,7 +5638,7 @@ async def get_flow(
     try:
         mix = await _compute_flow(
             request, response, limit, exclude, hour, current_user, db,
-            mode="live", history=history, session=sess, preload=preload,
+            mode="live", history=history, session=sess, rescue=rescue, preload=preload,
         )
     finally:
         _pool_cache_only.reset(token)

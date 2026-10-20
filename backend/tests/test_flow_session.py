@@ -675,12 +675,13 @@ def _no_explore():
     return rng
 
 
-def test_session_state_tells_rejected_artists():
+def test_session_state_tells_rejected_from_accepted_artists():
     """Только отвергнутый в сессии — отказ; лайк или дослушанный трек его снимает."""
     meta = {"1": {"artist": "a"}, "2": {"artist": "a"}, "3": {"artist": "b"},
             "4": {"artist": "b"}, "5": {"artist": "c"}}
     state = flow_session.SessionState(flow_session.parse_session("s1,n2,s3,c4,f5"), meta.get)
     assert state.rejected_artists() == {"a"}
+    assert state.accepted_artists() == {"b", "c"}
 
 
 def test_artist_rejected_in_session_leaves_both_arms():
@@ -704,3 +705,34 @@ def test_rejected_artist_fills_in_when_pool_runs_dry():
     assert chosen[0]["artist"] == "b"
     assert len(chosen) >= 2 and "a" in [item["artist"] for item in chosen]
 
+
+def test_rescue_puts_proven_tracks_first():
+    """Выход из серии: сначала артист, принятый в сессии, потом лайк, хит
+    знакомого, знакомый; новые — в самом конце."""
+    meta = {"9": {"artist": "kept"}, "8": {"artist": "skipped"}}
+    state = flow_session.SessionState(flow_session.parse_session("c9,s8"), meta.get)
+    pool = _pool(["new", "known", "loved", "hit", "kept", "skipped", "other"])
+    features = {
+        0: {"origin": "radio", "novel": True},
+        1: {"origin": "favorite", "novel": False},
+        2: {"origin": "liked", "novel": False},
+        3: {"origin": "radio", "novel": False},
+        4: {"origin": "radio", "novel": True},
+        5: {"origin": "favorite", "novel": False},
+        6: {"origin": "favorite", "novel": False},
+    }
+    chosen, extra = _select(pool, features, state, limit=5, rescue=True, hits={3})
+    assert [item["artist"] for item in chosen] == ["kept", "loved", "hit", "known", "other"]
+    assert all(row == {"arm": "rescue", "rescue": "on"} for row in extra.values())
+
+
+def test_rescue_caps_collection_at_half_of_the_portion():
+    pool = _pool([f"l{i}" for i in range(5)] + ["k1", "k2", "k3"])
+    features = {
+        index: {"origin": "liked" if index < 5 else "favorite", "novel": False}
+        for index in range(8)
+    }
+    chosen, _extra = _select(pool, features, flow_session.SessionState([], {}.get), limit=4,
+                             rescue=True, liked_max=1)
+    liked = [item for item in chosen if features[item["id"]]["origin"] == "liked"]
+    assert len(chosen) == 4 and len(liked) == 2

@@ -4213,3 +4213,27 @@ def test_preload_portion_does_not_burn_history(client, db, monkeypatch):
     after = client.get("/api/recommendations/flow?limit=5", headers=headers)
     assert "flow;desc=ready" in after.headers["Server-Timing"]
 
+
+def test_rescue_request_serves_rescue_or_holdout(client, db, monkeypatch):
+    """rescue=1 после серии скипов: порция спасения (arm rescue) либо, в доле
+    holdout, обычная выдача с пометкой — для сравнения."""
+    from app import flow_session
+
+    user, headers, first = _ready_setup(client, db, monkeypatch, "rescue-user")
+    for chosen, expected in ((True, "on"), (False, "holdout")):
+        monkeypatch.setattr(flow_session, "pick_rescue", lambda rng=None, c=chosen: c)
+        assert _precompute(user.id) is True
+        response = client.get(
+            f"/api/recommendations/flow?limit=5&rescue=1&exclude={_queue_ids(first)}",
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        served = response.json()
+        assert served
+        rows = _delivery_features(db, served[0]["recommendation_id"])
+        assert rows and all(row.get("rescue") == expected for row in rows)
+        if expected == "on":
+            assert all(row["arm"] == "rescue" for row in rows)
+        else:
+            assert all(row["arm"] in ("control", "session") for row in rows)
+        first = first + served

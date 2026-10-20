@@ -84,6 +84,10 @@ const FLOW_SESSION_MAX = 30
 // Разрыв больше этого — прошлая сессия: её сигналы в sess не идут, иначе
 // артист, скипнутый вчера вечером, оставался бы «отвергнутым» и сегодня.
 const FLOW_SESSION_GAP_MS = 30 * 60 * 1000
+// Скип быстрый, если звука не было или он шёл меньше этого.
+const FLOW_FAST_SKIP_MS = 10 * 1000
+// Столько быстрых скипов подряд — и волна просит порцию спасения (rescueFlow).
+const FLOW_RESCUE_STREAK = 3
 const FLOW_NEGATIVE_CODES = new Set(['n', 's', 'd'])
 const FLOW_POSITIVE_CODES = new Set(['l', 'c', 'f'])
 // Переходы, которые сделал плеер, а не слушатель: ошибка воспроизведения и
@@ -1028,7 +1032,10 @@ const usePlayerStore = create((set, get) => ({
     const playback = { ...playbackMetadata(get()), via }
     postRecommendationEvent(currentTrack, 'skip', completion, playback)
     if (!FLOW_AUTO_ADVANCE.has(via)) {
-      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n', { offset })
+      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n', {
+        fast: playback.played_ms < FLOW_FAST_SKIP_MS,
+        offset,
+      })
     }
     invalidateFlowPreload()
     const dbId =
@@ -1076,20 +1083,25 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Сигнал волны в сессию (sess). offset — сколько треков вперёд плеер уже
-  // запускает (их _dropRejectedArtist не трогает).
-  _noteFlowSignal: (track, code, { offset = 1 } = {}) => {
+  // Сигнал волны в сессию (sess). fast — быстрый скип (для серии, см.
+  // _maybeRescueFlow); offset — сколько треков вперёд плеер уже запускает
+  // (их _dropRejectedArtist не трогает).
+  _noteFlowSignal: (track, code, { fast = false, offset = 1 } = {}) => {
     if (!track || track.recommendation_surface !== 'flow' || track.id == null) return
     const entry = {
       code,
       id: String(track.id),
       artist: flowArtistKey(track.artist),
       at: Date.now(),
+      fast: fast || code === 'n' || code === 'd',
     }
     set((state) => ({
       flowSession: [...state.flowSession, entry].slice(-FLOW_SESSION_MAX),
     }))
-    if (FLOW_NEGATIVE_CODES.has(code)) get()._dropRejectedArtist(entry.artist, offset)
+    if (FLOW_NEGATIVE_CODES.has(code)) {
+      get()._dropRejectedArtist(entry.artist, offset)
+      get()._maybeRescueFlow()
+    }
   },
 
   // Сигналы текущей сессии: с конца, пока соседние (и последний — от «сейчас»)
@@ -1133,6 +1145,61 @@ const usePlayerStore = create((set, get) => ({
     )
     if (kept.length === queue.length) return
     set({ queue: kept, shuffledOrder: kept.map((_, i) => i) })
+  },
+
+  // Момент последнего запроса спасения: серия считается только после него.
+  flowRescueAt: 0,
+
+  // Серия быстрых скипов подряд — волна сейчас мимо: просим порцию из
+  // доказанного. Прод, 2026-10-20: после 5+ промахов подряд следующий трек
+  // нравился в 6.5% случаев, и такие серии чаще всего кончались уходом из волны.
+  _maybeRescueFlow: () => {
+    const { flowActive, flowRescueAt } = get()
+    if (!flowActive) return
+    const session = get()._flowSessionEntries()
+    let streak = 0
+    for (let i = session.length - 1; i >= 0; i -= 1) {
+      const entry = session[i]
+      if (entry.at <= flowRescueAt || !FLOW_NEGATIVE_CODES.has(entry.code) || !entry.fast) break
+      streak += 1
+    }
+    if (streak >= FLOW_RESCUE_STREAK) get().rescueFlow()
+  },
+
+  // Порция спасения (rescue на бэке, app/flow_session.py: принятые в сессии
+  // артисты, лайки, хиты знакомых) встаёт сразу за ближайшим следующим —
+  // остаток очереди, который и давал серию, уходит. Ближайший следующий
+  // остаётся: плеер его уже прогрел, подмена дала бы медленный старт.
+  rescueFlow: async () => {
+    const { flowActive, flowLoading } = get()
+    if (!flowActive || flowLoading) return
+    set({ flowLoading: true, flowRescueAt: Date.now() })
+    try {
+      const exclude = get().queue.slice(-100).map((t) => t.id).join(',')
+      const { data } = await api.get('/recommendations/flow', {
+        params: {
+          limit: FLOW_EXTEND_LIMIT,
+          exclude,
+          hour: new Date().getHours(),
+          sess: get()._flowSessionParam(),
+          rescue: 1,
+        },
+        skipErrorToast: true,
+      })
+      const state = get()
+      if (!state.flowActive || state.isShuffle) return
+      const head = state.queue.slice(0, state.currentIndex + 2)
+      const known = new Set(head.map((t) => t.id))
+      const fresh = (data || []).filter((t) => !known.has(t.id))
+      if (fresh.length === 0) return
+      const queue = [...head, ...fresh]
+      set({ queue, shuffledOrder: queue.map((_, i) => i) })
+      get().prefetchTracks(fresh.slice(0, 2), 2)
+    } catch (error) {
+      console.error('Flow rescue error:', error)
+    } finally {
+      set({ flowLoading: false })
+    }
   },
 
   nextTrack: (via) => {
