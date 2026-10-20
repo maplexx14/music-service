@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import Counter
 from typing import Iterable, Optional
 
 import httpx
@@ -243,6 +244,7 @@ def gate(
     popularity,
     familiar=None,
     familiar_slots: int = 0,
+    familiar_per_artist: int = 2,
 ) -> tuple[list, dict[int, bool]]:
     """Оставляет хиты; ``exempt`` (лайки, любимые артисты) проходит без проверки.
 
@@ -259,7 +261,9 @@ def gate(
     мест под знакомых нужно выдаче. Если прошедших знакомых меньше, недостающие
     добираются отсеянными знакомыми тем же порядком известности. Иначе места
     знакомых занимали лайки: прод, 2026-10-20, в пуле волны владельца 10
-    треков из 30, лайки через один.
+    треков из 30, лайки через один. Добор — не больше ``familiar_per_artist``
+    треков артиста вместе с уже оставленными: по известности первым шёл
+    артист с большим каталогом, и Powerwolf занял 7 мест пула из 21.
     """
     hit_by_item: dict[int, bool] = {}
     kept, reserve = [], []
@@ -286,6 +290,13 @@ def gate(
         reserve = reserve[taken:]
     if familiar is not None and familiar_slots > 0 and reserve:
         missing = familiar_slots - sum(1 for item in kept if familiar(item))
-        if missing > 0:
-            kept.extend([item for item in reserve if familiar(item)][:missing])
+        per_artist = Counter(artist_of(item) for item in kept)
+        for item in reserve:
+            if missing <= 0:
+                break
+            if not familiar(item) or per_artist[artist_of(item)] >= familiar_per_artist:
+                continue
+            kept.append(item)
+            per_artist[artist_of(item)] += 1
+            missing -= 1
     return kept, hit_by_item

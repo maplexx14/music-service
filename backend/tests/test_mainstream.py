@@ -182,7 +182,36 @@ def test_gate_refills_familiar_slots_with_familiar_non_hits():
         popularity=lambda item: 0,
         familiar=lambda item: item["familiar"],
         familiar_slots=3,
+        familiar_per_artist=3,
     )
     assert [(i["artist"], i["title"]) for i in kept] == [
         ("liked", "x"), ("known", "a"), ("known", "d"), ("known", "album track"),
+    ]
+
+
+def test_gate_familiar_refill_takes_at_most_two_tracks_per_artist():
+    """По известности первым идёт артист с большим каталогом — без потолка он
+    занимал весь добор (прод, 2026-10-20: Powerwolf — 7 мест пула из 21)."""
+    infos = {
+        "big": {"listeners": 3_000_000, "top": ["Hit", "B", "C"]},
+        "small": {"listeners": 200_000, "top": ["S1", "S2", "S3"]},
+    }
+    items = [{"artist": "big", "title": "hit"}]
+    items += [{"artist": "big", "title": f"deep {i}"} for i in range(6)]
+    items += [{"artist": "small", "title": f"rare {i}"} for i in range(3)]
+    kept, _hits = mainstream.gate(
+        items,
+        infos=infos,
+        exempt=lambda item: False,
+        artist_of=lambda item: item["artist"],
+        title_of=lambda item: item["title"],
+        norm_title=_norm,
+        limit=1,
+        popularity=lambda item: 0,
+        familiar=lambda item: True,
+        familiar_slots=6,
+    )
+    # Хит big уже в пуле — ему один трек добора; остальное — small, тоже до двух.
+    assert [(i["artist"], i["title"]) for i in kept] == [
+        ("big", "hit"), ("big", "deep 0"), ("small", "rare 0"), ("small", "rare 1"),
     ]
