@@ -22,6 +22,11 @@
 (app/learned_ranker.py) и с вероятностью ``EXPLORE_RATE`` отдаёт на место
 случайного кандидата пула — с записью вероятности, чтобы ранкер учился не
 только на собственных выборах.
+
+В обоих вариантах артист, которого в этой сессии только отвергали, в
+следующие порции не идёт (``SessionState.rejected_artists``): прод,
+2026-10-20, трек скипнутого в сессии артиста в следующей порции скипали в
+64% (control) и 51% (session) против 42% у остальных.
 """
 from __future__ import annotations
 
@@ -87,6 +92,9 @@ class SessionState:
 
     def __init__(self, events, meta_of: Callable[[str], Optional[dict]]):
         self.artist = Counter()
+        # Без затухания: сколько раз артиста в сессии приняли и отвергли.
+        self.artist_pos = Counter()
+        self.artist_neg = Counter()
         self.origin_pos = Counter()
         self.origin_neg = Counter()
         self.novel_pos = Counter()
@@ -104,9 +112,10 @@ class SessionState:
         for code, item_id in reversed(list(events)):
             meta = meta_of(item_id) or {}
             artist = meta.get("artist") or ""
+            good = code in ("l", "c", "f")
             if artist:
                 self.artist[artist] += _ARTIST_WEIGHTS[code] * weight
-            good = code in ("l", "c", "f")
+                (self.artist_pos if good else self.artist_neg)[artist] += 1
             target = (
                 (self.origin_pos, self.novel_pos, self.script_pos)
                 if good
@@ -144,6 +153,12 @@ class SessionState:
     @property
     def empty(self) -> bool:
         return self.count == 0
+
+    def rejected_artists(self) -> set:
+        """Артисты, которых в этой сессии только отвергали: скип или дизлайк
+        и ни одного «понравилось». Лайк или дослушанный трек артиста снимает
+        отказ — значит, не понравилась песня, а не он сам."""
+        return {artist for artist, n in self.artist_neg.items() if n and not self.artist_pos[artist]}
 
     def _base(self) -> float:
         return (self.pos + 1.0) / (self.pos + self.neg + 2.0)
@@ -339,6 +354,21 @@ def _apply_caps(chosen: list, rest: list, caps: list) -> list:
     return result
 
 
+def _without_rejected(pool: list, rejected: set, artist_of, limit: int) -> list:
+    """Пул без артистов, отвергнутых в этой сессии.
+
+    Короткая порция лучше повтора (фронт раньше попросит следующую), но не
+    почти пустая: если своих не набирается и на половину порции, отвергнутые
+    идут в конец, как добор.
+    """
+    if not rejected:
+        return pool
+    kept = [item for item in pool if artist_of(item) not in rejected]
+    if len(kept) >= max(1, limit // 2):
+        return kept
+    return kept + [item for item in pool if artist_of(item) in rejected]
+
+
 def select(
     pool: list,
     *,
@@ -361,7 +391,8 @@ def select(
 
     control — первые ``limit`` пула как есть (порядок предрасчёта). session —
     пул переставлен по сессии и ранкеру, разнос артистов жадно, плюс одно
-    место разведки с вероятностью ``EXPLORE_RATE`` на позицию.
+    место разведки с вероятностью ``EXPLORE_RATE`` на позицию. Отвергнутые в
+    сессии артисты уходят из пула в обоих вариантах.
     """
     extra: dict = {}
 
@@ -396,6 +427,16 @@ def select(
         components = (features.get(identity_of(item)) or {}).get("components") or {}
         value = components.get("affinity")
         return float(value) if isinstance(value, (int, float)) else None
+
+    # Без отвергнутых порядок пула уже не тот, что разносил предрасчёт: разнос
+    # артистов (и на стыке с прошлой порцией) нужно делать заново.
+    filtered = (
+        _without_rejected(pool, session.rejected_artists(), primary_of, limit)
+        if session is not None
+        else pool
+    )
+    reordered = len(filtered) != len(pool)
+    pool = filtered
 
     if arm != "session":
         chosen = _one_per_artist(list(pool[:limit]), list(pool[limit:]), primary_of)
@@ -438,7 +479,7 @@ def select(
     ranked = [row[2] for row in keyed]
     terms_of = {identity_of(row[2]): row[3] for row in keyed}
 
-    if ranked == list(pool):
+    if ranked == list(pool) and not reordered:
         # Поправок нет — порядок предрасчёта уже разнесён по артистам (и
         # лайки расставлены spread_into), перекладывать его незачем.
         chosen = list(pool[:limit])

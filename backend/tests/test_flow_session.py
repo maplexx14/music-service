@@ -667,3 +667,40 @@ def test_with_mainstream_gate_catalog_slots_go_to_deep_artists(monkeypatch):
     # Ни одного deep — хвост берётся, волна не пустеет.
     none = _gate_plan_profile([], [f"tail{i}" for i in range(20)])
     assert len(_external_plan(none, "ctx", **kwargs)["favorite_artists"]) == 12
+
+
+def _no_explore():
+    rng = random.Random(0)
+    rng.random = lambda: 0.99
+    return rng
+
+
+def test_session_state_tells_rejected_artists():
+    """Только отвергнутый в сессии — отказ; лайк или дослушанный трек его снимает."""
+    meta = {"1": {"artist": "a"}, "2": {"artist": "a"}, "3": {"artist": "b"},
+            "4": {"artist": "b"}, "5": {"artist": "c"}}
+    state = flow_session.SessionState(flow_session.parse_session("s1,n2,s3,c4,f5"), meta.get)
+    assert state.rejected_artists() == {"a"}
+
+
+def test_artist_rejected_in_session_leaves_both_arms():
+    """Скипнутый в сессии артист не идёт в следующие порции ни в control, ни в
+    session (прод, 2026-10-20: в следующей порции его скипали в 64% / 51%)."""
+    meta = {"9": {"artist": "a"}}
+    state = flow_session.SessionState(flow_session.parse_session("s9"), meta.get)
+    pool = _pool(["a", "b", "a", "c", "d", "e"])
+    for arm in ("control", "session"):
+        chosen, _extra = _select(pool, {}, state, arm=arm, rng=_no_explore(), limit=4)
+        assert [item["artist"] for item in chosen] == ["b", "c", "d", "e"]
+
+
+def test_rejected_artist_fills_in_when_pool_runs_dry():
+    """Своих не набирается и на половину порции — отвергнутые идут добором,
+    чтобы порция не пустела (пустой ответ останавливает музыку)."""
+    meta = {"9": {"artist": "a"}}
+    state = flow_session.SessionState(flow_session.parse_session("s9"), meta.get)
+    pool = _pool(["a", "a", "a", "b"])
+    chosen, _extra = _select(pool, {}, state, arm="control", limit=4)
+    assert chosen[0]["artist"] == "b"
+    assert len(chosen) >= 2 and "a" in [item["artist"] for item in chosen]
+

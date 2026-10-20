@@ -81,9 +81,23 @@ const FLOW_EXTEND_LIMIT = 6
 const FLOW_EXTEND_LEAD = 4
 // Сколько последних сигналов волны отправлять в sess (см. flow_session.py).
 const FLOW_SESSION_MAX = 30
+// Разрыв больше этого — прошлая сессия: её сигналы в sess не идут, иначе
+// артист, скипнутый вчера вечером, оставался бы «отвергнутым» и сегодня.
+const FLOW_SESSION_GAP_MS = 30 * 60 * 1000
+const FLOW_NEGATIVE_CODES = new Set(['n', 's', 'd'])
+const FLOW_POSITIVE_CODES = new Set(['l', 'c', 'f'])
 // Переходы, которые сделал плеер, а не слушатель: ошибка воспроизведения и
 // конец потока раньше 25% длительности. В сигналы сессии они не идут.
 const FLOW_AUTO_ADVANCE = new Set(['error', 'ended'])
+
+// Ключ артиста для сигналов волны — зеркало primary_artist_key
+// (backend/app/diversity.py): первый участник коллаба, регистр и пробелы сведены.
+const FLOW_COLLAB_SPLIT_RE = /\s*,\s*|\s+(?:&|x|vs\.?|feat\.?|ft\.?)\s+/i
+
+function flowArtistKey(name) {
+  const first = (name || '').trim().split(FLOW_COLLAB_SPLIT_RE)[0] || ''
+  return first.trim().toLowerCase().replace(/\s+/g, ' ')
+}
 
 function invalidateFlowPreload() {
   flowPreloadGeneration += 1
@@ -1003,8 +1017,9 @@ const usePlayerStore = create((set, get) => ({
   // сразу) массово не записывались.
   //
   // via — чем переключили (button, swipe, fullscreen_button, fullscreen_swipe,
-  // dislike, system, error, ended): уходит в метаданные скипа.
-  _recordSkipIfNeeded: (via = 'unknown') => {
+  // dislike, system, error, ended): уходит в метаданные скипа. offset — на
+  // сколько треков вперёд уходит очередь (advanceBy).
+  _recordSkipIfNeeded: (via = 'unknown', offset = 1) => {
     const { currentTrack, currentTime, duration, isPlaying } = get()
     if (!currentTrack || !isPlaying) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
@@ -1013,7 +1028,7 @@ const usePlayerStore = create((set, get) => ({
     const playback = { ...playbackMetadata(get()), via }
     postRecommendationEvent(currentTrack, 'skip', completion, playback)
     if (!FLOW_AUTO_ADVANCE.has(via)) {
-      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n')
+      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n', { offset })
     }
     invalidateFlowPreload()
     const dbId =
@@ -1061,17 +1076,64 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  _noteFlowSignal: (track, code) => {
+  // Сигнал волны в сессию (sess). offset — сколько треков вперёд плеер уже
+  // запускает (их _dropRejectedArtist не трогает).
+  _noteFlowSignal: (track, code, { offset = 1 } = {}) => {
     if (!track || track.recommendation_surface !== 'flow' || track.id == null) return
+    const entry = {
+      code,
+      id: String(track.id),
+      artist: flowArtistKey(track.artist),
+      at: Date.now(),
+    }
     set((state) => ({
-      flowSession: [...state.flowSession, { code, id: String(track.id) }].slice(-FLOW_SESSION_MAX),
+      flowSession: [...state.flowSession, entry].slice(-FLOW_SESSION_MAX),
     }))
+    if (FLOW_NEGATIVE_CODES.has(code)) get()._dropRejectedArtist(entry.artist, offset)
+  },
+
+  // Сигналы текущей сессии: с конца, пока соседние (и последний — от «сейчас»)
+  // не дальше FLOW_SESSION_GAP_MS.
+  _flowSessionEntries: () => {
+    const entries = get().flowSession
+    let at = Date.now()
+    let start = entries.length
+    while (start > 0 && at - (entries[start - 1].at ?? 0) <= FLOW_SESSION_GAP_MS) {
+      start -= 1
+      at = entries[start].at ?? 0
+    }
+    return entries.slice(start)
   },
 
   _flowSessionParam: () =>
     get()
-      .flowSession.map(({ code, id }) => `${code}${id}`)
+      ._flowSessionEntries()
+      .map(({ code, id }) => `${code}${id}`)
       .join(','),
+
+  // Артиста только что отвергли (скип, дизлайк), а в загруженной очереди волны
+  // ещё лежат его треки — убираем их: прод, 2026-10-20, такой трек в той же
+  // порции скипали в 84–90% случаев. Следующие порции сервер отдаёт уже без
+  // него (flow_session.SessionState.rejected_artists, то же правило: лайк или
+  // дослушанный трек артиста в сессии отказ снимает). Ближайшие offset треков
+  // не трогаем — плеер их уже запускает или прогрел.
+  _dropRejectedArtist: (artist, offset = 1) => {
+    const { flowActive, isShuffle, queue, currentIndex } = get()
+    if (!artist || !flowActive || isShuffle) return
+    const accepted = get()
+      ._flowSessionEntries()
+      .some((entry) => entry.artist === artist && FLOW_POSITIVE_CODES.has(entry.code))
+    if (accepted) return
+    const keepUntil = currentIndex + offset
+    const kept = queue.filter(
+      (track, index) =>
+        index <= keepUntil ||
+        track.recommendation_surface !== 'flow' ||
+        flowArtistKey(track.artist) !== artist
+    )
+    if (kept.length === queue.length) return
+    set({ queue: kept, shuffledOrder: kept.map((_, i) => i) })
+  },
 
   nextTrack: (via) => {
     get()._recordSkipIfNeeded(via)
@@ -1119,7 +1181,7 @@ const usePlayerStore = create((set, get) => ({
       get().nextTrack(via)
       return
     }
-    get()._recordSkipIfNeeded(via)
+    get()._recordSkipIfNeeded(via, n)
     get()._recordListenProgress()
     const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     const moved = { isPlaying: true, currentTime: 0, seekRequest: null }
