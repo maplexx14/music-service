@@ -4237,3 +4237,15 @@ def test_rescue_request_serves_rescue_or_holdout(client, db, monkeypatch):
         else:
             assert all(row["arm"] in ("control", "session") for row in rows)
         first = first + served
+
+
+def test_refill_per_artist_follows_the_discovery_slider():
+    """Потолок треков артиста в доборе пула — от ползунка: к «знакомому»
+    больше треков известных артистов, к «новому» — больше разных артистов."""
+    caps = [flow_router._refill_per_artist(step / 20) for step in range(21)]
+    assert caps == sorted(caps, reverse=True)
+    assert flow_router._refill_per_artist(0.0) == 4
+    assert flow_router._refill_per_artist(0.2) == 3
+    assert flow_router._refill_per_artist(0.5) == 2
+    assert flow_router._refill_per_artist(1.0) == 1
+    assert flow_router._refill_per_artist(-1.0) == 4 and flow_router._refill_per_artist(2.0) == 1

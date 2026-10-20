@@ -245,6 +245,21 @@ def _novel_cap(limit: int, ratio: float) -> int:
     return max(0, round(limit * ratio))
 
 
+_REFILL_PER_ARTIST_MAX = 4
+
+
+def _refill_per_artist(ratio: float) -> int:
+    """Сколько треков артиста добор пула знакомыми (mainstream.gate) может
+    взять — от ползунка новизны (решение владельца, 2026-10-20).
+
+    Ползунок к «знакомому» — волна держится известных артистов, и больше их
+    треков в пуле уместно; к «новому» — важнее разнообразие артистов:
+    0–0.1 → 4, 0.15–0.35 → 3, 0.4–0.6 → 2, выше → 1.
+    """
+    ratio = min(1.0, max(0.0, ratio))
+    return max(1, round(_REFILL_PER_ARTIST_MAX * (1.0 - ratio)))
+
+
 def _liked_cap(limit: int, ratio: float) -> int:
     """Потолок лайков в выдаче из готового пула — та же квота, что и в
     _compute_flow, но на ``limit`` выдачи, а не на весь пул."""
@@ -4991,6 +5006,7 @@ async def _compute_flow(
             familiar=lambda item: _item_identity(item) not in liked_identities
             and _artist_affinity(_item_artist_title(item)[0], gate_weights) is not None,
             familiar_slots=max(0, limit - liked_target - _novel_cap(limit, explore_ratio)),
+            familiar_per_artist=_refill_per_artist(explore_ratio),
         )
         for candidate in unified_candidates:
             if id(candidate) in hit_by_item:
