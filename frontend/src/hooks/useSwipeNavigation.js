@@ -52,6 +52,10 @@ const MAX_MS = 380
 const STALE_VELOCITY_MS = 80
 const ENTER_MS = 260
 const ENTER_SHIFT = 0.25
+// Уезжающий экран с тенью доезжает за край на её длину (сдвиг 12px + размытие
+// 32px, см. showUnder и --vt-shadow-reach в index.css): остановись он ровно у
+// края, полоса тени оставалась бы на экране и пропадала рывком.
+const SHADOW_REACH = 48
 // = --ease-drawer. Начальный наклон кривой ≈ 0.72 / 0.32: на старте экран
 // идёт в 2.25 раза быстрее средней скорости доезда.
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
@@ -207,7 +211,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const st = pan.screen.style
       st.transition = transition
       st.transform = x ? `translate3d(${x}px, 0, 0)` : ''
-      actionsRef.current.onPan?.(x, pan.width, transition)
+      // Довод за край ради тени (SHADOW_REACH) — не сдвиг вкладки: индикатор
+      // таб-бара проскочил бы свою ячейку.
+      actionsRef.current.onPan?.(Math.sign(x) * Math.min(Math.abs(x), pan.width), pan.width, transition)
       if (pan.under) {
         // Нижний экран едет с параллаксом: от сдвига на четверть ширины к нулю.
         const ux = -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
@@ -230,7 +236,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     // инлайн-стили снимаются в его layout-эффекте — до отрисовки кадра.
     const commitLive = (dir, ms, action) => {
       const finished = pan
-      setOffset(dir * pan.width, ms)
+      setOffset(dir * (pan.width + SHADOW_REACH), ms)
       let timer = 0
       const navigateNow = () => {
         clearTimeout(timer)
@@ -362,7 +368,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       // одновременно въезжает из-под него.
       const root = document.documentElement.style
       root.setProperty('--swipe-from', `${dx}px`)
-      root.setProperty('--swipe-to', `${dir * width}px`)
+      root.setProperty('--swipe-to', `${dir * (width + SHADOW_REACH)}px`)
       root.setProperty('--swipe-under', `${-dir * ENTER_SHIFT * width}px`)
       root.setProperty('--swipe-shadow', `${-dir * 12}px`)
       root.setProperty('--swipe-ms', `${ms}ms`)

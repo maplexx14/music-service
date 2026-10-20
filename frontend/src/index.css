@@ -406,14 +406,20 @@ html[data-nav='fade']::view-transition-new(page) {
 }
 
 
+/* Экран с тенью въезжает и уезжает из-за края на длину тени (--vt-shadow-
+   reach: сдвиг 12px + размытие 32px): остановись он ровно у края, тень
+   оставалась бы на экране полосой и пропадала рывком вместе с переходом. */
+:root {
+  --vt-shadow-reach: 48px;
+}
 @keyframes vt-page-in-right {
   from {
-    transform: translateX(100%);
+    transform: translateX(calc(100% + var(--vt-shadow-reach)));
   }
 }
 @keyframes vt-page-out-right {
   to {
-    transform: translateX(100%);
+    transform: translateX(calc(100% + var(--vt-shadow-reach)));
   }
 }
 @keyframes vt-page-under-out {
