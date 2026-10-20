@@ -16,6 +16,8 @@ os.environ.setdefault("REDIS_SOCKET_TIMEOUT", "0.05")
 # сразу тянет сеть (ytmusic-каталог + slskd). Присваивание, а не setdefault:
 # compose может протащить .env с включённым харвестом.
 os.environ["SLSK_HARVEST"] = "0"
+# Ежедневная рассылка пушей (app/push.py) — фоновый цикл, тестам не нужен.
+os.environ["PUSH_ENABLED"] = "0"
 # Deezer (app/routers/deezer.py) стоит первым в цепочке стрима и ходит в сеть,
 # если найдёт ARL. Тесты цепочки его не ждут: выключаем, а тесты самого Deezer
 # подменяют ARL явно.

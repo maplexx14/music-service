@@ -11,6 +11,8 @@ import SidebarView from './Sidebar'
 import PlayerView from './Player'
 import ToastView from './Toast'
 import InstallPrompt from './InstallPrompt'
+import PushPrompt from './PushPrompt'
+import { syncPushSubscription, trackPushOpen } from '../services/push'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
@@ -108,6 +110,12 @@ function Layout({ renderRoutes }) {
   // переход идёт в startTransition и под стеком смонтированных экранов
   // коммитится заметно позже тапа или свайпа.
   const [pendingNavIndex, setPendingNavIndex] = useState(null)
+
+  // Пуши: открытие из уведомления (?push=…) и сверка подписки устройства.
+  useEffect(() => {
+    trackPushOpen()
+    syncPushSubscription()
+  }, [])
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -369,6 +377,7 @@ function Layout({ renderRoutes }) {
       </MeterProfiler>
       <ToastContainer />
       {isMobile && <InstallPrompt />}
+      <PushPrompt />
       <AddToPlaylistDialog />
       <CensorOverrideDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже

@@ -3,6 +3,7 @@ import api, { setApiAuthToken, setDeviceToken } from '../services/api'
 import { useSearchStore } from './searchStore'
 import { clearPageCache } from '../services/pageCache'
 import { invalidateFlowPreload } from './playerStore'
+import { dropLocalPushSubscription } from '../services/push'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -518,6 +519,7 @@ const useAuthStore = create((set, get) => ({
       },
 
       logout: () => {
+        dropLocalPushSubscription()
         setApiAuthToken(null)
         set({
           user: null,

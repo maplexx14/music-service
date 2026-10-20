@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from 'lucide-react'
+import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Bell } from 'lucide-react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -11,6 +11,7 @@ import api from '../services/api'
 import EmailChangeSettings from '../components/EmailChangeSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
+import PushSettings from '../components/PushSettings'
 import ContactDeveloper from '../components/ContactDeveloper'
 import TasteAvatar from '../components/TasteAvatar'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
@@ -41,6 +42,7 @@ const SECTIONS = [
   { id: 'recs', label: 'Рекомендации', hint: 'Новые открытия', icon: Sparkles },
   { id: 'playback', label: 'Воспроизведение', hint: 'Качество звука', icon: Headphones },
   { id: 'appearance', label: 'Оформление', hint: 'Облегчённый режим, GIF', icon: Palette },
+  { id: 'notifications', label: 'Уведомления', hint: 'Новые релизы артистов', icon: Bell },
   { id: 'security', label: 'Безопасность', hint: 'Почта, двухфакторка, устройства', icon: Shield },
   // Диагностика плеера — отладочный инструмент, обычному пользователю не
   // нужен: лог событий воспроизведения имеет смысл только при разборе багов,
@@ -580,6 +582,12 @@ function Settings() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && (
+            <div {...panelProps('notifications')}>
+              <PushSettings />
             </div>
           )}
 

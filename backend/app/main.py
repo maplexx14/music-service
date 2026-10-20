@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from app.database import engine, Base
 from app.rate_limit import limiter
 from app.routers import auth, tracks, playlists, search, recommendations, users, external, soulseek, ytdlp, soundcloud, importer, aggregate, flow, yandex_music, spotify, artists, albums, deezer, censorship, share, feedback, lyrics
+from app.routers import push as push_router
 
 # Schema is managed by Alembic migrations (alembic upgrade head).
 # For quick local dev without migrations set DEBUG=true.
@@ -97,6 +98,7 @@ app.include_router(censorship.router, prefix="/api/censorship", tags=["censorshi
 app.include_router(share.router, prefix="/api/share", tags=["share"])
 app.include_router(feedback.router, prefix="/api/feedback", tags=["feedback"])
 app.include_router(lyrics.router, prefix="/api/lyrics", tags=["lyrics"])
+app.include_router(push_router.router, prefix="/api/push", tags=["push"])
 
 # Mount static files for music
 music_dir = os.path.join(os.path.dirname(__file__), "..", "music_files")
@@ -438,6 +440,42 @@ async def _artist_probe_loop() -> None:
             except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
                 logger.exception("artist probe pass failed")
             await asyncio.sleep(interval)
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
+async def _push_round_loop() -> None:
+    """Ежедневная рассылка пушей (app/push.py) в час ``PUSH_HOUR_UTC``.
+
+    Каждый воркер раз в несколько минут смотрит на часы; проход за день
+    запускает тот, кто первым поставил ``push:round:<дата>`` (SET NX), — два
+    уведомления одному юзеру за вечер не уйдут, даже если воркеров восемь.
+    Упавший посреди проход не повторяется: лучше недослать, чем задвоить.
+    """
+    import logging
+    from datetime import datetime, timezone
+
+    from app import push
+    from app.cache import redis_client
+
+    logger = logging.getLogger("push")
+    if os.getenv("PUSH_ENABLED", "1") != "1":
+        logger.info("push rounds disabled (PUSH_ENABLED != 1)")
+        return
+
+    async def _loop() -> None:
+        while True:
+            await asyncio.sleep(300)
+            try:
+                now = datetime.now(timezone.utc)
+                if now.hour != push.PUSH_HOUR_UTC:
+                    continue
+                key = f"push:round:{now.date().isoformat()}"
+                if await asyncio.to_thread(redis_client.set, key, "1", nx=True, ex=2 * 86400):
+                    await push.run_round(now)
+            except Exception:  # noqa: BLE001 — фон не должен умирать навсегда
+                logger.exception("push round failed")
 
     asyncio.create_task(_loop())
 

@@ -123,6 +123,42 @@ function cacheShell(response) {
   })
 }
 
+// Web Push (см. backend/app/push.py): payload — {title, body, url, tag}.
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = { body: event.data ? event.data.text() : '' }
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'bolt', {
+      body: data.body || '',
+      icon: '/apple-touch-icon-v3.png',
+      tag: data.tag || undefined,
+      data: { url: data.url || '/' },
+    }),
+  )
+})
+
+// Нажали на уведомление — открытое окно приложения переводим по ссылке,
+// иначе открываем новое.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = new URL(event.notification.data?.url || '/', self.location.origin).href
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      const open = windows.find((client) => new URL(client.url).origin === self.location.origin)
+      if (!open) return self.clients.openWindow(target)
+      // navigate() работает только у окна под этим SW — иначе новое окно.
+      return open
+        .focus()
+        .then((client) => client.navigate(target))
+        .catch(() => self.clients.openWindow(target))
+    }),
+  )
+})
+
 self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET') return

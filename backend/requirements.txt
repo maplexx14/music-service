@@ -46,6 +46,9 @@ ytmusicapi==1.12.3
 # Blowfish для расшифровки аудио Deezer (app/routers/deezer.py). Раньше
 # приходил только транзитивно, через minio.
 pycryptodome==3.23.0
+# Web Push (VAPID + шифрование aes128gcm) для уведомлений о новых релизах,
+# см. app/push.py.
+pywebpush==2.0.3
 # Нативный API клиент для Yandex Music (обход CAPTCHA через OAuth)
 yandex-music==2.1.1
 # Жанровый словарь и чтение локальных аудиофайлов для акустического профиля

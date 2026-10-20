@@ -156,6 +156,35 @@ user_trusted_devices = Table(
 )
 
 
+# Подписки Web Push (PushManager.subscribe в браузере/PWA). endpoint — URL
+# push-сервиса браузера, уникален на устройство; p256dh/auth — ключи, которыми
+# шифруется содержимое уведомления. Протухшие (404/410 от push-сервиса)
+# удаляются при отправке, см. app/push.py.
+push_subscriptions = Table(
+    'push_subscriptions',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('endpoint', Text, nullable=False, unique=True),
+    Column('p256dh', String(256), nullable=False),
+    Column('auth', String(64), nullable=False),
+    Column('user_agent', String(512), nullable=True),
+    Column('created_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column('last_success_at', DateTime(timezone=True), nullable=True),
+)
+
+# Секреты, которые сервис создаёт сам и обязан хранить надёжно, — сейчас ключ
+# VAPID: смени его, и все подписки на пуши молча перестанут работать. Redis
+# для этого не годится (кэш, может потеряться), env — лишний ручной шаг.
+app_secrets = Table(
+    'app_secrets',
+    Base.metadata,
+    Column('name', String(64), primary_key=True),
+    Column('value', Text, nullable=False),
+    Column('created_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+
 class User(Base):
     __tablename__ = "users"
 

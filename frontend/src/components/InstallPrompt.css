@@ -80,3 +80,10 @@
     transition: none;
   }
 }
+
+/* Кнопки в предложении включить уведомления (PushPrompt). */
+.push-prompt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
