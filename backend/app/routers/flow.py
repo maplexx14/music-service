@@ -4044,9 +4044,9 @@ async def _compute_flow(
     pool_limit — сколько кандидатов отобрать в предрасчёте: пул на несколько выдач,
     из которого каждая берёт ``limit`` под сигналы сессии (app/flow_session.py).
     session — сигналы сессии от клиента (параметр sess) для живой выдачи.
-    rescue — выход из серии скипов: пул как у предрасчёта, без новизны и с
-    квотой лайков RESCUE_LIKED_SHARE, порцию из него выбирает
-    flow_session.rescue_order. preload — прогрев с главной (см. get_flow).
+    rescue — выход из серии скипов: пул как у предрасчёта, порцию из него
+    выбирает flow_session.rescue_order. preload — прогрев с главной (см.
+    get_flow).
     """
     precompute = mode == "precompute"
     if rescue and not precompute and not pool_limit:
@@ -4095,8 +4095,7 @@ async def _compute_flow(
     # фактором приёма новых артистов (discovery_feedback.acceptance_factor), и
     # на проде 2026-10-18 у владельца 0.85 становилось 0.56: ползунок почти не
     # менял волну. Явно попрошенная новизна — просьба, а не prior.
-    # Выход из серии скипов новых не ищет: после серии нужно доказанное.
-    explore_ratio = 0.0 if rescue else requested_ratio
+    explore_ratio = requested_ratio
     # Исходы юзера и всех юзеров по источнику и письменности (часовой кэш).
     outcomes = await asyncio.to_thread(cached_outcome_stats, db, user_id)
     population_outcomes = await asyncio.to_thread(
@@ -4374,8 +4373,6 @@ async def _compute_flow(
     # Зажимаем целью разведки: две квоты не должны вместе съесть всю порцию,
     # и приоритет у явно попрошенных новых имён.
     liked_target = _liked_cap(limit, explore_ratio)
-    if rescue:
-        liked_target = max(liked_target, math.ceil(limit * flow_session.RESCUE_LIKED_SHARE))
 
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.

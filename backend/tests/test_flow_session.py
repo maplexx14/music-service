@@ -726,7 +726,9 @@ def test_rescue_puts_proven_tracks_first():
     assert all(row == {"arm": "rescue", "rescue": "on"} for row in extra.values())
 
 
-def test_rescue_caps_collection_at_half_of_the_portion():
+def test_rescue_keeps_the_usual_like_quota():
+    """Спасение ставит лайки вперёд, но не больше обычной квоты: из одних
+    лайков порция шла бы ими через трек (жалоба владельца, 2026-10-20)."""
     pool = _pool([f"l{i}" for i in range(5)] + ["k1", "k2", "k3"])
     features = {
         index: {"origin": "liked" if index < 5 else "favorite", "novel": False}
@@ -735,4 +737,4 @@ def test_rescue_caps_collection_at_half_of_the_portion():
     chosen, _extra = _select(pool, features, flow_session.SessionState([], {}.get), limit=4,
                              rescue=True, liked_max=1)
     liked = [item for item in chosen if features[item["id"]]["origin"] == "liked"]
-    assert len(chosen) == 4 and len(liked) == 2
+    assert len(chosen) == 4 and len(liked) == 1

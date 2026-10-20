@@ -35,7 +35,6 @@
 """
 from __future__ import annotations
 
-import math
 import random
 from collections import Counter
 from typing import Callable, Iterable, Optional
@@ -72,9 +71,6 @@ MIN_ARTIST_GAP = 4
 # Доля запросов выхода из серии, которые получают обычную выдачу (holdout,
 # features.rescue = "holdout"): без неё не с чем сравнить порции спасения.
 RESCUE_HOLDOUT = 0.2
-# Потолок лайков и песен коллекции в порции спасения — выше обычной квоты,
-# но не вся порция: сплошные лайки тоже приедаются.
-RESCUE_LIKED_SHARE = 0.5
 
 
 def pick_arm(rng: Optional[random.Random] = None) -> str:
@@ -406,7 +402,9 @@ def rescue_order(
     знакомого артиста (топ-3 Last.fm); знакомый; новый. Внутри ступени —
     порядок пула. На проде у владельца лучше всего принимались лайки и
     недавно дослушанное (good 35–48%), хиты любимых — 26% против 9% у их
-    треков не из топ-10.
+    треков не из топ-10. Лайков при этом не больше обычной квоты: порция
+    спасения из одних лайков шла бы ими через трек (жалоба владельца,
+    2026-10-20).
     """
 
     def tier(item) -> int:
@@ -511,10 +509,7 @@ def select(
         chosen = _apply_caps(
             chosen,
             [item for item in ranked if item not in chosen],
-            [
-                (capped, capped_max),
-                (is_liked, max(liked_max or 0, math.ceil(limit * RESCUE_LIKED_SHARE))),
-            ],
+            [(capped, capped_max), (is_liked, liked_max)],
         )
         chosen = _cap_artist_count(
             chosen, [item for item in ranked if item not in chosen], primary_of, affinity_of, kind_of
