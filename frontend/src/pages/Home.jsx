@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Pause, Loader2, Home as HomeIcon, History } from 'lucide-react'
+import { Play, Pause, Loader2, Home as HomeIcon, History, Sparkles } from 'lucide-react'
 import {
   recordRecommendationImpression,
   usePlayerStore,
@@ -544,6 +544,13 @@ function Home() {
             )}
           </div>
         </div>
+        {/* Настройка потока — внизу hero, вне потока вёрстки: центр диска не сдвигается. */}
+        {/* Одна иконка не объясняла, куда ведёт: подпись + та же иконка,
+            что у раздела «Рекомендации» в настройках. */}
+        <Link to="/settings/recs" className="wave-settings-link">
+          <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
+          Настроить поток
+        </Link>
       </div>
 
       <div className="home-tabs" role="tablist" data-active={activeTab}>

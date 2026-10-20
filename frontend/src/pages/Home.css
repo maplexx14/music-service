@@ -241,6 +241,38 @@
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
+/* Ссылка на настройки рекомендаций внизу hero, по центру под диском. */
+.wave-settings-link {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  z-index: 3;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  text-decoration: none;
+  transform: translateX(-50%);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.wave-settings-link:hover {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.wave-settings-link:active {
+  transform: translateX(-50%) scale(0.94);
+}
+
 /* Кнопка потока — сплошной круг акцентного цвета с одной иконкой в центре
    диска. Полупрозрачные варианты терялись на обложке и не читались как
    кнопка; плотная заливка сразу говорит «нажми». */
@@ -736,6 +768,11 @@
   .wave-heading {
     font-size: clamp(40px, 13vw, 60px);
     bottom: calc(100% + 16px);
+  }
+
+  /* Над нижней навигацией (72px, Layout.css). */
+  .wave-settings-link {
+    bottom: calc(16px + 72px + env(safe-area-inset-bottom, 0px));
   }
 
   .content-section {
