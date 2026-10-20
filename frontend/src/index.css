@@ -311,6 +311,24 @@ html[data-nav] .toast-container {
   animation: none;
 }
 
+/* Тени мини-плеера и таб-бара лежат за их краем, а снапшот перехода это
+   рамка элемента: WebKit тень в него не берёт, и после перехода она
+   появлялась рывком. Поэтому на время перехода тень рисует слой группы, а у
+   живого элемента она снята — в снапшот (во всех движках) попадает только
+   сам элемент, без двойной тени. */
+html[data-nav] .player,
+html[data-nav] .mobile-nav-global {
+  box-shadow: none;
+}
+::view-transition-group(mini-player) {
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+::view-transition-group(tabbar) {
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+}
+
 ::view-transition-old(page),
 ::view-transition-new(page) {
   mix-blend-mode: normal;

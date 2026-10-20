@@ -297,6 +297,15 @@ html.no-gpu .fullscreen-art-strip img {
    transition width/height/margin — раскладка всего плеера на каждом кадре,
    и всё равно скачок: flex-direction не анимируется. Морф — это уже
    сдвиг готовых снапшотов. Элемент на экране меняет место — ease-in-out. */
+/* Тень обложки на время морфа — у слоя группы, а не в снапшоте (иначе она
+   пропадает на время полёта и возвращается рывком, см. index.css). */
+html[data-morph='lyrics'] .fullscreen-art img.is-current {
+  box-shadow: none;
+}
+html[data-morph='lyrics']::view-transition-group(fs-art) {
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
 html[data-morph='lyrics'] .fullscreen-art img.is-current {
   view-transition-name: fs-art;
 }

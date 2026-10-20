@@ -63,21 +63,32 @@ function usable(r) {
   return r && r.width >= 2 && r.height >= 2 ? r : null
 }
 
+// Тень в координатах клона: он масштабирован, и тень уменьшается вместе с ним.
+function scaledShadow(shadow, scale) {
+  if (!shadow || shadow === 'none') return 'none'
+  return shadow.replace(/(-?[\d.]+)px/g, (_, n) => `${parseFloat(n) / scale}px`)
+}
+
 function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
-  const fromRadius = parseFloat(getComputedStyle(fromImg).borderRadius) || 0
-  const toRadius = parseFloat(getComputedStyle(toImg).borderRadius) || 0
+  const fromStyle = getComputedStyle(fromImg)
+  const toStyle = getComputedStyle(toImg)
+  const fromRadius = parseFloat(fromStyle.borderRadius) || 0
+  const toRadius = parseFloat(toStyle.borderRadius) || 0
   // Клон живёт в размере БОЛЬШЕГО прямоугольника и только уменьшается
   // (scale ≤ 1). WebKit растеризует слой в его собственном размере: клон
   // мини-обложки, растянутый scale(8), мылился бы весь полёт и резко
   // «прояснялся» в конце, а его радиус раздувался бы в круг.
   const base = toRect.width >= fromRect.width ? toRect : fromRect
-  // Кадр морфа: прямоугольник rect с экранным радиусом radius. Радиус — в
-  // координатах клона (до scale), иначе после масштаба он будет не тем.
-  const frame = (rect, radius) => {
+  // Кадр морфа: прямоугольник rect с экранным радиусом radius и тенью
+  // shadow. Радиус и тень — в координатах клона (до scale), иначе после
+  // масштаба они будут не те. Тень летит вместе с клоном: без неё обложка
+  // летела голой, а тень настоящей появлялась рывком в конце.
+  const frame = (rect, radius, shadow) => {
     const scale = rect.width / base.width
     return {
       transform: `translate(${rect.left - base.left}px, ${rect.top - base.top}px) scale(${scale})`,
       borderRadius: `${radius / scale}px`,
+      boxShadow: scaledShadow(shadow, scale),
     }
   }
   const clone = document.createElement('img')
@@ -98,14 +109,15 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
     'z-index:1300',
     'pointer-events:none',
   ].join(';')
-  const first = frame(fromRect, fromRadius)
+  const first = frame(fromRect, fromRadius, fromStyle.boxShadow)
   // Стартовый кадр сразу в стиле: до первого тика анимации клон не должен
   // мелькнуть в полном размере.
   clone.style.transform = first.transform
   clone.style.borderRadius = first.borderRadius
+  clone.style.boxShadow = first.boxShadow
   document.body.appendChild(clone)
 
-  const anim = clone.animate([first, frame(toRect, toRadius)], {
+  const anim = clone.animate([first, frame(toRect, toRadius, toStyle.boxShadow)], {
     duration,
     easing: drawerEase(),
     fill: 'forwards',
@@ -116,6 +128,9 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
       // рендер React), клон снимаем через кадр: снятый сразу, он оставлял
       // кадр с пустым местом, пока React не перерисовал visibility.
       resolve(true)
+      // Пока клон дожидается снятия, тень уже рисует настоящая обложка —
+      // две наложенные тени на эти кадры темнели бы.
+      clone.animate([{ boxShadow: 'none' }], { duration: 0, fill: 'forwards' })
       requestAnimationFrame(() => requestAnimationFrame(() => clone.remove()))
     }
     anim.oncancel = () => {
