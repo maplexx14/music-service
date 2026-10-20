@@ -709,6 +709,20 @@
     background: #000;
   }
 
+  .mobile-logo-btn {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s ease-out;
+  }
+
+  .mobile-logo-btn:active {
+    transform: scale(0.96);
+  }
+
   .mobile-logo-img {
     display: block;
     height: 48px;

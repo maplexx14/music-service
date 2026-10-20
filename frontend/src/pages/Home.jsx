@@ -439,7 +439,11 @@ function Home() {
         root={() => scrollerRef?.current ?? null}
       />
       <div className="mobile-header">
-        <img src="/logoBolt1.webp" alt="BoltMusic" className="mobile-logo-img" />
+        {/* Тап по логотипу — то же, что pull-to-refresh: шапка не липкая, и
+            логотип виден, только когда главная уже прокручена наверх. */}
+        <button type="button" className="mobile-logo-btn" onClick={() => fetchData(true)} aria-label="Обновить главную">
+          <img src="/logoBolt1.webp" alt="" className="mobile-logo-img" />
+        </button>
         <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
           <TasteAvatar user={user} className="mobile-avatar-img" />
         </Link>

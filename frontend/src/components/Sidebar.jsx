@@ -35,9 +35,9 @@ function Sidebar() {
   return (
     <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
-        <div className="logo">
-          {!isCollapsed && <img src="/logoBolt1.webp" alt="BoltMusic" className="logo-img" />}
-        </div>
+        <Link to="/" className="logo" aria-label="На главную">
+          {!isCollapsed && <img src="/logoBolt1.webp" alt="" className="logo-img" />}
+        </Link>
         <button className="collapse-btn" onClick={toggleCollapse} title={isCollapsed ? 'Развернуть' : 'Свернуть'}>
           {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
         </button>
