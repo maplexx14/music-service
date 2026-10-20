@@ -445,7 +445,7 @@ function FullScreenPlayer() {
         return
       }
       haptic(HAPTIC.selection)
-      switchByCarousel(dx < 0 ? 1 : -1, g.dx || 0, velocity)
+      switchByCarousel(dx < 0 ? 1 : -1, g.dx || 0, velocity, 'fullscreen_swipe')
     } else if (g.axis === 'y' && (dy >= 120 || (dy > 30 && dy / elapsed > 0.11))) {
       haptic(HAPTIC.light)
       // Морф обложки меряет её на текущей, оттянутой позиции — поэтому сначала
@@ -482,7 +482,7 @@ function FullScreenPlayer() {
   // Переключение идёт через Player (services/playerTransport): только он умеет
   // подменить элемент на прогретый буфер следующего трека, а заодно дотягивает
   // хвост постраничной очереди (queuePager). Прямой nextTrack() — лишь фолбэк.
-  const skipNow = () => skipForward(nextTrack)
+  const skipNow = (via) => skipForward(nextTrack, via)
 
   // Свайп, кнопки и дизлайк переключают через доезд карусели к соседу (см.
   // CAROUSEL_SWITCH_DELAY_MS в utils/settleStrip): трек меняется, когда сосед
@@ -499,10 +499,10 @@ function FullScreenPlayer() {
   // Плеер закрыли посреди доезда — переключение всё равно состоится.
   useEffect(() => () => flushCarouselSwitch(), [])
 
-  const switchByCarousel = (dir, from = 0, velocity) => {
+  const switchByCarousel = (dir, from = 0, velocity, via = 'fullscreen_button') => {
     const strip = stripRef.current
     const target = dir > 0 ? upNext : prevTrack
-    const doSwitch = () => (dir > 0 ? skipNow() : previousTrack())
+    const doSwitch = () => (dir > 0 ? skipNow(via) : previousTrack())
     // Повторное нажатие посреди доезда: прошлое переключение — сразу, это —
     // тоже сразу, без доезда (соседи в этом рендере уже устарели).
     const busy = Boolean(carouselSwitchRef.current)
@@ -544,7 +544,7 @@ function FullScreenPlayer() {
     carouselSwitchRef.current = { run, timer: setTimeout(run, duration + CAROUSEL_SWITCH_DELAY_MS) }
   }
 
-  const handleSkipForward = () => switchByCarousel(1)
+  const handleSkipForward = (via) => switchByCarousel(1, 0, undefined, via)
   const handleSkipBack = () => switchByCarousel(-1)
 
   useEffect(() => {
@@ -599,7 +599,7 @@ function FullScreenPlayer() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сети:
     // кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) handleSkipForward()
+    if (!wasDislikedBefore) handleSkipForward('dislike')
     try {
       const id = dbTrackId ?? (await materializeTrack(dislikedTrack))
       if (!id) return
@@ -816,7 +816,7 @@ function FullScreenPlayer() {
           <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
             {isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
           </button>
-          <button className="fullscreen-icon" onClick={handleSkipForward} aria-label="Вперёд" title="Вперёд">
+          <button className="fullscreen-icon" onClick={() => handleSkipForward()} aria-label="Вперёд" title="Вперёд">
             <SkipForward size={26} fill="currentColor" />
           </button>
         </div>

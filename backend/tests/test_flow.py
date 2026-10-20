@@ -4175,3 +4175,41 @@ def test_radio_artist_cap_is_lifted_when_nothing_else(client, db, monkeypatch):
 
 async def _async(value):
     return value
+
+
+def _delivery_features(db, request_id):
+    from sqlalchemy import select
+
+    return db.execute(
+        select(recommendation_impressions.c.features).where(
+            recommendation_impressions.c.request_id == request_id
+        )
+    ).scalars().all()
+
+
+def test_preload_portion_does_not_burn_history(client, db, monkeypatch):
+    """Прогрев с главной (preload=1) не пишется в ids истории: невключённый
+    прогрев не должен на часы исключать лучшее из следующих порций (прод,
+    2026-10-20: 70% выдач владельца никто не увидел). Мета пишется — по ней
+    разберутся сигналы сессии, если прогрев включат; остаток пула остаётся
+    готовым под прежний контекст."""
+    from app.cache import get_cache
+
+    user, headers, _first = _ready_setup(client, db, monkeypatch, "preload-user")
+    ids_before = list(get_cache(f"flow:history:v2:{user.id}")["ids"])
+    assert _precompute(user.id) is True
+
+    preload = client.get("/api/recommendations/flow?limit=5&preload=1", headers=headers)
+    assert preload.status_code == 200, preload.text
+    assert "flow;desc=ready" in preload.headers["Server-Timing"]
+    served = preload.json()
+    assert served
+    history = get_cache(f"flow:history:v2:{user.id}")
+    assert history["ids"] == ids_before
+    assert all(str(t["id"]) in history["meta"] for t in served)
+    rows = _delivery_features(db, served[0]["recommendation_id"])
+    assert rows and all(row.get("preload") is True for row in rows)
+
+    after = client.get("/api/recommendations/flow?limit=5", headers=headers)
+    assert "flow;desc=ready" in after.headers["Server-Timing"]
+

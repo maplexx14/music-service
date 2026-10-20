@@ -8,7 +8,8 @@
 // зависело от того, какой кнопкой переключили.
 //
 // Player регистрирует здесь свой обработчик; остальные зовут skipForward и
-// передают фолбэк на случай, когда Player не смонтирован.
+// передают фолбэк на случай, когда Player не смонтирован. via — чем
+// переключили (для телеметрии скипа, см. playerStore._recordSkipIfNeeded).
 
 let handler = null
 
@@ -19,7 +20,7 @@ export function registerSkipForward(fn) {
   }
 }
 
-export function skipForward(fallback) {
-  if (handler) return handler()
-  return fallback?.()
+export function skipForward(fallback, via) {
+  if (handler) return handler(via)
+  return fallback?.(via)
 }

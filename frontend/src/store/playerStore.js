@@ -81,6 +81,9 @@ const FLOW_EXTEND_LIMIT = 6
 const FLOW_EXTEND_LEAD = 4
 // Сколько последних сигналов волны отправлять в sess (см. flow_session.py).
 const FLOW_SESSION_MAX = 30
+// Переходы, которые сделал плеер, а не слушатель: ошибка воспроизведения и
+// конец потока раньше 25% длительности. В сигналы сессии они не идут.
+const FLOW_AUTO_ADVANCE = new Set(['error', 'ended'])
 
 function invalidateFlowPreload() {
   flowPreloadGeneration += 1
@@ -688,7 +691,14 @@ const usePlayerStore = create((set, get) => ({
     const generation = flowPreloadGeneration
     flowPreloadPromise = api
       .get('/recommendations/flow', {
-        params: { limit: FLOW_START_LIMIT, hour: new Date().getHours(), sess: get()._flowSessionParam() },
+        // preload: прогрев могут так и не включить — бэк не пишет его в
+        // историю, которая исключает отданное из следующих порций.
+        params: {
+          limit: FLOW_START_LIMIT,
+          hour: new Date().getHours(),
+          sess: get()._flowSessionParam(),
+          preload: 1,
+        },
         skipErrorToast: true,
       })
       .then(({ data }) => {
@@ -991,15 +1001,20 @@ const usePlayerStore = create((set, get) => ({
   // меньше 25%. Раньше здесь был ранний return при неизвестной duration, из-за
   // чего при быстром проматывании самые очевидные скипы (переключили почти
   // сразу) массово не записывались.
-  _recordSkipIfNeeded: () => {
+  //
+  // via — чем переключили (button, swipe, fullscreen_button, fullscreen_swipe,
+  // dislike, system, error, ended): уходит в метаданные скипа.
+  _recordSkipIfNeeded: (via = 'unknown') => {
     const { currentTrack, currentTime, duration, isPlaying } = get()
     if (!currentTrack || !isPlaying) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
     if (durationKnown && currentTime / duration >= 0.25) return
     const completion = durationKnown ? currentTime / duration : 0
-    const playback = playbackMetadata(get())
+    const playback = { ...playbackMetadata(get()), via }
     postRecommendationEvent(currentTrack, 'skip', completion, playback)
-    get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n')
+    if (!FLOW_AUTO_ADVANCE.has(via)) {
+      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n')
+    }
     invalidateFlowPreload()
     const dbId =
       currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
@@ -1058,8 +1073,8 @@ const usePlayerStore = create((set, get) => ({
       .flowSession.map(({ code, id }) => `${code}${id}`)
       .join(','),
 
-  nextTrack: () => {
-    get()._recordSkipIfNeeded()
+  nextTrack: (via) => {
+    get()._recordSkipIfNeeded(via)
     get()._recordListenProgress()
     const { queue, currentIndex, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     if (isShuffle && shuffledOrder.length > 0) {
@@ -1099,12 +1114,12 @@ const usePlayerStore = create((set, get) => ({
   // (см. отложенный переход в Player). Скип пишем только по треку, с которого
   // уходим: пропущенные незагружаемые пользователь не отвергал, и сигнал
   // «скип» по ним испортил бы рекомендации.
-  advanceBy: (n) => {
+  advanceBy: (n, via) => {
     if (n <= 1) {
-      get().nextTrack()
+      get().nextTrack(via)
       return
     }
-    get()._recordSkipIfNeeded()
+    get()._recordSkipIfNeeded(via)
     get()._recordListenProgress()
     const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
     const moved = { isPlaying: true, currentTime: 0, seekRequest: null }

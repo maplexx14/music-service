@@ -545,7 +545,8 @@ function PlayerInner() {
 
   // Пользовательский скип вперёд (кнопка/свайп). Состояние читаем из store в
   // момент вызова — защита от устаревшего замыкания в обработчиках свайпа.
-  const handleSkipForward = async () => {
+  // via — чем переключили, уходит в телеметрию скипа (см. _recordSkipIfNeeded).
+  const handleSkipForward = async (via = 'button') => {
     // Следующего трека нет, но плейлист загружен не весь (см. queuePager):
     // дотягиваем хвост и уходим вперёд по нему. Проактивная догрузка обычно
     // успевает раньше, так что сюда попадаем, только если запрос ещё летит
@@ -562,14 +563,14 @@ function PlayerInner() {
       if (usePlayerStore.getState().currentTrack?.id !== fromId) return
     }
     if (!playAdjacentNow(1)) return
-    nextTrack()
+    nextTrack(via)
   }
   // Фуллскрин и дизлайк переключают через этот же путь (services/playerTransport):
   // только он умеет подменить элемент на прогретый буфер. Ref — потому что
   // handleSkipForward пересоздаётся на каждом рендере.
   const skipForwardRef = useRef(null)
   skipForwardRef.current = handleSkipForward
-  useEffect(() => registerSkipForward(() => skipForwardRef.current?.()), [])
+  useEffect(() => registerSkipForward((via) => skipForwardRef.current?.(via)), [])
 
   // Горизонтальный свайп по области трека листает треки так же, как обложка
   // в полноэкранном плеере (только тач, см. useTrackCarousel). Вперёд можно
@@ -594,7 +595,7 @@ function PlayerInner() {
     canPrev: Boolean(prevTrack),
     canNext: Boolean(upNext) || hasQueuePager,
     onPrev: previousTrack,
-    onNext: handleSkipForward,
+    onNext: () => handleSkipForward('swipe'),
   })
 
   // Открытие фуллскрина — чистый CSS-drawer (@starting-style-слайд вверх,
@@ -1001,10 +1002,10 @@ function PlayerInner() {
             diag('ended:queueExtend', {})
             resumeAfterQueueExtend()
           } else {
-            nextTrack()
+            nextTrack('ended')
           }
         } else if (playAdjacentNow(1)) {
-          nextTrack()
+          nextTrack('ended')
         } else {
           // Пока ждём буфер, держим аудиосессию тишиной: если отдать её сейчас,
           // то к моменту готовности следующего трека включать его будет уже
@@ -1581,7 +1582,7 @@ function PlayerInner() {
     const offset = deferredOffsetRef.current
     diag('deferred:resume', { offset })
     if (!playAdjacentNow(offset)) return false
-    usePlayerStore.getState().advanceBy(offset)
+    usePlayerStore.getState().advanceBy(offset, 'ended')
     return true
   }
 
@@ -1671,12 +1672,12 @@ function PlayerInner() {
       diag(grew === null ? 'queueExtend:failed' : 'queueExtend:empty', {})
       pendingAdvanceRef.current = false
       engine.releaseSession()
-      nextTrack()
+      nextTrack('ended')
       return
     }
     diag('queueExtend:resume', {})
     if (playAdjacentNow(1)) {
-      nextTrack()
+      nextTrack('ended')
       return
     }
     // Старт отказал (фон без буфера) — переход остаётся отложенным и доиграется
@@ -2230,7 +2231,7 @@ function PlayerInner() {
         // Фоновое правило («стартуем только на загруженном буфере») живёт внутри
         // playAdjacentNow — там же, где выбирается подмена или загрузка с нуля.
         if (!playAdjacentNow(1)) return
-        usePlayerStore.getState().nextTrack()
+        usePlayerStore.getState().nextTrack('system')
       },
       seekto: (details) => {
         const audio = audioRef.current
@@ -2405,7 +2406,7 @@ function PlayerInner() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сетевого
     // запроса: кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) handleSkipForward()
+    if (!wasDislikedBefore) handleSkipForward('dislike')
     try {
       const id = dbTrackId ?? (await usePlayerStore.getState().materializeTrack(dislikedTrack))
       if (!id) return
@@ -2461,7 +2462,7 @@ function PlayerInner() {
           ? `Трек недоступен: ${trackAtError.title}`
           : `Не удалось воспроизвести трек: ${trackAtError.title}`
       )
-      nextTrack()
+      nextTrack('error')
     }
 
     if (retryCountRef.current >= MAX_TRACK_RETRIES) {
@@ -2693,7 +2694,7 @@ function PlayerInner() {
           <button
             type="button"
             className="control-btn"
-            onClick={handleSkipForward}
+            onClick={() => handleSkipForward('button')}
             aria-label="Следующий"
             title="Следующий"
           >

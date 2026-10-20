@@ -3737,13 +3737,19 @@ async def _deliver_portion(
     timings: Optional[list] = None,
     schedule_matches: bool = True,
     after_history=None,
+    preload: bool = False,
 ) -> list:
     """Выдача посчитанной порции: конверт атрибуции, история, телеметрия и
     постановка следующей порции в предрасчёт. Общая для живого и готового пути.
 
     after_history(mix) — корутина сразу после записи истории и ДО постановки
     в предрасчёт: остаток пула должен лечь раньше, чем flow-warmer проверит,
-    есть ли готовое (иначе он пересчитывал пул после каждой выдачи)."""
+    есть ли готовое (иначе он пересчитывал пул после каждой выдачи).
+    preload — прогрев с главной: отданное не пишется в ids/keys/queue истории,
+    иначе невключённый прогрев на часы исключал лучшее из пула (прод,
+    2026-10-20: 70% выдач владельца никто не увидел, 8364 трека за неделю).
+    Мета и артисты пишутся: по ним разбираются сигналы сессии, если прогрев
+    всё же включат."""
     # Первая порция (очередь пуста, exclude не пришёл) — это клик по «потоку»:
     # открываем её треком, который заиграет без резолва. Подгрузки не трогаем —
     # их треки прогреваются задолго до того, как до них дойдёт очередь.
@@ -3778,12 +3784,18 @@ async def _deliver_portion(
         delivery_scores[item.get("id")] = score
         if identity in features:
             delivery_features[item.get("id")] = features[identity]
+        if preload:
+            delivery_features[item.get("id")] = {
+                **(delivery_features.get(item.get("id")) or {}),
+                "preload": True,
+            }
 
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
+    recorded = () if preload else mix
     returned_ids = []
     returned_keys = []
-    for item in mix:
+    for item in recorded:
         source = item.get("source")
         external_id = item.get("external_id")
         if source and external_id:
@@ -3828,7 +3840,7 @@ async def _deliver_portion(
             # Очередь в формате клиентского exclude — для предрасчёта.
             "queue": (
                 [str(q) for q in (history.get("queue") or [])]
-                + [str(item.get("id")) for item in mix if item.get("id") is not None]
+                + [str(item.get("id")) for item in recorded if item.get("id") is not None]
             )[-_CLIENT_QUEUE_LIMIT:],
         },
         expire=_FLOW_HISTORY_TTL,
@@ -3955,6 +3967,8 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
                     recommendation_impressions.c.track_id,
                     recommendation_impressions.c.title,
                     recommendation_impressions.c.artist,
+                    recommendation_impressions.c.visible,
+                    recommendation_impressions.c.features,
                 )
                 .where(
                     recommendation_impressions.c.user_id == user_id,
@@ -3975,6 +3989,10 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
     keys = []
     artists = []
     for row in rows:
+        features = row.get("features")
+        # Невключённый прогрев с главной в историю не пишется (_deliver_portion).
+        if not row.get("visible") and isinstance(features, dict) and features.get("preload"):
+            continue
         source = row.get("source")
         external_id = row.get("external_id")
         track_id = row.get("track_id")
@@ -4008,6 +4026,7 @@ async def _compute_flow(
     prior: Optional[tuple] = None,
     pool_limit: Optional[int] = None,
     session: str = "",
+    preload: bool = False,
 ):
     """Расчёт порции потока.
 
@@ -4024,6 +4043,7 @@ async def _compute_flow(
     pool_limit — сколько кандидатов отобрать в предрасчёте: пул на несколько выдач,
     из которого каждая берёт ``limit`` под сигналы сессии (app/flow_session.py).
     session — сигналы сессии от клиента (параметр sess) для живой выдачи.
+    preload — прогрев с главной (см. get_flow).
     """
     precompute = mode == "precompute"
     request_limit = limit
@@ -5152,7 +5172,7 @@ async def _compute_flow(
             request, response, request_limit, exclude, hour, current_user, db,
             mode=mode, history=history, schedule_matches=schedule_matches,
             relax=True, prior=(mix, scores_by_identity, features_by_identity),
-            pool_limit=pool_limit, session=session,
+            pool_limit=pool_limit, session=session, preload=preload,
         )
     if prior is not None:
         prior_mix, prior_scores, prior_features = prior
@@ -5224,6 +5244,7 @@ async def _compute_flow(
         history=history,
         telemetry_bind=telemetry_bind,
         request_id=request_id,
+        preload=preload,
     )
 
 
@@ -5326,16 +5347,25 @@ def _history_ids_after(history: dict, mix: list) -> list:
 
 
 async def _store_leftover(
-    user_id: int, history: dict, delivered: list, leftover: list, ready: dict, limit: int
+    user_id: int,
+    history: dict,
+    delivered: list,
+    leftover: list,
+    ready: dict,
+    limit: int,
+    *,
+    preload: bool = False,
 ) -> None:
     """Невыданный остаток пула — готовой порцией под историю после выдачи.
 
     Следующая выдача возьмёт из него без расчёта, с новыми сигналами сессии.
     Мелкий остаток не храним: flow-warmer как раз считает свежий пул.
+    Прогрев (preload) ids истории не двигает — контекст остаётся прежним.
     """
     if len(leftover) < limit:
         return
-    context = _ranking_context(user_id, {"ids": _history_ids_after(history, delivered)})
+    ids = history.get("ids") if preload else _history_ids_after(history, delivered)
+    context = _ranking_context(user_id, {"ids": ids})
     await set_cache_async(
         _ready_key(user_id),
         {
@@ -5452,11 +5482,15 @@ async def get_flow(
     exclude: str = Query("", max_length=4000),
     hour: Optional[int] = Query(None, ge=0, le=23),
     sess: str = Query("", max_length=4000),
+    preload: bool = Query(False),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """Порция персонального потока. exclude — id уже находящихся в очереди,
-    sess — что юзер сделал с последними треками волны (app/flow_session.py)."""
+    sess — что юзер сделал с последними треками волны (app/flow_session.py).
+    preload — прогрев с главной: его могут так и не включить, поэтому в
+    историю, которая исключает отданное из следующих порций, он не пишется
+    (_deliver_portion)."""
     global _live_network_inflight, _live_waiting
     # Ответ уникален для каждого запроса — кэшировать нельзя ни на секунду
     # (подробно — в _compute_flow).
@@ -5519,8 +5553,10 @@ async def get_flow(
                 # Порядок mix — уже окончательный (мгновенный старт сделан
                 # до записи истории), под него и считается контекст остатка.
                 after_history=lambda delivered: _store_leftover(
-                    user_id, history, delivered, leftover, ready_payload, limit
+                    user_id, history, delivered, leftover, ready_payload, limit,
+                    preload=preload,
                 ),
+                preload=preload,
             )
             # Предрасчёт поставил матчи только голове пула (matched_ids).
             already = set(ready_payload.get("matched_ids") or []) if matched else set()
@@ -5551,7 +5587,7 @@ async def get_flow(
     try:
         mix = await _compute_flow(
             request, response, limit, exclude, hour, current_user, db,
-            mode="live", history=history, session=sess,
+            mode="live", history=history, session=sess, preload=preload,
         )
     finally:
         _pool_cache_only.reset(token)
