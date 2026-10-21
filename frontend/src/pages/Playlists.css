@@ -73,7 +73,9 @@
 
 .playlists-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* Минимум две колонки при любой ширине: карточка не уже 200px, пока
+     две помещаются, а дальше сжимается до половины ряда. */
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, calc(50% - 12px)), 1fr));
   gap: 24px;
 }
 
@@ -347,11 +349,5 @@
     width: 32px;
     height: 32px;
     opacity: 1;
-  }
-}
-
-@media (max-width: 400px) {
-  .playlists-grid {
-    grid-template-columns: 1fr;
   }
 }
