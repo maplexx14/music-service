@@ -400,3 +400,21 @@ class DeveloperMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     user = relationship("User")
+
+
+class ServiceRating(Base):
+    """Оценка довольства сервисом из настроек («Оценить сервис»).
+
+    Одна строка на юзера: повторная оценка заменяет прежнюю, чтобы среднее
+    в админке отражало текущее мнение, а не то, как часто кто-то жмёт звёзды.
+    """
+    __tablename__ = "service_ratings"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    score = Column(Integer, nullable=False)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+    user = relationship("User")

@@ -1,0 +1,56 @@
+.rate-stars {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.rate-star {
+  display: inline-flex;
+  padding: 6px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.rate-star.is-on {
+  color: #ffc400;
+}
+
+.rate-star.is-on svg {
+  fill: currentColor;
+}
+
+.rate-star:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.rate-star:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.rate-stars-label {
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Звёзды на плашке-предложении: тап сразу ставит оценку. Подсветка по
+   наведению показывает, сколько звёзд встанет. */
+.rate-prompt-stars {
+  margin: 6px 0 2px -6px;
+}
+
+@media (hover: hover) {
+  .rate-prompt-stars:hover .rate-star:not(:disabled) {
+    color: #ffc400;
+  }
+
+  .rate-prompt-stars .rate-star:hover ~ .rate-star:not(:disabled) {
+    color: var(--text-secondary);
+  }
+}

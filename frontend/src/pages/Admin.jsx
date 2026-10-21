@@ -282,6 +282,72 @@ function DeveloperMessages({ onCount }) {
   )
 }
 
+// Оценки сервиса из настроек («Оценить сервис»): среднее, распределение
+// по звёздам и последние оценки с комментариями.
+function ServiceRatings({ onSummary }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get('/feedback/ratings', { skipErrorToast: true, dedupe: false })
+      .then((response) => {
+        setData(response.data)
+        onSummary?.(response.data)
+      })
+      .catch((error) => console.error('Error loading service ratings:', error))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <Spinner />
+  if (!data || data.total === 0) return <div className="admin-empty">Оценок пока нет</div>
+
+  const maxCount = Math.max(...Object.values(data.distribution))
+
+  return (
+    <>
+      <div className="admin-rating-summary">
+        <div className="admin-rating-average">
+          <strong>{data.average.toFixed(1)}</strong>
+          <span>из 5 · {data.total} оцен.</span>
+        </div>
+        <div className="admin-rating-bars">
+          {[5, 4, 3, 2, 1].map((score) => {
+            const count = data.distribution[score] || 0
+            return (
+              <div key={score} className="admin-rating-bar">
+                <span className="admin-rating-bar-label">{score}★</span>
+                <span className="admin-rating-bar-track">
+                  <span
+                    className="admin-rating-bar-fill"
+                    style={{ width: maxCount ? `${(count / maxCount) * 100}%` : 0 }}
+                  />
+                </span>
+                <span className="admin-rating-bar-count">{count}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div className="admin-censor-list">
+        {data.items.map((item) => (
+          <div key={item.id} className="admin-censor admin-message">
+            <div className="admin-censor-info">
+              <div className="admin-rating-stars" aria-label={`${item.score} из 5`}>
+                {'★'.repeat(item.score)}<span>{'★'.repeat(5 - item.score)}</span>
+              </div>
+              {item.comment && <div className="admin-message-text">{item.comment}</div>}
+              <div className="admin-censor-meta">
+                {item.user ? `${item.user.username}${item.user.email ? ` · ${item.user.email}` : ''}` : 'удалённый пользователь'}
+                {' · '}{formatLastSeen(item.updated_at)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
 function UserCard({ user, nowPlaying }) {
   const [expanded, setExpanded] = useState(false)
   // Засчитанный трек (user_track_plays) и последний включённый (now-playing).
@@ -363,6 +429,7 @@ function Admin() {
   const [openPanels, setOpenPanels] = useState(readOpenPanels)
   const [unreadMessages, setUnreadMessages] = useState(0)
   const [pendingCensor, setPendingCensor] = useState(0)
+  const [ratingSummary, setRatingSummary] = useState(null)
 
   const togglePanel = (id) => {
     setOpenPanels((prev) => {
@@ -594,6 +661,16 @@ function Admin() {
         onToggle={() => togglePanel('messages')}
       >
         <DeveloperMessages onCount={setUnreadMessages} />
+      </AdminPanel>
+
+      <AdminPanel
+        title="Оценки"
+        subtitle="Довольство сервисом из «Оценить сервис» в настройках"
+        badge={ratingSummary?.average != null ? `${ratingSummary.average.toFixed(1)}★` : null}
+        open={openPanels.includes('ratings')}
+        onToggle={() => togglePanel('ratings')}
+      >
+        <ServiceRatings onSummary={setRatingSummary} />
       </AdminPanel>
 
       <AdminPanel

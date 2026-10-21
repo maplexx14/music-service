@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
-import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Bell } from 'lucide-react'
+import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Bell, Star } from 'lucide-react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -13,6 +13,7 @@ import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import PushSettings from '../components/PushSettings'
 import ContactDeveloper from '../components/ContactDeveloper'
+import RateService from '../components/RateService'
 import TasteAvatar from '../components/TasteAvatar'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import {
@@ -48,6 +49,7 @@ const SECTIONS = [
   // нужен: лог событий воспроизведения имеет смысл только при разборе багов,
   // о которых сообщили админам.
   { id: 'diag', label: 'Диагностика', hint: 'Журнал плеера', icon: Bug, adminOnly: true },
+  { id: 'rate', label: 'Оценить сервис', hint: 'Насколько вам нравится', icon: Star },
   { id: 'contact', label: 'Связь с разработчиком', hint: 'Ошибка, идея или вопрос', icon: MessageCircle },
 ]
 
@@ -599,6 +601,12 @@ function Settings() {
               <EmailChangeSettings />
               <EmailTwoFactorSettings />
               <TrustedDevices />
+            </div>
+          )}
+
+          {activeTab === 'rate' && (
+            <div {...panelProps('rate')}>
+              <RateService />
             </div>
           )}
 

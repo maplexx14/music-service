@@ -12,6 +12,7 @@ import PlayerView from './Player'
 import ToastView from './Toast'
 import InstallPrompt from './InstallPrompt'
 import PushPrompt from './PushPrompt'
+import RatePrompt from './RatePrompt'
 import { syncPushSubscription, trackPushOpen } from '../services/push'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
@@ -378,6 +379,7 @@ function Layout({ renderRoutes }) {
       <ToastContainer />
       {isMobile && <InstallPrompt />}
       <PushPrompt />
+      <RatePrompt />
       <AddToPlaylistDialog />
       <CensorOverrideDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже
