@@ -790,7 +790,7 @@ function FullScreenPlayer() {
         {/* Mobile: lyrics appear below info, above progress */}
         {lyricsMode && (
           <div className="fullscreen-lyrics-mobile">
-            <LyricsPanel showOnlyText />
+            <LyricsPanel isolateTouches />
           </div>
         )}
       </div>

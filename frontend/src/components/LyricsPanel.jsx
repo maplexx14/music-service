@@ -5,7 +5,7 @@ import { AlignLeft } from 'lucide-react'
 import BoltLoader from './BoltLoader'
 import './LyricsPanel.css'
 
-function LyricsPanel({ showOnlyText = false }) {
+function LyricsPanel({ isolateTouches = false }) {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const currentTime = usePlayerStore((s) => s.currentTime)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
@@ -29,7 +29,7 @@ function LyricsPanel({ showOnlyText = false }) {
   const markUserInput = () => {
     userInputRef.current = true
   }
-  const stopSwipe = showOnlyText ? (event) => event.stopPropagation() : undefined
+  const stopSwipe = isolateTouches ? (event) => event.stopPropagation() : undefined
 
   // Auto-scroll to active line
   useEffect(() => {
@@ -58,9 +58,9 @@ function LyricsPanel({ showOnlyText = false }) {
     }, 4000)
   }
 
-  // Click on a synced line to seek
+  // Тап по строке — перемотка на неё, и на телефоне тоже. Прокрутка пальцем
+  // клик не рождает: браузер гасит его, если касание сдвинулось.
   const handleLineClick = (time) => {
-    if (showOnlyText) return
     seekTo(time, 'lyrics')
   }
 
@@ -114,8 +114,8 @@ function LyricsPanel({ showOnlyText = false }) {
               className={`lyrics-line ${i === activeIndex ? 'active' : ''} ${i < activeIndex ? 'sung' : ''}`}
               ref={i === activeIndex ? activeRef : undefined}
               onClick={() => handleLineClick(line.time)}
-              role={showOnlyText ? undefined : 'button'}
-              tabIndex={showOnlyText ? undefined : 0}
+              role="button"
+              tabIndex={0}
             >
               {line.text}
             </div>

@@ -333,11 +333,13 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-info {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 16px;
   width: 100%;
   min-width: 0;
+  /* Подпись по центру во всех режимах — ось общая с обложкой и капсулой. */
+  text-align: center;
 }
 
 .fullscreen-info > div:first-child {
@@ -523,7 +525,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress-bar {
   position: relative;
-  height: 6px;
+  height: 4px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   cursor: pointer;
@@ -772,12 +774,6 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     font-size: var(--text-sm);
   }
 
-  /* Подпись по центру под обложкой — ось экрана общая с капсулой. */
-  .fullscreen-player:not(.has-lyrics):not(.karaoke-mode) .fullscreen-info {
-    grid-template-columns: minmax(0, 1fr);
-    text-align: center;
-  }
-
   .fullscreen-controls {
     justify-content: space-between;
     gap: 8px;
@@ -911,11 +907,6 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     gap: 14px;
   }
 
-  .fullscreen-player.has-lyrics .fullscreen-info > div:first-child,
-  .fullscreen-player.karaoke-mode .fullscreen-info > div:first-child {
-    text-align: left;
-  }
-
 }
 
 
@@ -935,10 +926,6 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     align-items: flex-start;
     justify-content: space-between;
     padding: 0 0 8px;
-  }
-
-  .fullscreen-player:not(.has-lyrics) .fullscreen-info > div:first-child {
-    text-align: left;
   }
 }
 
