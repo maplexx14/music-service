@@ -69,10 +69,33 @@ api.interceptors.request.use(
   }
 )
 
+// 502/503/504 без JSON-тела `detail` отдаёт nginx, а не бэкенд: так выглядит
+// окно деплоя, пока backend пересоздаётся (прод, 2026-10-21 15:39: ~12 с,
+// десяток тостов «Ошибка запроса (502)» разом). Свои 502 бэкенд отдаёт с
+// detail (лирика, обложки, импорт) — их не трогаем. GET переспрашиваем
+// молча, паузы в сумме ~23 с перекрывают перезапуск; не-GET не повторяем:
+// 502 бывает и на обрыве посреди запроса, а повтор POST задвоит действие.
+const GATEWAY_STATUSES = new Set([502, 503, 504])
+const GATEWAY_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 8000]
+
+const isGatewayError = (error) =>
+  GATEWAY_STATUSES.has(error.response?.status) &&
+  typeof error.response?.data?.detail !== 'string'
+
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const config = error.config
+    if (config && isGatewayError(error) && (config.method || 'get').toLowerCase() === 'get') {
+      const attempt = config.gatewayRetry || 0
+      if (attempt < GATEWAY_RETRY_DELAYS_MS.length && !config.signal?.aborted) {
+        config.gatewayRetry = attempt + 1
+        return new Promise((resolve) => setTimeout(resolve, GATEWAY_RETRY_DELAYS_MS[attempt])).then(
+          () => api.request(config)
+        )
+      }
+    }
     const status = error.response?.status
     // skipAuthRedirect — для запросов, где 401 означает «неверные данные в
     // форме», а не «сессия умерла»: шаг 2FA при входе, подтверждение пароля.
@@ -87,7 +110,8 @@ api.interceptors.response.use(
       const detail = error.response?.data?.detail
       const message =
         (typeof detail === 'string' && detail) ||
-        (status ? `Ошибка запроса (${status})` : 'Сервер недоступен. Проверьте соединение')
+        (isGatewayError(error) && 'Сервер перезапускается, повторите через несколько секунд') ||
+        (status ?`Ошибка запроса (${status})` : 'Сервер недоступен. Проверьте соединение')
       toast.error(message)
     }
     return Promise.reject(error)
