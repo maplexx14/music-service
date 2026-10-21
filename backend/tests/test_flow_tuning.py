@@ -25,10 +25,10 @@ def test_extremes_stretch_each_knob():
     low, high = parse({k: 0 for k in ("liked", "depth", "variety", "recent")}), parse(
         {k: 1 for k in ("liked", "depth", "variety", "recent")}
     )
-    assert discovery.liked_slots(15, 0.0, low.liked_factor) == 0
-    assert discovery.liked_slots(15, 0.0, high.liked_factor) > discovery.liked_slots(15, 0.0)
+    assert discovery.liked_slots(15, low.liked_factor) == 0
+    assert discovery.liked_slots(15, high.liked_factor) > discovery.liked_slots(15)
     # Максимум новых артистов по-прежнему без лайков, как бы ни стоял ползунок.
-    assert discovery.liked_slots(15, 1.0, high.liked_factor) == 0
+    assert flow._liked_cap(15, 1.0, high.liked_factor) == 0
     assert low.deep_cut_scale < flow._DEEP_CUT_SCALE < high.deep_cut_scale
     assert low.repeat_factor < 1.0 < high.repeat_factor
     assert low.artist_gap < MIN_ARTIST_GAP < high.artist_gap

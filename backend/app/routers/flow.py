@@ -8,10 +8,10 @@ beets/ffmpeg, жанру, контексту, качеству и свежест
 дефолтном значении, а явно повышенный ползунок задаёт минимальную цель новых
 артистов с fallback на знакомые треки при дефиците внешнего пула.
 
-Два исключения из «никаких фиксированных мест» — обе стороны этого ползунка, и
-обе заданы явной целью, а не веса́ми. Новые артисты получают ``discovery_slots``
-при поднятом ползунке, понравившиеся треки — ``liked_slots``, которая наоборот
-растёт к «знакомому» краю и обнуляется на максимуме разведки. Лайкам квота нужна
+Два исключения из «никаких фиксированных мест», оба заданы явной целью, а не
+веса́ми. Новые артисты получают ``discovery_slots`` при поднятом ползунке,
+понравившиеся треки — ``liked_slots`` по своему ползунку «Любимые треки»; цель
+новизны вычитается из неё, так что на максимуме разведки лайков нет. Лайкам квота нужна
 как пол, и сразу по двум причинам. Своего пути в поток у них не было вовсе:
 каталожная выборка отсекала их и по id, и как треки плейлиста, и по
 нормализованному ключу от провайдеров, — а на общем ранжировании уже слышанный
@@ -268,7 +268,7 @@ def _liked_cap(limit: int, ratio: float, liked_factor: float = 1.0) -> int:
     discovery_target = (
         discovery_slots(limit, ratio) if ratio > DEFAULT_DISCOVERY_RATIO else 0
     )
-    return min(liked_slots(limit, ratio, liked_factor), max(0, limit - discovery_target))
+    return min(liked_slots(limit, liked_factor), max(0, limit - discovery_target))
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire

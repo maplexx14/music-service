@@ -399,7 +399,7 @@ def test_flow_gives_liked_tracks_their_share_next_to_unplayed_library(client, db
     )
     assert response.status_code == 200, response.text
     tracks = response.json()
-    expected_liked = liked_slots(15, DEFAULT_DISCOVERY_RATIO)
+    expected_liked = liked_slots(15)
     assert expected_liked, "на дефолтном ползунке квота лайков не может быть нулевой"
     liked_count = sum(track["title"].startswith("liked-") for track in tracks)
     fresh_count = sum(track["title"].startswith("fresh-") for track in tracks)
@@ -473,7 +473,7 @@ def test_flow_spreads_liked_tracks_across_the_page(client, db):
         for index, track in enumerate(tracks)
         if track["title"].startswith("liked-")
     ]
-    assert len(positions) == liked_slots(15, DEFAULT_DISCOVERY_RATIO), positions
+    assert len(positions) == liked_slots(15), positions
     # Открывает волну неслышанное: старт — худшее место для знакомого.
     assert positions[0] >= 1, positions
     # Ни одной пары подряд и дотягиваемся до конца порции — то есть это разнос,
@@ -485,12 +485,13 @@ def test_flow_spreads_liked_tracks_across_the_page(client, db):
 
 
 def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
-    """Доля лайков растёт к «знакомому» краю плавно, а не появляется в крайнем.
+    """Доля лайков растёт с ползунком «Любимые треки» плавно.
 
     Ровно та жалоба, из-за которой квота и появилась: понравившееся не
-    попадалось в поток, пока ползунок не выкручен полностью в знакомое. Здесь
-    один и тот же пул опрашивается на трёх положениях, и лайки обязаны быть
-    и на дефолтном — а на максимуме разведки обязаны исчезнуть совсем.
+    попадалось в поток, пока ползунок не выкручен до края. Здесь один и тот же
+    пул опрашивается на нескольких положениях, и лайки обязаны быть и на
+    дефолтном — а на максимуме новых артистов обязаны исчезнуть совсем, даже
+    при «Любимых» на максимуме.
     """
     user = create_user(db, username="slider-share-user")
     playlist = Playlist(
@@ -535,17 +536,23 @@ def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
 
     headers = auth_headers(client, username="slider-share-user")
     counted = {}
-    for ratio in (0.0, DEFAULT_DISCOVERY_RATIO, 1.0):
+    settings = {
+        "few": {"discovery_ratio": DEFAULT_DISCOVERY_RATIO, "flow_tuning": {"liked": 0.25}},
+        "default": {"discovery_ratio": DEFAULT_DISCOVERY_RATIO, "flow_tuning": {"liked": 0.5}},
+        "many": {"discovery_ratio": DEFAULT_DISCOVERY_RATIO, "flow_tuning": {"liked": 1.0}},
+        "only_new": {"discovery_ratio": 1.0, "flow_tuning": {"liked": 1.0}},
+    }
+    for name, payload in settings.items():
         # Через API, а не мутацией ORM-объекта: flow закрывает сессию внутри
         # запроса, после чего user становится detached, и db.commit() уже ничего
         # не сохраняет — ползунок молча оставался бы прежним на всех итерациях.
         saved = client.put(
             "/api/users/me/preferences",
             headers=headers,
-            json={"discovery_ratio": ratio},
+            json=payload,
         )
         assert saved.status_code == 200, saved.text
-        assert saved.json()["discovery_ratio"] == ratio
+        assert saved.json()["discovery_ratio"] == payload["discovery_ratio"]
         # История потока живёт в Redis и между запросами одного теста
         # сохраняется; локальные id она не исключает, но чистим ради
         # независимости трёх замеров друг от друга.
@@ -556,14 +563,14 @@ def test_flow_liked_share_follows_the_slider_not_only_its_end(client, db):
         )
         assert response.status_code == 200, response.text
         tracks = response.json()
-        assert len(tracks) == 15, (ratio, tracks)
-        counted[ratio] = sum(
+        assert len(tracks) == 15, (name, tracks)
+        counted[name] = sum(
             track["title"].startswith("liked-") for track in tracks
         )
 
-    assert counted[0.0] > counted[DEFAULT_DISCOVERY_RATIO] > counted[1.0]
-    assert counted[DEFAULT_DISCOVERY_RATIO] > 0, counted
-    assert counted[1.0] == 0, counted
+    assert counted["many"] > counted["default"] > counted["few"], counted
+    assert counted["default"] > 0, counted
+    assert counted["only_new"] == 0, counted
 
 
 def test_liked_candidates_respect_dislikes_and_the_replay_cooldown(db):
@@ -723,7 +730,7 @@ def test_flow_liked_quota_takes_one_track_per_artist(client, db):
     assert response.status_code == 200, response.text
     liked_artists = [t["artist"] for t in response.json() if t["title"].startswith("liked-")]
 
-    assert len(liked_artists) == liked_slots(15, DEFAULT_DISCOVERY_RATIO), liked_artists
+    assert len(liked_artists) == liked_slots(15), liked_artists
     assert len(set(liked_artists)) == len(liked_artists), liked_artists
 
 
@@ -805,7 +812,7 @@ def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
     )
     assert response.status_code == 200, response.text
     tracks = response.json()
-    expected_liked = liked_slots(15, DEFAULT_DISCOVERY_RATIO)
+    expected_liked = liked_slots(15)
     assert len(tracks) == 15
     assert (
         sum(track["title"].startswith("liked-") for track in tracks) == expected_liked
@@ -1696,7 +1703,7 @@ def test_flow_high_discovery_ratio_prefers_fresh_local_tracks_before_likes(
     # Неслышанных локальных треков всего восемь плюс один свежий внешний
     # кандидат. Порция обрывается на них и на квоте лайков — добивать её до
     # запрошенных пятнадцати повтором понравившегося поток не должен.
-    expected_liked = min(liked_slots(15, 0.6), 15 - discovery_slots(15, 0.6))
+    expected_liked = min(liked_slots(15), 15 - discovery_slots(15, 0.6))
     assert expected_liked, "на 0.6 квота лайков ещё не должна обнуляться"
     assert len(tracks) == 8 + 1 + expected_liked, tracks
     assert sum(track["title"].startswith("fresh-") for track in tracks) == 8
