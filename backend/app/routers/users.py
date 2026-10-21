@@ -429,7 +429,9 @@ def _admin_users_page(
     total = query.count()
     users = query.limit(limit).offset(offset).all()
     last_tracks = _admin_last_tracks(db, [user.id for user in users])
-    last_heard = _admin_last_heard([user.id for user in users if user.id not in last_tracks])
+    # Для всех, а не только без засчитанных: вернувшийся юзер мог включить
+    # трек и уйти до порога, и карточка показала бы вчерашний засчитанный.
+    last_heard = _admin_last_heard([user.id for user in users])
     profiles = []
     for user in users:
         profile = _admin_profile(db, user, online_ids, with_taste, last_tracks.get(user.id))
@@ -439,8 +441,8 @@ def _admin_users_page(
 
 
 def _admin_last_heard(user_ids: List[int]) -> Dict[int, dict]:
-    """Последний игравший трек из событий now-playing (см. LAST_HEARD_TTL) —
-    для юзеров без засчитанных прослушиваний."""
+    """Последний игравший трек из событий now-playing (см. LAST_HEARD_TTL),
+    в том числе не дослушанный до порога user_track_plays."""
     if not user_ids:
         return {}
     try:

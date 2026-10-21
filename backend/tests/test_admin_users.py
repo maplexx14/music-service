@@ -311,3 +311,31 @@ def test_background_listener_stays_online(client, db):
     assert usernames.index("recent") < usernames.index("paused")
     # admin (свой запрос) и слушатель.
     assert body["online_users_count"] == 2
+
+
+def test_last_heard_sent_alongside_counted_play(client, db):
+    """Вернувшийся юзер включил трек и ушёл до порога: засчитанный трек старый,
+    но и последний включённый приходит в профиль — карточка выберет свежий."""
+    from app.cache import redis_client
+
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "returner")
+    redis_client.delete(f"users:last_heard:{listener.id}")
+    track = Track(title="Morning Song", artist="A", duration=100)
+    db.add(track)
+    db.commit()
+    db.execute(user_track_plays.insert(), [{
+        "user_id": listener.id, "track_id": track.id, "play_count": 1,
+        "last_played": datetime.utcnow() - timedelta(hours=8),
+    }])
+    db.commit()
+
+    client.put("/api/users/me/now-playing",
+               json={"track_id": "ytmusic:x", "title": "Evening Song", "artist": "B",
+                     "position": 0, "duration": 318, "is_playing": True},
+               headers=auth_headers(client, "returner"))
+
+    resp = client.get("/api/users/admin/users?taste=false", headers=auth_headers(client, "admin"))
+    profile = {p["username"]: p for p in resp.json()["users"]}["returner"]
+    assert profile["last_track"]["title"] == "Morning Song"
+    assert profile["last_heard"]["title"] == "Evening Song"

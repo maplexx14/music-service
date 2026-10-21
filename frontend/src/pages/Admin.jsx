@@ -284,8 +284,18 @@ function DeveloperMessages({ onCount }) {
 
 function UserCard({ user, nowPlaying }) {
   const [expanded, setExpanded] = useState(false)
-  const lastTrack = user.last_track
-  const lastHeard = user.last_heard
+  // Засчитанный трек (user_track_plays) и последний включённый (now-playing).
+  // Включённый показываем, если он свежее: вернувшийся юзер мог уйти до
+  // порога засчитывания, и карточка застряла бы на старом треке.
+  const heardAt = Date.parse(user.last_heard?.played_at ?? '')
+  // Тот же трек не подменяем: пауза после засчитывания тоже пишет now-playing.
+  const heardIsNewer =
+    Boolean(user.last_heard) &&
+    (!user.last_track ||
+      (user.last_heard.title !== user.last_track.title &&
+        heardAt > Date.parse(user.last_track.played_at ?? '')))
+  const lastTrack = heardIsNewer ? null : user.last_track
+  const lastHeard = heardIsNewer ? user.last_heard : null
 
   return (
     <div className={`admin-user${expanded ? ' is-expanded' : ''}`}>
