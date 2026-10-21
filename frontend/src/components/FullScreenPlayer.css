@@ -4,8 +4,8 @@
   /* Динамическая высота вьюпорта: учитывает адресную строку/панели на мобильных. */
   height: 100dvh;
   --fs-pad-x: 24px;
-  /* Сторона обложки. По ней же ширина полосы перемотки — полоса не шире
-     обложки над ней. */
+  /* Сторона обложки. От неё же ширина полосы перемотки: чуть шире
+     обложки, но не во весь экран. */
   --fs-art: min(440px, 78vw, 44vh);
   /* Цвет обложки — в слоях .fullscreen-backdrop под содержимым; здесь только
      подложка на кадр до них. */
@@ -524,7 +524,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress {
   width: 100%;
-  max-width: var(--fs-art);
+  max-width: min(560px, max(var(--fs-art), 88%));
   margin: 34px auto 0;
 }
 
@@ -764,7 +764,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-art {
-    margin: 22px 0 28px;
+    margin: 22px 0 14px;
   }
 
   .fullscreen-track-name {
@@ -805,7 +805,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-art {
-    margin: 16px 0 20px;
+    margin: 16px 0 12px;
   }
 
   .fullscreen-track-name {
@@ -917,7 +917,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 
   .fullscreen-player:not(.has-lyrics) .fullscreen-art {
-    margin: clamp(44px, 5vh, 56px) auto 34px;
+    margin: clamp(44px, 5vh, 56px) auto 18px;
   }
 
   .fullscreen-player:not(.has-lyrics) .fullscreen-info {
