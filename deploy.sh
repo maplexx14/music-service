@@ -14,8 +14,103 @@ fi
 
 compose() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
 
+# Ждёт healthcheck контейнера бэкенда; при провале печатает его лог и
+# возвращает 1 (а не exit): rolling-подмене ниже нужно убрать за собой
+# неудачный новый контейнер, оставив старый обслуживать трафик.
+wait_backend_healthy() {
+  local cid="$1" status restarts deadline=$((SECONDS + HEALTH_TIMEOUT))
+  echo "Ждём healthcheck бэкенда ${cid:0:12} (до ${HEALTH_TIMEOUT} с)…"
+  while :; do
+    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    restarts="$(docker inspect -f '{{.RestartCount}}' "$cid" 2>/dev/null || echo 0)"
+
+    # Контейнер свежесозданный, поэтому счётчик начинался с нуля: любой
+    # перезапуск здесь означает, что процесс умер (restart: unless-stopped
+    # поднял его снова). Ждать healthy в таком цикле бессмысленно.
+    if [[ "$restarts" != "0" ]]; then
+      echo "backend перезапускался ${restarts} раз(а) — процесс падает на старте. Последние строки лога:" >&2
+      docker logs --tail=80 "$cid" >&2
+      return 1
+    fi
+
+    case "$status" in
+      healthy)
+        echo "backend: healthy"
+        return 0
+        ;;
+      unhealthy)
+        # start_period уже истёк, а проверки продолжают падать — это не гонка.
+        echo "backend: unhealthy. Последние строки лога:" >&2
+        docker logs --tail=80 "$cid" >&2
+        return 1
+        ;;
+    esac
+    if ((SECONDS >= deadline)); then
+      echo "backend не стал healthy за ${HEALTH_TIMEOUT} с (статус: ${status:-нет данных}). Последние строки лога:" >&2
+      docker logs --tail=80 "$cid" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+nginx_reload() { compose exec -T nginx nginx -s reload 2>/dev/null; }
+
 compose config --quiet
 compose build --pull
+
+# ─────────────────── подмена бэкенда без простоя ───────────────────
+# Простой `up -d` сначала гасит старый backend, потом поднимает новый, и всё
+# окно (alembic + загрузка воркеров gunicorn, 12+ с) nginx отвечает 502 — на
+# проде это пачки тостов «Ошибка запроса (502)» на каждом деплое (2026-10-21).
+# Поэтому новый контейнер поднимается РЯДОМ со старым (--scale +1
+# --no-recreate), и только когда он healthy, старый уходит. nginx резолвит
+# `backend` во все адреса сервиса (Docker DNS отдаёт по A-записи на
+# контейнер), так что после reload ходит в оба; на остановленный старый
+# получает connection refused и переспрашивает живой (proxy_next_upstream).
+# Миграции новый образ катит, пока старый ещё обслуживает запросы, — они
+# должны быть совместимы со старым кодом (добавить колонку — да, переименовать
+# — в два деплоя).
+# shellcheck disable=SC2207  # ID контейнеров без пробелов
+old_backends=($(compose ps -q backend))
+# Тот же образ и тот же конфиг — подменять нечего: `up -d` ниже backend не
+# тронет, как и раньше при деплое одного фронта.
+backend_changed=1
+if ((${#old_backends[@]} == 1)) &&
+  [[ "$(docker inspect -f '{{.Image}}' "${old_backends[0]}")" == "$(docker image inspect -f '{{.Id}}' music-service/backend:prod)" ]] &&
+  [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "${old_backends[0]}")" == "$(compose config --hash backend | awk '{print $2}')" ]]; then
+  backend_changed=0
+  echo "backend: образ и конфиг не менялись — подмена не нужна"
+fi
+if ((${#old_backends[@]} > 0 && backend_changed)); then
+  compose up -d --no-deps --no-recreate --scale "backend=$((${#old_backends[@]} + 1))" backend
+  new_backend=""
+  for cid in $(compose ps -q backend); do
+    [[ " ${old_backends[*]} " == *" $cid "* ]] || new_backend="$cid"
+  done
+  if [[ -z "$new_backend" ]]; then
+    echo "Новый контейнер backend не появился — смотрите вывод compose выше." >&2
+    exit 1
+  fi
+  if ! wait_backend_healthy "$new_backend"; then
+    echo "Новый backend не поднялся — убираю его, старый продолжает работать." >&2
+    docker rm -f "$new_backend" >/dev/null
+    exit 1
+  fi
+  nginx_reload || true
+  # gunicorn на SIGTERM перестаёт принимать соединения и даёт текущим запросам
+  # до 30 с (graceful_timeout по умолчанию), отсюда -t 35.
+  # Пока старый гасится, его IP ещё жив и отвечает refused — nginx сразу
+  # уходит на новый. После выхода контейнера адрес пропадает из сети, и
+  # connect на него висит до ARP-таймаута (~3 с), поэтому reload сразу.
+  docker stop -t 35 "${old_backends[@]}" >/dev/null
+  nginx_reload || true
+  docker rm "${old_backends[@]}" >/dev/null
+  echo "backend: старый контейнер заменён новым ${new_backend:0:12}"
+fi
+
+# Остальные сервисы. backend уже на свежем образе с текущим конфигом, и
+# compose его не пересоздаёт.
 compose up -d --remove-orphans
 compose ps
 
@@ -31,41 +126,7 @@ if [[ -z "$backend_cid" ]]; then
   echo "Контейнер backend не создан — смотрите вывод compose ps выше." >&2
   exit 1
 fi
-
-echo "Ждём healthcheck бэкенда (до ${HEALTH_TIMEOUT} с)…"
-deadline=$((SECONDS + HEALTH_TIMEOUT))
-while :; do
-  status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_cid" 2>/dev/null || true)"
-  restarts="$(docker inspect -f '{{.RestartCount}}' "$backend_cid" 2>/dev/null || echo 0)"
-
-  # up -d создал контейнер заново, поэтому счётчик начинался с нуля: любой
-  # перезапуск здесь означает, что процесс умер (restart: unless-stopped
-  # поднял его снова). Ждать healthy в таком цикле бессмысленно.
-  if [[ "$restarts" != "0" ]]; then
-    echo "backend перезапускался ${restarts} раз(а) — процесс падает на старте. Последние строки лога:" >&2
-    compose logs --tail=80 backend >&2
-    exit 1
-  fi
-
-  case "$status" in
-    healthy)
-      echo "backend: healthy"
-      break
-      ;;
-    unhealthy)
-      # start_period уже истёк, а проверки продолжают падать — это не гонка.
-      echo "backend: unhealthy. Последние строки лога:" >&2
-      compose logs --tail=80 backend >&2
-      exit 1
-      ;;
-  esac
-  if ((SECONDS >= deadline)); then
-    echo "backend не стал healthy за ${HEALTH_TIMEOUT} с (статус: ${status:-нет данных}). Последние строки лога:" >&2
-    compose logs --tail=80 backend >&2
-    exit 1
-  fi
-  sleep 5
-done
+wait_backend_healthy "$backend_cid" || exit 1
 
 # Перечитывание конфига nginx — обязательный шаг, а не гигиена. В
 # nginx/conf.d/00-upstreams.conf апстрим задан статически (`server backend:8000`),
@@ -79,7 +140,7 @@ done
 # Reload (а не restart) — без обрыва соединений: мастер поднимает новых воркеров
 # с заново отрезолвленными апстримами. Не выходим по ошибке: если reload не
 # удался, ниже это поймает проверка /api/health и завалит деплой с логом nginx.
-if compose exec -T nginx nginx -s reload 2>/dev/null; then
+if nginx_reload; then
   echo "nginx: конфиг перечитан, апстримы отрезолвлены заново"
 else
   echo "nginx: reload не удался — проверяю доступность сервиса ниже" >&2

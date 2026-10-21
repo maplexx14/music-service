@@ -134,7 +134,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: music-service/backend:prod
-    container_name: music_backend
+    # Без container_name: deploy.sh на время подмены держит два экземпляра
+    # (--scale backend=2), а фиксированное имя это запрещает. В контейнер —
+    # `docker compose -f docker-compose.prod.yml exec backend ...`.
     restart: unless-stopped
     logging: *default-logging
     environment: &backend-env
@@ -379,7 +381,7 @@ services:
       - "4416"
 
   # Cloudflare WARP — бесплатный второй выход в YouTube (YTDLP_WARP_PROXY).
-  # Проверка: docker exec music_backend curl -sx http://warp:1080
+  # Проверка: docker compose -f docker-compose.prod.yml exec backend curl -sx http://warp:1080
   #   https://cloudflare.com/cdn-cgi/trace   → warp=on
   # Новый адрес WARP, если YouTube заблокировал и его: удалить том warp_data
   # и пересоздать контейнер — клиент зарегистрируется заново.
