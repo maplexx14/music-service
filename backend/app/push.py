@@ -211,14 +211,14 @@ def record_stat(field: str, day: Optional[date] = None) -> None:
 
 
 async def artist_releases(name: str) -> List[dict]:
-    """Релизы артиста из Deezer: [{id, title, type, date, artist}], кэш 12 ч."""
+    """Релизы артиста из Deezer: [{id, title, type, date, cover, artist}], кэш 12 ч."""
     from app import artist_cards
 
     card = await artist_cards.artist_card(name)
     deezer_id = card.get("deezer_id")
     if not deezer_id:
         return []
-    cache_key = f"artist_albums:v1:{deezer_id}"
+    cache_key = f"artist_albums:v2:{deezer_id}"
     cached = await get_cache_async(cache_key)
     if isinstance(cached, list):
         return [{**item, "artist": name} for item in cached]
@@ -231,6 +231,8 @@ async def artist_releases(name: str) -> List[dict]:
             "title": (item.get("title") or "").strip(),
             "type": (item.get("record_type") or "").lower(),
             "date": item.get("release_date") or "",
+            # 250 px — размер, который CDN Deezer отдаёт без пережатия на лету.
+            "cover": item.get("cover_medium") or "",
         }
         for item in data.get("data") or []
         if item.get("id") and item.get("title") and item.get("release_date")

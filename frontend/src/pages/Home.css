@@ -955,3 +955,14 @@
 @media (max-width: 380px) {
   .home-skeleton-card { padding: 8px; }
 }
+
+/* Подпись под заголовком полки: зачем она и когда обновится. */
+.section-title:has(+ .section-subtitle) {
+  margin-bottom: 4px;
+}
+
+.section-subtitle {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0 0 16px;
+}

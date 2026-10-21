@@ -26,6 +26,7 @@ import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import { isSoftwareRendering } from '../utils/gpu'
 import { toast } from '../store/toastStore'
+import { MONTH_GENITIVE } from '../utils/format'
 import './Home.css'
 
 // Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
@@ -37,6 +38,21 @@ const SOUNDCLOUD_SEED_LIMIT = 3
 // порога полка плейлистов не менялась бы, пока приложение не перезапустят.
 const SOUNDCLOUD_PLAYLIST_REFRESH_MS = 10 * 60 * 1000
 const homeRecommendationImpressions = new Set()
+const EMPTY_SHELVES = { releases: [], weekly: [], rediscover: [] }
+// Полки «повода вернуться» (релизы, открытия недели, давно не слушали)
+// меняются раз в час–неделю: чаще раза в 10 минут не спрашиваем.
+const SHELVES_REFRESH_MS = 10 * 60 * 1000
+
+function releaseAge(isoDate) {
+  const days = Math.round((Date.now() - new Date(`${isoDate}T00:00:00`).getTime()) / 86400000)
+  if (days <= 0) return 'сегодня'
+  if (days === 1) return 'вчера'
+  if (days < 7) return `${days} дн. назад`
+  const [, month, day] = isoDate.split('-')
+  return `${Number(day)} ${MONTH_GENITIVE[Number(month) - 1]}`
+}
+
+const RELEASE_TYPE = { single: 'сингл', album: 'альбом', ep: 'EP' }
 
 function shuffled(items) {
   const out = [...items]
@@ -184,6 +200,8 @@ function Home() {
     () => snapshot?.soundCloudPlaylists ?? [],
   )
   const [history, setHistory] = useState(() => snapshot?.history ?? [])
+  const [shelves, setShelves] = useState(() => snapshot?.shelves ?? EMPTY_SHELVES)
+  const shelvesFetchedAtRef = useRef(0)
   const [loading, setLoading] = useState(!snapshot?.recommendations)
   const [historyLoading, setHistoryLoading] = useState(false)
   const historyRequestedRef = useRef(false)
@@ -229,6 +247,28 @@ function Home() {
     fetchData()
   }, [])
 
+  // Каждая полка независима: упавшая или пустая просто не рисуется и не
+  // держит остальные.
+  const fetchShelves = async () => {
+    shelvesFetchedAtRef.current = Date.now()
+    const opts = { skipErrorToast: true }
+    const [releases, weekly, rediscover] = await Promise.allSettled([
+      api.get('/home/releases', opts),
+      api.get('/home/weekly', opts),
+      api.get('/home/rediscover', opts),
+    ])
+    const data = (result, fallback) => (result.status === 'fulfilled' ? result.value.data ?? fallback : fallback)
+    const next = {
+      releases: data(releases, []),
+      weekly: data(weekly, []),
+      rediscover: data(rediscover, []),
+    }
+    setShelves(next)
+    writeHomeSnapshot(userId, { shelves: next })
+  }
+  const fetchShelvesRef = useRef(fetchShelves)
+  fetchShelvesRef.current = fetchShelves
+
   // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
   // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
   // полки. Но сиды из preferred_artists юзера известны сразу, до всякой сети,
@@ -245,6 +285,7 @@ function Home() {
   }, [user])
 
   const fetchData = (refresh = false) => {
+    fetchShelves()
     api
       // Локальный час клиента — для контекста времени суток в рекомендациях
       // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
@@ -378,6 +419,17 @@ function Home() {
       if (document.hidden || !scRequestedRef.current) return
       if (Date.now() - scFetchedAtRef.current < SOUNDCLOUD_PLAYLIST_REFRESH_MS) return
       scFetchRef.current(lastTracksRef.current)
+    }
+    maybeRefresh()
+    document.addEventListener('visibilitychange', maybeRefresh)
+    return () => document.removeEventListener('visibilitychange', maybeRefresh)
+  }, [screenActive])
+  useEffect(() => {
+    if (!screenActive) return undefined
+    const maybeRefresh = () => {
+      if (document.hidden || !shelvesFetchedAtRef.current) return
+      if (Date.now() - shelvesFetchedAtRef.current < SHELVES_REFRESH_MS) return
+      fetchShelvesRef.current()
     }
     maybeRefresh()
     document.addEventListener('visibilitychange', maybeRefresh)
@@ -617,6 +669,66 @@ function Home() {
               />
             )}
           </div>
+
+          {shelves.releases.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Новое у ваших артистов</h2>
+              <Carousel
+                items={shelves.releases}
+                label="Новые релизы ваших артистов"
+                renderItem={(release) => (
+                  <Link
+                    key={release.id}
+                    className="playlist-card"
+                    to={`/artists/${encodeURIComponent(release.artist)}`}
+                  >
+                    <img
+                      src={resolveCoverUrl(release.cover) || defaultCover}
+                      alt={release.title}
+                      className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name">{release.title}</div>
+                      <div className="playlist-description">
+                        {release.artist} · {RELEASE_TYPE[release.type] || 'релиз'} · {releaseAge(release.date)}
+                      </div>
+                    </div>
+                  </Link>
+                )}
+              />
+            </div>
+          )}
+
+          {shelves.weekly.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Открытия недели</h2>
+              <p className="section-subtitle">Похожие на ваших любимых, но ещё не слышанные. Обновляется по понедельникам</p>
+              <Carousel
+                items={shelves.weekly}
+                label="Открытия недели"
+                renderItem={(track) => (
+                  <TrackCard key={track.id} track={track} queue={shelves.weekly} />
+                )}
+              />
+            </div>
+          )}
+
+          {shelves.rediscover.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Давно не слушали</h2>
+              <p className="section-subtitle">Ваши лайки, которые не звучали больше месяца</p>
+              <Carousel
+                items={shelves.rediscover}
+                label="Давно не слушали"
+                renderItem={(track) => (
+                  <TrackCard key={track.id} track={track} queue={shelves.rediscover} />
+                )}
+              />
+            </div>
+          )}
 
           {soundCloudPlaylists.length > 0 && (
             <div className="content-section content-section--tab-fade">
