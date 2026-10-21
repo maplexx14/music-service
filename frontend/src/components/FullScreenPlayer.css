@@ -364,6 +364,22 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   -webkit-box-orient: vertical;
 }
 
+.fullscreen-reason {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.fullscreen-player.karaoke-mode .fullscreen-reason {
+  display: none;
+}
+
 .fullscreen-artist {
   color: rgba(255, 255, 255, 0.68);
   font-size: var(--text-base);

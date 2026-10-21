@@ -3823,6 +3823,11 @@ async def _deliver_portion(
                 "recommendation_model_version": ALGORITHM_VERSION,
             }
         )
+        # Незнакомый артист подписывается в плеере: открытие, о котором
+        # предупредили, воспринимается как подарок, а не как промах волны
+        # (новые артисты скипаются втрое чаще знакомых).
+        if (features.get(identity) or {}).get("novel"):
+            item["recommendation_reason"] = "new_artist"
         delivery_scores[item.get("id")] = score
         if identity in features:
             delivery_features[item.get("id")] = features[identity]

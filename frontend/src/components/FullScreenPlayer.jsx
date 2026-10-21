@@ -776,6 +776,12 @@ function FullScreenPlayer() {
                 className="fullscreen-artist"
                 onNavigate={closeFullScreen}
               />
+              {/* Открытие волны подписано: незнакомое воспринимается как
+                  находка, а не как промах. Высота подписи и так меняется —
+                  название бывает в одну и в две строки. */}
+              {shownTrack.recommendation_reason === 'new_artist' && (
+                <div className="fullscreen-reason">новый для вас артист</div>
+              )}
             </div>
           </div>
 
