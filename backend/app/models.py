@@ -217,6 +217,10 @@ class User(Base):
     discovery_ratio = Column(
         Float, nullable=False, default=0.2, server_default="0.2"
     )
+    # Тонкая настройка волны: {liked, depth, variety, recent} в [0, 1], пустой
+    # объект и пропущенный ключ — середина, то есть прежнее поведение (см.
+    # app/flow_tuning.py).
+    flow_tuning = Column(JSON, nullable=False, default=dict, server_default="{}")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     # Последний аутентифицированный запрос — «последний онлайн» для админки.
     # Пишется с троттлингом (см. dependencies.get_current_user), чтобы не

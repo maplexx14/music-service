@@ -51,7 +51,7 @@ def discovery_slots(limit: int, ratio: float) -> int:
     return min(limit, max(1, round(limit * ratio)))
 
 
-def liked_slots(limit: int, ratio: float) -> int:
+def liked_slots(limit: int, ratio: float, factor: float = 1.0) -> int:
     """Сколько мест в порции держать под уже понравившиеся треки.
 
     Обратная сторона ``discovery_slots`` и такая же явная цель, а не prior:
@@ -62,9 +62,12 @@ def liked_slots(limit: int, ratio: float) -> int:
 
     Ноль на максимуме разведки — намеренно: пользователь попросил новые имена,
     и подмешивать ему собственные лайки было бы прямым противоречием.
+
+    ``factor`` — ползунок «Любимые треки» (FlowTuning.liked_factor): 1 —
+    прежняя квота, 2 — вдвое больше (не выше половины порции).
     """
     if limit <= 0:
         return 0
-    share = LIKED_MAX_SHARE * (1.0 - min(1.0, max(0.0, ratio)))
+    share = LIKED_MAX_SHARE * (1.0 - min(1.0, max(0.0, ratio))) * max(0.0, factor)
     return min(limit, round(limit * share))
 

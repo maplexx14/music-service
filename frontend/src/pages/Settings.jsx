@@ -40,7 +40,7 @@ const SECTIONS = [
   // жанров каждая занимает экран, вместе они превращались в простыню.
   { id: 'genres', label: 'Любимые жанры', hint: 'Что вы любите слушать', icon: Disc3 },
   { id: 'artists', label: 'Любимые артисты', hint: 'И похожие на них', icon: Mic2 },
-  { id: 'recs', label: 'Рекомендации', hint: 'Новые открытия', icon: Sparkles },
+  { id: 'recs', label: 'Рекомендации', hint: 'Что играет в волне', icon: Sparkles },
   { id: 'playback', label: 'Воспроизведение', hint: 'Качество звука', icon: Headphones },
   { id: 'appearance', label: 'Оформление', hint: 'Облегчённый режим, GIF', icon: Palette },
   { id: 'notifications', label: 'Уведомления', hint: 'Новые релизы артистов', icon: Bell },
@@ -52,6 +52,52 @@ const SECTIONS = [
   { id: 'rate', label: 'Оценить сервис', hint: 'Насколько вам нравится', icon: Star },
   { id: 'contact', label: 'Связь с разработчиком', hint: 'Ошибка, идея или вопрос', icon: MessageCircle },
 ]
+
+// Тонкая настройка волны (бэкенд: app/flow_tuning.py). Каждая ручка 0..1 на
+// бэкенде и проценты здесь; середина — прежняя волна, поэтому по умолчанию 50.
+const TUNING_DEFAULT = 50
+const TUNING_KNOBS = [
+  {
+    id: 'liked',
+    label: 'Любимые треки',
+    hint: 'Как часто волна будет включать то, что вы лайкнули.',
+    left: 'Реже',
+    right: 'Чаще',
+  },
+  {
+    id: 'depth',
+    label: 'Хиты или редкое',
+    hint: 'Самые известные песни ваших артистов или то, что вы могли пропустить.',
+    left: 'Только хиты',
+    right: 'Больше редкого',
+  },
+  {
+    id: 'variety',
+    label: 'Разнообразие артистов',
+    hint: 'Как часто один и тот же артист появляется в волне.',
+    left: 'Любимые чаще',
+    right: 'Больше разных',
+  },
+  {
+    id: 'recent',
+    label: 'Под настроение',
+    hint: 'Подбирать похожее на то, что вы слушаете в последние дни, или на всю вашу музыку.',
+    left: 'Вся моя музыка',
+    right: 'Последние дни',
+  },
+]
+
+function tuningFromUser(user) {
+  const stored = user?.flow_tuning || {}
+  return Object.fromEntries(TUNING_KNOBS.map(({ id }) => [
+    id,
+    Number.isFinite(stored[id]) ? Math.round(stored[id] * 100) : TUNING_DEFAULT,
+  ]))
+}
+
+function sameTuning(a, b) {
+  return TUNING_KNOBS.every(({ id }) => a[id] === b[id])
+}
 
 // Граница мобильной раскладки — та же, что у Layout (768px).
 const MOBILE_QUERY = '(max-width: 768px)'
@@ -100,6 +146,7 @@ function Settings() {
   const [discovery, setDiscovery] = useState(
     Math.round((user?.discovery_ratio ?? 0.2) * 100)
   )
+  const [tuning, setTuning] = useState(() => tuningFromUser(user))
   // Профиль приходит асинхронно (checkAuth), и на первом рендере user ещё
   // null — без этого окно оставалось пустым независимо от предпочтений.
   // Только ОДИН раз: дальше user обновляет автосохранение, и ответ на
@@ -114,6 +161,7 @@ function Settings() {
         excludedArtists: user.excluded_artists || [],
       })
       setDiscovery(Math.round((user.discovery_ratio ?? 0.2) * 100))
+      setTuning(tuningFromUser(user))
     }
   }, [user])
 
@@ -132,7 +180,8 @@ function Settings() {
     (!sameList(prefs.genres, user.preferred_genres || []) ||
       !sameList(prefs.artists, user.preferred_artists || []) ||
       !sameList(prefs.excludedArtists, user.excluded_artists || []) ||
-      discovery !== Math.round((user.discovery_ratio ?? 0.2) * 100))
+      discovery !== Math.round((user.discovery_ratio ?? 0.2) * 100) ||
+      !sameTuning(tuning, tuningFromUser(user)))
 
   // Вкус, выведенный из прослушиваний — тот же профиль, что строит волну:
   // юзер видит, что сервис о нём понял, и может перенести это в свой выбор.
@@ -167,6 +216,7 @@ function Settings() {
     prefs.artists,
     prefs.excludedArtists,
     discovery,
+    tuning,
   ])
 
   useEffect(() => {
@@ -177,8 +227,11 @@ function Settings() {
     const save = async () => {
       pendingSave.current = null
       lastSaved.current = prefsPayload
-      const [genres, artists, excludedArtists, ratio] = JSON.parse(prefsPayload)
-      const result = await updatePreferences(genres, artists, excludedArtists, ratio / 100)
+      const [genres, artists, excludedArtists, ratio, knobs] = JSON.parse(prefsPayload)
+      const flowTuning = Object.fromEntries(
+        Object.entries(knobs).map(([id, value]) => [id, value / 100]),
+      )
+      const result = await updatePreferences(genres, artists, excludedArtists, ratio / 100, flowTuning)
       if (!result.success) toast.error(result.error)
     }
     pendingSave.current = save
@@ -416,26 +469,21 @@ function Settings() {
               <div className="settings-card">
                 <div className="settings-section-title">Новые открытия</div>
                 <p className="settings-hint settings-section-hint">
-                  Влияют на рекомендации и ваш персональный поток. Сохраняется
-                  автоматически.
+                  Сохраняется само.
                 </p>
 
                 <div className="settings-balance">
                   <div className="settings-balance-head">
-                    <div className="settings-label">Приоритет новых артистов</div>
+                    <div className="settings-label">Новые артисты</div>
                     <div className="settings-hint">
-                      Насколько активно поднимать релевантные треки артистов, которых
-                      вы ещё не слушали. При высоком значении поток сначала старается
-                      выполнить эту цель, а при нехватке новых кандидатов использует
-                      знакомые треки. Чем ниже значение, тем больше места в порции
-                      достаётся тому, что вы уже отметили как понравившееся; на
-                      максимуме таких треков в потоке не будет вовсе.
+                      Сколько в волне будет артистов, которых вы ещё не слушали.
+                      Справа до упора — только новые, без ваших лайков.
                     </div>
                   </div>
                   <div className="settings-balance-values">
-                    <span className="settings-balance-new">{discovery}% приоритета</span>
+                    <span className="settings-balance-new">{discovery}%</span>
                     <span className="settings-balance-known">
-                      {discovery < 50 ? 'Больше знакомого' : 'Больше открытий'}
+                      {discovery < 50 ? 'Больше знакомого' : 'Больше нового'}
                     </span>
                   </div>
                   <input
@@ -450,11 +498,58 @@ function Settings() {
                     aria-label="Приоритет новых артистов в рекомендациях"
                   />
                   <div className="settings-balance-scale">
-                    <span>Точнее по знакомому</span>
-                    <span>Смелее открывать новое</span>
+                    <span>Знакомое</span>
+                    <span>Новое</span>
                   </div>
                 </div>
 
+              </div>
+
+              <div className="settings-card">
+                <div className="settings-section-title">Настроить волну</div>
+                <p className="settings-hint settings-section-hint">
+                  Двигайте, если волна играет не то. По центру — как обычно.
+                </p>
+
+                {TUNING_KNOBS.map(({ id, label, hint, left, right }) => (
+                  <div className="settings-balance" key={id}>
+                    <div className="settings-balance-head">
+                      <div className="settings-label">{label}</div>
+                      <div className="settings-hint">{hint}</div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={tuning[id]}
+                      onChange={(event) => {
+                        const value = Number(event.target.value)
+                        setTuning((prev) => ({ ...prev, [id]: value }))
+                      }}
+                      className="settings-balance-slider settings-tuning-slider"
+                      aria-label={label}
+                      aria-valuetext={tuning[id] === TUNING_DEFAULT ? 'как обычно' : `${tuning[id]}%`}
+                    />
+                    <div className="settings-balance-scale">
+                      <span>{left}</span>
+                      <span>{right}</span>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="settings-prefs-actions">
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    disabled={TUNING_KNOBS.every(({ id }) => tuning[id] === TUNING_DEFAULT)}
+                    onClick={() => setTuning(Object.fromEntries(
+                      TUNING_KNOBS.map(({ id }) => [id, TUNING_DEFAULT]),
+                    ))}
+                  >
+                    Сбросить
+                  </button>
+                </div>
               </div>
             </div>
           )}

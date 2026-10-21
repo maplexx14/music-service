@@ -491,6 +491,7 @@ const useAuthStore = create((set, get) => ({
         preferredArtists,
         excludedArtists,
         discoveryRatio,
+        flowTuning,
       ) => {
         try {
           const response = await api.put('/users/me/preferences', {
@@ -500,6 +501,7 @@ const useAuthStore = create((set, get) => ({
             ...(Number.isFinite(discoveryRatio)
               ? { discovery_ratio: discoveryRatio }
               : {}),
+            ...(flowTuning ? { flow_tuning: flowTuning } : {}),
           }, {
             // Бэк сразу считает первую порцию волны — под час юзера.
             params: { hour: new Date().getHours() },

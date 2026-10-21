@@ -82,6 +82,7 @@ from app.discovery import (
     discovery_slots,
     liked_slots,
 )
+from app.flow_tuning import FlowTuning, flow_tuning, parse as parse_flow_tuning
 from app.discovery_feedback import (
     cached_outcome_stats,
     cached_population_stats,
@@ -260,13 +261,14 @@ def _refill_per_artist(ratio: float) -> int:
     return max(1, round(_REFILL_PER_ARTIST_MAX * (1.0 - ratio)))
 
 
-def _liked_cap(limit: int, ratio: float) -> int:
+def _liked_cap(limit: int, ratio: float, liked_factor: float = 1.0) -> int:
     """Потолок лайков в выдаче из готового пула — та же квота, что и в
-    _compute_flow, но на ``limit`` выдачи, а не на весь пул."""
+    _compute_flow, но на ``limit`` выдачи, а не на весь пул.
+    ``liked_factor`` — ползунок «Любимые треки» (FlowTuning.liked_factor)."""
     discovery_target = (
         discovery_slots(limit, ratio) if ratio > DEFAULT_DISCOVERY_RATIO else 0
     )
-    return min(liked_slots(limit, ratio), max(0, limit - discovery_target))
+    return min(liked_slots(limit, ratio, liked_factor), max(0, limit - discovery_target))
 # Imported collections are an intentional taste signal. Keep their per-track
 # weight at the same level as a like. The separate artist-count threshold below
 # controls catalogue trust, so one noisy import still cannot open an entire
@@ -329,7 +331,7 @@ _ARTIST_HISTORY = 45
 # Само по себе число периодичность НЕ лечит: требование «не ближе d-1» на d
 # артистах выполнимо единственным способом — ротацией, поэтому за порядок
 # отвечает контекстный взвешенный выбор в diversity.interleave_artists.
-_MIN_ARTIST_GAP = 4
+# Разнос 4 — середина ползунка «Разнообразие артистов»: FlowTuning.artist_gap.
 # Насколько лучший кандидат источника может отставать по score от лучшего
 # вообще, чтобы сэмпл Томпсона мог отдать место этому источнику (см.
 # discovery_feedback.thompson_source_order). Радио-хит артиста, который лишь
@@ -504,13 +506,16 @@ _FRESH_SEED_SHARE = 2
 _PROBE_BONUS = 0.14
 
 
-def _artist_repeat_penalty(count: int, weight: Optional[float]) -> float:
+def _artist_repeat_penalty(
+    count: int, weight: Optional[float], factor: float = 1.0
+) -> float:
     """Штраф за ``count`` появлений артиста в недавней выдаче: чем больше вес
-    вкуса, тем мягче — доля артиста в волне растёт с тем, как его слушают."""
+    вкуса, тем мягче — доля артиста в волне растёт с тем, как его слушают.
+    ``factor`` — ползунок «Разнообразие артистов» (FlowTuning.repeat_factor)."""
     if not count:
         return 0.0
     scale = 1.0 + math.sqrt(max(weight or 0.0, 0.0)) / _ARTIST_REPEAT_WEIGHT_SCALE
-    return _ARTIST_REPEAT_PENALTY * count / scale
+    return _ARTIST_REPEAT_PENALTY * factor * count / scale
 
 
 def _artist_affinity(artist: str, weights: dict) -> Optional[float]:
@@ -548,8 +553,11 @@ def _as_aware(ts) -> datetime:
     return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
-def _mix_fresh_seeds(fresh, rest, total: int, context: str, salt: str) -> list:
-    """До _FRESH_SEED_SHARE свежих сидов, остальное — ротация по ``rest``.
+def _mix_fresh_seeds(
+    fresh, rest, total: int, context: str, salt: str, fresh_share: int = _FRESH_SEED_SHARE
+) -> list:
+    """До ``fresh_share`` свежих сидов, остальное — ротация по ``rest``.
+    ``fresh_share`` задаёт ползунок «Опора на недавнее» (FlowTuning.fresh_seeds).
 
     Обе части ротируются контекстным хэшем, как и раньше: каждая подгрузка
     ходит к своим сидам, а не к одному самому свежему.
@@ -561,7 +569,7 @@ def _mix_fresh_seeds(fresh, rest, total: int, context: str, salt: str) -> list:
             reverse=True,
         )
 
-    picked = rotated(list(dict.fromkeys(fresh)))[: min(_FRESH_SEED_SHARE, total)]
+    picked = rotated(list(dict.fromkeys(fresh)))[: min(fresh_share, total)]
     for value in rotated(list(dict.fromkeys(rest))):
         if len(picked) >= total:
             break
@@ -2079,6 +2087,7 @@ def _favorite_collection_candidates(
     favorite_ranks: dict,
     context: str,
     exclude_ids: Optional[set] = None,
+    deep_cut_scale: Optional[float] = None,
 ) -> List[Track]:
     """Песни доказанных любимых артистов из СВОЕЙ коллекции юзера (блокирующая).
 
@@ -2165,6 +2174,7 @@ def _favorite_collection_candidates(
             context,
             f"favorite-collection:{artist_key(owner)}",
             lambda track: track.id,
+            _DEEP_CUT_SCALE if deep_cut_scale is None else deep_cut_scale,
         )[:_FAVORITE_COLLECTION_PER_ARTIST]
     return picked
 
@@ -2178,6 +2188,7 @@ def _familiar_candidates_on_bind(
     liked_limit: Optional[int] = None,
     favorite_ranks: Optional[dict] = None,
     context: str = "",
+    deep_cut_scale: Optional[float] = None,
 ) -> tuple[List[Track], List[Track], List[Track]]:
     """Каталог, понравившееся и песни любимых из коллекции одной короткой
     сессией: (local, liked, favorite).
@@ -2212,7 +2223,12 @@ def _familiar_candidates_on_bind(
             _local_candidates(local_db, profile, limit, extra_exclude_ids),
             liked,
             _favorite_collection_candidates(
-                local_db, profile, favorite_ranks or {}, context, liked_exclude_ids
+                local_db,
+                profile,
+                favorite_ranks or {},
+                context,
+                liked_exclude_ids,
+                deep_cut_scale,
             ),
         )
     finally:
@@ -2826,22 +2842,29 @@ def _by_service_popularity(pool) -> List[ExternalTrackResponse]:
 _DEEP_CUT_SCALE = 6.0
 
 
-def _popular_first_shuffle(pool, context: str, salt: str, identity_of) -> list:
+def _popular_first_shuffle(
+    pool, context: str, salt: str, identity_of, scale: float = _DEEP_CUT_SCALE
+) -> list:
     """Случайный порядок каталога, взвешенный местом трека в топе артиста.
 
     Выборка без возвращения (Efraimidis–Spirakis, ключ log(u) / w),
     детерминированная контекстом подгрузки.
     """
-    return _rank_weighted_shuffle(_by_service_popularity(pool), context, salt, identity_of)
+    return _rank_weighted_shuffle(
+        _by_service_popularity(pool), context, salt, identity_of, scale
+    )
 
 
-def _rank_weighted_shuffle(ranked: list, context: str, salt: str, identity_of) -> list:
+def _rank_weighted_shuffle(
+    ranked: list, context: str, salt: str, identity_of, scale: float = _DEEP_CUT_SCALE
+) -> list:
     """То же для уже упорядоченного по популярности списка: место r весит
-    exp(-r / _DEEP_CUT_SCALE)."""
+    exp(-r / scale). ``scale`` задаёт ползунок «Хиты ↔ глубина каталога»
+    (FlowTuning.deep_cut_scale), по умолчанию — _DEEP_CUT_SCALE."""
 
     def key(pair):
         rank, item = pair
-        weight = math.exp(-rank / _DEEP_CUT_SCALE)
+        weight = math.exp(-rank / scale)
         u = max(stable_jitter(context, f"{salt}:{identity_of(item)}"), 1e-12)
         return math.log(u) / weight
 
@@ -3169,6 +3192,7 @@ def _external_plan(
     recent_artist_counts: Counter,
     now_ts: float,
     favorite_limit: Optional[int] = None,
+    fresh_seed_share: int = _FRESH_SEED_SHARE,
 ) -> dict:
     """Что именно спрашивать у внешних провайдеров для одной порции потока.
 
@@ -3193,6 +3217,7 @@ def _external_plan(
         _PROFILE_SEEDS,
         ranking_context,
         "profile-seed",
+        fresh_seed_share,
     )
 
     # Артисты вкуса, вокруг которых строим разведку этой подгрузки. Порядок в
@@ -3286,6 +3311,7 @@ def _external_plan(
         _LASTFM_SEED_TRACKS,
         ranking_context,
         "lastfm-seed",
+        fresh_seed_share,
     )
 
     # Сиды хитов похожих: один артист из свежих позитивов и остальные из
@@ -4103,6 +4129,8 @@ async def _compute_flow(
     ranking_context = _ranking_context(user_id, history)
 
     requested_ratio = discovery_ratio(current_user)
+    # Ползунки «Тонкой настройки» (app/flow_tuning.py); середина — как было.
+    tuning = flow_tuning(current_user)
     profile = await asyncio.to_thread(_taste_profile, db, user_id)
     if relax:
         profile = {**profile, "banned_artists": set(profile.get("hard_banned_artists") or ())}
@@ -4234,10 +4262,11 @@ async def _compute_flow(
         # fill the requested new-artist portion.
         discovery_term = (explore_ratio - 0.2) * (1.8 if is_novel_artist else -0.2)
         repeat_term = -min(
-            _ARTIST_REPEAT_CAP,
+            _ARTIST_REPEAT_CAP * tuning.repeat_factor,
             _artist_repeat_penalty(
                 recent_artist_counts[primary_artist_key(artist)],
                 _artist_affinity(artist, profile.get("artist_weight") or {}),
+                tuning.repeat_factor,
             ),
         )
         language_term = (
@@ -4280,6 +4309,7 @@ async def _compute_flow(
             ),
             "discovery_requested": round(requested_ratio, 3),
             "discovery_effective": round(explore_ratio, 3),
+            "flow_tuning": tuning.as_dict(),
         }
         script = script_of(artist, _title)
         if script:
@@ -4387,7 +4417,7 @@ async def _compute_flow(
     # волна должна оставаться волной, а не повтором плейлиста лайков.
     # Зажимаем целью разведки: две квоты не должны вместе съесть всю порцию,
     # и приоритет у явно попрошенных новых имён.
-    liked_target = _liked_cap(limit, explore_ratio)
+    liked_target = _liked_cap(limit, explore_ratio, tuning.liked_factor)
 
     # Откуда пришёл кандидат — пишется в телеметрию отдачи, чтобы по данным
     # было видно, какой генератор новинок работает, а какой отдаёт скипы.
@@ -4548,6 +4578,7 @@ async def _compute_flow(
         recent_artist_counts=recent_artist_counts,
         now_ts=now_ts,
         favorite_limit=request_limit,
+        fresh_seed_share=tuning.fresh_seeds(_FRESH_SEED_SHARE),
     )
     seeds = plan["seeds"]
     similar_artists = plan["similar_artists"]
@@ -4606,7 +4637,11 @@ async def _compute_flow(
         if artist_weights.get(artist_key(artist), 0.0) < _ARTIST_PROVEN_WEIGHT:
             return _by_service_popularity(pool)
         return _popular_first_shuffle(
-            pool, ranking_context, f"favorite-any:{artist}", _item_identity
+            pool,
+            ranking_context,
+            f"favorite-any:{artist}",
+            _item_identity,
+            tuning.deep_cut_scale,
         )
 
     def _needs_more_pools() -> bool:
@@ -4838,6 +4873,7 @@ async def _compute_flow(
         liked_target,
         favorite_ranks,
         ranking_context,
+        tuning.deep_cut_scale,
     )
     # Понравившееся разбираем ПЕРВЫМ: при совпадении нормализованного ключа с
     # другой строкой каталога в единый пул должна попасть именно лайкнутая.
@@ -5162,13 +5198,13 @@ async def _compute_flow(
         interleave_artists(
             [item for item in mix if _item_identity(item) not in liked_identities],
             artist_getter=lambda item: _item_artist_title(item)[0],
-            min_gap=_MIN_ARTIST_GAP,
+            min_gap=tuning.artist_gap,
             previous_artists=history.get("artists") or [],
             context=ranking_context,
         ),
         liked_items,
         artist_getter=lambda item: _item_artist_title(item)[0],
-        min_gap=_MIN_ARTIST_GAP,
+        min_gap=tuning.artist_gap,
     )
 
     scores_by_identity: dict = {}
@@ -5337,6 +5373,7 @@ async def _session_select(
         model = await asyncio.to_thread(learned_ranker.load, user_id)
         learned = learned_ranker.scorer(model)
     ratio = _pool_discovery_ratio(pool, features)
+    tuning = _pool_flow_tuning(pool, features)
     chosen, extra = flow_session.select(
         pool,
         limit=limit,
@@ -5351,7 +5388,8 @@ async def _session_select(
         capped=lambda item: (features.get(_flow_item_identity(item)) or {}).get("origin") == "genre",
         capped_max=_genre_cap(limit),
         novel_max=_novel_cap(limit, ratio),
-        liked_max=_liked_cap(limit, ratio),
+        liked_max=_liked_cap(limit, ratio, tuning.liked_factor),
+        min_gap=tuning.artist_gap,
         rescue=rescue,
         hits=await _cached_hits(pool) if rescue else None,
     )
@@ -5395,6 +5433,16 @@ def _pool_discovery_ratio(pool: list, features: dict) -> float:
         if isinstance(value, (int, float)):
             return float(value)
     return DEFAULT_DISCOVERY_RATIO
+
+
+def _pool_flow_tuning(pool: list, features: dict) -> FlowTuning:
+    """Тонкая настройка, под которую считался пул (features.flow_tuning).
+    Пул старше ползунков признака не несёт — тогда середина, как и было."""
+    for item in pool:
+        value = (features.get(_flow_item_identity(item)) or {}).get("flow_tuning")
+        if isinstance(value, dict):
+            return parse_flow_tuning(value)
+    return FlowTuning()
 
 
 def _history_ids_after(history: dict, mix: list) -> list:
@@ -5484,7 +5532,9 @@ def _release_request_session(db: Session, user: User) -> None:
     же чтение в async-коде сходило бы в БД синхронно, из event loop. rollback,
     а не close: сессия остаётся рабочей для живого пути.
     """
-    for name in ("id", "username", "is_active", "excluded_artists", "discovery_ratio"):
+    for name in (
+        "id", "username", "is_active", "excluded_artists", "discovery_ratio", "flow_tuning",
+    ):
         getattr(user, name, None)
     if user in db:
         db.expunge(user)

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime
 
 from app import storage
@@ -49,6 +49,7 @@ class UserResponse(UserBase):
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []
     discovery_ratio: float = 0.2
+    flow_tuning: Dict[str, float] = {}
     created_at: datetime
 
     class Config:
@@ -76,6 +77,13 @@ class RegistrationClaimResponse(BaseModel):
     device_token: Optional[str] = None
 
 
+class FlowTuningUpdate(BaseModel):
+    liked: float = Field(0.5, ge=0.0, le=1.0)
+    depth: float = Field(0.5, ge=0.0, le=1.0)
+    variety: float = Field(0.5, ge=0.0, le=1.0)
+    recent: float = Field(0.5, ge=0.0, le=1.0)
+
+
 class UserPreferencesUpdate(BaseModel):
     """Обновление явных предпочтений и исключений авто-профиля."""
     preferred_genres: List[str] = []
@@ -84,6 +92,9 @@ class UserPreferencesUpdate(BaseModel):
     # Мягкий prior на открытие новых артистов. None (поле не прислали) означает
     # «не менять»: клиент, который сохраняет только жанры, не сбрасывает его.
     discovery_ratio: Optional[float] = Field(None, ge=0.0, le=1.0)
+    # Тонкая настройка волны (app/flow_tuning.py). None — «не менять», как и
+    # у discovery_ratio.
+    flow_tuning: Optional[FlowTuningUpdate] = None
 
 
 class ArtistCard(BaseModel):

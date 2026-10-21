@@ -21,6 +21,7 @@ from app.routers import flow
 from app.routers.flow import _taste_profile
 from app.routers.ytdlp import search_ytmusic_artists
 from app.artist_utils import artist_key
+from app.flow_tuning import parse as parse_flow_tuning
 from app.recommendation_cache import invalidate_flow_ready, invalidate_recommendation_cache
 
 router = APIRouter()
@@ -263,6 +264,8 @@ def update_preferences(
     # который сохраняет только жанры, не должен сбрасывать баланс в дефолт.
     if prefs.discovery_ratio is not None:
         current_user.discovery_ratio = round(float(prefs.discovery_ratio), 2)
+    if prefs.flow_tuning is not None:
+        current_user.flow_tuning = parse_flow_tuning(prefs.flow_tuning.model_dump()).as_dict()
     db.commit()
     db.refresh(current_user)
     # Следующий запрос должен сразу учитывать новый выбор, а не отдавать

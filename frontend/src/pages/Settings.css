@@ -567,13 +567,20 @@ button.settings-menu-item {
   outline-offset: 4px;
 }
 
+/* Края ползунка — главная подсказка: по ним настраивают с одного взгляда,
+   не читая описание. Поэтому крупно и светлым, а не серым мелким. */
 .settings-balance-scale {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 12px;
+  margin-top: 10px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-balance-scale span:last-child {
+  text-align: right;
 }
 
 @media (max-width: 600px) {
@@ -659,4 +666,13 @@ button.settings-menu-item {
     min-height: 40px;
     padding: 8px 6px;
   }
+}
+
+/* Ползунки тонкой настройки: середина — обычная волна, поэтому полоса без
+   заливки, только отметка середины. */
+.settings-tuning-slider {
+  margin-top: 16px;
+  background:
+    linear-gradient(var(--text-tertiary), var(--text-tertiary)) center / 2px 100% no-repeat,
+    var(--surface-4);
 }

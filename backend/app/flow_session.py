@@ -440,6 +440,7 @@ def select(
     capped_max: Optional[int] = None,
     novel_max: Optional[int] = None,
     liked_max: Optional[int] = None,
+    min_gap: int = MIN_ARTIST_GAP,
     rescue: bool = False,
     hits: Optional[set] = None,
 ) -> tuple[list, dict]:
@@ -569,7 +570,7 @@ def select(
             lambda item: primary_artist_key(artist_of(item)),
             limit,
             previous_artists,
-            MIN_ARTIST_GAP,
+            min_gap,
         )
     chosen = _one_per_artist(chosen, [item for item in ranked if item not in chosen], primary_of)
     chosen = apply_caps(chosen, [item for item in ranked if item not in chosen])
