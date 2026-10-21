@@ -113,6 +113,7 @@ from app.diversity import (
 from app.recommendation_scoring import (
     ALGORITHM_VERSION,
     LOCAL_POPULARITY_REFERENCE,
+    POPULARITY_WEIGHT,
     SERVICE_POPULARITY_REFERENCE,
     popularity_score,
     rank_popularity,
@@ -4274,12 +4275,19 @@ async def _compute_flow(
             if _is_core_artist(artist, core_artist_keys)
             else language_term_by_script.get(script_of(artist, title), 0.0)
         )
-        score +=discovery_term + repeat_term + origin_term + language_term
+        # Ползунок «Хиты или редкое»: поправка к весу популярности в score
+        # (на середине ноль). Отдельным слагаемым, а не правкой score_track —
+        # остальные выдачи ползунок не трогает.
+        hits_term = (
+            (tuning.hits_factor - 1.0) * POPULARITY_WEIGHT * score_inputs["popularity"]
+        )
+        score += discovery_term + repeat_term + origin_term + language_term + hits_term
         score_by_item[score_key] = score
         # Компоненты считаются только для отданных позиций (см. телеметрию
         # ниже) — входы запоминаем, а не пересчитываем весь пул.
         score_inputs_by_item[score_key] = (
-            item, score_inputs, discovery_term, repeat_term, origin_term, language_term
+            item, score_inputs, discovery_term, repeat_term, origin_term, language_term,
+            hits_term,
         )
         return score
 
@@ -4319,13 +4327,16 @@ async def _compute_flow(
             features["proximity"] = round(proximity, 3)
         if cached is not None:
             (
-                source_item, inputs, discovery_term, repeat_term, origin_term, language_term
+                source_item, inputs, discovery_term, repeat_term, origin_term, language_term,
+                hits_term,
             ) = cached
             components = score_components(source_item, **inputs)
             components["discovery"] = discovery_term
             components["repeat"] = repeat_term
             components["origin"] = origin_term
             components["language"] = language_term
+            if hits_term:
+                components["hits"] = hits_term
             features["components"] = {
                 name: round(value, 4) for name, value in components.items()
             }

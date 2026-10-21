@@ -14,6 +14,7 @@ def test_neutral_tuning_keeps_previous_behaviour():
     tuning = FlowTuning()
     assert tuning.liked_factor == 1.0
     assert tuning.deep_cut_scale == flow._DEEP_CUT_SCALE
+    assert tuning.hits_factor == 1.0
     assert tuning.repeat_factor == 1.0
     assert tuning.artist_gap == MIN_ARTIST_GAP
     assert tuning.fresh_seeds(flow._FRESH_SEED_SHARE) == flow._FRESH_SEED_SHARE
@@ -30,6 +31,9 @@ def test_extremes_stretch_each_knob():
     # Максимум новых артистов по-прежнему без лайков, как бы ни стоял ползунок.
     assert flow._liked_cap(15, 1.0, high.liked_factor) == 0
     assert low.deep_cut_scale < flow._DEEP_CUT_SCALE < high.deep_cut_scale
+    # «Хиты» слева: популярность весит больше, справа — меньше.
+    assert low.hits_factor == pytest.approx(3.0)
+    assert high.hits_factor == pytest.approx(1 / 3)
     assert low.repeat_factor < 1.0 < high.repeat_factor
     assert low.artist_gap < MIN_ARTIST_GAP < high.artist_gap
     assert low.fresh_seeds(2) == 0 and high.fresh_seeds(2) == 4

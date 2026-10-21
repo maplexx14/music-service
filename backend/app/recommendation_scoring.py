@@ -26,6 +26,9 @@ ALGORITHM_VERSION = "hybrid-v18"
 # whole real range of play counts was worth 0.04 points — less than the novelty
 # bonus alone, i.e. popularity could not decide anything.
 _POPULARITY_WEIGHT = 0.5
+# Для волны: ползунок «Хиты или редкое» добавляет к этому весу свою поправку
+# (app/flow_tuning.py, FlowTuning.hits_factor).
+POPULARITY_WEIGHT = _POPULARITY_WEIGHT
 _FRESHNESS_WEIGHT = 0.22
 _AFFINITY_WEIGHT = 2.4
 _CONTENT_WEIGHT = 1.15
