@@ -34,7 +34,7 @@
 import { diag, snapshotAudio } from '../utils/playerDiag'
 import { noteSpan } from '../utils/frameMeter'
 
-// Короткий зацикливаемый WAV с тишиной. Собираем байтами, а не base64-строкой:
+// Зацикливаемый WAV с тишиной. Собираем байтами, а не base64-строкой:
 // строка была бы непрозрачным блобом, в котором не видно ни частоты, ни того,
 // что тишина в 8-битном PCM кодируется значением 128, а не нулём (нули дали бы
 // постоянное смещение — щелчок на старте и стопе).
@@ -44,10 +44,16 @@ import { noteSpan } from '../utils/frameMeter'
 //   • «мост» аудиосессии на время, пока играть нечего (см. holdSession).
 // Для обеих нужна ненулевая длительность: нулевой WAV кончается в тот же тик,
 // и с ним элемент не успевает ни получить разрешение, ни удержать сессию.
+//
+// Полторы минуты, а не доли секунды: каждый круг петли — перемотка на начало,
+// а перемотка в окне жеста освежает мосту метку Now Playing (см.
+// claimNowPlaying) и ставит виджету его позицию, 0:00. Петля в 0.25 с
+// перематывалась четыре раза в секунду и забирала виджет у трека. Полторы
+// минуты длиннее отложенного перехода (DEFERRED_BRIDGE_MAX_MS в Player).
 function makeSilenceUrl() {
   if (typeof Blob === 'undefined' || typeof URL === 'undefined') return null
   const sampleRate = 8000
-  const samples = sampleRate / 4 // 0.25 с
+  const samples = sampleRate * 90
   const bytes = new Uint8Array(44 + samples)
   const view = new DataView(bytes.buffer)
   const ascii = (offset, text) => {
@@ -77,6 +83,14 @@ const isIOS =
   /iPad|iPhone|iPod/.test(navigator.userAgent) &&
   typeof window !== 'undefined' &&
   !window.MSStream
+
+// Движок WebKit: Safari и любой браузер на iOS. Правило выбора Now Playing ниже
+// (claimNowPlaying) — его; в Firefox атрибут autoplay ещё и запускает элемент.
+const isWebKit =
+  isIOS ||
+  (typeof navigator !== 'undefined' &&
+    /AppleWebKit/.test(navigator.userAgent) &&
+    !/Chrome|Chromium|Edg|OPR/.test(navigator.userAgent))
 
 // preload активного элемента: на iOS 'metadata' (исторически подобранное
 // значение — не тянуть весь файл до play()), на остальных 'auto'. Заряжаемый
@@ -125,6 +139,61 @@ if (bridge) {
 let bridgeHeld = false
 
 const slotsAndBridge = () => [...slots, bridge].filter(Boolean)
+
+// Кому WebKit отдаёт Now Playing (экран блокировки, Пункт управления).
+//
+// Не тому, кто играет. Кандидат — любой незаглушённый <audio>, у которого был
+// источник, в том числе стоящий на паузе: currentSrc WebKit помнит и после
+// removeAttribute('src') + load(), так что освобождённый слот и мост остаются
+// кандидатами. Из них побеждает тот, с кем последним «взаимодействовали»
+// (HTMLMediaElement::selectBestMediaSession, одинаково в Safari 17.4–26).
+// Метку освежают play(), pause(), load(), смена src и перемотка — но только
+// «в жесте»: в обработчике касания или кнопки виджета, 5 с после них
+// (transient activation) и 1 с после ended. Кнопку ▶/⏸ и ход часов виджет
+// берёт у победителя, а название и позицию — у mediaSession.
+//
+// Отсюда ▶ поверх играющего трека: прогрев следующего (src + load на idle)
+// через секунду после скипа или конца трека делал idle самым «свежим», а он на
+// паузе. То же — после первого старта: unlock освобождал idle и мост уже после
+// play() трека. Поэтому после любой операции с чужим элементом движок касается
+// владельца последним. Касание — атрибут autoplay: на нём WebKit освежает
+// метку так же (HTMLMediaElement::attributeChanged), но больше ничего не
+// делает, а play() синхронно публикует Now Playing (до 76 мс на iPhone). Вне
+// жеста касание ничего не меняет — как и операция перед ним.
+//
+// Проверено в WebKit 18.2 (Playwright) с чтением системного Now Playing через
+// MediaRemote: прогрев в окне жеста — виджет на паузе поверх звука, прогрев с
+// касанием активного следом — играет.
+//
+// Владелец — активный слот, кроме двух окон:
+//   • мягкая пауза (lendNowPlaying): мост на паузе, чтобы виджет показал паузу;
+//   • отложенный переход (holdSession): заряжаемый слот — заиграет он, а вне
+//     жеста (подмена по готовности буфера) метку уже не освежить.
+let standIn = false
+let awaitingNext = false
+
+function touch(el) {
+  if (!el) return
+  try {
+    el.setAttribute('autoplay', '')
+    el.removeAttribute('autoplay')
+  } catch {
+    /* noop */
+  }
+}
+
+function claimNowPlaying() {
+  if (!isWebKit) return
+  if (standIn) {
+    touch(bridge)
+    return
+  }
+  touch(getActive())
+  // Заряжаемый — последним. Активный перед ним — на случай, если заряжаемый не
+  // годится (ошибка загрузки): тогда виджет останется за доигравшим треком на
+  // паузе, а не за мостом с бегущими часами поверх тишины.
+  if (awaitingNext) touch(getIdle())
+}
 
 let activeIndex = 0
 let sharedVolume = 1
@@ -199,6 +268,7 @@ export function pauseInactive() {
     }
     silenced = true
   }
+  if (silenced) claimNowPlaying()
   return silenced
 }
 
@@ -219,9 +289,13 @@ export function mount() {
 export function holdSession() {
   if (!bridge || !SILENCE_URL || bridgeHeld) return
   bridgeHeld = true
+  // На мягкой паузе мост держит вывод вместо Web Audio, и Now Playing остаётся
+  // за ним (см. lendNowPlaying); иначе это отложенный переход.
+  awaitingNext = !standIn
   try {
+    // Без перемотки на начало: тишине всё равно, откуда играть, а перемотка
+    // ставит виджету позицию моста (см. makeSilenceUrl).
     if (bridge.src !== SILENCE_URL) bridge.src = SILENCE_URL
-    bridge.currentTime = 0
     const promise = bridge.play()
     if (promise?.then) {
       promise.then(
@@ -237,26 +311,52 @@ export function holdSession() {
   } catch {
     bridgeHeld = false
   }
+  claimNowPlaying()
 }
 
+// Отпускает мост — и держащий сессию, и одолженный мягкой паузе. Now Playing
+// возвращается активному слоту.
 export function releaseSession() {
-  if (!bridge || !bridgeHeld) return
+  // awaitingNext — на случай, если сам мост не заиграл: отложенный переход
+  // кончается и тогда, а владельцем должен стать активный.
+  if (!bridge || (!bridgeHeld && !standIn && !awaitingNext)) return
+  const wasHeld = bridgeHeld
   bridgeHeld = false
-  try {
-    bridge.pause()
-    diag('bridge:release', {})
-  } catch {
-    /* noop */
+  awaitingNext = false
+  standIn = false
+  if (wasHeld) {
+    try {
+      bridge.pause()
+      diag('bridge:release', {})
+    } catch {
+      /* noop */
+    }
   }
+  claimNowPlaying()
+}
+
+// Мягкая пауза (Player: handlers.pause): трек стоит на скорости 0 и для системы
+// продолжает играть — иначе ▶ в фоне не вернёт звук. Но играющий владелец Now
+// Playing — это ⏸ и бегущие часы на виджете поверх паузы. Отдаём Now Playing
+// мосту, стоящему на паузе с тишиной: название и позицию виджет всё равно
+// берёт у mediaSession, а состояние у моста — честная пауза. Владение
+// возвращает releaseSession. Звать в жесте: вне него метку не освежить.
+export function lendNowPlaying() {
+  if (!isWebKit || !bridge || !SILENCE_URL) return
+  standIn = true
+  awaitingNext = false
+  if (bridge.src !== SILENCE_URL) bridge.src = SILENCE_URL
+  claimNowPlaying()
+  diag('nowPlaying:lend', {})
 }
 
 // Звуковой вывод без media-элемента — для мягкой паузы в Player.jsx.
 //
 // Мост (holdSession) удерживает iOS от заморозки, но он сам media-элемент:
-// Now Playing уходит к нему, и виджет через несколько секунд показывает ⏸ и
-// бегущее время поверх паузы. Web Audio в Now Playing не участвует, поэтому
-// виджет остаётся за треком на паузе. Генератор на −80 дБ, а не на нулевой
-// громкости: нулевой вывод система может счесть тишиной.
+// играющий, он забирает Now Playing, и виджет показывает ⏸ и бегущее время
+// поверх паузы. Web Audio в Now Playing не участвует, а виджет на это время
+// отдан мосту, стоящему на паузе (lendNowPlaying). Генератор на −80 дБ, а не
+// на нулевой громкости: нулевой вывод система может счесть тишиной.
 //
 // Вызывать в жесте (кнопка виджета): resume() вне жеста iOS отклонит.
 // Результат приходит промисом: false — держать вывод не вышло.
@@ -344,6 +444,7 @@ export function unlock() {
       } catch {
         /* noop */
       }
+      claimNowPlaying()
     }
     try {
       el.src = SILENCE_URL
@@ -366,6 +467,7 @@ export function unlock() {
       /* элемент не в том состоянии — фоновая подмена обойдётся без разрешения */
     }
   }
+  claimNowPlaying()
   return true
 }
 
@@ -423,6 +525,7 @@ function release(el) {
   } catch {
     /* noop */
   }
+  claimNowPlaying()
   noteSpan('аудио: освобождение элемента', performance.now() - startedAt)
 }
 
@@ -519,6 +622,7 @@ export function preload(url) {
   } catch {
     /* noop */
   }
+  claimNowPlaying()
   noteSpan('аудио: прогрев (src + load)', performance.now() - startedAt)
   diag('preload:start', { url: shortUrl(abs) })
   return true
@@ -611,6 +715,8 @@ export function swapTo(url) {
   const swapStarted = performance.now()
   const previous = getActive()
   activeIndex = 1 - activeIndex
+  // Отложенный переход, если был, состоялся: заряжаемый стал активным.
+  awaitingNext = false
   detachPreloadWatch?.()
 
   // Старый элемент не глушим здесь и вообще не глушим, пока новый не запоёт.
@@ -681,12 +787,11 @@ export function finishSwap(expectedActive = null) {
     /* noop */
   }
   // Освобождаем ВСЕГДА, даже докачанный до конца. Раньше такой оставляли
-  // заряженным ради мгновенной кнопки ◀ — и это ломало системный виджет:
-  // WebKit выбирает «now playing» среди элементов с живым источником и
-  // продолжал считать таковым оставленный, а он на паузе. На экране блокировки
-  // это выглядело как ▶ поверх честно звучащего трека и мёртвая шкала
-  // перемотки — шкала показывала длительность БРОШЕННОГО трека (в логе с
-  // устройства: swap:finish dur=30 при играющем dur=133).
+  // заряженным ради мгновенной кнопки ◀, и на экране блокировки был ▶ поверх
+  // звучащего трека с длительностью БРОШЕННОГО (в логе с устройства:
+  // swap:finish dur=30 при играющем dur=133). Кандидатом в Now Playing элемент
+  // остаётся и после освобождения — currentSrc WebKit помнит, — так что виджет
+  // за играющим держит claimNowPlaying, а освобождение отдаёт декодер и сеть.
   //
   // Цена — «предыдущий трек» больше не мгновенный, он идёт обычным путём с
   // загрузкой. Правильное состояние виджета важнее: оно нужно на каждом треке,

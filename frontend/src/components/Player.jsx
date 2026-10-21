@@ -2089,8 +2089,9 @@ function PlayerInner() {
           if (same) {
             diag('widget:play:soft', snapshotAudio(audio))
             if (!usePlayerStore.getState().isPlaying) togglePlayPause()
-            // Пауза моста — последний переход, который видела система; без
-            // пере-объявления виджет остался бы на ▶ поверх звука.
+            // Now Playing вернулся треку (endSoftPause → releaseSession), а
+            // здесь объявляем «играю» с точной позицией — без этого виджет
+            // остался бы на паузе моста поверх звука.
             reassertNowPlaying(audio, 'soft:reassertPlay')
             const startedAt = audio.currentTime
             setTimeout(() => {
@@ -2185,8 +2186,12 @@ function PlayerInner() {
         // Одной скорости 0 хватает лишь на 5–10 с: дальше iOS, видимо, замечает,
         // что звук не выводится, и замораживает так же. Поэтому на время паузы
         // держим настоящий звуковой вывод — Web Audio (engine.holdOutput). Мост
-        // тишины только запасной вариант: он media-элемент, Now Playing уходит
-        // к нему, и виджет показывает ⏸ с бегущим временем поверх паузы.
+        // тишины только запасной вариант: он играющий media-элемент, и виджет
+        // показывает ⏸ с бегущим временем поверх паузы.
+        //
+        // Элемент на скорости 0 для WebKit тоже играет, а кнопку и ход часов
+        // виджет берёт у владельца Now Playing. Поэтому владение уходит мосту,
+        // стоящему на паузе (engine.lendNowPlaying): ▶ и стоящее время.
         //
         // Пауза по кнопке — явный отказ от воспроизведения: отложенный переход
         // отменяем, иначе догрузившийся буфер сам запустил бы трек поверх паузы.
@@ -2196,22 +2201,24 @@ function PlayerInner() {
           softPausedElRef.current = audio
           softPausedAtRef.current = Date.now()
           audio.playbackRate = 0
+          engine.lendNowPlaying()
           engine.holdOutput().then((held) => {
-            if (!held && softPausedElRef.current === audio) engine.holdSession()
+            if (held || softPausedElRef.current !== audio) return
+            engine.holdSession()
+            // Играющий мост забирает виджет, а на каждом круге петли WebKit
+            // ставит ему позицию моста — 0:00. Держим на виджете позицию
+            // трека, пока мягкая пауза не кончится.
+            const keepPosition = setInterval(() => {
+              if (softPausedElRef.current !== audio) {
+                clearInterval(keepPosition)
+                return
+              }
+              syncPositionState(audio)
+            }, 1000)
           })
           if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
           diag('widget:pause:soft', snapshotAudio(audio))
-          // Под мостом виджет показывал 0:00: Now Playing переходит к мосту, а
-          // его позиция — начало 0.25-секундной закольцованной тишины.
-          // Держим на виджете позицию трека, пока мягкая пауза не кончится.
           syncPositionState(audio)
-          const keepPosition = setInterval(() => {
-            if (softPausedElRef.current !== audio) {
-              clearInterval(keepPosition)
-              return
-            }
-            syncPositionState(audio)
-          }, 1000)
         } else {
           audio?.pause()
         }
