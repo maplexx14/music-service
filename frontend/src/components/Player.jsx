@@ -1408,6 +1408,15 @@ function PlayerInner() {
   //
   // Возвращает true, если воспроизведение действительно начато.
   const playAdjacentNow = (offset) => {
+    // В скрытой вкладке updateTime не пишет позицию в store, а телеметрия
+    // ухода с трека (_recordSkipIfNeeded, _recordListenProgress, played_ms)
+    // читает именно её. Без сверки доигранный с погашенным экраном трек
+    // уходил скипом с позицией на момент гашения. Сверяем до swapTo: пока
+    // активен элемент уходящего трека.
+    if (document.hidden) {
+      const time = engine.getActive()?.currentTime
+      if (Number.isFinite(time)) setCurrentTime(time)
+    }
     const next = usePlayerStore.getState().getNextTrack(offset)
     if (!next) return false
     const url = resolveRawUrl(next, EXTERNAL_SOURCES.includes(next.source))
