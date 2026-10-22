@@ -4,6 +4,18 @@ import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settin
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import TasteAvatar from './TasteAvatar'
+import api from '../services/api'
+import {
+  peekCache,
+  writeCache,
+  subscribeCache,
+  intentPrefetchHandlers,
+  prefetchPlaylist,
+  LIBRARY_CACHE_KEY,
+} from '../services/pageCache'
+import { useImportStore } from '../store/importStore'
+import defaultCover from '../assets/default-cover.webp'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import './Sidebar.css'
 
 function Sidebar() {
@@ -19,6 +31,18 @@ function Sidebar() {
     // Dispatch custom event to notify Layout
     window.dispatchEvent(new Event('sidebarToggle'))
   }, [isCollapsed])
+
+  // Плейлисты медиатеки — тот же список и кэш, что у вкладки «Медиатека»:
+  // создание и удаление там сразу видны здесь.
+  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
+  const importsCompleted = useImportStore((s) => s.completed)
+  useEffect(() => subscribeCache(LIBRARY_CACHE_KEY, setPlaylists), [])
+  useEffect(() => {
+    api
+      .get('/playlists/me', { skipErrorToast: true })
+      .then((response) => writeCache(LIBRARY_CACHE_KEY, response.data))
+      .catch(() => {})
+  }, [importsCompleted])
 
   const toggleCollapse = () => {
     setIsCollapsed(!isCollapsed)
@@ -62,6 +86,43 @@ function Sidebar() {
           )
         })}
       </nav>
+
+      <div className="sidebar-playlists">
+        {!isCollapsed && (
+          <Link to="/playlists" className="sidebar-section-title">
+            Плейлисты
+          </Link>
+        )}
+        <div className="sidebar-playlists-list">
+          {playlists.map((playlist) => {
+            const path = `/playlists/${playlist.id}`
+            return (
+              <Link
+                key={playlist.id}
+                to={path}
+                className={`sidebar-playlist${location.pathname === path ? ' active' : ''}`}
+                title={isCollapsed ? playlist.name : undefined}
+                {...intentPrefetchHandlers(() => prefetchPlaylist(playlist.id))}
+              >
+                <img
+                  src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                  alt=""
+                  className="sidebar-playlist-cover"
+                  loading="lazy"
+                  decoding="async"
+                  onError={handleCoverError}
+                />
+                {!isCollapsed && (
+                  <div className="sidebar-playlist-text">
+                    <div className="sidebar-playlist-name">{playlist.name}</div>
+                    <div className="sidebar-playlist-meta">{playlist.track_count ?? 0} треков</div>
+                  </div>
+                )}
+              </Link>
+            )
+          })}
+        </div>
+      </div>
 
       {/* Связь с разработчиком — раздел настроек; здесь ссылка на виду, чтобы
           не искать её в меню. */}

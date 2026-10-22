@@ -10,6 +10,9 @@ import api from './api'
 // встречать следующего.
 const entries = new Map()
 const inflight = new Map()
+// Подписчики на запись ключа: место вне страницы (сайдбар) следует за тем,
+// что страница положила в кэш, не перезапрашивая сеть.
+const listeners = new Map()
 
 // Верхняя граница, чтобы долгая сессия с сотней открытых артистов не копила
 // мегабайты: вытесняем самые старые записи.
@@ -32,6 +35,14 @@ export function writeCache(key, data) {
   while (entries.size > MAX_ENTRIES) {
     entries.delete(entries.keys().next().value)
   }
+  listeners.get(key)?.forEach((fn) => fn(data))
+}
+
+// fn(data) — на каждую запись ключа. Возвращает отписку.
+export function subscribeCache(key, fn) {
+  if (!listeners.has(key)) listeners.set(key, new Set())
+  listeners.get(key).add(fn)
+  return () => listeners.get(key)?.delete(fn)
 }
 
 // Правка записи без продления её свежести: лайк или сохранение на странице

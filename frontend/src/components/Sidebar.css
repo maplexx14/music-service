@@ -97,7 +97,6 @@
 }
 
 .sidebar-nav {
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -126,6 +125,97 @@
 .nav-item.active {
   color: var(--text-primary);
   background-color: var(--surface-1);
+}
+
+/* Плейлисты занимают место между вкладками и низом и прокручиваются сами:
+   длинная медиатека не выталкивает профиль за экран. */
+.sidebar-playlists {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-section-title {
+  padding: 0 16px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-section-title:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-playlists-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-playlists-list::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar-playlist {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-secondary);
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-playlist:hover,
+.sidebar-playlist.active {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+.sidebar-playlist-cover {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background-color: var(--surface-4);
+  outline: 1px solid rgba(255, 255, 255, 0.06);
+  outline-offset: -1px;
+}
+
+.sidebar-playlist-text {
+  min-width: 0;
+}
+
+.sidebar-playlist-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-playlist-meta {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sidebar.collapsed .sidebar-playlist {
+  justify-content: center;
+  padding: 4px;
 }
 
 .nav-item-contact {
