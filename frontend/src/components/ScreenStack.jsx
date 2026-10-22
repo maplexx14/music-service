@@ -34,8 +34,12 @@ import {
 //   прежней прокруткой. Глубже стек не держим — память. После «Назад»
 //   следующий нижний экран досоздаётся в простое, а не в коммите возврата.
 //   Смена query на том же экране (REPLACE) индекс не меняет — экран тот же.
-//   Исключение — настройки: меню и разделы — один экран на все записи, как
-//   и один маршрут в App.jsx, иначе несохранённые предпочтения терялись бы.
+//   Настройки — как все: меню и раздел — разные записи, а значит и экраны.
+//   Раньше это был один экран на все записи, и свайп «Назад» из раздела
+//   тянул его над пустотой, а после отпускания тот же экран перерисовывался
+//   меню — выглядело как перезагрузка. Чужие правки предпочтений нижний
+//   экран не затирает: автосохранение есть только у раздела, где их правят
+//   (см. editsPrefs в pages/Settings.jsx).
 //
 // У каждого экрана свой контейнер прокрутки (.screen-scroll), поэтому скрытые
 // вкладки сохраняют позицию сами. Скрыты они через visibility: раскладка
@@ -43,8 +47,7 @@ import {
 
 export const tabScreenId = (path) => `tab:${path}`
 // Слот вложенного экрана для записи истории idx с локацией location.
-export const detailScreenId = (idx, location) =>
-  location?.pathname.startsWith('/settings') ? 'detail:settings' : `detail:${idx}`
+export const detailScreenId = (idx) => `detail:${idx}`
 const isDetailId = (id) => id.startsWith('detail:')
 
 // Позиции прокрутки вложенного экрана по ключу записи истории: «Назад»
@@ -208,9 +211,9 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
   }
 
   const idx = entryIndexOf(location.key)
-  const currentId = currentIsTab ? null : detailScreenId(idx, location)
+  const currentId = currentIsTab ? null : detailScreenId(idx)
   const below = entryAt(idx - 1)
-  const belowId = !currentIsTab && below && !isTabRoot(below.pathname) ? detailScreenId(idx - 1, below) : null
+  const belowId = !currentIsTab && below && !isTabRoot(below.pathname) ? detailScreenId(idx - 1) : null
   const belowSeparate = belowId && belowId !== currentId
   {
     const details = detailsRef.current

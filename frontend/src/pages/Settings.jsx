@@ -186,6 +186,25 @@ function Settings() {
     }
   }, [user])
 
+  // Правил ли предпочтения этот экран сам. Автосохранение — только у такого:
+  // на телефоне меню настроек остаётся смонтированным под разделом со своей
+  // копией предпочтений, снятой при открытии. Без флага после сохранения
+  // раздела копия меню расходилась с профилем, и меню «досохраняло» её —
+  // старым значением поверх только что выбранного.
+  const prefsEdited = useRef(false)
+  const editPrefs = (update) => {
+    prefsEdited.current = true
+    setPrefs(update)
+  }
+  const editDiscovery = (value) => {
+    prefsEdited.current = true
+    setDiscovery(value)
+  }
+  const editTuning = (update) => {
+    prefsEdited.current = true
+    setTuning(update)
+  }
+
   // Раскладка: на компьютере меню слева и раздел справа (без раздела в URL —
   // первый); на телефоне /settings — только меню, раздел — отдельный экран.
   const { section: sectionParam } = useParams()
@@ -196,8 +215,9 @@ function Settings() {
   const requested = sections.find((item) => item.id === sectionParam)
   const active = requested ?? (isMobile ? null : sections[0])
 
-  // Предпочтения живут здесь, а не в разделе: маршрут один (/settings/:section?),
-  // компонент при переходах между меню и разделами не размонтируется.
+  // Предпочтения живут здесь, а не в разделе: маршрут один (/settings/:section?).
+  // На компьютере разделы переключаются в этом же экране; на телефоне меню и
+  // раздел — разные экраны стека, оба смонтированы (см. ScreenStack).
   const prefsDirty =
     !!user &&
     (!sameList(prefs.genres, user.preferred_genres || []) ||
@@ -243,7 +263,7 @@ function Settings() {
   ])
 
   useEffect(() => {
-    if (!prefsDirty || lastSaved.current === prefsPayload) {
+    if (!prefsEdited.current || !prefsDirty || lastSaved.current === prefsPayload) {
       pendingSave.current = null
       return undefined
     }
@@ -484,7 +504,7 @@ function Settings() {
                   <GenreSelect
                     selected={prefs.genres}
                     detected={detected.genres}
-                    onChange={(genres) => setPrefs((prev) => ({ ...prev, genres }))}
+                    onChange={(genres) => editPrefs((prev) => ({ ...prev, genres }))}
                   />
                 </div>
               ) : (
@@ -501,7 +521,7 @@ function Settings() {
                     genres={prefs.genres}
                     suggestionLimit={48}
                     onChange={({ artists, excludedArtists }) =>
-                      setPrefs((prev) => ({ ...prev, artists, excludedArtists }))
+                      editPrefs((prev) => ({ ...prev, artists, excludedArtists }))
                     }
                   />
                 </div>
@@ -537,7 +557,7 @@ function Settings() {
                     max="100"
                     step="5"
                     value={discovery}
-                    onChange={(event) => setDiscovery(Number(event.target.value))}
+                    onChange={(event) => editDiscovery(Number(event.target.value))}
                     className="settings-balance-slider"
                     style={{ '--balance-fill': `${discovery}%` }}
                     aria-label="Приоритет новых артистов в рекомендациях"
@@ -570,7 +590,7 @@ function Settings() {
                       value={tuning[id]}
                       onChange={(event) => {
                         const value = Number(event.target.value)
-                        setTuning((prev) => ({ ...prev, [id]: value }))
+                        editTuning((prev) => ({ ...prev, [id]: value }))
                       }}
                       className="settings-balance-slider settings-tuning-slider"
                       aria-label={label}
@@ -588,7 +608,7 @@ function Settings() {
                     type="button"
                     className="btn btn--ghost"
                     disabled={TUNING_KNOBS.every(({ id }) => tuning[id] === TUNING_DEFAULT)}
-                    onClick={() => setTuning(Object.fromEntries(
+                    onClick={() => editTuning(Object.fromEntries(
                       TUNING_KNOBS.map(({ id }) => [id, TUNING_DEFAULT]),
                     ))}
                   >

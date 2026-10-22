@@ -203,7 +203,7 @@ function Layout({ renderRoutes }) {
     const below = canGoBack() ? entryAt(entryIdx - 1) : null
     backPath = canGoBack() ? below?.pathname : tabOf(location.pathname)
     if (backPath && isTabRoot(backPath)) backTarget = tabScreenId(backPath)
-    else if (below) backTarget = detailScreenId(entryIdx - 1, below)
+    else if (below) backTarget = detailScreenId(entryIdx - 1)
   }
   // Подсветка меню переезжает в момент отпускания пальца: иначе она ждала бы
   // доезда экранов и коммита роутера и отставала от свайпа.
