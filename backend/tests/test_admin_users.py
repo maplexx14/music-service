@@ -9,7 +9,7 @@
 
 from datetime import datetime, timedelta
 
-from app.models import Track, User, user_track_plays
+from app.models import Playlist, Track, User, user_track_plays
 
 from tests.conftest import auth_headers, create_user
 
@@ -213,6 +213,34 @@ def test_now_playing_visible_to_admin(client, db):
     client.delete("/api/users/me/now-playing", headers=auth_headers(client, "listener"))
     states = client.get("/api/users/admin/now-playing", headers=admin_headers).json()["now_playing"]
     assert str(listener.id) not in states
+
+
+def test_now_playing_carries_where_the_queue_was_started(client, db):
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+    other = create_user(db, "other")
+    own = Playlist(name="Ночная", owner_id=listener.id, is_public=False)
+    private = Playlist(name="Секрет", owner_id=other.id, is_public=False)
+    db.add_all([own, private])
+    db.commit()
+
+    def play(context):
+        resp = client.put(
+            "/api/users/me/now-playing",
+            json={"title": "Song", "duration": 200, "is_playing": True, "context": context},
+            headers=auth_headers(client, "listener"),
+        )
+        assert resp.status_code == 200, resp.text
+        states = client.get(
+            "/api/users/admin/now-playing", headers=auth_headers(client, "admin")
+        ).json()["now_playing"]
+        return states[str(listener.id)]["context"]
+
+    assert play({"kind": None, "path": f"/playlists/{own.id}"})["title"] == "Ночная"
+    # Чужой приватный плейлист по id не раскрываем.
+    assert play({"kind": None, "path": f"/playlists/{private.id}"})["title"] is None
+    assert play({"kind": "flow", "path": "/search"})["kind"] == "flow"
+    assert play(None) is None
 
 
 def test_activity_visible_to_admin(client, db):

@@ -91,6 +91,7 @@ function snapshot() {
     currentShuffleIndex: state.isShuffle ? shuffledOrder.indexOf(currentIndex) : -1,
     isRepeatOne: state.isRepeatOne,
     source: state.source,
+    playContext: state.playContext,
     flowActive: state.flowActive,
     // Пейджер считает смещение по длине очереди — после обрезки оно неверное.
     queuePager: trimmed ? null : state.queuePager,
@@ -247,6 +248,7 @@ function applySnapshot(data) {
       currentShuffleIndex: data.isShuffle ? data.currentShuffleIndex : -1,
       isRepeatOne: Boolean(data.isRepeatOne),
       source: data.source ?? null,
+      playContext: data.playContext ?? null,
       flowActive: Boolean(data.flowActive),
       queuePager: data.queuePager ?? null,
       isPlaying: false,

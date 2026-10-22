@@ -295,6 +295,16 @@ const loadVolume = () => {
   }
 }
 
+// Экран, с которого запустили очередь: play* зовут только страницы, и в момент
+// нажатия адрес — это экран под пальцем.
+function capturePlayContext(source, track) {
+  return {
+    kind: source || null,
+    path: typeof window !== 'undefined' ? window.location.pathname : null,
+    title: source === 'album' ? track?.album || null : null,
+  }
+}
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -303,6 +313,11 @@ const usePlayerStore = create((set, get) => ({
   currentShuffleIndex: -1,
   isPlaying: false,
   source: null,
+  // Откуда запущена очередь — для статуса в админке («в волне», «из плейлиста»).
+  // kind — тот же source, path — экран, где нажали play (ставится в playTrack/
+  // playPlaylist; переходы по очереди его не трогают), title — имя, если оно
+  // есть под рукой (альбом).
+  playContext: null,
   volume: loadVolume(),
   currentTime: 0,
   duration: 0,
@@ -708,6 +723,7 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: isShuffle ? shuffleIndex : -1,
       isPlaying: true,
       source,
+      playContext: capturePlayContext(source, track),
       flowActive: source === 'flow',
       seekRequest: null,
       // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
@@ -952,6 +968,7 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: isShuffle ? idx : -1,
       isPlaying: true,
       source,
+      playContext: capturePlayContext(source, tracks[actualIndex]),
       flowActive: source === 'flow',
       seekRequest: null,
       // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).

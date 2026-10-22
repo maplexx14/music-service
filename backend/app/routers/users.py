@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import json
 import logging
+import re
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
-from app.models import User, Track, UserPlayerState, user_track_plays
+from app.models import Playlist, User, Track, UserPlayerState, user_track_plays
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption, ArtistCard
 from app import artist_cards
 from app import lastfm_genres
@@ -564,6 +565,33 @@ LAST_HEARD_TTL = 30 * 24 * 3600
 _LAST_HEARD_PREFIX = "users:last_heard:"
 
 
+class PlayContextPayload(BaseModel):
+    """Откуда запущена очередь: kind — источник плеера (flow, album, artist,
+    wave, external), path — экран, где нажали play, title — имя, если клиент
+    его знает (альбом)."""
+    kind: Optional[str] = Field(None, max_length=40)
+    path: Optional[str] = Field(None, max_length=300)
+    title: Optional[str] = Field(None, max_length=300)
+
+
+_PLAYLIST_PATH = re.compile(r"^/playlists/(\d+)$")
+
+
+def _play_context(db: Session, user_id: int, context: Optional[PlayContextPayload]) -> Optional[dict]:
+    """Контекст для админки; имя плейлиста клиент не шлёт — берём из БД.
+    Только свой или публичный: чужой приватный плейлист по id не раскрываем."""
+    if context is None:
+        return None
+    result = context.model_dump()
+    match = _PLAYLIST_PATH.match(context.path or "")
+    if match and not result.get("title"):
+        playlist = db.get(Playlist, int(match.group(1)))
+        if playlist is not None and (playlist.owner_id == user_id or playlist.is_public):
+            result["title"] = playlist.name
+            result["liked"] = bool(playlist.is_liked)
+    return result
+
+
 class NowPlayingPayload(BaseModel):
     # Внешние треки (ytmusic/soundcloud) ещё не в БД, поэтому id — строка,
     # а название/артист/обложка приходят от клиента, а не из Track.
@@ -575,6 +603,7 @@ class NowPlayingPayload(BaseModel):
     position: float = Field(0, ge=0)
     duration: float = Field(0, ge=0)
     is_playing: bool = True
+    context: Optional[PlayContextPayload] = None
 
 
 def _now_playing_ttl(payload: NowPlayingPayload) -> int:
@@ -590,9 +619,11 @@ def _now_playing_ttl(payload: NowPlayingPayload) -> int:
 @router.put("/me/now-playing")
 def update_now_playing(
     payload: NowPlayingPayload,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     state = payload.model_dump()
+    state["context"] = _play_context(db, current_user.id, payload.context)
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_cache(f"{_NOW_PLAYING_PREFIX}{current_user.id}", state, expire=_now_playing_ttl(payload))
     if payload.is_playing:

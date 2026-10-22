@@ -75,7 +75,35 @@ function livePosition(state) {
   return state.duration ? Math.min(position, state.duration) : position
 }
 
+// Откуда запущена очередь (playerStore.playContext, имя плейлиста — с бэкенда).
+function decodePathPart(part) {
+  try {
+    return decodeURIComponent(part)
+  } catch {
+    return part
+  }
+}
+
+function playContextLabel(context) {
+  if (!context) return null
+  const { kind, path = '', title } = context
+  if (kind === 'flow') return 'в волне'
+  if (path === '/liked' || context.liked) return 'из «Понравившихся»'
+  if (path.startsWith('/playlists/')) return title ? `из плейлиста «${title}»` : 'из плейлиста'
+  if (kind === 'album' || path.startsWith('/albums/')) return title ? `с альбома «${title}»` : 'с альбома'
+  const artist = /^\/artists\/([^/]+)/.exec(path)
+  if (artist) return `у артиста «${decodePathPart(artist[1])}»`
+  if (path.startsWith('/search')) return 'из поиска'
+  if (path.startsWith('/external/')) return 'из плейлиста SoundCloud'
+  if (path === '/') return kind === 'wave' ? 'из рекомендаций на главной' : 'с главной'
+  if (path.startsWith('/track/')) return 'со страницы трека'
+  if (path.startsWith('/recap')) return 'из итогов месяца'
+  if (path.startsWith('/upload')) return 'со страницы загрузки'
+  return path ? `с экрана ${path}` : null
+}
+
 function NowPlaying({ state }) {
+  const where = playContextLabel(state.context)
   return (
     <div className="admin-now-playing">
       <img
@@ -92,6 +120,7 @@ function NowPlaying({ state }) {
         </div>
         <div className="admin-now-playing-meta">
           {state.is_playing ? 'Слушает сейчас' : 'На паузе'}
+          {where ? ` ${where}` : ''}
           {' · '}
           {formatClock(livePosition(state))}{state.duration ? ` / ${formatClock(state.duration)}` : ''}
           {state.source ? ` · ${state.source}` : ''}

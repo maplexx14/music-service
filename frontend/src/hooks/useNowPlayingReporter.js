@@ -75,6 +75,7 @@ export default function useNowPlayingReporter(enabled) {
             artist: track.artist ?? null,
             cover_url: track.cover_url ?? null,
             source: track.source ?? null,
+            context: state.playContext ?? null,
             position: last.position,
             duration: last.duration,
             is_playing: last.playing,
