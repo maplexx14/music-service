@@ -77,6 +77,25 @@ class RegistrationClaimResponse(BaseModel):
     device_token: Optional[str] = None
 
 
+class SessionHandoffResponse(BaseModel):
+    """Одноразовый токен для приложения на экране «Домой» (см. session_handoff)."""
+    token: str
+    expires_in: int
+
+
+class SessionHandoffClaimRequest(BaseModel):
+    # Пусто — токен придёт cookie, если iOS скопировала её при установке.
+    token: Optional[str] = Field(None, max_length=200)
+
+
+class SessionHandoffClaimResponse(BaseModel):
+    """signed_in=False — передавать нечего, вход как обычно."""
+    signed_in: bool = False
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
+    device_token: Optional[str] = None
+
+
 class FlowTuningUpdate(BaseModel):
     liked: float = Field(0.5, ge=0.0, le=1.0)
     depth: float = Field(0.5, ge=0.0, le=1.0)

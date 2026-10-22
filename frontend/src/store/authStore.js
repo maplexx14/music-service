@@ -4,6 +4,7 @@ import { useSearchStore } from './searchStore'
 import { clearPageCache } from '../services/pageCache'
 import { invalidateFlowPreload } from './playerStore'
 import { dropLocalPushSubscription } from '../services/push'
+import { claimHandoff, shouldClaimHandoff } from '../services/sessionHandoff'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -46,6 +47,9 @@ const useAuthStore = create((set, get) => ({
       user: null,
       token: null,
       isAuthenticated: false,
+      // Приложение на экране «Домой» пробует войти сессией Safari
+      // (services/sessionHandoff) — пока идёт, страницу входа не показываем.
+      handoffPending: false,
       
       login: async (username, password) => {
         try {
@@ -522,6 +526,19 @@ const useAuthStore = create((set, get) => ({
 
       logout: () => {
         dropLocalPushSubscription()
+        // Токен для приложения на экране «Домой» (services/sessionHandoff)
+        // не должен пережить выход. Заголовок явно: ниже он снимается раньше,
+        // чем запрос успеет уйти.
+        const { token } = get()
+        if (token) {
+          api
+            .delete('/auth/handoff', {
+              headers: { Authorization: `Bearer ${token}` },
+              skipErrorToast: true,
+              skipAuthRedirect: true,
+            })
+            .catch(() => {})
+        }
         setApiAuthToken(null)
         set({
           user: null,
@@ -619,6 +636,18 @@ if (typeof window !== 'undefined') {
       // Verify token is still valid
       useAuthStore.getState().checkAuth()
     }
+  }
+
+  if (shouldClaimHandoff(Boolean(stored?.token))) {
+    useAuthStore.setState({ handoffPending: true })
+    claimHandoff()
+      .then(async (data) => {
+        if (!data) return
+        if (data.device_token) setDeviceToken(data.device_token)
+        await useAuthStore.getState().finalizeLogin(data.access_token)
+      })
+      .catch(() => {})
+      .finally(() => useAuthStore.setState({ handoffPending: false }))
   }
 }
 

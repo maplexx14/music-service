@@ -2,7 +2,7 @@ from datetime import timedelta
 from typing import List
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from app.rate_limit import limiter
 from sqlalchemy import func
@@ -30,6 +30,9 @@ from app.schemas import (
     RegistrationClaimRequest,
     RegistrationClaimResponse,
     RevokeAllDevicesResponse,
+    SessionHandoffClaimRequest,
+    SessionHandoffClaimResponse,
+    SessionHandoffResponse,
     Token,
     TrustedDeviceResponse,
     TwoFactorDisableRequest,
@@ -92,6 +95,14 @@ from app.password_reset import (
     consume_reset_token,
     issue_reset_token,
     send_password_reset_email,
+)
+from app.session_handoff import (
+    HANDOFF_COOKIE,
+    HANDOFF_TTL_SEC,
+    HandoffUnavailable,
+    consume_handoff,
+    issue_handoff,
+    revoke_handoff,
 )
 from app.trusted_devices import (
     DEVICE_TOKEN_HEADER,
@@ -331,6 +342,81 @@ def claim_registration(
     return RegistrationClaimResponse(verified=True, **_issue_access_token(user, device_token))
 
 
+# Путь cookie — только эндпоинт обмена: остальным запросам Safari она не нужна.
+_HANDOFF_COOKIE_PATH = "/api/auth/handoff"
+
+
+@router.post("/handoff", response_model=SessionHandoffResponse)
+@limiter.limit("30/minute")
+def issue_session_handoff(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Токен для приложения на экране «Домой» (см. app.session_handoff).
+    Клиент берёт его только в Safari на iOS, вне установленного приложения."""
+    try:
+        token = issue_handoff(current_user.id)
+    except HandoffUnavailable:
+        raise HTTPException(status_code=503, detail="Session handoff temporarily unavailable")
+    response.set_cookie(
+        HANDOFF_COOKIE,
+        token,
+        max_age=HANDOFF_TTL_SEC,
+        path=_HANDOFF_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    return SessionHandoffResponse(token=token, expires_in=HANDOFF_TTL_SEC)
+
+
+@router.delete("/handoff", response_model=MessageResponse)
+@limiter.limit("30/minute")
+def revoke_session_handoff(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Выход в Safari: невостребованный токен больше не впускает приложение."""
+    revoke_handoff(current_user.id)
+    response.delete_cookie(HANDOFF_COOKIE, path=_HANDOFF_COOKIE_PATH, secure=True, httponly=True, samesite="lax")
+    return MessageResponse(message="ok")
+
+
+@router.post("/handoff/claim", response_model=SessionHandoffClaimResponse)
+@limiter.limit("30/minute")
+def claim_session_handoff(
+    payload: SessionHandoffClaimRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """Вход приложения на экране «Домой» по токену из start_url или cookie.
+
+    Токен выдан уже вошедшей сессии Safari, поэтому устройство запоминается
+    без кода — это та же сессия на том же телефоне."""
+    token = payload.token or request.cookies.get(HANDOFF_COOKIE)
+    # Погашен ли токен, cookie больше не нужна в любом случае.
+    response.delete_cookie(HANDOFF_COOKIE, path=_HANDOFF_COOKIE_PATH, secure=True, httponly=True, samesite="lax")
+    if not token:
+        return SessionHandoffClaimResponse()
+    try:
+        user_id = consume_handoff(token)
+    except HandoffUnavailable:
+        return SessionHandoffClaimResponse()
+    user = db.get(User, user_id) if user_id is not None else None
+    if user is None or not user.is_active:
+        return SessionHandoffClaimResponse()
+    device_token = remember_device(
+        db,
+        user.id,
+        request.headers.get("user-agent"),
+        request.headers.get(DEVICE_TOKEN_HEADER),
+    )
+    return SessionHandoffClaimResponse(signed_in=True, **_issue_access_token(user, device_token))
+
+
 def _reject_pending_login(login: str, password: str) -> None:
     """Вход в ещё не подтверждённую регистрацию — 403 «подтвердите почту», а
     не 401 «неверный пароль»: с ним человек решал, что ошибся паролем, и
@@ -461,6 +547,7 @@ def reset_password(
     user.hashed_password = get_password_hash(payload.new_password)
     revoke_all_devices(db, user.id)
     db.commit()
+    revoke_handoff(user.id)
     return MessageResponse(message="Пароль изменён")
 
 
@@ -992,4 +1079,6 @@ def revoke_other_devices(
     revoked = revoke_all_devices(
         db, current_user.id, keep_token=request.headers.get(DEVICE_TOKEN_HEADER)
     )
+    # Невостребованный токен для приложения на экране «Домой» — тоже доступ.
+    revoke_handoff(current_user.id)
     return RevokeAllDevicesResponse(revoked=revoked)

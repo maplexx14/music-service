@@ -128,3 +128,81 @@ def test_onboarding_save_queues_first_wave_precompute(client, db):
     assert meta["limit"] == flow_router._PC_START_LIMIT
     assert meta["base_url"].startswith("http")
     assert isinstance(meta["hour_offset"], int)
+
+
+# --- Сессия из Safari в приложение на экране «Домой» (app.session_handoff) ---
+
+
+def _issue_handoff(client):
+    resp = client.post("/api/auth/handoff", headers=auth_headers(client, "bob"))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
+
+
+def _claim_handoff(client, token=None, cookie=None):
+    kwargs = {"cookies": {"bolt_handoff": cookie}} if cookie else {}
+    resp = client.post("/api/auth/handoff/claim", json={"token": token}, **kwargs)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_home_screen_app_signs_in_with_safari_handoff(client, db):
+    create_user(db, "bob")
+    token = _issue_handoff(client)
+
+    body = _claim_handoff(client, token)
+    assert body["signed_in"] is True and body["access_token"] and body["device_token"]
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+    assert me.status_code == 200 and me.json()["username"] == "bob"
+    # Приложение запомнено: следующий вход оттуда — без кода.
+    assert _login(client, body["device_token"])["mfa_required"] is False
+    # Токен одноразовый.
+    assert _claim_handoff(client, token)["signed_in"] is False
+
+
+def test_handoff_token_from_copied_cookie(client, db):
+    create_user(db, "bob")
+    token = _issue_handoff(client)
+    assert _claim_handoff(client, cookie=token)["signed_in"] is True
+
+
+def test_handoff_without_token_does_nothing(client, db):
+    create_user(db, "bob")
+    assert _claim_handoff(client)["signed_in"] is False
+    assert _claim_handoff(client, "not-a-token")["signed_in"] is False
+
+
+def test_new_handoff_revokes_previous_one(client, db):
+    create_user(db, "bob")
+    first = _issue_handoff(client)
+    second = _issue_handoff(client)
+    assert _claim_handoff(client, first)["signed_in"] is False
+    assert _claim_handoff(client, second)["signed_in"] is True
+
+
+def test_handoff_needs_signed_in_session(client, db):
+    assert client.post("/api/auth/handoff").status_code == 401
+
+
+def test_handoff_of_deactivated_user_does_not_sign_in(client, db):
+    user = create_user(db, "bob")
+    token = _issue_handoff(client)
+    user.is_active = False
+    db.commit()
+    assert _claim_handoff(client, token)["signed_in"] is False
+
+
+def test_logout_revokes_handoff(client, db):
+    create_user(db, "bob")
+    token = _issue_handoff(client)
+    resp = client.delete("/api/auth/handoff", headers=auth_headers(client, "bob"))
+    assert resp.status_code == 200, resp.text
+    assert _claim_handoff(client, token)["signed_in"] is False
+
+
+def test_forgetting_all_devices_revokes_handoff(client, db):
+    create_user(db, "bob")
+    token = _issue_handoff(client)
+    resp = client.post("/api/auth/devices/revoke-all", headers=auth_headers(client, "bob"))
+    assert resp.status_code == 200, resp.text
+    assert _claim_handoff(client, token)["signed_in"] is False

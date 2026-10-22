@@ -86,8 +86,11 @@ def _no_recent_verify_window(monkeypatch):
 
     monkeypatch.setattr(trusted_devices, "RECENT_VERIFY_WINDOW_SEC", 0)
     clear_pattern("auth:verified_ip:*")
+    # Токены передачи сессии в PWA (session_handoff) тоже привязаны к id юзера.
+    clear_pattern("auth:handoff*")
     yield
     clear_pattern("auth:verified_ip:*")
+    clear_pattern("auth:handoff*")
 
 
 @pytest.fixture(autouse=True)

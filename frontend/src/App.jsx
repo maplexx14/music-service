@@ -9,6 +9,7 @@ import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted, safeNextPath } from './services/navigation'
 import { lazyWithReload } from './services/staleBuild'
 import { needsOnboarding } from './services/onboarding'
+import { offerHandoff } from './services/sessionHandoff'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
 const appHistory = createAppHistory()
@@ -87,6 +88,8 @@ function LoginRedirect() {
 // пересоздавал бы Layout вместе с плеером.
 function GuestRoutes() {
   const location = useLocation()
+  const handoffPending = useAuthStore((state) => state.handoffPending)
+  if (handoffPending) return <Spinner page />
   if (!matchPath('/track/:id', location.pathname)) return <LoginRedirect />
   return (
     <Suspense fallback={<Spinner page />}>
@@ -166,6 +169,10 @@ function App() {
     }
   }, [isAuthenticated])
   useNowPlayingReporter(isAuthenticated)
+  // Safari на iOS: готовим вход для приложения на экране «Домой».
+  useEffect(() => {
+    if (isAuthenticated) offerHandoff()
+  }, [isAuthenticated])
 
   // Маршруты одного экрана стека (components/ScreenStack.jsx): каждый экран
   // рендерит свою локацию — скрытая вкладка остаётся на своём пути. Suspense
