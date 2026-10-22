@@ -55,6 +55,10 @@ router = APIRouter()
 # (users.update_preferences) — лимит один на оба пути записи.
 _MAX_PREFERRED_ARTISTS = 50
 
+# С какой длины ключа имени (translit_key) строку исполнителя можно опознать
+# по словам, а не только по точному участнику — см. _library_spellings.
+_MIN_WORD_MATCH_LEN = 3
+
 
 def _like_pattern(token: str) -> str:
     """Экранирует спецсимволы LIKE: '%' и '_' из имени — это литералы."""
@@ -72,18 +76,26 @@ def _library_spellings(db: Session, name: str) -> Tuple[List[str], List[str]]:
 
     Разделение на две группы нужно порядку выдачи: сольный трек стоит выше
     совместного, как и было при точном сравнении имён.
+
+    Строку, которую разделители не разбирают («Земфира и друзья»), опознаём по
+    словам: каждое слово имени — слово строки. Не подстрокой: ilike по «ST»
+    собирал на страницу System Of A Down, Disturbed и Rammstein. Имени короче
+    трёх букв и слов мало: «ST» по словам совпал бы со «St. Vincent», поэтому
+    такие имена берём только по точному совпадению участника.
     """
     key = translit_key(name)
     if not key:
         return [], []
+    by_words = len(key) >= _MIN_WORD_MATCH_LEN
 
     solo: List[str] = []
     collab: List[str] = []
     for (value,) in db.query(Track.artist).distinct():
         parts = split_artists(value or "")
-        if not any(translit_key(p) == key for p in parts):
-            continue
-        (solo if len(parts) == 1 else collab).append(value)
+        if any(translit_key(p) == key for p in parts):
+            (solo if len(parts) == 1 else collab).append(value)
+        elif by_words and query_names_artist(name, value or ""):
+            collab.append(value)
     return solo, collab
 
 
@@ -94,9 +106,8 @@ def _local_tracks(db: Session, name: str, limit: int) -> List[Track]:
     записан склеенной строкой («A, B», «A feat. B»), и на странице B такой трек
     тоже должен быть.
 
-    Три условия отбора, а не одно: первые два — известные написания имени (см.
-    _library_spellings), третье — вхождение подстрокой, которое ловит то, что
-    разделителями не разбирается («Земфира и друзья»).
+    Отбор только по известным написаниям имени (см. _library_spellings): там
+    же опознаётся и то, что разделителями не разбирается.
     """
     solo, collab = _library_spellings(db, name)
 
@@ -107,7 +118,6 @@ def _local_tracks(db: Session, name: str, limit: int) -> List[Track]:
             or_(
                 exact,
                 Track.artist.in_(collab) if collab else false(),
-                Track.artist.ilike(_like_pattern(name), escape="\\"),
             )
         )
         .order_by(

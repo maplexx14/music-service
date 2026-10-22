@@ -236,6 +236,34 @@ class TestArtistEndpoint:
         # Трек записан склеенной строкой — на странице Jay-Z он тоже должен быть.
         assert [t["title"] for t in data["tracks"]] == ["Numb/Encore"]
 
+    def test_short_name_does_not_collect_substring_matches(self, client, db):
+        # Регрессия «ST»: ilike '%st%' собирал на страницу чужие треки.
+        from app.models import Track
+
+        for title, artist in [
+            ("Плохая", "ST"),
+            ("Вместе", "ST, Guf"),
+            ("Toxicity", "System Of A Down"),
+            ("Shape of My Heart", "Sting"),
+            ("Los Ageless", "St. Vincent"),
+        ]:
+            db.add(Track(title=title, artist=artist, duration=200, source="local"))
+        db.commit()
+
+        data = client.get("/api/artists", params={"name": "ST"}).json()
+        assert [t["title"] for t in data["tracks"]] == ["Плохая", "Вместе"]
+
+    def test_finds_artist_in_string_without_separators(self, client, db):
+        from app.models import Track
+
+        db.add(Track(title="Хочешь", artist="Земфира и друзья", duration=200, source="local"))
+        db.add(Track(title="Чужой", artist="Земфирыч", duration=200, source="local"))
+        db.commit()
+
+        data = client.get("/api/artists", params={"name": "Земфира"}).json()
+        # «и» не разделитель, но имя — целое слово строки; подстрока «Земфирыч» — нет.
+        assert [t["title"] for t in data["tracks"]] == ["Хочешь"]
+
 
 class TestArtistPageCensorship:
     """Цензура на странице исполнителя — регрессия «CUPSIZE — Клей».
