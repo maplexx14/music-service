@@ -30,7 +30,12 @@ function VerifyEmail() {
       if (cancelled) return
       if (result.success) {
         setStatus('done')
-        setTimeout(() => navigate(result.authenticated ? '/onboarding' : '/login?verified=1'), 600)
+        // replace: системное «назад» с онбординга не должно возвращать на
+        // одноразовую ссылку — повторная проверка токена кончается ошибкой.
+        setTimeout(
+          () => navigate(result.authenticated ? '/onboarding' : '/login?verified=1', { replace: true }),
+          600,
+        )
       } else {
         setStatus('error')
         setError(result.error)

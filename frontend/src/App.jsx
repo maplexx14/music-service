@@ -65,6 +65,15 @@ function AfterLoginRedirect() {
   return <Navigate to={safeNextPath(searchParams)} replace />
 }
 
+// Новичка — на онбординг. Решаем на каждом переходе, а не в рендере App:
+// отметка «показан» живёт в localStorage, а не в сторе, App после неё не
+// перерисовывается, и вычисленный заранее <Navigate> возвращал вышедшего с
+// онбординга без выбора («Пропустить», системное «назад») снова на шаг 1.
+function OnboardingGate({ user, children }) {
+  useLocation()
+  return needsOnboarding(user) ? <Navigate to="/onboarding" replace /> : children
+}
+
 // Незалогиненного — на вход, запомнив адрес: ссылка на трек из «Поделиться»
 // после входа должна открыть трек, а не главную.
 function LoginRedirect() {
@@ -255,11 +264,9 @@ function App() {
           path="/*"
           element={
             isAuthenticated ? (
-              needsOnboarding(user) ? (
-                <Navigate to="/onboarding" replace />
-              ) : (
+              <OnboardingGate user={user}>
                 <Layout renderRoutes={renderScreenRoutes} />
-              )
+              </OnboardingGate>
             ) : (
               <GuestRoutes />
             )
