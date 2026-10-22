@@ -14,6 +14,7 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
 import { shareLink } from '../utils/shareLink'
 import { useCoverColors } from '../hooks/useCoverColors'
+import { useScreen } from '../hooks/useScreen'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
 // Шапка — та же hero-карточка в тон обложки, что у исполнителя.
@@ -25,6 +26,11 @@ const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 // интерфейс страницы полностью повторяет PlaylistDetail.
 function LikedSongs() {
   const navigate = useNavigate()
+  // На мобиле вкладка монтируется скрытой в фоне (ScreenStack warmTabs) —
+  // упавший запрос не должен уводить юзера с экрана, на котором он стоит.
+  const { active } = useScreen()
+  const activeRef = useRef(active)
+  activeRef.current = active
   // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
   const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
   const heroColors = useCoverColors(playlist?.cover_url) || DEFAULT_HERO_COLORS
@@ -76,6 +82,14 @@ function LikedSongs() {
     }
   }, [likedTrackIds, likedTracksLoaded])
 
+  // Скрытой вкладке запрос упал молча — повторяем, когда её открыли.
+  useEffect(() => {
+    if (active && !loading && !playlist) {
+      setLoading(true)
+      fetchPlaylist()
+    }
+  }, [active])
+
   const mountLikeConfirmedAt = useRef(likeConfirmedAt)
   useEffect(() => {
     if (likeConfirmedAt !== mountLikeConfirmedAt.current) fetchPlaylist()
@@ -109,7 +123,7 @@ function LikedSongs() {
       setTotalTracks(Number(response.headers['x-total-count']) || fresh.tracks.length)
     } catch (error) {
       console.error('Error fetching liked playlist:', error)
-      if (!peekCache(LIKED_CACHE_KEY)) navigate('/playlists')
+      if (!peekCache(LIKED_CACHE_KEY) && activeRef.current) navigate('/playlists')
     } finally {
       setLoading(false)
     }
