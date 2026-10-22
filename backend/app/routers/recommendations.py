@@ -291,7 +291,6 @@ def _varied_popular(
     keep=None,
     used: Optional[dict] = None,
     restrict_artists: Optional[set] = None,
-    excluded_artists: Optional[set] = None,
     user_id: Optional[int] = None,
     exclude_select=None,
 ) -> list:
@@ -323,13 +322,6 @@ def _varied_popular(
         q = q.filter(
             or_(func.lower(Track.artist).in_(restrict_artists), Track.source == "soundcloud")
         )
-    if excluded_artists:
-        q = q.filter(
-            or_(
-                ~func.lower(Track.artist).in_(excluded_artists),
-                Track.source == "soundcloud",
-            )
-        )
     if exclude_ids:
         q = q.filter(~Track.id.in_(exclude_ids))
     if exclude_select is not None:
@@ -343,7 +335,6 @@ def _varied_popular(
         # старт не должен подсовывать стабильно скипаемые CJK/вьетнамские хиты.
         if (
             (not restrict_artists or artist_key(effective_track_artist_title(t)[0]) in restrict_artists)
-            and (not excluded_artists or artist_key(effective_track_artist_title(t)[0]) not in excluded_artists)
             and not is_foreign_script(effective_track_artist_title(t)[1])
             and (keep is None or keep(t))
         )
@@ -376,7 +367,6 @@ def _cold_start_candidates(
     *,
     preferred_genres: list[str],
     preferred_artists: list[str],
-    excluded_artists: set[str],
     exclude_ids: set[int],
     limit: int,
     user_id: int,
@@ -398,19 +388,10 @@ def _cold_start_candidates(
     query = db.query(Track).filter(or_(*filters))
     if exclude_ids:
         query = query.filter(~Track.id.in_(exclude_ids))
-    if excluded_artists:
-        query = query.filter(
-            or_(
-                ~func.lower(Track.artist).in_(excluded_artists),
-                Track.source == "soundcloud",
-            )
-        )
     pool = query.order_by(desc(Track.play_count), Track.id).limit(max(100, limit * 30)).all()
     filtered_pool = []
     for track in pool:
         effective_key = artist_key(effective_track_artist_title(track)[0])
-        if effective_key in excluded_artists:
-            continue
         genre_key = str(track.genre or "").strip().lower()
         if (
             track.source == "soundcloud"
@@ -594,8 +575,7 @@ def _playlist_taste_artist_keys(db: Session, user: User) -> set[str]:
                 )[0]
             )
         )
-    excluded = {artist_key(name) for name in (user.excluded_artists or [])}
-    return {key for key in keys if key and key not in excluded}
+    return {key for key in keys if key}
 
 
 def _decay(ts, half_life_days: float = _TASTE_HALF_LIFE_DAYS) -> float:
@@ -1173,14 +1153,6 @@ def _compute_recommendations(
     # и получал глобально популярное, независимо от выбранного жанра.
     preferred_genres = list(current_user.preferred_genres or [])
     preferred_artists = list(current_user.preferred_artists or [])
-    excluded_artist_keys = {
-        artist_key(name)
-        for name in (current_user.excluded_artists or [])
-        if artist_key(name)
-    }
-    excluded_artist_keys -= {
-        artist_key(name) for name in preferred_artists if artist_key(name)
-    }
     has_explicit_preferences = bool(preferred_genres or preferred_artists)
 
     recommended_tracks = []
@@ -1293,8 +1265,7 @@ def _compute_recommendations(
     deep_catalog_keys = set(
         flow_router.deep_catalog_artist_keys(
             flow_router._collection_rows(db, current_user.id),
-            excluded_artist_keys,
-            preferred_artists,
+            preferred=preferred_artists,
         )
     )
     hits_anchor = deep_catalog_keys or {
@@ -1304,7 +1275,7 @@ def _compute_recommendations(
     hits_context = f"home-hits:{current_user.id}:{ranking_now:%Y%m%d%H}"
     hits_seed_artists = tuple(
         sorted(
-            (a for a in hits_anchor if a and a not in excluded_artist_keys),
+            (a for a in hits_anchor if a),
             key=lambda value: stable_jitter(hits_context, value),
             reverse=True,
         )[:_EXTERNAL_HITS_SEEDS]
@@ -1324,11 +1295,6 @@ def _compute_recommendations(
 
     # Тот же ползунок, что и в волне, без поправки на приём новых артистов.
     library_discovery = discovery_ratio(current_user)
-
-    def _is_excluded_artist(track) -> bool:
-        return (
-            artist_key(effective_track_artist_title(track)[0]) in excluded_artist_keys
-        )
 
     def _candidate_score(track, content_bonus: Optional[float] = None) -> float:
         is_external = not isinstance(getattr(track, "id", None), int)
@@ -1536,7 +1502,6 @@ def _compute_recommendations(
             )
             if curated or confident_by_weight:
                 artist_keys.append(key)
-        artist_keys = [key for key in artist_keys if key not in excluded_artist_keys]
         known_artist_keys = set(artist_keys)
 
         # Артисты, по которым у юзера есть ЛЮБОЙ положительный сигнал. Шире
@@ -1547,9 +1512,7 @@ def _compute_recommendations(
         # рекомендации всем остальным. Открытие НОВЫХ имён остаётся за
         # co-occurrence: это единственный путь, которому межюзерность нужна
         # по смыслу (см. app/cooccurrence.py).
-        scope_artist_keys = {
-            key for key in artist_positive if key not in excluded_artist_keys
-        }
+        scope_artist_keys = set(artist_positive)
 
         # Единая проверка релевантности для ВСЕХ путей выдачи (основной пул,
         # co-occurrence-соседи, добор популярным). Раньше каждый путь фильтровал
@@ -1578,11 +1541,7 @@ def _compute_recommendations(
                 prefer_cyrillic=_prefer_cyrillic,
             )
         )
-        keep_track = lambda track: (
-            artist_key(effective_track_artist_title(track)[0])
-            not in excluded_artist_keys
-            and _keep_track_base(track)
-        )
+        keep_track = _keep_track_base
         # Для добора глобально популярным — строгий вариант: там кандидат не
         # связан со вкусом ничем, поэтому нужно положительное подтверждение.
         _keep_unrelated_base = track_check(
@@ -1593,11 +1552,7 @@ def _compute_recommendations(
                 require_signal=True,
             )
         )
-        keep_unrelated = lambda track: (
-            artist_key(effective_track_artist_title(track)[0])
-            not in excluded_artist_keys
-            and _keep_unrelated_base(track)
-        )
+        keep_unrelated = _keep_unrelated_base
 
         # Кандидаты по вкусу; скипнутые треки исключаем целиком. Условия строим
         # только для непустых списков — у внешних треков жанра нет, и пустой
@@ -1837,11 +1792,8 @@ def _compute_recommendations(
 
         # Provider candidates are retrieved from the user's actual taste
         # seeds, so they are not subject to the local catalogue's artist scope.
-        # They still use the same score and hard negative/exclusion signals.
+        # They still use the same score and hard negative signals.
         for track in external_candidates:
-            artist = artist_key(effective_track_artist_title(track)[0])
-            if artist in excluded_artist_keys:
-                continue
             # Пул может прийти из кэша и быть старее последних лайков/скипов:
             # исключения применяются не только при его расчёте, но и здесь,
             # при сборке выдачи (см. _external_pool_cached).
@@ -1872,7 +1824,6 @@ def _compute_recommendations(
                 exclude_select=exclude_select,
                 keep=keep_unrelated,
                 restrict_artists=scope_artist_keys or None,
-                excluded_artists=excluded_artist_keys,
                 user_id=current_user.id,
             )
             for track in popular:
@@ -1914,10 +1865,6 @@ def _compute_recommendations(
             track
             for track in candidate_pool.values()
             if track.id not in exclude_ids
-            # Исключённый юзером артист не проходит ни одним путём: раньше
-            # акустический кандидат обходил keep_track, а вместе с ним и
-            # проверку excluded_artists.
-            and not _is_excluded_artist(track)
             and (not isinstance(track.id, int) or keep_track(track))
         ]
         # Скор одного кандидата ~0.2мс, а нужен он и сортировке, и rerank —
@@ -1956,7 +1903,6 @@ def _compute_recommendations(
             db,
             preferred_genres=preferred_genres,
             preferred_artists=preferred_artists,
-            excluded_artists=excluded_artist_keys,
             exclude_ids=skipped_track_ids | fatigued_ids,
             limit=limit,
             user_id=current_user.id,
@@ -1966,7 +1912,6 @@ def _compute_recommendations(
                 db,
                 skipped_track_ids | fatigued_ids | {t.id for t in recommended_tracks},
                 limit - len(recommended_tracks),
-                excluded_artists=excluded_artist_keys,
                 used=Counter(
                     primary_artist_key(effective_track_artist_title(t)[0])
                     for t in recommended_tracks

@@ -366,8 +366,8 @@ function ArtistSelect({
                   type="button"
                   className="pref-dismiss-detected"
                   onClick={() => excludeDetected(a)}
-                  aria-label={`Убрать ${a} из определённых артистов`}
-                  title="Не учитывать этого артиста"
+                  aria-label={`Скрыть подсказку ${a}`}
+                  title="Скрыть подсказку"
                 >
                   <X size={14} />
                 </button>

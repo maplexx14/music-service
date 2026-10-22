@@ -215,7 +215,11 @@ def get_detected_taste(
     genres = sorted(
         (g for g in counts if g in GENRE_KEYWORDS), key=lambda g: -counts[g]
     )
-    return {"genres": genres[:12], "artists": (profile.get("artists") or [])[:12]}
+    # excluded_artists — подсказки, которые юзер скрыл крестиком. Волну они
+    # не трогают (см. flow._taste_profile), только этот список.
+    hidden = {artist_key(name) for name in current_user.excluded_artists or []}
+    artists = [a for a in profile.get("artists") or [] if artist_key(a) not in hidden]
+    return {"genres": genres[:12], "artists": artists[:12]}
 
 
 @router.put("/me/preferences", response_model=UserResponse)

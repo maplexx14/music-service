@@ -208,8 +208,9 @@ class User(Base):
     # Списки строк: ключи жанров (из GENRE_KEYWORDS) и имена артистов.
     preferred_genres = Column(JSON, nullable=False, default=list, server_default="[]")
     preferred_artists = Column(JSON, nullable=False, default=list, server_default="[]")
-    # Артисты, которых пользователь убрал из автоматически определённых
-    # предпочтений. Это отдельный список: явные лайки и история не меняются.
+    # Подсказки «Определено по вашим прослушиваниям», скрытые крестиком. Только
+    # скрывают подсказку (/users/me/taste) — волну и рекомендации не трогают:
+    # артист из лайков и истории играет как прежде.
     excluded_artists = Column(JSON, nullable=False, default=list, server_default="[]")
     # Мягкий prior на открытие новых артистов. Он меняет общий score, но не
     # резервирует позиции и не отбрасывает релевантный контент по имени автора.

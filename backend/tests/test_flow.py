@@ -2089,6 +2089,36 @@ def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):
     assert "DetectedArtist" not in response.json()["artists"]
 
 
+def test_hidden_detected_artist_still_plays_in_wave(client, db):
+    """Прод 2026-10-22: крестик у подсказки «Определено по вашим
+    прослушиваниям» вычеркнул юзеру из волны артиста 8 из 11 его лайков.
+    Скрытая подсказка — не запрет: профиль волны артиста сохраняет."""
+    user = create_user(db, username="hidden-detected-user")
+    user.excluded_artists = ["DetectedArtist"]
+    track = Track(
+        title="detected track",
+        artist="DetectedArtist",
+        duration=100,
+        source="local",
+        file_path="minio://music/detected.mp3",
+    )
+    db.add(track)
+    db.commit()
+    db.execute(
+        user_track_plays.insert().values(
+            user_id=user.id,
+            track_id=track.id,
+            play_count=3,
+            last_played=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+    profile = flow_router._taste_profile(db, user.id)
+    assert "detectedartist" in {a.lower() for a in profile["artists"]}
+    assert "detectedartist" not in profile["banned_artists"]
+
+
 def test_preferences_persist_detected_artist_exclusion_and_explicit_override(client, db):
     user = create_user(db, username="excluded-preferences-user")
     headers = auth_headers(client, username="excluded-preferences-user")

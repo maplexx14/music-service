@@ -264,8 +264,7 @@ def favorite_artists(db: Session, user: User) -> List[str]:
     except Exception:  # noqa: BLE001 — без профиля обойдёмся явным выбором
         logger.exception("taste profile for push failed: user %s", user.id)
         profile = {}
-    blocked = {artist_key(a) for a in (user.excluded_artists or [])}
-    blocked |= {artist_key(a) for a in profile.get("banned_artists") or [] if isinstance(a, str)}
+    blocked = {artist_key(a) for a in profile.get("banned_artists") or [] if isinstance(a, str)}
     result: List[str] = []
     seen = set()
     for name in list(user.preferred_artists or []) + list(profile.get("artists") or []):

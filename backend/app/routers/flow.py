@@ -711,7 +711,7 @@ def collection_song_counts(collection_rows) -> dict[str, int]:
     return {artist: len(songs) for artist, songs in songs_by_artist.items()}
 
 
-def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List[str]:
+def deep_catalog_artist_keys(collection_rows, preferred=()) -> List[str]:
     """Любимые артисты: от _DEEP_CATALOG_MIN_TRACKS разных песен в коллекции.
 
     Им волна и лента отдают глубокий каталог, остальным — только хиты
@@ -724,14 +724,13 @@ def deep_catalog_artist_keys(collection_rows, excluded=(), preferred=()) -> List
     мейнстрим-фильтре ВСЕ свои треки (прод, 2026-10-10: первый по весу артист
     профиля не попал в волну ни разу).
     """
-    excluded = set(excluded)
     deep = {
         artist
         for artist, songs in collection_song_counts(collection_rows).items()
         if artist and songs >= _DEEP_CATALOG_MIN_TRACKS
     }
     deep.update(primary_artist_key(name) for name in preferred)
-    return sorted(artist for artist in deep if artist and artist not in excluded)
+    return sorted(artist for artist in deep if artist)
 
 
 def flow_rejected_artist_keys(event_rows, collection_counts=None) -> set:
@@ -1315,17 +1314,17 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # истории, и без этого поток свёлся бы к глобально популярному.
     # Явные артисты/жанры ведут себя как курированные (лайки/плейлисты) и
     # участвуют в локальной и provider-генерации с сильным весом.
+    # User.excluded_artists сюда не входит: это лишь скрытые подсказки
+    # «Определено по вашим прослушиваниям» (их фильтрует /users/me/taste), а не
+    # запрет. Прод 2026-10-22: крестик у подсказки вычеркнул юзеру из волны
+    # артиста 8 из 11 его лайков.
     pref = (
-        db.query(User.preferred_genres, User.preferred_artists, User.excluded_artists)
+        db.query(User.preferred_genres, User.preferred_artists)
         .filter(User.id == user_id)
         .first()
     )
     pref_genres = list(pref[0] or []) if pref else []
     pref_artists = list(pref[1] or []) if pref else []
-    excluded_artists = {
-        artist_key(name) for name in (list(pref[2] or []) if pref else []) if artist_key(name)
-    }
-    excluded_artists -= {artist_key(name) for name in pref_artists if artist_key(name)}
 
     for name in pref_artists:
         key = artist_key(name)
@@ -1457,7 +1456,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # из ~100 скипов мусорной волны перевесили 9 его треков в плейлисте, и
     # артист ушёл в banned_artists — пропал из волны целиком. Скипы по-прежнему
     # снижают вес (ротация) и исключают сами треки.
-    deep_keys = deep_catalog_artist_keys(collection_rows, excluded_artists, pref_artists)
+    deep_keys = deep_catalog_artist_keys(collection_rows, preferred=pref_artists)
     for key in deep_keys:
         if key not in disliked_artist_keys and artist_weight.get(key, 0.0) < _FAVORITE_SKIP_FLOOR:
             artist_weight[key] = _FAVORITE_SKIP_FLOOR
@@ -1498,21 +1497,12 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     top_artists = [artist_display.get(a, a) for a in topartist_keys]
     # Артисты, ушедшие в минус, — фильтр для радио-кандидатов.
     banned_artists = {a for a, w in artist_weight.items() if w < 0}
-    banned_artists |= excluded_artists | flow_rejected_artists
+    banned_artists |= flow_rejected_artists
     hard_banned_artists = {
         a for a, w in artist_weight.items() if w <= -_RELAXED_BAN_WEIGHT
-    } | disliked_artist_keys | excluded_artists
-    for key in excluded_artists:
-        artist_weight.pop(key, None)
-        artist_display.pop(key, None)
-        curated_artist_keys[:] = [a for a in curated_artist_keys if a != key]
-        catalog_artist_keys[:] = [a for a in catalog_artist_keys if a != key]
-        playlist_artist_keys[:] = [a for a in playlist_artist_keys if a != key]
+    } | disliked_artist_keys
     catalog_artist_keys[:] = [a for a in catalog_artist_keys if a not in flow_rejected_artists]
-    topartist_keys = [
-        key for key in topartist_keys
-        if key not in excluded_artists and key not in flow_rejected_artists
-    ]
+    topartist_keys = [key for key in topartist_keys if key not in flow_rejected_artists]
     top_artists = [artist_display.get(key, key) for key in topartist_keys]
 
     # Плейлистные артисты для SoundCloud-генерации: свежие первыми,
@@ -1554,8 +1544,6 @@ def _taste_profile(db: Session, user_id: int) -> dict:
             if key in skipped_keys or key in seen_seed_track:
                 continue
             if not effective_artist or not effective_title:
-                continue
-            if artist_key(effective_artist) in excluded_artists:
                 continue
             seen_seed_track.add(key)
             pairs.append((effective_artist, effective_title))
@@ -1675,10 +1663,10 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         # Бан второго прохода, когда обычный не набрал порцию (_compute_flow).
         "hard_banned_artists": hard_banned_artists,
         # Часть banned_artists, которую ротация лайков не исключает: только
-        # отвергнутые в волне, не ушедшие в минус по весу и не исключённые.
+        # отвергнутые в волне и не ушедшие в минус по весу.
         "flow_rejected_artists": flow_rejected_artists - {
             a for a, w in artist_weight.items() if w < 0
-        } - excluded_artists - disliked_artist_keys,
+        } - disliked_artist_keys,
         "prefer_cyrillic": dominant_is_cyrillic(lang_texts),
         # (доля кириллицы, сколько текстов) — априор языка в волне
         # (discovery_feedback.language_terms).
@@ -3667,7 +3655,6 @@ def _fresh_negatives_query(db: Session, user_id: int, since: datetime) -> tuple[
 async def _take_ready_portion(
     db: Session,
     user_id: int,
-    excluded_artists: list,
     history: dict,
     limit: int,
     exclude: str,
@@ -3703,7 +3690,6 @@ async def _take_ready_portion(
         )
     else:
         negatives, bad_artists = set(), set()
-    bad_artists |= {artist_key(a) for a in excluded_artists if a}
     # stream_url собраны под адрес, с которым считалась порция; отдаём под тот,
     # с которого пришёл этот запрос (другой домен, туннель, нет меты у воркера).
     built_for = str(payload.get("base_url") or "")
@@ -5549,7 +5535,7 @@ def _release_request_session(db: Session, user: User) -> None:
     а не close: сессия остаётся рабочей для живого пути.
     """
     for name in (
-        "id", "username", "is_active", "excluded_artists", "discovery_ratio", "flow_tuning",
+        "id", "username", "is_active", "discovery_ratio", "flow_tuning",
     ):
         getattr(user, name, None)
     if user in db:
@@ -5634,7 +5620,6 @@ async def get_flow(
     started = time.perf_counter()
     await asyncio.to_thread(_release_request_session, db, current_user)
     user_id = current_user.id
-    excluded_artists = list(current_user.excluded_artists or [])
     history = None
     if _FLOW_PRECOMPUTE:
         timings: list = []
@@ -5645,7 +5630,6 @@ async def get_flow(
         ready, ready_state = await _take_ready_portion(
             db,
             user_id,
-            excluded_artists,
             history,
             limit,
             exclude,

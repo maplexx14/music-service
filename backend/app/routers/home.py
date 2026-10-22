@@ -216,7 +216,6 @@ async def home_weekly(
     def compute():
         heard = _heard_artist_keys(db, current_user.id)
         blocked = heard | {artist_key(a) for a in favorites}
-        blocked |= {artist_key(a) for a in current_user.excluded_artists or []}
         keys = pick_new_artists(similar_lists, blocked, WEEKLY_LIMIT)
         return _weekly_track_ids(db, current_user, keys, week)
 
