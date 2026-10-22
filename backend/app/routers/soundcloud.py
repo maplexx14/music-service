@@ -1284,37 +1284,50 @@ async def _remux_hls_to_cache(cache_id: str, m3u8_url: str, ext: str) -> Optiona
     return final_path
 
 
+async def _ensure_hls_cached(track_id: str) -> Optional[str]:
+    """Собирает HLS-only трек в дисковый кэш (если ещё нет) и возвращает путь.
+
+    None — пригодного HLS нет (транскодов нет или только DRM). Зовут и /stream,
+    и прогрев: собранный файл делает трек готовым (prefetch_is_ready видит
+    кэш-файл), а следующий /stream отдаёт его с диска без ремукса.
+    """
+    cache_id = f"sc{track_id}"
+    lock = _hls_locks.setdefault(track_id, asyncio.Lock())
+    async with lock:
+        cached = _cached_file(cache_id)
+        if cached:
+            return cached
+        hls = await resolve_hls_via_api(track_id)
+        if not hls:
+            return None
+        m3u8_url, ext = hls
+        logger.info("SoundCloud %s: прогрессивного потока нет, собираем HLS", track_id)
+        cached = await _remux_hls_to_cache(cache_id, m3u8_url, ext)
+        if not cached:
+            return None
+        # Дисковый кэш вытесняется по LRU — кладём копию в MinIO, чтобы
+        # второй раз не ремуксить (и чтобы ленивая архивация, которая умеет
+        # только прогрессивный резолв, больше не билась об этот трек).
+        try:
+            from app import external_archive
+
+            asyncio.create_task(
+                external_archive.adopt_local_file("soundcloud", track_id, cached)
+            )
+        except Exception:  # noqa: BLE001 — архивация не важнее воспроизведения
+            logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
+        return cached
+
+
 async def _stream_via_hls(request: Request, track_id: str):
     """Отдаёт трек, у которого у SoundCloud остался только HLS.
 
     Возвращает None, если пригодного HLS нет — тогда вызывающий код оставляет
     исходную ошибку (503/404), как будто этого пути не существует.
     """
-    cache_id = f"sc{track_id}"
-    lock = _hls_locks.setdefault(track_id, asyncio.Lock())
-    async with lock:
-        cached = _cached_file(cache_id)
-        if not cached:
-            hls = await resolve_hls_via_api(track_id)
-            if not hls:
-                return None
-            m3u8_url, ext = hls
-            logger.info("SoundCloud %s: прогрессивного потока нет, собираем HLS", track_id)
-            cached = await _remux_hls_to_cache(cache_id, m3u8_url, ext)
-            if not cached:
-                return None
-            # Дисковый кэш вытесняется по LRU — кладём копию в MinIO, чтобы
-            # второй раз не ремуксить (и чтобы ленивая архивация, которая умеет
-            # только прогрессивный резолв, больше не билась об этот трек).
-            try:
-                from app import external_archive
-
-                asyncio.create_task(
-                    external_archive.adopt_local_file("soundcloud", track_id, cached)
-                )
-            except Exception:  # noqa: BLE001 — архивация не важнее воспроизведения
-                logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
-
+    cached = await _ensure_hls_cached(track_id)
+    if not cached:
+        return None
     ext = os.path.splitext(cached)[1].lower()
     return await _serve_file(cached, MEDIA_TYPES.get(ext, "audio/mp4"), request)
 
@@ -1534,7 +1547,7 @@ async def prefetch_soundcloud(token: str):
     track_id, permalink = _decode_token(token)
     status = schedule_prefetch(
         f"sc{track_id}",
-        lambda force=False: _resolve_cached(track_id, permalink, force=force),
+        lambda force=False: _resolve_for_prefetch(track_id, permalink, force=force),
         f"soundcloud:resolve:{track_id}",
         _RESOLVE_TTL,
         archive_key=f"soundcloud/{track_id}",
@@ -1545,6 +1558,20 @@ async def prefetch_soundcloud(token: str):
     # чтобы прогрев остался дешёвым и не ходил в YouTube за каждым треком.
     asyncio.create_task(_prefetch_ytmusic_match(track_id))
     return {"status": status}
+
+
+async def _resolve_for_prefetch(
+    track_id: str, permalink: str, force: bool = False
+) -> tuple[str, str, Optional[int], bool]:
+    """Резолв для прогрева. Прогрессивного потока нет — собираем HLS на диск,
+    как это сделал бы /stream: иначе ready у такого трека не наступал никогда,
+    и фронт держал гейт скипа вперёд до упора попыток (~24 с). Ошибку резолва
+    пробрасываем: прогрев её глотает, а готовность видна по кэш-файлу."""
+    try:
+        return await _resolve_cached(track_id, permalink, force=force)
+    except TransientResolveError:
+        await _ensure_hls_cached(track_id)
+        raise
 
 
 async def _prefetch_ytmusic_match(track_id: str) -> None:

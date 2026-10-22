@@ -179,3 +179,41 @@ def test_search_hides_previews_and_drm(monkeypatch):
     results = asyncio.run(soundcloud._search_api(request, "q", 10))
 
     assert [t.external_id for t in results] == ["1"]
+
+
+def test_prefetch_assembles_hls_when_no_progressive_stream(monkeypatch):
+    """Прод 2026-10-22: у HLS-only трека (DJ Anemia — archangel) прогрев
+    отвечал ready=false до упора попыток, хотя /stream его играл через HLS."""
+    TransientResolveError = ytdlp.TransientResolveError
+
+    async def no_progressive(track_id, permalink, force=False):
+        raise TransientResolveError(track_id)
+
+    assembled = []
+
+    async def ensure_hls(track_id):
+        assembled.append(track_id)
+        return f"/cache/sc{track_id}.m4a"
+
+    monkeypatch.setattr(soundcloud, "_resolve_cached", no_progressive)
+    monkeypatch.setattr(soundcloud, "_ensure_hls_cached", ensure_hls)
+
+    with pytest.raises(TransientResolveError):
+        asyncio.run(soundcloud._resolve_for_prefetch("42", "https://soundcloud.com/a/b"))
+    assert assembled == ["42"]
+
+
+def test_prefetch_does_not_touch_hls_for_unavailable_track(monkeypatch):
+    TrackUnavailable = ytdlp.TrackUnavailable
+
+    async def gone(track_id, permalink, force=False):
+        raise TrackUnavailable(track_id)
+
+    async def must_not_assemble(track_id):
+        raise AssertionError("HLS is not an option for a removed track")
+
+    monkeypatch.setattr(soundcloud, "_resolve_cached", gone)
+    monkeypatch.setattr(soundcloud, "_ensure_hls_cached", must_not_assemble)
+
+    with pytest.raises(TrackUnavailable):
+        asyncio.run(soundcloud._resolve_for_prefetch("42", "https://soundcloud.com/a/b"))
