@@ -96,17 +96,53 @@ function RouteCommitSignal() {
   return null
 }
 
+// «Что юзер делает» для админки (PUT /users/me/activity): экран и видна ли
+// вкладка. Только путь, без query — поисковые запросы в админку не уходят.
+function reportActivity(visible) {
+  api
+    .put(
+      '/users/me/activity',
+      { screen: appHistory.location.pathname, visible },
+      // Уход в фон бывает перед выгрузкой — запрос должен её пережить.
+      visible
+        ? { skipErrorToast: true }
+        : { skipErrorToast: true, adapter: 'fetch', fetchOptions: { keepalive: true } },
+    )
+    .catch(() => {})
+}
+
+// Смена экрана. С задержкой: пролистанные на пути экраны админке не нужны.
+const ACTIVITY_ROUTE_DELAY_MS = 1500
+
+function ActivityRouteSignal({ enabled }) {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    if (!enabled || document.hidden) return undefined
+    const timer = window.setTimeout(() => reportActivity(true), ACTIVITY_ROUTE_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [enabled, pathname])
+  return null
+}
+
 function App() {
   const { isAuthenticated, user } = useAuthStore()
 
   useEffect(() => {
     if (!isAuthenticated) return undefined
+    let wasVisible = !document.hidden
     const heartbeat = () => {
       // Только на экране. С погашенным экраном на мобильной сети каждый запрос
       // посреди трека будит модем на ~5–10 с, а онлайн слушателя в фоне
       // админка видит по играющему now-playing (бэкенд _online_user_ids).
-      if (document.hidden) return
-      api.get('/users/me', { skipErrorToast: true, dedupe: false }).catch(() => {})
+      // Уход в фон — одно событие, чтобы админка видела «свернул(а)».
+      if (document.hidden) {
+        if (wasVisible) reportActivity(false)
+        wasVisible = false
+        return
+      }
+      wasVisible = true
+      // Он же держит presence-маркер онлайна (любой авторизованный запрос).
+      reportActivity(true)
       // Приложение (особенно PWA) держат открытым неделями — продлеваем
       // сессию и без перезапуска; чаще раза в несколько часов не ходит.
       useAuthStore.getState().renewToken()
@@ -231,6 +267,7 @@ function App() {
         />
       </Routes>
       <RouteCommitSignal />
+      <ActivityRouteSignal enabled={isAuthenticated} />
       <ImportTracker enabled={isAuthenticated} />
     </HistoryRouter>
   )

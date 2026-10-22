@@ -152,7 +152,7 @@
 .admin-user-name { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .admin-user-name strong { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .admin-user-online-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
-.admin-user-seen { color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+.admin-user-seen { color: var(--text-secondary); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
 .admin-user-chevron { flex-shrink: 0; color: var(--text-secondary); transform: rotate(-90deg); transition: transform var(--duration-fast) var(--ease-out); }
 .admin-user.is-expanded .admin-user-chevron { transform: none; }
 .admin-user-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--text-secondary); font-size: 13px; min-width: 0; }

@@ -215,6 +215,33 @@ def test_now_playing_visible_to_admin(client, db):
     assert str(listener.id) not in states
 
 
+def test_activity_visible_to_admin(client, db):
+    create_user(db, "admin", is_admin=True)
+    listener = create_user(db, "listener")
+
+    resp = client.put(
+        "/api/users/me/activity",
+        json={"screen": "/search", "visible": True},
+        headers=auth_headers(client, "listener"),
+    )
+    assert resp.status_code == 200, resp.text
+
+    admin_headers = auth_headers(client, "admin")
+    activity = client.get("/api/users/admin/now-playing", headers=admin_headers).json()["activity"]
+    state = activity[str(listener.id)]
+    assert state["screen"] == "/search"
+    assert state["visible"] is True
+    assert state["updated_at"]
+
+    client.put(
+        "/api/users/me/activity",
+        json={"screen": "/search", "visible": False},
+        headers=auth_headers(client, "listener"),
+    )
+    activity = client.get("/api/users/admin/now-playing", headers=admin_headers).json()["activity"]
+    assert activity[str(listener.id)]["visible"] is False
+
+
 def test_now_playing_admin_only(client, db):
     create_user(db, "plain")
     resp = client.get("/api/users/admin/now-playing", headers=auth_headers(client, "plain"))

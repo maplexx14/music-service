@@ -611,6 +611,36 @@ def clear_now_playing(current_user: User = Depends(get_current_active_user)):
     return {"ok": True}
 
 
+# «Что юзер делает» для админки: экран приложения и видна ли вкладка. Клиент
+# шлёт на смене экрана, в минутном пульсе (только на экране — он же держит
+# presence-маркер) и один раз при уходе в фон. Видимую активность держим чуть
+# дольше пульса: пропал пульс — юзер ушёл. Уход в фон помним как паузу
+# now-playing: дальше вкладку могли закрыть, а iOS выгрузить PWA молча.
+ACTIVITY_VISIBLE_TTL = 150
+ACTIVITY_HIDDEN_TTL = NOW_PLAYING_PAUSED_TTL
+_ACTIVITY_PREFIX = "users:activity:"
+
+
+class ActivityPayload(BaseModel):
+    screen: str = Field(..., max_length=300)
+    visible: bool = True
+
+
+@router.put("/me/activity")
+def update_activity(
+    payload: ActivityPayload,
+    current_user: User = Depends(get_current_active_user),
+):
+    state = payload.model_dump()
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_cache(
+        f"{_ACTIVITY_PREFIX}{current_user.id}",
+        state,
+        expire=ACTIVITY_VISIBLE_TTL if payload.visible else ACTIVITY_HIDDEN_TTL,
+    )
+    return {"ok": True}
+
+
 # --- Состояние плеера между устройствами (см. models.UserPlayerState) ---
 
 # Снимок несёт окно очереди до ~300 треков с метаданными; потолок с запасом,
@@ -678,11 +708,16 @@ def delete_player_state(
 
 def _now_playing_states() -> Dict[str, dict]:
     """{user_id: state} всех живых now-playing ключей — только Redis."""
+    return _user_states(_NOW_PLAYING_PREFIX)
+
+
+def _user_states(prefix: str) -> Dict[str, dict]:
+    """{user_id: state} всех живых ключей `<prefix><user_id>` — только Redis."""
     try:
-        keys = list(redis_client.scan_iter(match=f"{_NOW_PLAYING_PREFIX}*", count=200))
+        keys = list(redis_client.scan_iter(match=f"{prefix}*", count=200))
         values = redis_client.mget(keys) if keys else []
     except Exception:
-        logger.exception("failed to read now-playing states")
+        logger.exception("failed to read %s states", prefix)
         return {}
     result = {}
     for key, raw in zip(keys, values):
@@ -697,12 +732,16 @@ def _now_playing_states() -> Dict[str, dict]:
 
 @router.get("/admin/now-playing")
 def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
-    """Текущее состояние плееров всех, у кого живой now-playing ключ.
+    """Текущее состояние плееров всех, у кого живой now-playing ключ, и экран,
+    на котором юзер сейчас (см. update_activity).
 
     Ответ — {user_id: state}; панель опрашивает его часто и вливает в уже
     показанные карточки, поэтому здесь только Redis, без запросов в БД.
     """
-    return {"now_playing": _now_playing_states()}
+    return {
+        "now_playing": _now_playing_states(),
+        "activity": _user_states(_ACTIVITY_PREFIX),
+    }
 
 
 @router.get("/{user_id}", response_model=UserResponse)

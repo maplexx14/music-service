@@ -213,10 +213,12 @@ def _reset_online_presence_markers():
     _online_marked_at.clear()
     clear_pattern("users:online:*")
     clear_pattern("users:now_playing:*")
+    clear_pattern("users:activity:*")
     yield
     _online_marked_at.clear()
     clear_pattern("users:online:*")
     clear_pattern("users:now_playing:*")
+    clear_pattern("users:activity:*")
 
 
 @pytest.fixture(autouse=True)

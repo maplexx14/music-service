@@ -214,6 +214,47 @@ function formatLastSeen(value) {
   })
 }
 
+// Экран приложения по пути из /users/me/activity (маршруты — App.jsx).
+const SCREEN_LABELS = [
+  [/^\/$/, 'на главной'],
+  [/^\/search/, 'в поиске'],
+  [/^\/playlists\/./, 'смотрит плейлист'],
+  [/^\/playlists/, 'в плейлистах'],
+  [/^\/external\//, 'смотрит плейлист SoundCloud'],
+  [/^\/albums\//, 'смотрит альбом'],
+  [/^\/track\//, 'смотрит трек'],
+  [/^\/liked/, 'в любимых'],
+  [/^\/recap/, 'смотрит итоги месяца'],
+  [/^\/upload/, 'загружает трек'],
+  [/^\/settings/, 'в настройках'],
+  [/^\/admin/, 'в админке'],
+  [/^\/onboarding/, 'проходит онбординг'],
+]
+
+function screenLabel(path) {
+  const artist = /^\/artists\/([^/]+)/.exec(path || '')
+  if (artist) {
+    let name = artist[1]
+    try {
+      name = decodeURIComponent(name)
+    } catch {
+      // битый escape — показываем как есть
+    }
+    return `у артиста «${name}»`
+  }
+  const match = SCREEN_LABELS.find(([pattern]) => pattern.test(path || ''))
+  return match ? match[1] : 'в приложении'
+}
+
+// Что юзер делает сейчас: экран (activity) плюс плеер (now-playing).
+function userStatus(user, activity, nowPlaying) {
+  const playing = Boolean(nowPlaying?.is_playing)
+  if (activity?.visible) return screenLabel(activity.screen)
+  if (activity && !activity.visible) return playing ? 'слушает в фоне' : 'свернул(а) приложение'
+  if (playing) return 'слушает'
+  return user.is_online ? 'в сети' : formatLastSeen(user.last_seen)
+}
+
 // Сообщения из «Связь с разработчиком» (настройки). Новые подсвечены, пока
 // админ не отметит прочитанным.
 function DeveloperMessages({ onCount }) {
@@ -348,7 +389,7 @@ function ServiceRatings({ onSummary }) {
   )
 }
 
-function UserCard({ user, nowPlaying }) {
+function UserCard({ user, nowPlaying, activity }) {
   const [expanded, setExpanded] = useState(false)
   // Засчитанный трек (user_track_plays) и последний включённый (now-playing).
   // Включённый показываем, если он свежее: вернувшийся юзер мог уйти до
@@ -376,7 +417,7 @@ function UserCard({ user, nowPlaying }) {
           <strong>{user.username}</strong>
         </span>
         <span className="admin-user-seen">
-          {user.is_online ? 'в сети' : formatLastSeen(user.last_seen)}
+          {userStatus(user, activity, nowPlaying)}
         </span>
         <ChevronDown size={16} className="admin-user-chevron" aria-hidden="true" />
       </button>
@@ -425,6 +466,7 @@ function Admin() {
   const [deletingId, setDeletingId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [nowPlaying, setNowPlaying] = useState({})
+  const [activity, setActivity] = useState({})
   const [userFilter, setUserFilter] = useState('')
   const [openPanels, setOpenPanels] = useState(readOpenPanels)
   const [unreadMessages, setUnreadMessages] = useState(0)
@@ -515,6 +557,7 @@ function Admin() {
     try {
       const response = await api.get('/users/admin/now-playing', { skipErrorToast: true, dedupe: false })
       setNowPlaying(response.data.now_playing || {})
+      setActivity(response.data.activity || {})
     } catch (error) {
       console.error('Error fetching now playing:', error)
     }
@@ -636,7 +679,12 @@ function Admin() {
         ) : (
           <div className="admin-users">
             {filteredUsers.map((user) => (
-              <UserCard key={user.id} user={user} nowPlaying={nowPlaying[user.id]} />
+              <UserCard
+                key={user.id}
+                user={user}
+                nowPlaying={nowPlaying[user.id]}
+                activity={activity[user.id]}
+              />
             ))}
           </div>
         )}
