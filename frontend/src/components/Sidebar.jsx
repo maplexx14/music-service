@@ -66,8 +66,8 @@ function Sidebar() {
       {/* Связь с разработчиком — раздел настроек; здесь ссылка на виду, чтобы
           не искать её в меню. */}
       <Link
-        to="/settings/contact"
-        className={`nav-item nav-item-contact${location.pathname === '/settings/contact' ? ' active' : ''}`}
+        to="/settings/feedback"
+        className={`nav-item nav-item-contact${location.pathname === '/settings/feedback' ? ' active' : ''}`}
         title={isCollapsed ? 'Связь с разработчиком' : ''}
         onPointerEnter={() => prefetchRouteChunk('/settings')}
         onPointerDown={() => prefetchRouteChunk('/settings')}
@@ -81,7 +81,7 @@ function Sidebar() {
       <div className="sidebar-footer">
         <Link
           to="/settings"
-          className={`profile-trigger${location.pathname.startsWith('/settings') && location.pathname !== '/settings/contact' ? ' active' : ''}`}
+          className={`profile-trigger${location.pathname.startsWith('/settings') && location.pathname !== '/settings/feedback' ? ' active' : ''}`}
           title={isCollapsed ? 'Профиль и настройки' : undefined}
           aria-label="Профиль и настройки"
           onPointerEnter={() => prefetchRouteChunk('/settings')}

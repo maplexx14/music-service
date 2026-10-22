@@ -88,6 +88,7 @@ function PushSettings() {
 
   return (
     <div className="settings-card">
+      <div className="settings-section-title">Уведомления</div>
       <div className="settings-row">
         <div>
           <div className="settings-label">Уведомления на этом устройстве</div>

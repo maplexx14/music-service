@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
-import { Sparkles, Disc3, Mic2, Headphones, Palette, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle, Bell, Star } from 'lucide-react'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
+import { Sparkles, Disc3, Mic2, SlidersHorizontal, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from 'lucide-react'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -15,6 +15,7 @@ import PushSettings from '../components/PushSettings'
 import ContactDeveloper from '../components/ContactDeveloper'
 import RateService from '../components/RateService'
 import TasteAvatar from '../components/TasteAvatar'
+import HeroHearts from '../components/HeroHearts'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import {
   clearFrameMeter,
@@ -35,22 +36,42 @@ const QUALITY_OPTIONS = [
 // Разделы настроек — пункты меню. id — сегмент URL (/settings/security): на
 // раздел можно дать прямую ссылку, а на телефоне раздел — отдельный экран со
 // своим «Назад» в верхней панели.
+//
+// Разделов пять, по смыслу: что я люблю, как играет поток, как ведёт себя
+// приложение, мой аккаунт, написать нам. Раньше их было десять, и пункт из
+// одного тумблера соседствовал с пунктом на экран артистов.
 const SECTIONS = [
-  // Жанры и артисты — отдельными разделами: сетка фото артистов и плитки
-  // жанров каждая занимает экран, вместе они превращались в простыню.
-  { id: 'genres', label: 'Любимые жанры', hint: 'Что вы любите слушать', icon: Disc3 },
-  { id: 'artists', label: 'Любимые артисты', hint: 'И похожие на них', icon: Mic2 },
-  { id: 'recs', label: 'Рекомендации', hint: 'Что играет в волне', icon: Sparkles },
-  { id: 'playback', label: 'Воспроизведение', hint: 'Качество звука', icon: Headphones },
-  { id: 'appearance', label: 'Оформление', hint: 'Облегчённый режим, GIF', icon: Palette },
-  { id: 'notifications', label: 'Уведомления', hint: 'Новые релизы артистов', icon: Bell },
-  { id: 'security', label: 'Безопасность', hint: 'Почта, двухфакторка, устройства', icon: Shield },
+  { id: 'taste', label: 'Мой вкус', hint: 'Жанры и артисты', icon: Disc3 },
+  { id: 'wave', label: 'Поток', hint: 'Что и как играет в волне', icon: Sparkles },
+  { id: 'app', label: 'Приложение', hint: 'Звук, вид, уведомления', icon: SlidersHorizontal },
+  { id: 'account', label: 'Аккаунт', hint: 'Почта, вход, устройства', icon: Shield },
+  { id: 'feedback', label: 'Обратная связь', hint: 'Оценка и сообщение', icon: MessageCircle },
   // Диагностика плеера — отладочный инструмент, обычному пользователю не
   // нужен: лог событий воспроизведения имеет смысл только при разборе багов,
   // о которых сообщили админам.
   { id: 'diag', label: 'Диагностика', hint: 'Журнал плеера', icon: Bug, adminOnly: true },
-  { id: 'rate', label: 'Оценить сервис', hint: 'Насколько вам нравится', icon: Star },
-  { id: 'contact', label: 'Связь с разработчиком', hint: 'Ошибка, идея или вопрос', icon: MessageCircle },
+]
+
+// Прежние разделы → новые. Ссылки на них живут в закладках, в уведомлениях и
+// в установленных PWA со старой сборкой: ведём туда, где теперь их пункты.
+const LEGACY_SECTIONS = {
+  genres: 'taste',
+  artists: 'taste?tab=artists',
+  recs: 'wave',
+  playback: 'app',
+  appearance: 'app',
+  notifications: 'app',
+  security: 'account',
+  rate: 'feedback',
+  contact: 'feedback',
+}
+
+// Вкладки «Моего вкуса»: плитки жанров и сетка артистов каждая занимает
+// экран, вместе они превращались в простыню — поэтому переключатель, а не
+// две карточки подряд.
+const TASTE_TABS = [
+  ['genres', 'Жанры', Disc3],
+  ['artists', 'Артисты', Mic2],
 ]
 
 // Тонкая настройка волны (бэкенд: app/flow_tuning.py). Каждая ручка 0..1 на
@@ -168,6 +189,8 @@ function Settings() {
   // Раскладка: на компьютере меню слева и раздел справа (без раздела в URL —
   // первый); на телефоне /settings — только меню, раздел — отдельный экран.
   const { section: sectionParam } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tasteTab = searchParams.get('tab') === 'artists' ? 'artists' : 'genres'
   const isMobile = useIsMobile()
   const sections = SECTIONS.filter((item) => !item.adminOnly || user?.is_admin)
   const requested = sections.find((item) => item.id === sectionParam)
@@ -305,6 +328,10 @@ function Settings() {
     }
   }
 
+  if (sectionParam && LEGACY_SECTIONS[sectionParam]) {
+    return <Navigate to={`/settings/${LEGACY_SECTIONS[sectionParam]}`} replace />
+  }
+
   // Неизвестный раздел (опечатка в ссылке, «Диагностика» без прав) — в меню.
   // Пока профиль не загружен, права неизвестны: не уводим раньше времени.
   if (sectionParam && !requested && user) {
@@ -321,11 +348,15 @@ function Settings() {
     window.location.href = '/login'
   }
 
+  // Профиль — на том же небе с сердцами, что и поток на главной: настройки
+  // начинаются с фирменного экрана, а не с серой строки.
   const profileCard = user && (
     <div className="settings-profile">
+      <HeroHearts />
       <TasteAvatar user={user} className="settings-profile-avatar" />
       <div className="settings-profile-text">
         <div className="settings-profile-name">{user.full_name || user.username}</div>
+        {user.email && <div className="settings-profile-email">{user.email}</div>}
       </div>
     </div>
   )
@@ -422,50 +453,64 @@ function Settings() {
 
       {/* Жанры и артисты — плитки и сетка фото: им нужна вся ширина, а не
           колонка в 600px, как у разделов с формами. */}
-      <div className={`settings-layout${['genres', 'artists'].includes(activeTab) ? ' wide' : ''}`}>
+      <div className={`settings-layout${activeTab === 'taste' ? ' wide' : ''}`}>
         {!isMobile && menu}
         <div className="settings-content">
-          {activeTab === 'genres' && (
-            <div {...panelProps('genres')}>
-              <div className="settings-card">
-                <div className="settings-section-title">Любимые жанры</div>
-                <p className="settings-hint settings-section-hint">
-                  Выберите то, что вам ближе — это настроит ваш поток. Сохраняется
-                  автоматически.
-                </p>
-                <GenreSelect
-                  selected={prefs.genres}
-                  detected={detected.genres}
-                  onChange={(genres) => setPrefs((prev) => ({ ...prev, genres }))}
-                />
+          {activeTab === 'taste' && (
+            <div {...panelProps('taste')}>
+              <div className="settings-tabs" role="tablist" aria-label="Мой вкус" data-active={tasteTab}>
+                {TASTE_TABS.map(([id, label, Icon]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tasteTab === id}
+                    className={`settings-tab${tasteTab === id ? ' active' : ''}`}
+                    onClick={() => setSearchParams(id === 'genres' ? {} : { tab: id }, { replace: true })}
+                  >
+                    <Icon size={18} aria-hidden="true" />
+                    {label}
+                  </button>
+                ))}
               </div>
+
+              {tasteTab === 'genres' ? (
+                <div className="settings-card">
+                  <div className="settings-section-title">Любимые жанры</div>
+                  <p className="settings-hint settings-section-hint">
+                    Выберите то, что вам ближе — это настроит ваш поток. Сохраняется
+                    автоматически.
+                  </p>
+                  <GenreSelect
+                    selected={prefs.genres}
+                    detected={detected.genres}
+                    onChange={(genres) => setPrefs((prev) => ({ ...prev, genres }))}
+                  />
+                </div>
+              ) : (
+                <div className="settings-card">
+                  <div className="settings-section-title">Любимые артисты</div>
+                  <p className="settings-hint settings-section-hint">
+                    Отметьте артиста — рядом появятся похожие. Нужного нет — найдите
+                    поиском. Сохраняется автоматически.
+                  </p>
+                  <ArtistSelect
+                    selected={prefs.artists}
+                    excluded={prefs.excludedArtists}
+                    detected={detected.artists}
+                    genres={prefs.genres}
+                    suggestionLimit={48}
+                    onChange={({ artists, excludedArtists }) =>
+                      setPrefs((prev) => ({ ...prev, artists, excludedArtists }))
+                    }
+                  />
+                </div>
+              )}
             </div>
           )}
 
-          {activeTab === 'artists' && (
-            <div {...panelProps('artists')}>
-              <div className="settings-card">
-                <div className="settings-section-title">Любимые артисты</div>
-                <p className="settings-hint settings-section-hint">
-                  Отметьте артиста — рядом появятся похожие. Нужного нет — найдите
-                  поиском. Сохраняется автоматически.
-                </p>
-                <ArtistSelect
-                  selected={prefs.artists}
-                  excluded={prefs.excludedArtists}
-                  detected={detected.artists}
-                  genres={prefs.genres}
-                  suggestionLimit={48}
-                  onChange={({ artists, excludedArtists }) =>
-                    setPrefs((prev) => ({ ...prev, artists, excludedArtists }))
-                  }
-                />
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'recs' && (
-            <div {...panelProps('recs')}>
+          {activeTab === 'wave' && (
+            <div {...panelProps('wave')}>
               <div className="settings-card">
                 <div className="settings-section-title">Новые открытия</div>
                 <p className="settings-hint settings-section-hint">
@@ -554,9 +599,10 @@ function Settings() {
             </div>
           )}
 
-          {activeTab === 'playback' && (
-            <div {...panelProps('playback')}>
+          {activeTab === 'app' && (
+            <div {...panelProps('app')}>
               <div className="settings-card">
+                <div className="settings-section-title">Звук</div>
                 <div className="settings-row settings-row-quality">
                   <div>
                     <div className="settings-label">Качество звука</div>
@@ -599,12 +645,9 @@ function Settings() {
                   </label>
                 </div>
               </div>
-            </div>
-          )}
 
-          {activeTab === 'appearance' && (
-            <div {...panelProps('appearance')}>
               <div className="settings-card">
+                <div className="settings-section-title">Оформление</div>
                 <div className="settings-row">
                   <div>
                     <div className="settings-label">Облегчённый режим</div>
@@ -679,17 +722,13 @@ function Settings() {
                   </div>
                 </div>
               </div>
-            </div>
-          )}
 
-          {activeTab === 'notifications' && (
-            <div {...panelProps('notifications')}>
               <PushSettings />
             </div>
           )}
 
-          {activeTab === 'security' && (
-            <div {...panelProps('security')}>
+          {activeTab === 'account' && (
+            <div {...panelProps('account')}>
               {/* Почта первой: на неё завязан второй фактор. Дальше сам
                   фактор, потом устройства — доверенное устройство как раз то,
                   что второй фактор позволяет пропускать при входе. */}
@@ -699,14 +738,9 @@ function Settings() {
             </div>
           )}
 
-          {activeTab === 'rate' && (
-            <div {...panelProps('rate')}>
+          {activeTab === 'feedback' && (
+            <div {...panelProps('feedback')}>
               <RateService />
-            </div>
-          )}
-
-          {activeTab === 'contact' && (
-            <div {...panelProps('contact')}>
               <ContactDeveloper />
             </div>
           )}

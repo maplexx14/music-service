@@ -3,8 +3,9 @@
 }
 
 .settings-header h1 {
+  font-family: var(--font-display);
   font-size: 32px;
-  font-weight: bold;
+  font-weight: 800;
   color: var(--text-primary);
   margin-bottom: 6px;
   letter-spacing: -0.01em;
@@ -57,8 +58,9 @@
   outline-offset: -2px;
 }
 
+/* Активный пункт — тот же фиолетовый, что у капсулы «Главная / История». */
 .settings-menu-item.active {
-  background: var(--brand-accent-soft);
+  background: var(--settings-pill);
   color: var(--text-primary);
 }
 
@@ -68,13 +70,13 @@
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: var(--surface-2);
-  color: var(--text-primary);
+  border-radius: 12px;
+  background: var(--brand-accent-soft);
+  color: var(--brand-accent-text);
 }
 
 .settings-menu-item.active .settings-menu-icon {
-  background: var(--brand-accent);
+  background: rgba(255, 255, 255, 0.16);
   color: var(--text-primary);
 }
 
@@ -90,6 +92,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  font-family: var(--font-display);
   font-size: var(--text-base);
   font-weight: 600;
   color: inherit;
@@ -105,6 +108,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.settings-menu-item.active .settings-menu-hint {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 /* Шеврон — признак «откроется экран»; на компьютере раздел открывается
@@ -126,33 +133,59 @@
   }
 }
 
-/* Профиль над меню: сюда теперь ведёт нажатие на аватар. */
+/* Профиль над меню: сюда ведёт нажатие на аватар. Фон — небо с сердцами
+   из логотипа (HeroHearts), как у потока на главной в облегчённом режиме;
+   палитра фирменная, а не от обложки. */
 .settings-profile {
+  --hero-c1: #b070ff;
+  --hero-c2: #8929ff;
+  --hero-c3: #440f85;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 12px 16px;
+  gap: 14px;
+  min-height: 104px;
+  margin-bottom: 16px;
+  padding: 20px 16px;
+  border-radius: 20px;
+}
+
+.settings-profile .hero-hearts {
+  z-index: -1;
 }
 
 .settings-profile-avatar {
   display: block;
   overflow: hidden;
   flex: none;
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   object-fit: cover;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 8px 24px rgba(0, 0, 0, 0.45);
 }
-
 
 .settings-profile-text {
   min-width: 0;
 }
 
 .settings-profile-name {
+  font-family: var(--font-display);
   font-size: var(--text-md);
-  font-weight: 700;
+  font-weight: 800;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.settings-profile-email {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.72);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -243,17 +276,31 @@ button.settings-menu-item {
   }
 
   .settings-menu ul {
+    position: relative;
     gap: 0;
-    background: var(--surface-1);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
+    background: var(--settings-surface);
+    border-radius: 22px;
     overflow: hidden;
+  }
+
+  .settings-menu ul::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--settings-ring);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
   }
 
   .settings-menu-item {
     position: relative;
-    min-height: 64px;
-    padding: 10px 12px;
+    min-height: 68px;
+    padding: 10px 14px;
     border-radius: 0;
   }
 
@@ -269,12 +316,19 @@ button.settings-menu-item {
   }
 
   .settings-profile {
-    padding: 0 4px 20px;
+    min-height: 128px;
+    margin-bottom: 20px;
+    padding: 24px 20px;
+    border-radius: 24px;
   }
 
   .settings-profile-avatar {
-    width: 56px;
-    height: 56px;
+    width: 64px;
+    height: 64px;
+  }
+
+  .settings-profile-name {
+    font-size: 20px;
   }
 
   /* Разделитель от текста, а не от края — как в системных списках
@@ -283,10 +337,10 @@ button.settings-menu-item {
     content: '';
     position: absolute;
     top: 0;
-    left: 60px;
+    left: 62px;
     right: 0;
     height: 1px;
-    background: var(--surface-2);
+    background: rgba(255, 255, 255, 0.06);
   }
 }
 
@@ -299,16 +353,45 @@ button.settings-menu-item {
   white-space: nowrap;
 }
 
+/* Палитра раздела: почти чёрная поверхность с градиентным 1px-кольцом и
+   фиолетовая «таблетка» выбора — как у капсулы «Главная / История» и нижней
+   навигации, а не серые плашки общего вида. */
+.page-container:has(> .settings-header) {
+  --settings-surface: #0d0d12;
+  --settings-pill: #55308a;
+  --settings-ring: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05));
+}
+
 .settings-card {
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 20px;
+  position: relative;
+  background: var(--settings-surface, var(--surface-1));
+  border-radius: 20px;
+  padding: 22px;
   max-width: 600px;
 }
 
+.settings-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--settings-ring, var(--border-subtle));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
 .settings-card + .settings-card {
-  margin-top: 20px;
+  margin-top: 16px;
+}
+
+/* Под заголовком карточки первая строка без разделителя. */
+.settings-section-title + .settings-row {
+  border-top: none;
+  margin-top: 6px;
 }
 
 .settings-card h2 {
@@ -322,8 +405,8 @@ button.settings-menu-item {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border-subtle);
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .settings-row:first-of-type {
@@ -331,8 +414,9 @@ button.settings-menu-item {
 }
 
 .settings-label {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-size: 14px;
+  font-weight: 500;
 }
 
 .settings-hint {
@@ -430,14 +514,23 @@ button.settings-menu-item {
 }
 
 .settings-gif-upload {
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 8px 12px;
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-pill);
+  padding: 10px 18px;
   color: var(--text-primary);
+  font-family: var(--font-display);
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   text-align: center;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .settings-gif-upload:hover {
+    background: var(--settings-pill, var(--surface-3));
+  }
 }
 
 .settings-gif-upload input {
@@ -460,10 +553,13 @@ button.settings-menu-item {
 
 .settings-gif-preview button {
   border: none;
-  background: var(--surface-3);
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   color: var(--text-primary);
-  border-radius: 8px;
-  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -474,6 +570,7 @@ button.settings-menu-item {
 
 /* --- Секция музыкальных предпочтений --- */
 .settings-section-title {
+  font-family: var(--font-display);
   font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
@@ -500,7 +597,7 @@ button.settings-menu-item {
 .settings-balance {
   margin-top: 24px;
   padding-top: 20px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .settings-balance-head .settings-hint {
@@ -613,17 +710,28 @@ button.settings-menu-item {
    отдельные кнопки читались бы как три независимых действия. Активный цвет —
    тот же акцент, что у чипов предпочтений. */
 .settings-row-quality {
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.settings-row-quality .settings-hint {
+  max-width: none;
+}
+
+.settings-row-quality .settings-seg-btn {
+  flex: 1;
+  min-height: 40px;
 }
 
 .settings-seg {
   display: flex;
   flex-shrink: 0;
   gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border-subtle);
+  padding: 4px;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .settings-seg-btn {
@@ -633,7 +741,9 @@ button.settings-menu-item {
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
+  font-family: var(--font-display);
   font-size: 13px;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -646,24 +756,14 @@ button.settings-menu-item {
 }
 
 .settings-seg-btn.active {
-  background: var(--brand-accent);
+  background: var(--settings-pill, var(--brand-accent));
   color: var(--text-primary);
 }
 
 /* На телефоне подпись с подсказкой и три кнопки в строку не влезают —
    переносим управление под текст и растягиваем по ширине. */
 @media (max-width: 560px) {
-  .settings-row-quality {
-    flex-wrap: wrap;
-  }
-
-  .settings-row-quality .settings-seg {
-    flex: 1 1 100%;
-  }
-
   .settings-row-quality .settings-seg-btn {
-    flex: 1;
-    min-height: 40px;
     padding: 8px 6px;
   }
 }
@@ -675,4 +775,98 @@ button.settings-menu-item {
   background:
     linear-gradient(var(--text-tertiary), var(--text-tertiary)) center / 2px 100% no-repeat,
     var(--surface-4);
+}
+
+/* Поля форм внутри карточек (почта, отзыв, сообщение) — чёрные с тонким
+   кольцом: серое поле на почти чёрной карточке выглядело чужим. */
+.settings-card .field {
+  background-color: #000;
+  border-color: rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+}
+
+.settings-card .field:focus {
+  background-color: #000;
+  border-color: var(--brand-accent);
+}
+
+/* --- Вкладки «Мой вкус» -----------------------------------------------------
+   Та же капсула, что «Главная / История» (Home.css .home-tabs): тёмная
+   основа, градиентное кольцо, фиолетовая подсветка едет под активной. */
+.settings-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 20px;
+  padding: 6px;
+  background: #0a0a0e;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.settings-tabs::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.settings-tabs::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: calc(50% - 6px);
+  border-radius: var(--radius-pill);
+  background: var(--settings-pill);
+  transition: transform 0.38s var(--ease-drawer);
+}
+
+.settings-tabs[data-active='artists']::before {
+  transform: translateX(100%);
+}
+
+.settings-tab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.2s ease;
+}
+
+.settings-tab:hover:not(.active),
+.settings-tab.active {
+  color: var(--text-primary);
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-tabs::before {
+    transition: none;
+  }
 }

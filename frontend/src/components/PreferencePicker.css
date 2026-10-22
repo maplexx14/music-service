@@ -105,6 +105,11 @@
   font-size: 15px;
   font-weight: 700;
   line-height: 1.2;
+  /* Узкая плитка (две в ряд на телефоне) не вмещает «Альтернатива»: перенос
+     по слогам с дефисом, а не обрыв на последней букве. anywhere — запас для
+     браузера без словаря переносов. */
+  hyphens: auto;
+  -webkit-hyphens: auto;
   overflow-wrap: anywhere;
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
 }

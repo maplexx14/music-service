@@ -102,7 +102,7 @@ function RatePrompt() {
 
   const openComment = () => {
     setVisible(false)
-    navigate('/settings/rate')
+    navigate('/settings/feedback')
   }
 
   return (

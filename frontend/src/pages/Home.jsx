@@ -605,7 +605,7 @@ function Home() {
         {/* Настройка потока — внизу hero, вне потока вёрстки: центр диска не сдвигается. */}
         {/* Одна иконка не объясняла, куда ведёт: подпись + та же иконка,
             что у раздела «Рекомендации» в настройках. */}
-        <Link to="/settings/recs" className="wave-settings-link">
+        <Link to="/settings/wave" className="wave-settings-link">
           <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
           Настроить поток
         </Link>
