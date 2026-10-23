@@ -541,3 +541,12 @@
   }
 }
 
+
+/* Без color-mix (старый Android WebView) — без осветления пятна, см. Artist.css. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .liked-hero-cover {
+    background:
+      radial-gradient(90% 90% at 30% 20%, var(--hero-c1), transparent 70%),
+      linear-gradient(135deg, var(--hero-c2) 0%, var(--hero-c3) 100%);
+  }
+}

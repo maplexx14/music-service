@@ -143,7 +143,7 @@
 }
 
 /* Пластинка меньше: над ней стоит заголовок «поток», он должен влезть в hero. */
-.hero-section:has(.hero-disc.is-vinyl) {
+.hero-section.has-vinyl {
   --disc-size: min(440px, 30vw, 42vh);
 }
 
@@ -163,8 +163,9 @@
   /* Статичный слепок Grainient: светлые пятна c1, две диагональные полосы c2
      под углом blendAngle шейдера, почти чёрные углы и мягкий свет под диском.
      Плоский трёхцветный градиент выглядел блекло. Рисуется один раз — годится
-     и для lite mode, и для рендера без GPU. Строка выше — фолбэк без
-     color-mix. */
+     и для lite mode, и для рендера без GPU. Строка выше фолбэком не
+     работает: объявление с var() не откатывается, — без color-mix см.
+     @supports ниже. */
   background:
     radial-gradient(30% 26% at 50% 50%, color-mix(in oklab, var(--hero-c1) 70%, white) 0%, transparent 100%),
     radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
@@ -173,6 +174,18 @@
     radial-gradient(45% 50% at 95% 5%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
     radial-gradient(45% 50% at 5% 98%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
     var(--hero-c3);
+}
+
+/* Старый Android WebView без color-mix: те же пятна без подсветки и
+   затемнения углов. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .hero-grainient-static {
+    background:
+      radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
+      radial-gradient(38% 50% at 80% 70%, var(--hero-c1) 0%, transparent 70%),
+      linear-gradient(131deg, transparent 18%, var(--hero-c2) 38%, transparent 52%, transparent 58%, var(--hero-c2) 74%, transparent 92%),
+      var(--hero-c3);
+  }
 }
 
 /* Зерно поверх слепка — гасит полосы на плавных переходах и добавляет
@@ -237,7 +250,7 @@
 /* Играет трек и диск-пластинка — заголовок встаёт над ней, а не на
    наклейку. Отступ от низа .wave-center: половина её высоты (центр кнопки
    = центр диска) плюс радиус диска и зазор. */
-.hero-section:has(.hero-disc.is-vinyl) .wave-heading {
+.hero-section.has-vinyl .wave-heading {
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
@@ -774,9 +787,17 @@
   }
 
   /* Замер с макета: пластинка — 75% ширины экрана, заголовок на ~43px выше. */
-  .hero-section:has(.hero-disc.is-vinyl) {
+  .hero-section.has-vinyl {
     --disc-size: min(360px, 75vw, 50svh);
     --heading-gap: 42px;
+  }
+
+  /* svh нет в Android WebView до 108: внутри переменной он не откатывается,
+     и диск терял размер целиком. */
+  @supports not (height: 1svh) {
+    .hero-section.has-vinyl {
+      --disc-size: min(360px, 75vw, 50vh);
+    }
   }
 
   .wave-heading {

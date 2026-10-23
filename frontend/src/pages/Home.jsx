@@ -218,6 +218,7 @@ function Home() {
   const currentCoverUrl = usePlayerStore((s) => s.currentTrack?.cover_url)
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
+  const vinylDisc = useUiSettingsStore((s) => s.vinylDisc)
   // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
   // и они тоже красятся в тон трека. Разбор — один thumb на трек, дёшево.
   const coverColors = useCoverColors(currentCoverUrl)
@@ -501,7 +502,10 @@ function Home() {
         </Link>
       </div>
       <div
-        className="hero-section"
+        // has-vinyl — то же условие, при котором HeroDisc рисует пластинку
+        // (есть трек и включён винил). Классом, а не :has(): в Android
+        // WebView до 105 его нет, и заголовок оставался на диске.
+        className={`hero-section${vinylDisc && currentTrackId != null ? ' has-vinyl' : ''}`}
         // Палитра под обложку текущего трека: WebGL-градиент получает её
         // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
         style={{

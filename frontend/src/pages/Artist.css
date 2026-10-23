@@ -499,3 +499,29 @@
     transform: none;
   }
 }
+
+/* Без color-mix (Android WebView до 111 — его на старых телефонах не
+   обновляют): объявление с var() внутри не откатывается на предыдущее, а
+   сбрасывается целиком, и вместо цветной шапки проступал чёрный фон
+   приложения. Повторяем те же слои без смешивания: полупрозрачность — через
+   затемняющий слой поверх цвета, а низ градиента уходит в прозрачный, где
+   под ним уже лежит затемнённый фон страницы. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .artist-hero {
+    background:
+      radial-gradient(120% 90% at 0% 0%, var(--hero-c1), transparent 45%),
+      linear-gradient(160deg, var(--hero-c2) 0%, var(--hero-c3) 55%, var(--bg-app) 100%);
+  }
+
+  .hero-page {
+    background:
+      linear-gradient(rgb(18 18 18 / 0.45), rgb(18 18 18 / 0.45)),
+      var(--hero-c3);
+  }
+
+  .hero-page::before {
+    background:
+      radial-gradient(120% 420px at 0% 0%, var(--hero-c1), transparent 45%),
+      linear-gradient(180deg, var(--hero-c2) 0, var(--hero-c3) 300px, transparent 100%);
+  }
+}
