@@ -10,11 +10,10 @@ const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
 const isAndroidApp = /BoltAndroid\//.test(ua)
 const isAndroid = /Android/.test(ua) && !isAndroidApp
 
-// У Android свой ключ: подсказка про APK новая, и отказ от прежней установки
-// через Chrome не должен её прятать.
-const DISMISSED_KEY = isAndroid ? 'apk-prompt-dismissed-at' : 'install-prompt-dismissed-at'
+const DISMISSED_KEY = 'install-prompt-dismissed-at'
 const APK_URL = '/bolt.apk'
-// После «Не сейчас» напоминаем не чаще раза в две недели.
+// После «Не сейчас» напоминаем не чаще раза в две недели. На Android — при
+// каждом открытии сайта: из браузера звать в приложение, пока не поставят.
 const REPEAT_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 // Не встречаем подсказкой с порога: сначала даём человеку начать слушать.
 // На Android короче: приложение — главное, что мы там предлагаем.
@@ -28,6 +27,7 @@ const isIOSOtherBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/.test(ua)
 const isIOSInApp = !isIOSOtherBrowser && (/GSA\//.test(ua) || !/Safari\//.test(ua))
 
 function wasDismissedRecently() {
+  if (isAndroid) return false
   try {
     const at = Number(localStorage.getItem(DISMISSED_KEY))
     return at > 0 && Date.now() - at < REPEAT_AFTER_MS
@@ -80,7 +80,7 @@ function InstallPrompt() {
           Музыка играет в фоне и с выключенным экраном. После скачивания открой файл и разреши установку.
         </p>
         <div className="push-prompt-actions">
-          {/* Скачал — больше не напоминаем, как после «Не сейчас». */}
+          {/* Скачал — прячем до следующего открытия сайта. */}
           <a className="btn btn--primary btn--sm" href={APK_URL} download="bolt.apk" onClick={dismiss}>
             <Download size={14} aria-hidden="true" /> Скачать
           </a>
