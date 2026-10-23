@@ -177,6 +177,9 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/music_files/') || url.pathname.startsWith('/cover_files/')) return
   if (request.destination === 'audio' || request.destination === 'video' || request.destination === 'media') return
   if (request.headers.get('range')) return
+  // APK качается переходом: ветка навигации ниже на медленной сети подсунула
+  // бы каркас из кэша, а успешный ответ записала бы в кэш вместо каркаса.
+  if (url.pathname.endsWith('.apk')) return
 
   // Навигация: network-first с таймаутом. Пока ответа нет, iOS после сплэша
   // держит пустой белый WebView — на медленной мобильной сети секундами.

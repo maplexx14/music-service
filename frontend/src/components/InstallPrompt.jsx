@@ -1,17 +1,24 @@
 import { useEffect, useState } from 'react'
 import { Download, Share, Plus, X } from 'lucide-react'
 import { isIOS, isStandalone } from '../services/navigation'
-import { canPromptInstall, onInstallAvailability, promptInstall, setInstallPromptVisible } from '../services/installPrompt'
+import { setInstallPromptVisible } from '../services/installPrompt'
 import './InstallPrompt.css'
 
-const DISMISSED_KEY = 'install-prompt-dismissed-at'
+const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+// Внутри нашего APK (WebView с BoltAndroid в UA) предлагать нечего. Мост и так
+// выдаёт standalone, но на старом WebView без document-start скрипта не успевает.
+const isAndroidApp = /BoltAndroid\//.test(ua)
+const isAndroid = /Android/.test(ua) && !isAndroidApp
+
+// У Android свой ключ: подсказка про APK новая, и отказ от прежней установки
+// через Chrome не должен её прятать.
+const DISMISSED_KEY = isAndroid ? 'apk-prompt-dismissed-at' : 'install-prompt-dismissed-at'
+const APK_URL = '/bolt.apk'
 // После «Не сейчас» напоминаем не чаще раза в две недели.
 const REPEAT_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 // Не встречаем подсказкой с порога: сначала даём человеку начать слушать.
 const SHOW_DELAY_MS = 8000
 
-const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-const isAndroid = /Android/.test(ua)
 // Сторонние браузеры на iOS (16.4+) тоже умеют «На экран Домой» через
 // «Поделиться», но кнопка не внизу, как в Safari.
 const isIOSOtherBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/.test(ua)
@@ -32,25 +39,20 @@ function wasDismissedRecently() {
 const iosEligible = isIOS && typeof window !== 'undefined' && window.innerWidth <= 768
 
 // Подсказка «добавь на главный экран». iOS: события установки нет, только
-// вручную через «Поделиться». Android: Chrome даёт beforeinstallprompt, и
-// кнопка открывает системный диалог. Без установки нет ни свайпов, ни
-// нормального фонового воспроизведения.
+// вручную через «Поделиться». Android: предлагаем скачать APK — в любом
+// браузере, не только в Chrome, и с фоновым воспроизведением через
+// foreground service. Без установки нет ни свайпов, ни нормального фона.
 function InstallPrompt() {
   const [delayPassed, setDelayPassed] = useState(false)
-  const [androidReady, setAndroidReady] = useState(() => isAndroid && canPromptInstall())
   const [dismissed, setDismissed] = useState(() => isStandalone || wasDismissedRecently())
 
   useEffect(() => {
     if (dismissed || !(iosEligible || isAndroid)) return undefined
     const timer = setTimeout(() => setDelayPassed(true), SHOW_DELAY_MS)
-    const unsubscribe = isAndroid ? onInstallAvailability(setAndroidReady) : undefined
-    return () => {
-      clearTimeout(timer)
-      unsubscribe?.()
-    }
+    return () => clearTimeout(timer)
   }, [dismissed])
 
-  const visible = !dismissed && delayPassed && (iosEligible || androidReady)
+  const visible = !dismissed && delayPassed && (iosEligible || isAndroid)
 
   useEffect(() => {
     setInstallPromptVisible(visible)
@@ -67,24 +69,20 @@ function InstallPrompt() {
     }
   }
 
-  const install = async () => {
-    const outcome = await promptInstall()
-    // Отказ в системном диалоге — тот же «Не сейчас».
-    if (outcome === 'dismissed') dismiss()
-    else setDismissed(true)
-  }
-
   let title = 'Добавь bolt на главный экран'
   let body
   if (isAndroid) {
-    title = 'Установи bolt как приложение'
+    title = 'Скачай приложение bolt для Android'
     body = (
       <>
-        <p className="install-prompt-text">Откроется на весь экран, без адресной строки браузера.</p>
+        <p className="install-prompt-text">
+          Музыка играет в фоне и с выключенным экраном. После скачивания открой файл и разреши установку.
+        </p>
         <div className="push-prompt-actions">
-          <button type="button" className="btn btn--primary btn--sm" onClick={install}>
-            <Download size={14} aria-hidden="true" /> Установить
-          </button>
+          {/* Скачал — больше не напоминаем, как после «Не сейчас». */}
+          <a className="btn btn--primary btn--sm" href={APK_URL} download="bolt.apk" onClick={dismiss}>
+            <Download size={14} aria-hidden="true" /> Скачать
+          </a>
           <button type="button" className="btn btn--ghost btn--sm" onClick={dismiss}>
             Не сейчас
           </button>
