@@ -353,7 +353,7 @@
   .import-pill-container {
     left: 12px;
     right: 12px;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 160px);
+    bottom: calc(var(--safe-bottom) + 160px);
   }
 
   .import-pill {
@@ -384,7 +384,7 @@
 
   .import-progress-modal {
     max-width: none;
-    padding: 24px 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+    padding: 24px 20px calc(var(--safe-bottom) + 20px);
     border: none;
     border-top: 1px solid rgba(162, 89, 255, 0.25);
     border-radius: 20px 20px 0 0;

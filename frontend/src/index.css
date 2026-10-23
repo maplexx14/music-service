@@ -61,6 +61,10 @@
   --icon-lg: 20px;
   --icon-xl: 24px;
   --icon-2xl: 48px;
+  /* Нижний safe-area. Android в установленном приложении отдаёт 0, и
+     таб-бар ложился на самый край экрана, под жестовую полоску; там держим
+     минимальный зазор. На iPhone без кнопки inset больше и ничего не меняется. */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   /* Шрифт сервиса — Unbounded везде (см. @font-face выше). */
   --font-text: 'Unbounded', sans-serif;
   --font-display: var(--font-text);
@@ -211,6 +215,12 @@ body {
 html,
 body {
   overscroll-behavior: none;
+}
+
+@media (display-mode: standalone) {
+  :root {
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  }
 }
 
 html {
@@ -464,6 +474,12 @@ summary:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--brand-accent);
   outline-offset: 2px;
+}
+
+/* Фокус от тапа или мыши без контура. Chromium на Android рисовал свой
+   оранжевый контур на нажатой кнопке. */
+:focus:not(:focus-visible) {
+  outline: none;
 }
 
 

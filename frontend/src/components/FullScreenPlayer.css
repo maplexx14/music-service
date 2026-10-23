@@ -13,7 +13,7 @@
   color: var(--text-primary);
   display: flex;
   flex-direction: column;
-  padding: calc(env(safe-area-inset-top, 0px) + 22px) var(--fs-pad-x) calc(env(safe-area-inset-bottom, 0px) + 24px);
+  padding: calc(env(safe-area-inset-top, 0px) + 22px) var(--fs-pad-x) calc(var(--safe-bottom) + 24px);
   z-index: 1200;
   overflow: hidden;
   transition:
@@ -748,7 +748,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   .fullscreen-player {
     --fs-pad-x: 18px;
     --fs-art: min(340px, 72vw, 42vh);
-    padding: calc(env(safe-area-inset-top, 0px) + 14px) var(--fs-pad-x) calc(env(safe-area-inset-bottom, 0px) + 12px);
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) var(--fs-pad-x) calc(var(--safe-bottom) + 12px);
   }
 
   /* Тело — во всю ширину экрана, чтобы соседние обложки доходили до края,

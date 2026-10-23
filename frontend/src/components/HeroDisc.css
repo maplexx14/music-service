@@ -9,6 +9,9 @@
   inset: 0;
   margin: auto;
   width: var(--disc-size);
+  /* Высота явно: при inset: 0 Chromium на Android растягивал диск по
+     высоте контейнера, не глядя на aspect-ratio. */
+  height: var(--disc-size);
   aspect-ratio: 1;
   border-radius: 50%;
   z-index: 1;
@@ -118,7 +121,7 @@
     /* Нижний паддинг hero больше верхнего — под нижнюю навигацию (Home.css).
        Кнопка потока центрирована без него, диск — тоже, иначе они
        разъезжаются. */
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(72px + var(--safe-bottom));
     /* Сверху hero заходит под шапку (safe-area + 68, Home.css) — диск
        центрируется ниже неё, как и кнопка, иначе он уезжал вверх. */
     top: calc(env(safe-area-inset-top, 0px) + 68px);

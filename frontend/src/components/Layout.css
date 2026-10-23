@@ -37,7 +37,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 70px);
+  bottom: calc(var(--safe-bottom) + 70px);
   z-index: 1004;
 }
 
@@ -86,7 +86,7 @@
        пальцем ехал рывками. Вложенные ленты-карусели — сами контейнеры
        прокрутки и своё горизонтальное листание сохраняют. */
     touch-action: pan-y pinch-zoom;
-    --main-pad-bottom: calc(env(safe-area-inset-bottom, 0px) + 180px);
+    --main-pad-bottom: calc(var(--safe-bottom) + 180px);
   }
 
   /* Статус-бар прозрачный (black-translucent) — без отступа под него
@@ -166,7 +166,7 @@
     position: fixed;
     left: 6px;
     right: 6px;
-    bottom: calc(env(safe-area-inset-bottom, 0px) - 2px);
+    bottom: calc(var(--safe-bottom) - 2px);
     height: 72px;
     padding: 0;
     /* Сплошной фон, без просвета: hero и обложки под панелью не видны.

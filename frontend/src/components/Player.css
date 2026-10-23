@@ -488,7 +488,7 @@
     left: 12px;
     right: 12px;
     /* Такой же размер, как меню; выше меню с зазором. */
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+    bottom: calc(var(--safe-bottom) + 80px);
     height: 72px;
     padding: 0 16px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */

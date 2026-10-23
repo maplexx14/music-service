@@ -311,7 +311,7 @@
     border: none;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 20px 20px 0 0;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: var(--safe-bottom);
     animation: atp-sheet-in 240ms var(--ease-drawer) backwards;
     will-change: transform;
   }

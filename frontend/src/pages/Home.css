@@ -743,7 +743,7 @@
        углах виден он, а не чёрный фон страницы. Высота шапки возвращена
        отступом сверху. */
     padding: calc(32px + env(safe-area-inset-top, 0px) + 68px) 16px
-      calc(32px + 72px + env(safe-area-inset-bottom, 0px));
+      calc(32px + 72px + var(--safe-bottom));
     margin: calc(-1 * (env(safe-area-inset-top, 0px) + 68px)) -16px 24px;
     width: calc(100% + 32px);
     /* Поток — на весь первый экран, до самого низа (шапка лежит
@@ -786,7 +786,7 @@
 
   /* Над нижней навигацией (72px, Layout.css). */
   .wave-settings-link {
-    bottom: calc(16px + 72px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(16px + 72px + var(--safe-bottom));
   }
 
   .content-section {
