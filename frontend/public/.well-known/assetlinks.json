@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "lat.boltmusic.app",
+      "sha256_cert_fingerprints": [
+        "03:02:CF:70:60:3A:58:BB:DB:B1:FF:70:CE:F2:DD:AA:2B:15:DD:9F:4D:07:49:DB:A5:C8:09:E6:77:68:A5:41"
+      ]
+    }
+  }
+]
