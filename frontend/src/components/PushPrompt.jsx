@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Bell, X } from 'lucide-react'
 import { enablePush, pushPermission } from '../services/push'
 import { toast } from '../store/toastStore'
+import { isInstallPromptVisible } from '../services/installPrompt'
 import './InstallPrompt.css'
 
 const DISMISSED_KEY = 'push-prompt-dismissed-at'
@@ -29,7 +30,8 @@ function PushPrompt() {
 
   useEffect(() => {
     if (pushPermission() !== 'default' || wasDismissedRecently()) return undefined
-    const timer = setTimeout(() => setVisible(true), SHOW_DELAY_MS)
+    // Подсказка установки занимает то же место — спросим в другой раз.
+    const timer = setTimeout(() => setVisible(!isInstallPromptVisible()), SHOW_DELAY_MS)
     return () => clearTimeout(timer)
   }, [])
 

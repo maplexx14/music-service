@@ -15,6 +15,7 @@ import { installFastTap } from './services/fastTap'
 import { applyGpuClass } from './utils/gpu'
 import { installPowerSaveWatch } from './utils/powerSave'
 import { diag } from './utils/playerDiag'
+import { installInstallPromptCapture } from './services/installPrompt'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
 applyGpuClass()
@@ -25,6 +26,7 @@ installImageFade()
 installFrameMeter()
 installTouchGuard()
 installFastTap()
+installInstallPromptCapture()
 
 // WebKit на iOS решает, ждать ли главный поток перед прокруткой, по
 // слушателям touch- и pointer-событий под пальцем: если среди них есть

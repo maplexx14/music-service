@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
 import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, matchPath, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
+import InstallPrompt from './components/InstallPrompt'
 import ImportTracker from './components/ImportTracker'
 import Spinner from './components/Spinner'
 import api from './services/api'
@@ -281,6 +282,9 @@ function App() {
         />
       </Routes>
       <RouteCommitSignal />
+      {/* Над роутами: подсказка видна и на входе, и в онбординге, и не
+          перезапускает таймер при смене экрана. */}
+      <InstallPrompt />
       <ActivityRouteSignal enabled={isAuthenticated} />
       <ImportTracker enabled={isAuthenticated} />
     </HistoryRouter>

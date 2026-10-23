@@ -10,7 +10,6 @@ import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
 import PlayerView from './Player'
 import ToastView from './Toast'
-import InstallPrompt from './InstallPrompt'
 import PushPrompt from './PushPrompt'
 import RatePrompt from './RatePrompt'
 import { syncPushSubscription, trackPushOpen } from '../services/push'
@@ -377,7 +376,6 @@ function Layout({ renderRoutes }) {
         <Player />
       </MeterProfiler>
       <ToastContainer />
-      {isMobile && <InstallPrompt />}
       <PushPrompt />
       <RatePrompt />
       <AddToPlaylistDialog />
