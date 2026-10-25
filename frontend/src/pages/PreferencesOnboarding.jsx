@@ -35,7 +35,7 @@ import './PreferencesOnboarding.css'
  * есть в настройках. Предпочтения сохраняются на выходе с последнего шага.
  */
 const STEPS = [
-  { title: 'Перенесите свою музыку', hint: 'Вставьте ссылку на профиль, плейлист, альбом или избранное — SoundCloud, Yandex Music или Spotify. Перенос пойдёт в фоне, пока вы выбираете жанры и артистов.' },
+  { title: 'Перенесите свою музыку', hint: 'Вставьте ссылку на профиль, плейлист, альбом или избранное — SoundCloud, Yandex Music, Spotify или Deezer. Перенос пойдёт в фоне, пока вы выбираете жанры и артистов.' },
   { title: 'Что вы любите слушать?', hint: 'Выберите жанры — мы соберём поток под ваш вкус. Это можно изменить в настройках в любой момент.' },
   { title: 'Любимые артисты', hint: 'Подсказки собраны по выбранным жанрам. Нужного нет — найдите поиском.' },
 ]
@@ -243,6 +243,7 @@ function PreferencesOnboarding() {
 
             <ul className="onboarding-import-examples">
               <li>open.spotify.com/playlist/… · /album/… · /track/…</li>
+              <li>deezer.com/playlist/… · /album/… · /track/…</li>
               <li>soundcloud.com/user · /user/sets/playlist</li>
               <li>music.yandex.ru/users/login (профиль) · /users/login/playlists/… · /album/…</li>
             </ul>

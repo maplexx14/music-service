@@ -13,6 +13,8 @@ import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { artistPath } from '../utils/artists'
 import { formatDuration } from '../utils/format'
+import { parseMusicLink, linkPagePath } from '../utils/musicLinks'
+import SourceIcon from '../components/SourceIcon'
 import './Search.css'
 
 // Пауза набора перед запросом. 600мс ощущались как «поиск думает»: локальная
@@ -27,7 +29,26 @@ const SEARCH_FILTERS = [
   { id: 'library', label: 'Медиатека' },
   { id: 'ytmusic', label: 'YouTube Music' },
   { id: 'soundcloud', label: 'SoundCloud' },
+  { id: 'deezer', label: 'Deezer' },
+  { id: 'spotify', label: 'Spotify' },
 ]
+
+// Deezer и Spotify ищутся только под своим фильтром: звука там нет, каждому
+// результату бэк подбирает запись в YouTube Music, и в «Все» это были бы
+// дубли выдачи YouTube Music ценой секунд подбора.
+const PROVIDER_FILTERS = new Set(['deezer', 'spotify'])
+const PROVIDER_LABELS = { deezer: 'Deezer', spotify: 'Spotify' }
+
+// Поиск Spotify работает только с ключами на бэке — без них фильтр прячем.
+// Статус один на сессию.
+let spotifyStatusPromise = null
+const fetchSpotifyEnabled = () => {
+  spotifyStatusPromise ??= api
+    .get('/spotify/status', { skipErrorToast: true })
+    .then(({ data }) => !!data?.configured)
+    .catch(() => false)
+  return spotifyStatusPromise
+}
 
 // «Лучшие совпадения» из своей медиатеки: локальный поиск отвечает за доли
 // секунды, внешний — за секунды, и точное совпадение из базы не должно ждать
@@ -115,6 +136,9 @@ function Search() {
   const searchError = useSearchStore((state) => state.searchError)
   const filter = useSearchStore((state) => state.filter)
   const setFilter = useSearchStore((state) => state.setFilter)
+  const providerTracks = useSearchStore((state) => state.providerTracks)
+  const [providerLoading, setProviderLoading] = useState(false)
+  const [spotifyEnabled, setSpotifyEnabled] = useState(false)
   const [loading, setLoading] = useState(false)
   // Внешний каталог отвечает за 2–5 с — дольше локальной выдачи, после
   // которой гаснет основной спиннер. Без своего индикатора страница успевала
@@ -123,9 +147,74 @@ function Search() {
   // Long-press / правый клик на треке — контекстное меню (лайк и др.).
   const trackMenu = useTrackContextMenu()
 
+  // Вставленная ссылка Spotify/Deezer/Яндекса — не запрос, а то, что надо
+  // открыть: каталог по ней искать бессмысленно.
+  const musicLink = useMemo(() => parseMusicLink(query), [query])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchSpotifyEnabled().then((enabled) => {
+      if (cancelled) return
+      setSpotifyEnabled(enabled)
+      // Фильтр Spotify мог остаться в сторе, а ключи с бэка убрали.
+      if (!enabled && useSearchStore.getState().filter === 'spotify') setFilter('all')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const filters = spotifyEnabled ? SEARCH_FILTERS : SEARCH_FILTERS.filter((f) => f.id !== 'spotify')
+
+  // Выдача Deezer/Spotify — под своим фильтром и только для текущего запроса.
+  const providerQuery = query.trim()
+  const providerResult = PROVIDER_FILTERS.has(filter) ? providerTracks[filter] : null
+  const currentProviderTracks =
+    providerResult && providerResult.q === providerQuery ? providerResult.tracks : []
+
+  useEffect(() => {
+    if (!PROVIDER_FILTERS.has(filter) || !providerQuery || parseMusicLink(providerQuery)) {
+      setProviderLoading(false)
+      return
+    }
+    if (useSearchStore.getState().providerTracks[filter]?.q === providerQuery) {
+      setProviderLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    setProviderLoading(true)
+    const timeoutId = window.setTimeout(() => {
+      api
+        .get(`/import/search/${filter}`, {
+          params: { q: providerQuery },
+          // Холодный подбор двадцати результатов — несколько секунд.
+          timeout: 0,
+          skipErrorToast: true,
+          signal: controller.signal,
+        })
+        .then(({ data }) => {
+          useSearchStore.getState().setProviderTracks(filter, providerQuery, data || [])
+          usePlayerStore.getState().prefetchTracks(data || [], 1)
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return
+          console.error(`${filter} search error:`, error)
+          useSearchStore.getState().setSearchError(`Не удалось выполнить поиск в ${PROVIDER_LABELS[filter]}.`)
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setProviderLoading(false)
+        })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timeoutId)
+      controller.abort()
+      // Оборванный запрос свой finally пропускает — снимаем спиннер здесь.
+      setProviderLoading(false)
+    }
+  }, [filter, providerQuery])
+
   useEffect(() => {
     const searchQuery = query.trim()
-    if (searchQuery.length > 0) {
+    if (searchQuery.length > 0 && !parseMusicLink(searchQuery)) {
       // Возврат на страницу с той же строкой: выдача уже в сторе целиком,
       // повторять четыре запроса незачем.
       if (useSearchStore.getState().cachedQuery === searchQuery) return
@@ -291,9 +380,9 @@ function Search() {
   }
 
   const showAll = filter === 'all'
-  const shows = (id) => showAll || filter === id
+  const shows = (id) => (showAll && !PROVIDER_FILTERS.has(id)) || filter === id
   // Спиннер внешнего поиска нужен, только если его секции вообще видны.
-  const waitingExternal = externalLoading && filter !== 'library'
+  const waitingExternal = externalLoading && filter !== 'library' && !PROVIDER_FILTERS.has(filter)
 
   const hasResults = showAll
     ? results.tracks.length > 0 ||
@@ -308,6 +397,8 @@ function Search() {
         library: results.tracks,
         ytmusic: externalTracks.ytmusic,
         soundcloud: externalTracks.soundcloud,
+        deezer: currentProviderTracks,
+        spotify: currentProviderTracks,
       }[filter].length > 0
 
   // Секция внешних треков: разметка одна на оба источника, отличаются только
@@ -330,14 +421,17 @@ function Search() {
               {...trackIntentHandlers(track)}
               {...trackMenu.getProps(track)}
             >
-              <img
-                src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
-                alt={track.title}
-                className="track-item-cover"
-                loading="lazy"
-                decoding="async"
-                onError={handleCoverError}
-              />
+              <span className="source-cover">
+                <img
+                  src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+                  alt={track.title}
+                  className="track-item-cover"
+                  loading="lazy"
+                  decoding="async"
+                  onError={handleCoverError}
+                />
+                <SourceIcon source={track.provider || track.source} />
+              </span>
               <div className="track-item-info">
                 <div className="track-item-title">
                   {track.title}
@@ -392,7 +486,9 @@ function Search() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key !== 'Enter') return
+            e.currentTarget.blur()
+            if (musicLink) navigate(linkPagePath(query))
           }}
           className="search-input"
           autoFocus
@@ -400,9 +496,9 @@ function Search() {
         {/* Фильтры — в липкой шапке, под полем: вне её в iOS PWA (клавиатура
             поднимает и прокручивает экран) лента уезжала под строку поиска
             и до неё было не добраться. */}
-        {query && (
+        {query && !musicLink && (
           <div className="search-filters" role="radiogroup" aria-label="Источник">
-            {SEARCH_FILTERS.map((item) => (
+            {filters.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -422,7 +518,15 @@ function Search() {
         <Spinner label="Поиск..." />
       )}
 
-      {!loading && query && searchError && (
+      {musicLink && (
+        <Link to={linkPagePath(query)} className="search-link-card">
+          <span className="search-link-card__kicker">{musicLink.label} · {musicLink.service}</span>
+          <span className="search-link-card__title">Слушать по ссылке</span>
+          <span className="search-link-card__hint">Треки подберутся из YouTube Music, без импорта в медиатеку</span>
+        </Link>
+      )}
+
+      {!loading && query && !musicLink && searchError && (
         <div className="search-error">{searchError}</div>
       )}
 
@@ -433,7 +537,7 @@ function Search() {
           стоит под «Лучшими совпадениями»: совпадения из медиатеки видны
           сразу, внешние дорисовываются к ним позже. С фильтром видна одна
           секция. */}
-      {!loading && query && (
+      {!loading && query && !musicLink && (
         <div className="search-results">
           {showAll && artists.length > 0 && (
             <div className="results-section artists-section">
@@ -469,6 +573,12 @@ function Search() {
             <Spinner label="Ищем в YouTube Music и SoundCloud..." />
           )}
 
+          {PROVIDER_FILTERS.has(filter) && providerLoading && (
+            <Spinner label={`Ищем в ${PROVIDER_LABELS[filter]}...`} />
+          )}
+          {PROVIDER_FILTERS.has(filter) &&
+            renderExternalSection(PROVIDER_LABELS[filter], currentProviderTracks)}
+
           {shows('library') && libraryTracks.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Треки</h2>
@@ -482,14 +592,17 @@ function Search() {
                     {...trackIntentHandlers(track)}
                     {...trackMenu.getProps(track)}
                   >
-                    <img
-                      src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
-                      alt={track.title}
-                      className="track-item-cover"
-                      onError={handleCoverError}
-                      loading="lazy"
-                      decoding="async"
-                    />
+                    <span className="source-cover">
+                      <img
+                        src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+                        alt={track.title}
+                        className="track-item-cover"
+                        onError={handleCoverError}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <SourceIcon source={track.source} />
+                    </span>
                     <div className="track-item-info">
                       <div className="track-item-title">{track.title}</div>
                       <ArtistLink artist={track.artist} className="track-item-artist" />
@@ -574,7 +687,7 @@ function Search() {
             </div>
           )}
 
-          {!loading && !waitingExternal && query && !hasResults && (
+          {!loading && !waitingExternal && !providerLoading && query && !hasResults && (
             <div className="no-results">
               <p>Ничего не найдено</p>
             </div>
@@ -585,7 +698,7 @@ function Search() {
       {!query && (
         <div className="search-placeholder">
           <h2>Найдите любимую музыку</h2>
-          <p>Ищите треки, плейлисты и исполнителей</p>
+          <p>Ищите треки, плейлисты и исполнителей — или вставьте ссылку Spotify, Deezer, Яндекс Музыки</p>
         </div>
       )}
       <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />

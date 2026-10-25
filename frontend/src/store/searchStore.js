@@ -2,6 +2,9 @@ import { create } from 'zustand'
 
 const emptyResults = { tracks: [], playlists: [] }
 const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
+// Поиск по Deezer/Spotify идёт только под своим фильтром; выдача помнит свой
+// запрос: { [provider]: { q, tracks } }.
+const emptyProviderTracks = {}
 
 // Выдача поиска живёт в сторе, а не в состоянии страницы: роутер размонтирует
 // /search при уходе на другую вкладку, и локальный useState терял и запрос, и
@@ -14,6 +17,7 @@ const useSearchStore = create((set) => ({
   resultsQuery: '',
   externalTracks: emptyExternalTracks,
   externalPlaylists: [],
+  providerTracks: emptyProviderTracks,
   artists: [],
   searchError: '',
   // Запрос, чья выдача дособрана целиком. Только по нему возврат на страницу
@@ -40,6 +44,8 @@ const useSearchStore = create((set) => ({
   setResults: (results, resultsQuery = '') => set({ results, resultsQuery }),
   setExternalTracks: (externalTracks) => set({ externalTracks }),
   setExternalPlaylists: (externalPlaylists) => set({ externalPlaylists }),
+  setProviderTracks: (provider, q, tracks) =>
+    set((state) => ({ providerTracks: { ...state.providerTracks, [provider]: { q, tracks } } })),
   setArtists: (artists) => set({ artists }),
   setSearchError: (searchError) => set({ searchError }),
 
@@ -51,6 +57,7 @@ const useSearchStore = create((set) => ({
       resultsQuery: '',
       externalTracks: emptyExternalTracks,
       externalPlaylists: [],
+      providerTracks: emptyProviderTracks,
       artists: [],
       searchError: '',
       cachedQuery: '',
@@ -65,6 +72,7 @@ const useSearchStore = create((set) => ({
       resultsQuery: '',
       externalTracks: emptyExternalTracks,
       externalPlaylists: [],
+      providerTracks: emptyProviderTracks,
       artists: [],
       searchError: '',
       cachedQuery: '',

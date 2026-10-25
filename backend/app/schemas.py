@@ -473,11 +473,28 @@ class ExternalTrackResponse(BaseModel):
     # («Song (Clean)», «Song (Radio Edit)»). Фронт рисует бейдж; см.
     # aggregate._mark_clean.
     is_clean: bool = False
+    # Где трек найден, если звук взят из другого источника: поиск по Deezer и
+    # Spotify показывает их метаданные, а играет подобранную запись YouTube
+    # Music. Фронт рисует по нему иконку сервиса на обложке.
+    provider: Optional[str] = None
     recommendation_id: Optional[str] = None
     recommendation_surface: Optional[str] = None
     recommendation_position: Optional[int] = None
     recommendation_score: Optional[float] = None
     recommendation_model_version: Optional[str] = None
+
+
+class LinkListenResponse(BaseModel):
+    """Послушать ссылку (Spotify/Deezer/Yandex) без импорта: страница треков."""
+    source: str          # spotify | deezer | yandex
+    kind: str            # playlist | album | track | artist | likes
+    title: Optional[str] = None
+    cover_url: Optional[str] = None
+    total: int           # треков в коллекции у источника
+    offset: int
+    next_offset: Optional[int] = None  # None — дальше страниц нет
+    tracks: List[ExternalTrackResponse] = []
+    skipped: int = 0     # сколько треков страницы не нашлось в YouTube Music
 
 
 class RecommendationResponse(BaseModel):

@@ -119,6 +119,15 @@
   background-color: var(--surface-3);
 }
 
+/* Кольцо значка сервиса — цвета строки, в том числе под наведением. */
+.track-item {
+  --source-icon-ring: var(--surface-1);
+}
+
+.track-item:hover {
+  --source-icon-ring: var(--surface-3);
+}
+
 .track-item-cover {
   width: 56px;
   height: 56px;
@@ -262,6 +271,43 @@
   background-color: rgba(226, 33, 52, 0.1);
   border: 1px solid rgba(226, 33, 52, 0.3);
   border-radius: 8px;
+}
+
+/* Вставленная ссылка Spotify/Deezer/Яндекса: вместо выдачи — переход. */
+.search-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  border-radius: 12px;
+  background-color: var(--surface-2);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+.search-link-card:hover {
+  background-color: var(--surface-3);
+}
+
+.search-link-card:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.search-link-card__kicker {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.search-link-card__title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.search-link-card__hint {
+  font-size: 14px;
+  color: var(--text-secondary);
 }
 
 .no-results {

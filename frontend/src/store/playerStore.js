@@ -907,7 +907,9 @@ const usePlayerStore = create((set, get) => ({
     queueExtendPromise = (async () => {
       try {
         const response = await api.get(queuePager.url, {
-          params: { ...queuePager.params, skip, limit: QUEUE_PAGE_SIZE },
+          // cursor — смещение не по очереди, а по списку источника: у ссылки
+          // Spotify/Deezer часть треков не находится, и очередь короче списка.
+          params: { ...queuePager.params, skip: queuePager.cursor ?? skip, limit: QUEUE_PAGE_SIZE },
           skipErrorToast: true,
         })
         const total = Number(response.headers['x-total-count']) || queuePager.total
@@ -923,7 +925,16 @@ const usePlayerStore = create((set, get) => ({
         // не допускает (POST даёт 400), так что совпадение id — всегда съезд.
         const known = new Set(state.queue.map((t) => t.id))
         const fresh = (response.data?.tracks || []).filter((t) => !known.has(t.id))
+        const cursorMode = queuePager.cursor != null
+        const cursor = response.data?.next_offset ?? null
+        const cursorPager = cursor != null ? { ...queuePager, cursor } : null
         if (fresh.length === 0) {
+          // По курсору пустая страница — ещё не конец: её треки могли просто
+          // не найтись. Конец — когда источник не дал следующего смещения.
+          if (cursorMode) {
+            set({ queuePager: cursorPager })
+            return false
+          }
           // Тянуть больше нечего: плейлист кончился или укоротился, пока его
           // слушали. Пейджер закрываем, иначе на каждом переходе ходили бы за
           // страницей, которой нет.
@@ -938,7 +949,9 @@ const usePlayerStore = create((set, get) => ({
           shuffledOrder: state.isShuffle
             ? [...state.shuffledOrder, ...shuffleArray(fresh.map((_, i) => skip + i))]
             : [...state.shuffledOrder, ...fresh.map((_, i) => skip + i)],
-          queuePager: skip + fresh.length < total ? { ...queuePager, total } : null,
+          queuePager: cursorMode
+            ? cursorPager
+            : skip + fresh.length < total ? { ...queuePager, total } : null,
         })
         // Хвост приехал — греем резолв ближайших, иначе первый же переход в
         // догруженную часть ждал бы холодный yt-dlp.

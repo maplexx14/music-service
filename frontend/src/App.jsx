@@ -38,6 +38,7 @@ const Search = lazyWithReload(() => import('./pages/Search'))
 const Playlists = lazyWithReload(() => import('./pages/Playlists'))
 const PlaylistDetail = lazyWithReload(() => import('./pages/PlaylistDetail'))
 const ExternalPlaylist = lazyWithReload(() => import('./pages/ExternalPlaylist'))
+const LinkPlaylist = lazyWithReload(() => import('./pages/LinkPlaylist'))
 const Album = lazyWithReload(() => import('./pages/Album'))
 const Artist = lazyWithReload(() => import('./pages/Artist'))
 const Track = lazyWithReload(() => import('./pages/Track'))
@@ -187,6 +188,7 @@ function App() {
         <Route path="/playlists" element={<Playlists />} />
         <Route path="/playlists/:id" element={<PlaylistDetail />} />
         <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
+        <Route path="/link" element={<LinkPlaylist />} />
         <Route path="/albums/:source/:id" element={<Album />} />
         <Route path="/artists/:name" element={<Artist />} />
         <Route path="/track/:id" element={<Track />} />

@@ -193,8 +193,8 @@ function Playlists() {
       {showImportForm && (
         <div className="import-playlist-form">
           <p className="import-hint">
-            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music
-            либо Spotify. Из профиля
+            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music,
+            Spotify либо Deezer. Из профиля
             Yandex Music переносятся открытые плейлисты и «Мне нравится» — каждый отдельным
             плейлистом.
           </p>
@@ -204,6 +204,13 @@ function Playlists() {
               <span className="import-example-url">open.spotify.com/playlist/37i9dQ...</span>
               <span className="import-example-url">open.spotify.com/album/1DFixL...</span>
               <span className="import-example-url">open.spotify.com/track/4cOdK2...</span>
+            </div>
+
+            <div className="import-example">
+              <span className="import-example-label">Deezer:</span>
+              <span className="import-example-url">deezer.com/playlist/908622995</span>
+              <span className="import-example-url">deezer.com/album/302127</span>
+              <span className="import-example-url">link.deezer.com/s/...</span>
             </div>
            
             <div className="import-example">
@@ -224,7 +231,7 @@ function Playlists() {
             <input
               className="field"
               type="url"
-              placeholder="https://open.spotify.com/... , https://music.yandex.ru/... или https://soundcloud.com/..."
+              placeholder="Ссылка Spotify, Deezer, Yandex Music или SoundCloud"
               value={importUrl}
               onChange={(e) => { setImportUrl(e.target.value); setPreview(null) }}
               autoFocus

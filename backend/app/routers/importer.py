@@ -1,4 +1,4 @@
-"""Импорт треков и плейлистов из внешних сервисов (SoundCloud, Yandex Music, Spotify).
+"""Импорт треков и плейлистов из внешних сервисов (SoundCloud, Yandex Music, Spotify, Deezer).
 
 Разбирает ссылку, делает каждый трек играбельным и складывает в новый плейлист
 пользователя:
@@ -11,12 +11,18 @@
 * Spotify — метаданные из spotify.py (страница встроенного плеера без ключей,
   либо Web API, если ключи заданы): аудио закрыто DRM, поэтому каждый трек
   тоже подбирается матчингом в YouTube Music.
+* Deezer — метаданные из публичного api.deezer.com (deezer_links.py), аудио
+  тем же матчингом в YouTube Music.
+
+Кроме импорта в плейлист, ссылку можно просто послушать (GET /listen): те же
+метаданные и матчинг, но без записи в БД — страница ссылки на фронте.
 
 Ключи и токены нигде не обязательны — они лишь снимают ограничения (длинные
 плейлисты в Spotify, приватные коллекции в Yandex).
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -25,10 +31,11 @@ import time
 from typing import Awaitable, Callable, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
+from app import deezer_links
 from app.artist_utils import split_title_artist
 from app.cache import get_cache_async, redis_client, set_cache, set_cache_async
 from app.database import get_db
@@ -45,6 +52,8 @@ from app.schemas import (
     ImportPreviewTrack,
     ImportRequest,
     ImportResult,
+    LinkListenResponse,
+    ExternalTrackResponse,
     PlaylistResponse,
 )
 
@@ -89,13 +98,14 @@ _SOURCE_LABELS = {
     "soundcloud": "SoundCloud",
     "yandex": "Yandex Music",
     "spotify": "Spotify",
+    "deezer": "Deezer",
 }
 
 
 def _detect(url: str) -> Tuple[str, str]:
     """Ссылка → (source, kind). Кидает 400 на нераспознанный URL.
 
-    source: soundcloud | yandex | spotify;
+    source: soundcloud | yandex | spotify | deezer;
     kind: playlist | user | track | album | artist | likes | profile.
     """
     # Spotify: и веб-ссылки (open.spotify.com/...), и URI (spotify:playlist:...).
@@ -103,6 +113,10 @@ def _detect(url: str) -> Tuple[str, str]:
     spotify_parsed = spotify.parse_url(url)
     if spotify_parsed:
         return "spotify", spotify_parsed[0]
+
+    deezer_parsed = deezer_links.parse_url(url)
+    if deezer_parsed:
+        return "deezer", deezer_parsed[0]
 
     host = (urlparse(url).netloc or "").lower()
     path = urlparse(url).path.rstrip("/")
@@ -131,19 +145,22 @@ def _detect(url: str) -> Tuple[str, str]:
 
     raise HTTPException(
         status_code=400,
-        detail="Поддерживаются только ссылки SoundCloud, Yandex Music и Spotify",
+        detail="Поддерживаются только ссылки SoundCloud, Yandex Music, Spotify и Deezer",
     )
 
 
 async def _normalize_url(url: str) -> str:
     """Приводит ссылку к разбираемому виду до _detect.
 
-    Мобильное «Поделиться» в Spotify даёт короткую spotify.link/... — из неё
-    нельзя вытащить тип и id, пока не пройден редирект.
+    Мобильное «Поделиться» в Spotify и Deezer даёт короткую ссылку
+    (spotify.link/..., link.deezer.com/s/...) — из неё нельзя вытащить тип и
+    id, пока не пройден редирект.
     """
     url = (url or "").strip()
     if spotify.is_short_link(url):
         return await spotify.resolve_short_link(url)
+    if deezer_links.is_short_link(url):
+        return await deezer_links.resolve_short_link(url)
     return url
 
 
@@ -291,7 +308,7 @@ def _build_match_query(artist: str, title: str) -> str:
 
 
 def _tracks_to_entries(tracks: List) -> List[dict]:
-    """Треки Spotify/Yandex → entries в формате yt-dlp (общий вход матчинга)."""
+    """Треки Spotify/Yandex/Deezer → entries в формате yt-dlp (общий вход матчинга)."""
     return [
         {
             "title": t.title,
@@ -300,7 +317,7 @@ def _tracks_to_entries(tracks: List) -> List[dict]:
             "duration": t.duration,
             "thumbnails": [{"url": t.cover_url}] if t.cover_url else [],
             "id": t.id,
-            # explicit есть только у Spotify (Web API); yandex-треки несут False
+            # explicit есть у Spotify (Web API) и Deezer; yandex-треки несут False
             "explicit": bool(getattr(t, "explicit", False)),
         }
         for t in tracks
@@ -344,6 +361,9 @@ async def _extract_collection(
 
     if source == "spotify":
         return await _extract_spotify(url)
+    if source == "deezer":
+        title, cover, tracks = await deezer_links.fetch_by_url(url)
+        return title, cover, _tracks_to_entries(tracks)
 
     # Для Yandex Music сначала пробуем нативный API (обходит CAPTCHA)
     yandex_errors: List[str] = []
@@ -958,6 +978,169 @@ async def import_preview(
         cover_url=cover,
         track_count=len(tracks),
         tracks=tracks,
+    )
+
+
+# Поиск по каталогам без звука (Deezer, Spotify): выдача уже с подобранными
+# записями YouTube Music. Подбор — ytmusic-поиск на каждый результат, поэтому
+# выдачу держим дольше обычного поиска.
+_PROVIDER_SEARCH_TTL = 30 * 60
+_PROVIDER_SEARCH_LIMIT = 20
+
+
+async def _provider_search(provider: str, q: str) -> List:
+    if provider == "deezer":
+        return await deezer_links.search(q, _PROVIDER_SEARCH_LIMIT)
+    return await spotify.search_spotify(q, _PROVIDER_SEARCH_LIMIT)
+
+
+@router.get("/search/{provider}", response_model=List[ExternalTrackResponse])
+async def provider_search(
+    provider: str,
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=200),
+    current_user=Depends(get_current_active_user),
+):
+    """Поиск в Deezer/Spotify → играбельные треки с их названиями и обложками.
+
+    Звук — подобранная запись YouTube Music (или SoundCloud без цензуры), как
+    при импорте и с тем же кэшем подбора. Не нашедшиеся результаты выпадают.
+    """
+    if provider not in ("deezer", "spotify"):
+        raise HTTPException(status_code=404, detail="Неизвестный источник поиска")
+    if provider == "spotify" and not spotify.is_configured():
+        raise HTTPException(status_code=503, detail="Поиск Spotify не настроен")
+
+    query = q.strip()
+    cache_key = f"provider:search:{provider}:{query.lower()}"
+    cached = await get_cache_async(cache_key)
+    if cached is None:
+        found = await _provider_search(provider, query)
+        entries = _tracks_to_entries(found)
+        sem = asyncio.Semaphore(_CONCURRENCY)
+
+        async def resolve(entry: dict) -> Optional[ExternalTrackImport]:
+            async with sem:
+                payload, _matched = await _entry_to_import(request, provider, entry)
+                return payload
+
+        matches = await asyncio.gather(*(resolve(e) for e in entries))
+        cached = [
+            {"entry": entry, "match": match.model_dump()}
+            for entry, match in zip(entries, matches)
+            if match is not None
+        ]
+        await set_cache_async(cache_key, cached, expire=_PROVIDER_SEARCH_TTL if cached else 300)
+
+    tracks: List[ExternalTrackResponse] = []
+    seen = set()
+    for item in cached:
+        entry = item["entry"]
+        track = _as_track_response(request, ExternalTrackImport(**item["match"]))
+        if track.id in seen:
+            continue  # два результата подобрались в одну запись
+        seen.add(track.id)
+        # Показываем то, что юзер искал: название, обложку и длительность
+        # из каталога; играет подобранная запись.
+        track.title = entry.get("title") or track.title
+        track.artist = _artist_of(entry) or track.artist
+        track.album = entry.get("album") or track.album
+        track.duration = int(entry.get("duration") or 0) or track.duration
+        track.cover_url = _cover_of(entry) or track.cover_url
+        track.is_explicit = bool(entry.get("explicit"))
+        track.provider = provider
+        tracks.append(track)
+
+    from app.routers import deezer
+    deezer.schedule_ytmusic_deezer_match(tracks)
+    return tracks
+
+
+# Метаданные ссылки для /listen: страницы одной коллекции не должны каждый раз
+# заново ходить в Spotify/Deezer. Коллекции меняются редко, но не вечны.
+_LISTEN_META_TTL = 15 * 60
+_LISTEN_SOURCES = ("spotify", "deezer", "yandex")
+
+
+def _as_track_response(request: Request, imp: ExternalTrackImport) -> ExternalTrackResponse:
+    stream_url = imp.stream_url or ""
+    if imp.source == "ytmusic":
+        # Хост зависит от адреса запроса, а подбор лежит в кэше месяц.
+        stream_url = f"{str(request.base_url).rstrip('/')}/api/ytdlp/stream/{imp.external_id}"
+    return ExternalTrackResponse(
+        id=f"{imp.source}:{imp.external_id}",
+        source=imp.source,
+        external_id=imp.external_id,
+        title=imp.title,
+        artist=imp.artist,
+        album=imp.album,
+        duration=imp.duration or 0,
+        cover_url=imp.cover_url,
+        stream_url=stream_url,
+        genre=imp.genre,
+        is_explicit=imp.is_explicit,
+    )
+
+
+@router.get("/listen", response_model=LinkListenResponse)
+async def listen_link(
+    request: Request,
+    response: Response,
+    url: str = Query(..., min_length=1),
+    # skip/limit — как у страниц плейлиста: по ним плеер дотягивает хвост
+    # очереди (playerStore.extendQueueIfNeeded). Матчинг дорогой (~0.6 с на
+    # трек), поэтому длинная коллекция подбирается страницами.
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    current_user=Depends(get_current_active_user),
+):
+    """Ссылка Spotify/Deezer/Yandex → играбельные треки без импорта в БД.
+
+    Подбор в YouTube Music тот же, что у импорта (и тот же кэш). skip считается
+    по трекам коллекции у источника; X-Total-Count — их число.
+    """
+    url = await _normalize_url(url)
+    source, kind = _detect(url)
+    if source not in _LISTEN_SOURCES or kind == "profile":
+        raise HTTPException(
+            status_code=400,
+            detail="Послушать можно трек, альбом или плейлист Spotify, Deezer или Yandex Music",
+        )
+
+    meta_key = f"link:listen:{hashlib.sha1(url.encode()).hexdigest()}"
+    meta = await get_cache_async(meta_key)
+    if meta is None:
+        title, cover, entries = await _extract_collection(request, url, source, kind)
+        if source == "yandex" and kind == "likes" and not title:
+            title = "Избранное (Yandex Music)"
+        meta = {"title": title, "cover": cover, "entries": entries}
+        if entries:
+            await set_cache_async(meta_key, meta, expire=_LISTEN_META_TTL)
+
+    entries = meta["entries"]
+    if not entries:
+        raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
+
+    end = skip + limit
+    imports, _matched, skipped = await _resolve_entries(request, source, entries[skip:end])
+    tracks = [_as_track_response(request, imp) for imp in imports]
+
+    # Звук ytmusic-подбора берётся из Deezer, если там есть та же запись:
+    # ищем эквиваленты заранее, как после обычного поиска.
+    from app.routers import deezer
+    deezer.schedule_ytmusic_deezer_match(tracks)
+
+    response.headers["X-Total-Count"] = str(len(entries))
+    return LinkListenResponse(
+        source=source,
+        kind=kind,
+        title=meta["title"],
+        cover_url=meta["cover"],
+        total=len(entries),
+        offset=skip,
+        next_offset=end if end < len(entries) else None,
+        tracks=tracks,
+        skipped=skipped,
     )
 
 
