@@ -7,6 +7,14 @@
   /* Сторона обложки. От неё же ширина полосы перемотки: чуть шире
      обложки, но не во весь экран. */
   --fs-art: min(440px, 78vw, 44vh);
+  /* Фирменный фиолетовый, приглушённый: тот же тон (OKLCH h≈300), но
+     насыщенность вдвое ниже (C 0.11 против 0.235 у --brand-accent). Сплошной
+     яркий акцент поверх обложки во весь экран перетягивал внимание с неё. */
+  --fs-accent: #7c61a8;
+  --fs-accent-hover: #886cb7;
+  --fs-accent-active: #6f5897;
+  --fs-accent-fill: #a28acd;
+  --fs-accent-soft: rgba(124, 97, 168, 0.32);
   /* Цвет обложки — в слоях .fullscreen-backdrop под содержимым; здесь только
      подложка на кадр до них. */
   background-color: var(--surface-2);
@@ -803,7 +811,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--brand-accent-active), var(--brand-accent-hover));
+  background: var(--fs-accent-fill);
   /* Длина — через scaleX, её ведёт анимация на композиторе
      (usePlaybackProgress): ни раскладки, ни перерисовки. */
   transform-origin: left center;
@@ -831,7 +839,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   margin-top: -5px;
   border-radius: 999px;
   background: var(--surface-inverse);
-  box-shadow: 0 0 0 4px rgba(162, 89, 255, 0.35);
+  box-shadow: 0 0 0 4px var(--fs-accent-soft);
   /* Точка появляется только под пальцем/курсором — в покое полоса чистая. */
   transform: scale(0);
   transition: transform var(--duration-base) var(--ease-out);
@@ -919,10 +927,10 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   color: var(--text-primary);
 }
 
-/* Включённый режим — акцент и точка под иконкой. */
+/* Включённый режим — приглушённый акцент под иконкой. */
 .fullscreen-tool.active {
   color: var(--text-primary);
-  background: var(--brand-accent-soft-strong);
+  background: var(--fs-accent-soft);
 }
 
 .fullscreen-tool:disabled {
@@ -930,13 +938,13 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   cursor: not-allowed;
 }
 
-/* Плей — та же кнопка, что у потока на главной: сплошной акцентный круг,
-   белая иконка, мягкое кольцо. */
+/* Плей — как у потока на главной: сплошной круг, белая иконка, мягкое
+   кольцо, — только в приглушённом фиолетовом (--fs-accent). */
 .fullscreen-play {
   width: 72px;
   height: 72px;
   border-radius: 999px;
-  background: var(--brand-accent);
+  background: var(--fs-accent);
   color: var(--text-primary);
   border: none;
   display: grid;
@@ -944,13 +952,13 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   cursor: pointer;
   box-shadow:
     0 14px 36px rgba(0, 0, 0, 0.35),
-    0 0 0 6px rgba(162, 89, 255, 0.25);
+    0 0 0 6px var(--fs-accent-soft);
   transition: transform 0.2s ease, background 0.2s ease;
   flex: 0 0 auto;
 }
 
 .fullscreen-play:hover {
-  background: var(--brand-accent-hover);
+  background: var(--fs-accent-hover);
 }
 
 /* В капсуле кольцо не нужно: её отступ (6px) и так обводит кнопку, а кольцо
@@ -967,7 +975,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 }
 
 .fullscreen-play:active {
-  background: var(--brand-accent-active);
+  background: var(--fs-accent-active);
   transition-duration: 100ms;
 }
 

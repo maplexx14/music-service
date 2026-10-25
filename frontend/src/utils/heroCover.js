@@ -13,6 +13,11 @@ const HERO_MIN_SIDE = 400
 // копии строки, где все пиксели почти чёрные; не больше четверти с края.
 const LETTERBOX_SAMPLE = 64
 const LETTERBOX_MAX_CHANNEL = 24
+// Поле от тёмного фона самой обложки отличает край: за полем картинка
+// начинается сразу (строка-две — уже яркие пиксели), а тёмный фон (bad guy
+// Billie Eilish — чёрное над головой) светлеет плавно. Без этой проверки
+// такой фон срезался как поле, и голова уходила под шапку.
+const LETTERBOX_EDGE_CHANNEL = 96
 
 const HERO_CACHE_MAX = 300
 const results = new Map()
@@ -28,17 +33,24 @@ function findLetterbox(img) {
     if (!ctx) return { top: 0, bottom: 0 }
     ctx.drawImage(img, 0, 0, n, n)
     const data = ctx.getImageData(0, 0, n, n).data
-    const isBar = (y) => {
+    const rowMax = (y) => {
+      let max = 0
       for (let x = 0; x < n; x++) {
         const i = (y * n + x) * 4
-        if (Math.max(data[i], data[i + 1], data[i + 2]) > LETTERBOX_MAX_CHANNEL) return false
+        max = Math.max(max, data[i], data[i + 1], data[i + 2])
       }
-      return true
+      return max
     }
+    const isBar = (y) => rowMax(y) <= LETTERBOX_MAX_CHANNEL
+    // Резкий край: одна из двух строк сразу за полем уже яркая.
+    const hasEdge = (y, dir) =>
+      rowMax(y) > LETTERBOX_EDGE_CHANNEL || rowMax(y + dir) > LETTERBOX_EDGE_CHANNEL
     let top = 0
     while (top < n / 4 && isBar(top)) top++
+    if (top && !hasEdge(top, 1)) top = 0
     let bottom = 0
     while (bottom < n / 4 && isBar(n - 1 - bottom)) bottom++
+    if (bottom && !hasEdge(n - 1 - bottom, -1)) bottom = 0
     // Граничная строка уменьшенной копии смешивает поле с картинкой и уже
     // не «чёрная», а край поля размыт сжатием JPEG: без запаса в две строки
     // от поля оставалась полоска (8px, потом 1px).
