@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2 } from 'lucide-react'
+import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2, ListPlus } from 'lucide-react'
 import LikeHeart from './LikeHeart'
 import {
   invalidateFlowPreload,
@@ -11,6 +11,7 @@ import {
 import { useLyrics } from '../hooks/useLyrics'
 import { useThemeColor } from '../hooks/useThemeColor'
 import { toast } from '../store/toastStore'
+import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { analyzeHeroCover, getHeroCover, guessHeroCover } from '../utils/heroCover'
@@ -736,6 +737,25 @@ function FullScreenPlayer() {
     }
   }
 
+  // «В плейлист» — общее окно (AddToPlaylistDialog), как в мини-плеере. Трек
+  // фиксируем на момент нажатия: если за время выбора заиграет следующий,
+  // добавиться должен тот, что был на экране.
+  const handleAddToPlaylist = () => {
+    if (!canInteract) return
+    haptic(HAPTIC.selection)
+    const track = currentTrack
+    openAddToPlaylist(track, {
+      resolveId: async () => {
+        if (dbTrackId !== null && usePlayerStore.getState().currentTrack?.id === track.id) {
+          return dbTrackId
+        }
+        return usePlayerStore.getState().currentTrack?.id === track.id
+          ? materializeCurrentTrack()
+          : materializeTrack(track)
+      },
+    })
+  }
+
   // Ссылка на страницу трека (/track/:id). Системный «Поделиться», где он
   // есть (телефоны), иначе — ссылка в буфер.
   //
@@ -999,6 +1019,17 @@ function FullScreenPlayer() {
           title={hasLyrics ? undefined : 'Текст не найден'}
         >
           <AlignLeft size={22} />
+        </button>
+        {/* «В плейлист» — по центру панели: самое частое действие из неё. */}
+        <button
+          type="button"
+          className="fullscreen-tool"
+          onClick={handleAddToPlaylist}
+          disabled={!canInteract}
+          aria-label="Добавить в плейлист"
+          title="Добавить в плейлист"
+        >
+          <ListPlus size={22} />
         </button>
         <button
           type="button"
