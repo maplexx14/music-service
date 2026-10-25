@@ -124,7 +124,7 @@
     bottom: calc(72px + var(--safe-bottom));
     /* Сверху hero заходит под шапку (safe-area + 68, Home.css) — диск
        центрируется ниже неё, как и кнопка, иначе он уезжал вверх. */
-    top: calc(env(safe-area-inset-top, 0px) + 68px);
+    top: calc(var(--safe-top) + 68px);
   }
 }
 

@@ -2,7 +2,7 @@
    как уведомление, но ниже него по слою: тост важнее. */
 .install-prompt {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  top: calc(var(--safe-top) + 8px);
   left: 12px;
   right: 12px;
   z-index: 1900;

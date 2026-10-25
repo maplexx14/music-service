@@ -107,7 +107,7 @@
 @media (max-width: 768px) {
   .toast-container {
     --toast-enter-y: -16px;
-    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    top: calc(var(--safe-top) + 8px);
     bottom: auto;
     padding: 0 12px;
   }

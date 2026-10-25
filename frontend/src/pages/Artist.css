@@ -400,7 +400,7 @@
   .artist-compact-bar {
     display: flex;
     position: fixed;
-    top: env(safe-area-inset-top, 0px);
+    top: var(--safe-top);
     left: 64px;
     right: 8px;
     height: 52px;

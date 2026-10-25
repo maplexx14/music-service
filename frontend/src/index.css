@@ -65,6 +65,9 @@
      таб-бар ложился на самый край экрана, под жестовую полоску; там держим
      минимальный зазор. На iPhone без кнопки inset больше и ничего не меняется. */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Верхний safe-area. Android-оболочка растянута под статус-бар, а env()
+     в WebView там часто 0 — оболочка ставит --safe-top на html сама. */
+  --safe-top: env(safe-area-inset-top, 0px);
   /* Шрифт сервиса — Unbounded везде (см. @font-face выше). */
   --font-text: 'Unbounded', sans-serif;
   --font-display: var(--font-text);
@@ -731,10 +734,6 @@ html.power-save *::after {
 }
 
 @media (max-width: 768px) {
-  html.no-gpu .mobile-status-scrim,
-  html.power-save .mobile-status-scrim {
-    background: rgba(5, 5, 5, 0.94);
-  }
   html.no-gpu .mobile-topbar,
   html.power-save .mobile-topbar {
     background: rgba(0, 0, 0, 0.95);

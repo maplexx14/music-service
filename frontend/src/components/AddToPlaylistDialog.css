@@ -307,7 +307,7 @@
   .atp-dialog {
     max-width: none;
     /* Отступ сверху под статус-бар: шторка не должна заходить под часы. */
-    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 24px);
+    max-height: calc(100dvh - var(--safe-top) - 24px);
     border: none;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 20px 20px 0 0;
