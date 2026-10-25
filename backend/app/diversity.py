@@ -60,6 +60,11 @@ _COLLAB_SPLIT = re.compile(
 )
 
 
+def primary_artist_name(name: str) -> str:
+    """Имя ПЕРВОГО артиста строки: "A, B feat. C" -> "A"."""
+    return _COLLAB_SPLIT.split((name or "").strip(), 1)[0].strip()
+
+
 def primary_artist_key(name: str) -> str:
     """Ключ по ПЕРВОМУ артисту строки.
 
@@ -67,7 +72,7 @@ def primary_artist_key(name: str) -> str:
     другим артистом, и один и тот же исполнитель проскакивает все ограничения
     на повторы.
     """
-    return artist_key(_COLLAB_SPLIT.split((name or "").strip(), 1)[0])
+    return artist_key(primary_artist_name(name))
 
 
 def artist_part_keys(name: str) -> list:

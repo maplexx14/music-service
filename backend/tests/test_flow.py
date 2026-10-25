@@ -2089,6 +2089,38 @@ def test_excluded_detected_artist_stays_out_of_taste_profile(client, db):
     assert "DetectedArtist" not in response.json()["artists"]
 
 
+def test_collab_counts_for_its_lead_artist_in_taste_profile(db):
+    """Прод 2026-10-25: лайк фита «SQWOZ BAB, Джарахов» ставил строку коллаба
+    в любимые. Вес уходит первому исполнителю, участник фита места не
+    получает, а строка коллаба остаётся знакомой для _artist_affinity."""
+    from app.routers.flow import _taste_profile
+
+    user = create_user(db, username="collab-profile-user")
+    track = Track(
+        title="collab track",
+        artist="Lead Artist, Guest Artist",
+        duration=100,
+        source="local",
+        file_path="minio://music/collab.mp3",
+    )
+    db.add(track)
+    db.commit()
+    db.execute(
+        user_track_plays.insert().values(
+            user_id=user.id,
+            track_id=track.id,
+            play_count=3,
+            last_played=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+    assert profile["artists"] == ["Lead Artist"]
+    assert "guest artist" not in profile["artist_weight"]
+    assert "lead artist, guest artist" in profile["artist_weight"]
+
+
 def test_hidden_detected_artist_still_plays_in_wave(client, db):
     """Прод 2026-10-22: крестик у подсказки «Определено по вашим
     прослушиваниям» вычеркнул юзеру из волны артиста 8 из 11 его лайков.

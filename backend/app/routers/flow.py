@@ -106,6 +106,7 @@ from app.diversity import (
     artist_part_keys,
     interleave_artists,
     primary_artist_key,
+    primary_artist_name,
     soft_artist_rerank,
     spread_into,
     weighted_order,
@@ -1488,7 +1489,42 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     # означал, что каждая подгрузка волны собирает кандидатов вокруг одних и
     # тех же нескольких имён, а остальная библиотека юзера не доходит до
     # выдачи вообще. Берём шире (_FLOW_ARTISTS из всех положительных).
-    positive_keys = [a for a, w in artist_weight.items() if w > 0]
+    #
+    # Коллаб «A, B» артистом вкуса не бывает: его вес уходит первому
+    # исполнителю, участники фита своего места не получают. Прод, 2026-10-25:
+    # у юзера в любимых стояло «SQWOZ BAB, Джарахов» от одного лайка, хотя
+    # выбран был SQWOZ BAB, а Джарахов ей не подходит. Строка коллаба остаётся
+    # в artist_weight (_artist_affinity матчит её как есть) и в банах — по ней
+    # не понять, кого из участников отвергли.
+    collab_keys = set()
+    for key, weight in list(artist_weight.items()):
+        display = artist_display.get(key, key)
+        if weight <= 0 or len(artist_part_keys(display)) < 2:
+            continue
+        collab_keys.add(key)
+        primary = primary_artist_key(display)
+        if not primary or primary in disliked_artist_keys:
+            continue
+        artist_weight[primary] = artist_weight.get(primary, 0.0) + weight
+        artist_display.setdefault(primary, primary_artist_name(display))
+        if key in non_imported_artist_keys:
+            non_imported_artist_keys.add(primary)
+        if key in imported_playlist_artist_keys:
+            imported_playlist_artist_keys.add(primary)
+        playlist_artist_totals[primary] += playlist_artist_totals[key]
+    # Каталоги любимых тоже по первому исполнителю: поиск по строке коллаба
+    # приносит как раз совместные треки — то есть музыку участника фита.
+    folded_catalog = []
+    for key in catalog_artist_keys:
+        if key in collab_keys:
+            key = primary_artist_key(artist_display.get(key, key))
+            if not key or key in disliked_artist_keys:
+                continue
+        folded_catalog.append(key)
+    catalog_artist_keys[:] = list(dict.fromkeys(folded_catalog))
+    positive_keys = [
+        a for a, w in artist_weight.items() if w > 0 and a not in collab_keys
+    ]
     # Keep the helper call's small public signature: callers/tests may provide
     # a lightweight two-argument implementation. Flow applies its per-request
     # context when selecting seeds below, so the profile itself remains a
