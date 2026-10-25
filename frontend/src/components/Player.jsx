@@ -12,6 +12,7 @@ import LikeHeart from './LikeHeart'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady, preloadCover } from '../utils/media'
+import { analyzeHeroCover, guessHeroCover } from '../utils/heroCover'
 import { beginOpenMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
@@ -660,6 +661,15 @@ function PlayerInner() {
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
     const cancel = window.cancelIdleCallback ?? clearTimeout
     const handle = idle(() => {
+      // На телефоне фуллскрин показывает обложку во весь верх (hero) —
+      // греем её: заодно проверка размера и полей готова к открытию, и плеер
+      // сразу открывается в своей раскладке. Квадрат для карусели (и клона
+      // морфа) тогда не нужен — его там нет.
+      const heroUrl = resolveCoverUrl(currentTrack.cover_url, 'hero')
+      if (window.matchMedia?.('(max-width: 768px)').matches && guessHeroCover(heroUrl)) {
+        analyzeHeroCover(heroUrl)
+        return
+      }
       preloadCover(resolveCoverUrl(currentTrack.cover_url, true), COVER_WARM_TIMEOUT_MS).catch(() => {})
     })
     return () => cancel(handle)

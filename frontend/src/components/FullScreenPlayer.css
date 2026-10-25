@@ -224,6 +224,9 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    /* Подложка-миниатюра (heroStyle) ложится так же, как сама картинка. */
+    background-size: cover;
+    background-position: center;
     will-change: opacity;
   }
 

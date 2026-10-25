@@ -13,6 +13,7 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { analyzeHeroCover, getHeroCover, guessHeroCover } from '../utils/heroCover'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
@@ -115,89 +116,30 @@ function TintBackdrop({ color, children }) {
   )
 }
 
-// Обложка во весь верх экрана вместо квадрата в карусели. Только квадратные и не мельче HERO_MIN_SIDE: превью
-// клипа 16:9 на весь экран режется, мелкая картинка мылится — для них
-// остаётся обычный плеер.
-const HERO_MIN_SIDE = 400
-
-// Чёрные поля, вшитые в саму картинку: YouTube Music отдаёт кадр клипа,
-// вписанный в квадрат, — сверху и снизу чёрные полосы. На весь экран
-// верхняя полоса легла бы под шапку чёрной лентой. Ищем по уменьшенной
-// копии строки, где все пиксели почти чёрные; не больше четверти с края.
-const LETTERBOX_SAMPLE = 64
-const LETTERBOX_MAX_CHANNEL = 24
-
-function findLetterbox(img) {
-  const n = LETTERBOX_SAMPLE
-  try {
-    const canvas = document.createElement('canvas')
-    canvas.width = n
-    canvas.height = n
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return { top: 0, bottom: 0 }
-    ctx.drawImage(img, 0, 0, n, n)
-    const data = ctx.getImageData(0, 0, n, n).data
-    const isBar = (y) => {
-      for (let x = 0; x < n; x++) {
-        const i = (y * n + x) * 4
-        if (Math.max(data[i], data[i + 1], data[i + 2]) > LETTERBOX_MAX_CHANNEL) return false
-      }
-      return true
-    }
-    let top = 0
-    while (top < n / 4 && isBar(top)) top++
-    let bottom = 0
-    while (bottom < n / 4 && isBar(n - 1 - bottom)) bottom++
-    // Граничная строка уменьшенной копии смешивает поле с картинкой и уже
-    // не «чёрная», а край поля размыт сжатием JPEG: без запаса в две строки
-    // от поля оставалась полоска (8px, потом 1px).
-    const pad = (rows) => (rows ? rows + 2 : 0) / n
-    return { top: pad(top), bottom: pad(bottom) }
-  } catch {
-    // Пиксели не прочитать (картинка с чужого домена без CORS) — без обрезки.
-    return { top: 0, bottom: 0 }
-  }
-}
-
-// Пиксели читаются только с картинки своего домена или с CORS-запросом.
-// crossOrigin — только для чужого домена (dev): для своего он перевёл бы
-// запрос в CORS-режим, и браузер скачал бы обложку второй раз мимо кэша
-// обычного <img> (см. useThemeColor).
-function isCrossOrigin(src) {
-  try {
-    return new URL(src, window.location.origin).origin !== window.location.origin
-  } catch {
-    return false
-  }
-}
-
-// Подходит ли обложка на фон — по реальным размерам картинки — и сколько
-// срезать чёрных полей. Пока новая не скачалась и не декодировалась, держим
-// прежний ответ: фон не мигает пустотой, а раскладка не прыгает
-// туда-обратно на каждой смене трека.
+// Обложка во весь верх экрана вместо квадрата в карусели (utils/heroCover).
+// Плеер открывается сразу в нужной раскладке: по готовому ответу, а если
+// обложку ещё не проверяли — по догадке от источника. На смене трека,
+// пока новую не проверили, держим прежний ответ: фон не мигает пустотой,
+// а раскладка не прыгает туда-обратно.
 function useHeroCover(url) {
-  const [hero, setHero] = useState(null)
+  const [hero, setHero] = useState(() => {
+    const known = getHeroCover(url)
+    return known !== undefined ? known : guessHeroCover(url)
+  })
   useEffect(() => {
     if (!url) {
       setHero(null)
       return undefined
     }
+    const known = getHeroCover(url)
+    if (known !== undefined) {
+      setHero(known)
+      return undefined
+    }
     let cancelled = false
-    const img = new Image()
-    if (isCrossOrigin(url)) img.crossOrigin = 'anonymous'
-    const finish = (result) => {
+    analyzeHeroCover(url).then((result) => {
       if (!cancelled) setHero(result)
-    }
-    img.onload = () => {
-      const w = img.naturalWidth
-      const h = img.naturalHeight
-      const ok = Math.min(w, h) >= HERO_MIN_SIDE && Math.abs(w / h - 1) < 0.05
-      const done = () => finish(ok ? { url, ...findLetterbox(img) } : null)
-      if (typeof img.decode === 'function') img.decode().then(done, done)
-      else done()
-    }
-    img.onerror = () => finish(null)
-    img.src = url
+    })
     return () => {
       cancelled = true
     }
@@ -207,14 +149,17 @@ function useHeroCover(url) {
 
 // Срез чёрных полей: картинка выше рамки на их долю и сдвинута вверх на
 // верхнее — поля уходят за край (у .fullscreen-hero overflow: hidden).
-function cropStyle(cover) {
+// Подложка — миниатюра из кэша (как у обложки в карусели): пока большая
+// качается, на её месте та же картинка, только мягче, а не пустой фон.
+function heroStyle(cover) {
+  const style = cover.thumb ? { backgroundImage: `url("${cover.thumb}")` } : {}
   const visible = 1 - (cover.top || 0) - (cover.bottom || 0)
-  if (visible >= 1) return undefined
-  return {
-    top: `${(-cover.top / visible) * 100}%`,
-    bottom: 'auto',
-    height: `${100 / visible}%`,
+  if (visible < 1) {
+    style.top = `${(-cover.top / visible) * 100}%`
+    style.bottom = 'auto'
+    style.height = `${100 / visible}%`
   }
+  return style
 }
 
 function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
@@ -227,7 +172,7 @@ function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
           key={layer.key}
           className={`fullscreen-hero-img${layer.entering ? ' is-entering' : ''}`}
           src={layer.value.url}
-          style={cropStyle(layer.value)}
+          style={heroStyle(layer.value)}
           alt=""
           data-no-fade=""
           decoding="async"
@@ -415,7 +360,12 @@ function FullScreenPlayer() {
     resolveCoverUrl(currentTrack?.cover_url, 'thumb') || coverUrl,
   )
 
-  const hero = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
+  const heroInfo = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
+  const heroThumb = resolveCoverUrl(currentTrack?.cover_url, 'thumb')
+  const hero = useMemo(
+    () => (heroInfo ? { ...heroInfo, thumb: heroThumb } : null),
+    [heroInfo, heroThumb],
+  )
   const heroUrl = hero?.url
   // С текстом песни обложки на экране нет — и фоном тоже: строки читаются
   // по ровному цвету, а не по картинке. Подпись при этом остаётся на месте
