@@ -573,3 +573,49 @@ def test_library_stream_schedules_censor_check(client, db, monkeypatch):
 
     assert response.status_code == 200
     assert scheduled == ["bruZDcRPOD0"]
+
+
+def test_soundcloud_audio_falls_back_to_hls(monkeypatch, tmp_path):
+    """Кандидат только с HLS (нет цельного файла) всё равно сравнивается."""
+    from app import transcode
+    from app.routers import soundcloud
+
+    async def no_progressive(track_id, permalink, force=False):
+        raise RuntimeError("нет прогрессивного аудио-формата")
+
+    async def hls(track_id):
+        assert track_id == "42"
+        return "https://cf-hls-media.sndcdn.com/playlist.m3u8", ".m4a"
+
+    remuxed = []
+
+    def remux(url, path, container, max_bytes):
+        remuxed.append((url, container))
+        with open(path, "wb") as fh:
+            fh.write(b"audio")
+        return True
+
+    monkeypatch.setattr(soundcloud, "_resolve_cached", no_progressive)
+    monkeypatch.setattr(soundcloud, "resolve_hls_via_api", hls)
+    monkeypatch.setattr(transcode, "remux_hls_to_file", remux)
+
+    path = asyncio.run(censorship._soundcloud_audio({"id": "42", "permalink": "p"}))
+    try:
+        assert path and path.endswith(".m4a")
+        assert remuxed == [("https://cf-hls-media.sndcdn.com/playlist.m3u8", "mp4")]
+    finally:
+        censorship._remove(path)
+
+
+def test_soundcloud_audio_skips_candidate_without_hls(monkeypatch):
+    from app.routers import soundcloud
+
+    async def no_progressive(track_id, permalink, force=False):
+        raise RuntimeError("DRM")
+
+    async def no_hls(track_id):
+        return None
+
+    monkeypatch.setattr(soundcloud, "_resolve_cached", no_progressive)
+    monkeypatch.setattr(soundcloud, "resolve_hls_via_api", no_hls)
+    assert asyncio.run(censorship._soundcloud_audio({"id": "42", "permalink": "p"})) is None

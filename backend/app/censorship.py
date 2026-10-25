@@ -583,9 +583,8 @@ async def _soundcloud_audio(candidate: dict) -> Optional[str]:
         url, ext, _total, _fresh = await soundcloud._resolve_cached(
             candidate["id"], candidate["permalink"]
         )
-    except Exception:  # noqa: BLE001 — HLS-only/DRM/сбой резолва: кандидат пропускается
-        logger.info("censor check: soundcloud %s not resolvable", candidate["id"])
-        return None
+    except Exception:  # noqa: BLE001 — нет цельного файла: пробуем HLS
+        return await _soundcloud_hls_audio(candidate["id"])
     fd, tmp = tempfile.mkstemp(suffix=ext or ".mp3")
     os.close(fd)
     written = 0
@@ -606,6 +605,41 @@ async def _soundcloud_audio(candidate: dict) -> Optional[str]:
         logger.warning("censor check: soundcloud %s download failed", candidate["id"], exc_info=True)
         _remove(tmp)
         return None
+
+
+async def _soundcloud_hls_audio(track_id: str) -> Optional[str]:
+    """Временный файл, собранный из HLS, или None (HLS нет, только DRM, сбой).
+
+    Перезаливы всё чаще раздаются только через HLS (BIG RUSSIAN BOSS «Кошмар»,
+    2026-10-25: у всех кандидатов лишь hls_aac) — без этого пути проверка
+    навсегда застревала на «не скачался». Собираем во временный файл, а не в
+    кэш плеера (soundcloud._ensure_hls_cached): кандидат может и не подойти,
+    архивировать его незачем.
+    """
+    import os
+    import tempfile
+
+    from app.routers import soundcloud
+    from app.transcode import remux_hls_to_file
+
+    try:
+        hls = await soundcloud.resolve_hls_via_api(track_id)
+    except Exception:  # noqa: BLE001 — сеть/API
+        logger.info("censor check: soundcloud %s HLS lookup failed", track_id, exc_info=True)
+        return None
+    if not hls:
+        logger.info("censor check: soundcloud %s not resolvable", track_id)
+        return None
+    m3u8_url, ext = hls
+    fd, tmp = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
+    container = "mp3" if ext == ".mp3" else "mp4"
+    ok = await asyncio.to_thread(remux_hls_to_file, m3u8_url, tmp, container, _MAX_AUDIO_BYTES)
+    if not ok:
+        logger.warning("censor check: soundcloud %s HLS remux failed", track_id)
+        _remove(tmp)
+        return None
+    return tmp
 
 
 def _remove(path: Optional[str]) -> None:
