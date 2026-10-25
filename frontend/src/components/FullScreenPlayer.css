@@ -775,7 +775,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 .fullscreen-progress-bar {
   position: relative;
-  height: 6px;
+  /* Тонкая линия — точка на ней (всегда видна) и так показывает позицию. */
+  height: 3px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   cursor: pointer;
@@ -790,8 +791,9 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   position: absolute;
   left: 0;
   right: 0;
-  top: -14px;
-  bottom: -14px;
+  /* С тонкой полосой зона нажатия держится той же высоты, что была. */
+  top: -16px;
+  bottom: -16px;
 }
 
 .fullscreen-progress-bar .fullscreen-progress-fill {
@@ -839,16 +841,20 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   margin-top: -5px;
   border-radius: 999px;
   background: var(--surface-inverse);
-  box-shadow: 0 0 0 4px var(--fs-accent-soft);
-  /* Точка появляется только под пальцем/курсором — в покое полоса чистая. */
-  transform: scale(0);
-  transition: transform var(--duration-base) var(--ease-out);
+  /* Точка видна всегда; под пальцем/курсором крупнее и с кольцом. В покое
+     без кольца: на нуле оно вылезало за левый край контента. */
+  box-shadow: 0 0 0 0 var(--fs-accent-soft);
+  transform: scale(1);
+  transition:
+    transform var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
 }
 
 .fullscreen-progress-bar:hover .fullscreen-progress-thumb::after,
 .fullscreen-progress-bar:active .fullscreen-progress-thumb::after,
 .fullscreen-progress-bar.is-dragging .fullscreen-progress-thumb::after {
-  transform: scale(1);
+  transform: scale(1.35);
+  box-shadow: 0 0 0 4px var(--fs-accent-soft);
 }
 
 .fullscreen-progress-time {
