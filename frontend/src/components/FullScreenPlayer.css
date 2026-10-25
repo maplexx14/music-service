@@ -834,13 +834,16 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 .fullscreen-progress-thumb::after {
   content: '';
   position: absolute;
+  /* 9px, а не 10: у полосы 3px нечётная высота, и чётная точка из-за
+     округления сидела на полпикселя ниже её середины. */
   top: 50%;
-  right: -5px;
-  width: 10px;
-  height: 10px;
-  margin-top: -5px;
+  right: -4.5px;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
   border-radius: 999px;
-  background: var(--surface-inverse);
+  /* Цвет заливки — точка читается как её конец, а не отдельный элемент. */
+  background: var(--fs-accent-fill);
   /* Точка видна всегда; под пальцем/курсором крупнее и с кольцом. В покое
      без кольца: на нуле оно вылезало за левый край контента. */
   box-shadow: 0 0 0 0 var(--fs-accent-soft);
