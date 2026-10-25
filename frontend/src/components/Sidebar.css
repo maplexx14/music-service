@@ -139,8 +139,10 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Заголовок и подсказка — на левом крае обложек (отступ строки 8px),
+   а не на оси иконок вкладок: иначе надпись висит правее списка. */
 .sidebar-section-title {
-  padding: 0 16px 8px;
+  padding: 0 8px 8px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
@@ -152,6 +154,8 @@
   color: var(--text-primary);
 }
 
+/* Список уходит под край мягко, а не обрезается: затухание сверху и снизу,
+   отступы того же размера — у начала и конца списка ничего не прячется. */
 .sidebar-playlists-list {
   flex: 1;
   min-height: 0;
@@ -159,58 +163,92 @@
   scrollbar-width: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  padding-block: 4px 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 4px, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 4px, #000 calc(100% - 16px), transparent);
 }
 
 .sidebar-playlists-list::-webkit-scrollbar {
   display: none;
 }
 
+/* Строка выровнена по вкладкам выше: центр обложки — на оси иконок,
+   название — на линии подписей (8 + 40 + 8 = 56, как 16 + 24 + 16).
+   Радиус концентричен обложке: 4 + отступ 4 = 8. */
 .sidebar-playlist {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-card);
   text-decoration: none;
   color: var(--text-secondary);
-  transition: color var(--duration-base) var(--ease-out),
-              background-color var(--duration-base) var(--ease-out);
+  transition: background-color var(--duration-base) var(--ease-out);
 }
 
 .sidebar-playlist:hover,
 .sidebar-playlist.active {
-  color: var(--text-primary);
   background-color: var(--surface-1);
+}
+
+.sidebar-playlist:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -2px;
 }
 
 .sidebar-playlist-cover {
   width: 40px;
   height: 40px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
   flex-shrink: 0;
   background-color: var(--surface-4);
-  outline: 1px solid rgba(255, 255, 255, 0.06);
+  outline: var(--image-outline);
   outline-offset: -1px;
 }
 
 .sidebar-playlist-text {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sidebar-playlist-name {
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.3;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.sidebar-playlist.active .sidebar-playlist-name {
+  color: var(--brand-accent);
+}
+
 .sidebar-playlist-meta {
   font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-playlists-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-playlists-empty:hover {
+  color: var(--text-primary);
 }
 
 .sidebar.collapsed .sidebar-playlist {

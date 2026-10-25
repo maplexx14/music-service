@@ -16,6 +16,7 @@ import {
 import { useImportStore } from '../store/importStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { plural } from '../utils/format'
 import './Sidebar.css'
 
 function Sidebar() {
@@ -33,8 +34,9 @@ function Sidebar() {
   }, [isCollapsed])
 
   // Плейлисты медиатеки — тот же список и кэш, что у вкладки «Медиатека»:
-  // создание и удаление там сразу видны здесь.
-  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
+  // создание и удаление там сразу видны здесь. null — ещё не загрузили:
+  // подсказку «пусто» не показываем, пока ответ не пришёл.
+  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? null)
   const importsCompleted = useImportStore((s) => s.completed)
   useEffect(() => subscribeCache(LIBRARY_CACHE_KEY, setPlaylists), [])
   useEffect(() => {
@@ -93,8 +95,14 @@ function Sidebar() {
             Плейлисты
           </Link>
         )}
+        {!isCollapsed && playlists?.length === 0 && (
+          <Link to="/playlists" className="sidebar-playlists-empty">
+            Создайте свой первый плейлист
+          </Link>
+        )}
         <div className="sidebar-playlists-list">
-          {playlists.map((playlist) => {
+          {(playlists ?? []).map((playlist) => {
+            const count = playlist.track_count ?? 0
             const path = `/playlists/${playlist.id}`
             return (
               <Link
@@ -115,7 +123,9 @@ function Sidebar() {
                 {!isCollapsed && (
                   <div className="sidebar-playlist-text">
                     <div className="sidebar-playlist-name">{playlist.name}</div>
-                    <div className="sidebar-playlist-meta">{playlist.track_count ?? 0} треков</div>
+                    <div className="sidebar-playlist-meta">
+                      {count} {plural(count, 'трек', 'трека', 'треков')}
+                    </div>
                   </div>
                 )}
               </Link>
