@@ -2,6 +2,7 @@
   position: fixed;
   inset: 0;
   /* Динамическая высота вьюпорта: учитывает адресную строку/панели на мобильных. */
+  height: 100vh;
   height: 100dvh;
   --fs-pad-x: 24px;
   /* Сторона обложки. От неё же ширина полосы перемотки: чуть шире
@@ -144,6 +145,10 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
     display: block;
     position: absolute;
     inset: 0 0 auto;
+    /* Без dvh (Chrome < 108, старый WebView на Android) объявление
+       невалидно, высота схлопывается в 0 — дети абсолютные — и обложки нет. */
+    height: 100vw;
+    height: max(100vw, 64vh);
     height: max(100vw, 64dvh);
     /* Срезанные чёрные поля обложки (cropStyle) уходят за край. */
     overflow: hidden;
@@ -490,8 +495,9 @@ html.no-gpu .fullscreen-art-strip img {
 .fullscreen-like-burst::before {
   content: '';
   grid-area: 1 / 1;
+  /* Высота явно, не aspect-ratio: его нет в Chrome < 88 (старый WebView). */
   width: min(190px, 41vw, 23vh);
-  aspect-ratio: 1;
+  height: min(190px, 41vw, 23vh);
   background: url('../assets/like-heart-line.webp') center / contain no-repeat;
   filter: brightness(0) blur(9px);
   opacity: 0.3;
@@ -980,7 +986,8 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 /* Треугольник «Играть» по центру рамки смотрится сдвинутым влево — масса
    фигуры у основания. Сдвиг на глаз. */
 .fullscreen-play .lucide-play {
-  translate: 2px 0;
+  /* transform, не translate: свойства translate нет в Chrome < 104. */
+  transform: translateX(2px);
 }
 
 .fullscreen-play:active {
