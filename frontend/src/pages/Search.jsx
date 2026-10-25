@@ -530,10 +530,10 @@ function Search() {
         <div className="search-error">{searchError}</div>
       )}
 
-      {/* Порядок секций фиксирован: исполнители → лучшие совпадения → треки
-          из медиатеки → YouTube Music → SoundCloud → плейлисты → пользователи.
-          Исполнители сверху — это не результат, а переход: одно нажатие вместо
-          выискивания артиста среди его же треков. Спиннер внешнего поиска
+      {/* Порядок секций фиксирован: исполнители → плейлисты → лучшие
+          совпадения → треки из медиатеки → YouTube Music → SoundCloud.
+          Исполнители и плейлисты сверху — это не результат, а переход: одно
+          нажатие вместо выискивания артиста или подборки среди треков. Спиннер внешнего поиска
           стоит под «Лучшими совпадениями»: совпадения из медиатеки видны
           сразу, внешние дорисовываются к ним позже. С фильтром видна одна
           секция. */}
@@ -567,59 +567,6 @@ function Search() {
               />
             </div>
           )}
-
-          {shows('top') && renderExternalSection('Лучшие совпадения', topTracks)}
-          {waitingExternal && (
-            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
-          )}
-
-          {PROVIDER_FILTERS.has(filter) && providerLoading && (
-            <Spinner label={`Ищем в ${PROVIDER_LABELS[filter]}...`} />
-          )}
-          {PROVIDER_FILTERS.has(filter) &&
-            renderExternalSection(PROVIDER_LABELS[filter], currentProviderTracks)}
-
-          {shows('library') && libraryTracks.length > 0 && (
-            <div className="results-section">
-              <h2 className="results-title">Треки</h2>
-              <div className="tracks-list">
-                {libraryTracks.map((track) => (
-                  <div
-                    key={track.id}
-                    className="track-item"
-                    data-fast-tap=""
-                    onClick={() => handlePlayTrack(track)}
-                    {...trackIntentHandlers(track)}
-                    {...trackMenu.getProps(track)}
-                  >
-                    <span className="source-cover">
-                      <img
-                        src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
-                        alt={track.title}
-                        className="track-item-cover"
-                        onError={handleCoverError}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                      <SourceIcon source={track.source} />
-                    </span>
-                    <div className="track-item-info">
-                      <div className="track-item-title">{track.title}</div>
-                      <ArtistLink artist={track.artist} className="track-item-artist" />
-                    </div>
-                    {formatDuration(track.duration) && (
-                      <div className="track-item-meta">
-                        <span className="track-item-duration">{formatDuration(track.duration)}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {shows('ytmusic') && renderExternalSection('YouTube Music', externalTracks.ytmusic)}
-          {shows('soundcloud') && renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
           {showAll && results.playlists.length > 0 && (
             <div className="results-section">
@@ -686,6 +633,59 @@ function Search() {
               />
             </div>
           )}
+
+          {shows('top') && renderExternalSection('Лучшие совпадения', topTracks)}
+          {waitingExternal && (
+            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
+          )}
+
+          {PROVIDER_FILTERS.has(filter) && providerLoading && (
+            <Spinner label={`Ищем в ${PROVIDER_LABELS[filter]}...`} />
+          )}
+          {PROVIDER_FILTERS.has(filter) &&
+            renderExternalSection(PROVIDER_LABELS[filter], currentProviderTracks)}
+
+          {shows('library') && libraryTracks.length > 0 && (
+            <div className="results-section">
+              <h2 className="results-title">Треки</h2>
+              <div className="tracks-list">
+                {libraryTracks.map((track) => (
+                  <div
+                    key={track.id}
+                    className="track-item"
+                    data-fast-tap=""
+                    onClick={() => handlePlayTrack(track)}
+                    {...trackIntentHandlers(track)}
+                    {...trackMenu.getProps(track)}
+                  >
+                    <span className="source-cover">
+                      <img
+                        src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+                        alt={track.title}
+                        className="track-item-cover"
+                        onError={handleCoverError}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <SourceIcon source={track.source} />
+                    </span>
+                    <div className="track-item-info">
+                      <div className="track-item-title">{track.title}</div>
+                      <ArtistLink artist={track.artist} className="track-item-artist" />
+                    </div>
+                    {formatDuration(track.duration) && (
+                      <div className="track-item-meta">
+                        <span className="track-item-duration">{formatDuration(track.duration)}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {shows('ytmusic') && renderExternalSection('YouTube Music', externalTracks.ytmusic)}
+          {shows('soundcloud') && renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
           {!loading && !waitingExternal && !providerLoading && query && !hasResults && (
             <div className="no-results">
