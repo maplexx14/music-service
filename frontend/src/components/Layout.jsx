@@ -13,6 +13,7 @@ import ToastView from './Toast'
 import PushPrompt from './PushPrompt'
 import RatePrompt from './RatePrompt'
 import { syncPushSubscription, trackPushOpen } from '../services/push'
+import { isAndroidApp, runAppAction } from '../services/androidApp'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
@@ -116,6 +117,26 @@ function Layout({ renderRoutes }) {
     trackPushOpen()
     syncPushSubscription()
   }, [])
+
+  // Android-оболочка открывает ссылки, «Поделиться» и ярлыки внутри уже
+  // запущенной страницы, без перезагрузки — иначе оборвалась бы музыка.
+  useEffect(() => {
+    if (!isAndroidApp()) return
+    window.__boltNavigate = (path) => navigate(path)
+    return () => {
+      delete window.__boltNavigate
+    }
+  }, [navigate])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const action = params.get('app')
+    if (!action) return
+    params.delete('app')
+    const rest = params.toString()
+    navigate(`${location.pathname}${rest ? `?${rest}` : ''}`, { replace: true })
+    runAppAction(action)
+  }, [location.search, location.pathname, navigate])
 
   useEffect(() => {
     const handleStorageChange = () => {

@@ -36,6 +36,7 @@ import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality
 import * as engine from '../services/audioEngine'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
+import { isAndroidApp, sendTrackFeedback } from '../services/androidApp'
 
 // Сколько ждать фонового прогрева hi-res обложки (см. эффект прогрева).
 const COVER_WARM_TIMEOUT_MS = 10000
@@ -548,6 +549,27 @@ function PlayerInner() {
     currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
+
+  // Лайк и дизлайк на системном плеере Android-оболочки. Обработчики — через
+  // ref: handleLike/handleDislike объявлены ниже раннего return.
+  const systemFeedbackRef = useRef(null)
+  const systemLiked =
+    (dbTrackId ? likedTrackIds.includes(dbTrackId) : false) ||
+    (currentTrack ? pendingLikeKeys.includes(trackLikeKey(currentTrack)) : false)
+  const systemDisliked = dbTrackId ? dislikedTrackIds.includes(dbTrackId) : false
+  useEffect(() => {
+    if (currentTrack && isAndroidApp()) sendTrackFeedback(systemLiked, systemDisliked)
+  }, [currentTrack, systemLiked, systemDisliked])
+  useEffect(() => {
+    if (!isAndroidApp() || !('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    ms.setActionHandler('bolt-like', () => systemFeedbackRef.current?.like())
+    ms.setActionHandler('bolt-dislike', () => systemFeedbackRef.current?.dislike())
+    return () => {
+      ms.setActionHandler('bolt-like', null)
+      ms.setActionHandler('bolt-dislike', null)
+    }
+  }, [])
 
   // Пользовательский скип вперёд (кнопка/свайп). Состояние читаем из store в
   // момент вызова — защита от устаревшего замыкания в обработчиках свайпа.
@@ -2472,6 +2494,7 @@ function PlayerInner() {
       setLoadingDislike(false)
     }
   }
+  systemFeedbackRef.current = { like: handleLike, dislike: handleDislike }
 
   // «В плейлист» — общее окно (AddToPlaylistDialog). Трек фиксируем на момент
   // нажатия: если за время выбора заиграет следующий, добавиться должен тот,

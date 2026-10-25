@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useSearchStore } from '../store/searchStore'
@@ -122,6 +122,7 @@ const prefetchExternalPlaylist = (id) =>
 
 function Search() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   // Всё, что должно пережить уход на другую вкладку, — в сторе: роутер
   // размонтирует страницу, и локальный useState обнулял запрос вместе с выдачей.
   const query = useSearchStore((state) => state.query)
@@ -150,6 +151,19 @@ function Search() {
   // Вставленная ссылка Spotify/Deezer/Яндекса — не запрос, а то, что надо
   // открыть: каталог по ней искать бессмысленно.
   const musicLink = useMemo(() => parseMusicLink(query), [query])
+
+  // /search?q=… — сюда Android-оболочка приносит текст из «Поделиться».
+  // Ссылку на трек или коллекцию сразу открываем, остальное — запрос.
+  useEffect(() => {
+    const shared = searchParams.get('q')
+    if (shared == null) return
+    if (parseMusicLink(shared)) {
+      navigate(linkPagePath(shared), { replace: true })
+      return
+    }
+    setQuery(shared)
+    navigate('/search', { replace: true })
+  }, [searchParams, navigate, setQuery])
 
   useEffect(() => {
     let cancelled = false
