@@ -494,6 +494,7 @@ function PlayerInner() {
   // см. heavyCoverTrackId в playerStore и HEAVY_COVER_DELAY_MS.
   const heavyCoverTrackId = usePlayerStore((s) => s.heavyCoverTrackId)
   const heavyCoverTimerRef = useRef(null)
+  const audibleTrackId = usePlayerStore((s) => s.audibleTrackId)
   // Таймер проверки «подменённый элемент реально поехал» (см. verifySwapStarted).
   const swapVerifyTimerRef = useRef(null)
   // Страховочный таймер отпускания предыдущего элемента, если 'playing' на
@@ -655,25 +656,36 @@ function PlayerInner() {
   // не на узком канале: там сотни КБ картинки стоят перебуферизации, а
   // фуллскрин откроется и с мини-обложкой. Таймаут длинный — готовность
   // запомнится и на медленной сети, — но не даёт прогреву копить промисы.
+  //
+  // На телефоне фуллскрин показывает обложку во весь верх (hero), и греем её
+  // раньше — сразу после первого звука, без HEAVY_COVER_DELAY_MS: с паузой и
+  // простоем (на iOS requestIdleCallback нет — 1,2 с таймера) прогрев шёл
+  // через ~4 с после звука, и открытый раньше плеер качал hero при открытии.
+  // Сперва full (~50 КБ, его же через 3 с возьмёт виджет системы — из кэша):
+  // он подложка hero вместо мыльной миниатюры, пока hero (80–130 КБ, у
+  // Яндекса и Deezer 1000×1000) докачивается. Потом hero — заодно проверка
+  // размера и полей готова к открытию, и плеер сразу в своей раскладке.
+  const coverWarmAllowed =
+    currentTrack?.id != null && (heavyCoverAllowed || audibleTrackId === currentTrack.id)
   useEffect(() => {
-    if (!currentTrack?.cover_url || isFullScreen || !heavyCoverAllowed) return undefined
+    if (!currentTrack?.cover_url || isFullScreen || !coverWarmAllowed) return undefined
     if (isLowQuality()) return undefined
-    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
+    const fullUrl = resolveCoverUrl(currentTrack.cover_url, true)
+    const heroUrl = resolveCoverUrl(currentTrack.cover_url, 'hero')
+    const wantsHero = window.matchMedia?.('(max-width: 768px)').matches && guessHeroCover(heroUrl)
+    if (!wantsHero && !heavyCoverAllowed) return undefined
+    let cancelled = false
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, wantsHero ? 300 : 1200))
     const cancel = window.cancelIdleCallback ?? clearTimeout
-    const handle = idle(() => {
-      // На телефоне фуллскрин показывает обложку во весь верх (hero) —
-      // греем её: заодно проверка размера и полей готова к открытию, и плеер
-      // сразу открывается в своей раскладке. Квадрат для карусели (и клона
-      // морфа) тогда не нужен — его там нет.
-      const heroUrl = resolveCoverUrl(currentTrack.cover_url, 'hero')
-      if (window.matchMedia?.('(max-width: 768px)').matches && guessHeroCover(heroUrl)) {
-        analyzeHeroCover(heroUrl)
-        return
-      }
-      preloadCover(resolveCoverUrl(currentTrack.cover_url, true), COVER_WARM_TIMEOUT_MS).catch(() => {})
-    })
-    return () => cancel(handle)
-  }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed])
+    const handle = idle(async () => {
+      await preloadCover(fullUrl, COVER_WARM_TIMEOUT_MS).catch(() => {})
+      if (wantsHero && !cancelled) analyzeHeroCover(heroUrl)
+    }, { timeout: 300 })
+    return () => {
+      cancelled = true
+      cancel(handle)
+    }
+  }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed, coverWarmAllowed])
 
   // Фон фуллскрина красится в цвет обложки (useThemeColor) по той же
   // миниатюре, что уже показана в мини-плеере. Считаем его в простое, а не

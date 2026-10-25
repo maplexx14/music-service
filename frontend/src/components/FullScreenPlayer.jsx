@@ -13,7 +13,7 @@ import { useThemeColor } from '../hooks/useThemeColor'
 import { toast } from '../store/toastStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import defaultCover from '../assets/default-cover.webp'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl, handleCoverError, isCoverReady } from '../utils/media'
 import { analyzeHeroCover, getHeroCover, guessHeroCover } from '../utils/heroCover'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
@@ -362,7 +362,12 @@ function FullScreenPlayer() {
   )
 
   const heroInfo = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
-  const heroThumb = resolveCoverUrl(currentTrack?.cover_url, 'thumb')
+  // Подложка hero — самая чёткая из готовых: full, если мини-плеер успел его
+  // прогреть (см. прогрев обложки в Player), иначе миниатюра из кэша.
+  const heroFull = resolveCoverUrl(currentTrack?.cover_url, true)
+  const heroThumb = isCoverReady(heroFull)
+    ? heroFull
+    : resolveCoverUrl(currentTrack?.cover_url, 'thumb')
   const hero = useMemo(
     () => (heroInfo ? { ...heroInfo, thumb: heroThumb } : null),
     [heroInfo, heroThumb],
