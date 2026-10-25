@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard } from 'lucide-react'
+import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2 } from 'lucide-react'
 import LikeHeart from './LikeHeart'
 import {
   invalidateFlowPreload,
@@ -77,14 +77,16 @@ function thumbTransform(ratio) {
 // не бывает).
 const MAX_TINT_LAYERS = 3
 
-function TintBackdrop({ color }) {
-  const [layers, setLayers] = useState(() => [{ key: 0, color, entering: false }])
-  const [shownColor, setShownColor] = useState(color)
-  if (color !== shownColor) {
-    setShownColor(color)
+// Слои проявления: новое значение — новый слой поверх (is-entering), слой
+// под проявившимся убирает settle. Общие для цвета фона и обложки-фона.
+function useFadeLayers(value) {
+  const [layers, setLayers] = useState(() => [{ key: 0, value, entering: false }])
+  const [shownValue, setShownValue] = useState(value)
+  if (value !== shownValue) {
+    setShownValue(value)
     setLayers((prev) => [
       ...prev.slice(1 - MAX_TINT_LAYERS),
-      { key: prev[prev.length - 1].key + 1, color, entering: true },
+      { key: prev[prev.length - 1].key + 1, value, entering: true },
     ])
   }
   const settle = (key) =>
@@ -92,6 +94,11 @@ function TintBackdrop({ color }) {
       const index = prev.findIndex((layer) => layer.key === key)
       return index > 0 ? prev.slice(index) : prev
     })
+  return [layers, settle]
+}
+
+function TintBackdrop({ color, children }) {
+  const [layers, settle] = useFadeLayers(color)
 
   return (
     <div className="fullscreen-backdrop" aria-hidden="true">
@@ -99,7 +106,132 @@ function TintBackdrop({ color }) {
         <div
           key={layer.key}
           className={`fullscreen-tint${layer.entering ? ' is-entering' : ''}`}
-          style={layer.color ? { backgroundColor: layer.color } : undefined}
+          style={layer.value ? { backgroundColor: layer.value } : undefined}
+          onAnimationEnd={layer.entering ? () => settle(layer.key) : undefined}
+        />
+      ))}
+      {children}
+    </div>
+  )
+}
+
+// Обложка во весь верх экрана вместо квадрата в карусели. Только квадратные и не мельче HERO_MIN_SIDE: превью
+// клипа 16:9 на весь экран режется, мелкая картинка мылится — для них
+// остаётся обычный плеер.
+const HERO_MIN_SIDE = 400
+
+// Чёрные поля, вшитые в саму картинку: YouTube Music отдаёт кадр клипа,
+// вписанный в квадрат, — сверху и снизу чёрные полосы. На весь экран
+// верхняя полоса легла бы под шапку чёрной лентой. Ищем по уменьшенной
+// копии строки, где все пиксели почти чёрные; не больше четверти с края.
+const LETTERBOX_SAMPLE = 64
+const LETTERBOX_MAX_CHANNEL = 24
+
+function findLetterbox(img) {
+  const n = LETTERBOX_SAMPLE
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = n
+    canvas.height = n
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return { top: 0, bottom: 0 }
+    ctx.drawImage(img, 0, 0, n, n)
+    const data = ctx.getImageData(0, 0, n, n).data
+    const isBar = (y) => {
+      for (let x = 0; x < n; x++) {
+        const i = (y * n + x) * 4
+        if (Math.max(data[i], data[i + 1], data[i + 2]) > LETTERBOX_MAX_CHANNEL) return false
+      }
+      return true
+    }
+    let top = 0
+    while (top < n / 4 && isBar(top)) top++
+    let bottom = 0
+    while (bottom < n / 4 && isBar(n - 1 - bottom)) bottom++
+    // Граничная строка уменьшенной копии смешивает поле с картинкой и уже
+    // не «чёрная», а край поля размыт сжатием JPEG: без запаса в две строки
+    // от поля оставалась полоска (8px, потом 1px).
+    const pad = (rows) => (rows ? rows + 2 : 0) / n
+    return { top: pad(top), bottom: pad(bottom) }
+  } catch {
+    // Пиксели не прочитать (картинка с чужого домена без CORS) — без обрезки.
+    return { top: 0, bottom: 0 }
+  }
+}
+
+// Пиксели читаются только с картинки своего домена или с CORS-запросом.
+// crossOrigin — только для чужого домена (dev): для своего он перевёл бы
+// запрос в CORS-режим, и браузер скачал бы обложку второй раз мимо кэша
+// обычного <img> (см. useThemeColor).
+function isCrossOrigin(src) {
+  try {
+    return new URL(src, window.location.origin).origin !== window.location.origin
+  } catch {
+    return false
+  }
+}
+
+// Подходит ли обложка на фон — по реальным размерам картинки — и сколько
+// срезать чёрных полей. Пока новая не скачалась и не декодировалась, держим
+// прежний ответ: фон не мигает пустотой, а раскладка не прыгает
+// туда-обратно на каждой смене трека.
+function useHeroCover(url) {
+  const [hero, setHero] = useState(null)
+  useEffect(() => {
+    if (!url) {
+      setHero(null)
+      return undefined
+    }
+    let cancelled = false
+    const img = new Image()
+    if (isCrossOrigin(url)) img.crossOrigin = 'anonymous'
+    const finish = (result) => {
+      if (!cancelled) setHero(result)
+    }
+    img.onload = () => {
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      const ok = Math.min(w, h) >= HERO_MIN_SIDE && Math.abs(w / h - 1) < 0.05
+      const done = () => finish(ok ? { url, ...findLetterbox(img) } : null)
+      if (typeof img.decode === 'function') img.decode().then(done, done)
+      else done()
+    }
+    img.onerror = () => finish(null)
+    img.src = url
+    return () => {
+      cancelled = true
+    }
+  }, [url])
+  return hero
+}
+
+// Срез чёрных полей: картинка выше рамки на их долю и сдвинута вверх на
+// верхнее — поля уходят за край (у .fullscreen-hero overflow: hidden).
+function cropStyle(cover) {
+  const visible = 1 - (cover.top || 0) - (cover.bottom || 0)
+  if (visible >= 1) return undefined
+  return {
+    top: `${(-cover.top / visible) * 100}%`,
+    bottom: 'auto',
+    height: `${100 / visible}%`,
+  }
+}
+
+function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
+  const [layers, settle] = useFadeLayers(cover)
+
+  return (
+    <div className={className}>
+      {layers.map((layer) => (
+        <img
+          key={layer.key}
+          className={`fullscreen-hero-img${layer.entering ? ' is-entering' : ''}`}
+          src={layer.value.url}
+          style={cropStyle(layer.value)}
+          alt=""
+          data-no-fade=""
+          decoding="async"
+          draggable={false}
           onAnimationEnd={layer.entering ? () => settle(layer.key) : undefined}
         />
       ))}
@@ -231,6 +363,10 @@ function FullScreenPlayer() {
   // иначе под клоном была бы вторая картинка.
   const [coverHidden, setCoverHidden] = useState(isCoverMorphActive)
   const [lyricsMode, setLyricsMode] = useState(false)
+  // Текст песни во весь экран (телефон): подпись, перемотка и кнопки
+  // прячутся, внизу остаётся узкая полоса с названием и плеем.
+  const [lyricsExpanded, setLyricsExpanded] = useState(false)
+  const expanded = lyricsMode && lyricsExpanded
   // Демо-режим: караоке для записи экрана, поверх плеера (см. DemoMode).
   const [demoMode, setDemoMode] = useState(false)
   const gestureRef = useRef(null)
@@ -278,6 +414,20 @@ function FullScreenPlayer() {
     true,
     resolveCoverUrl(currentTrack?.cover_url, 'thumb') || coverUrl,
   )
+
+  const hero = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
+  const heroUrl = hero?.url
+  // С текстом песни обложки на экране нет — и фоном тоже: строки читаются
+  // по ровному цвету, а не по картинке. Подпись при этом остаётся на месте
+  // (has-cover-info): включение текста не двигает название и артиста.
+  const hasHero = Boolean(heroUrl) && !lyricsMode
+  // А под текстом песни — та же обложка, размытая во весь экран. Размытие
+  // не требует чёткой картинки: берём миниатюру из кэша, подойдёт и превью
+  // клипа 16:9.
+  const blurUrl = lyricsMode
+    ? resolveCoverUrl(currentTrack?.cover_url, 'thumb') || coverUrl
+    : null
+  const blurCover = useMemo(() => (blurUrl ? { url: blurUrl } : null), [blurUrl])
 
   // Смена трека — карусель доезжает: обложка, что была соседом справа
   // (вперёд) или слева (назад), уже стоит в центре, а полосу сдвигаем туда,
@@ -695,9 +845,24 @@ function FullScreenPlayer() {
         : String(slide.track.id),
     }))
 
+  // Кнопка «текст во весь экран». При подписи с логотипом (has-cover-info)
+  // стоит над логотипом справа от названия; в развёрнутом тексте (подписи
+  // нет) и без логотипа — в правом нижнем углу текста песни.
+  const expandButton = (
+    <button
+      type="button"
+      className="fullscreen-icon fullscreen-lyrics-expand"
+      onClick={() => setLyricsExpanded(!lyricsExpanded)}
+      aria-pressed={expanded}
+      aria-label={expanded ? 'Свернуть текст' : 'Текст во весь экран'}
+    >
+      {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+    </button>
+  )
+
   return (
     <div
-      className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}`}
+      className={`fullscreen-player${isClosing ? ' is-closing' : ''}${lyricsMode ? ' has-lyrics' : ''}${hasHero ? ' has-hero' : ''}${heroUrl ? ' has-cover-info' : ''}${expanded ? ' lyrics-expanded' : ''}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -705,7 +870,10 @@ function FullScreenPlayer() {
       ref={playerRef}
       style={{ '--art-gap': `${ART_GAP}px` }}
     >
-      <TintBackdrop color={tint} />
+      <TintBackdrop color={tint}>
+        {hero && <HeroBackdrop cover={hero} />}
+        {blurCover && <HeroBackdrop cover={blurCover} className="fullscreen-blur" />}
+      </TintBackdrop>
       <div className="fullscreen-header">
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
@@ -783,6 +951,12 @@ function FullScreenPlayer() {
                 <div className="fullscreen-reason">новый для вас артист</div>
               )}
             </div>
+            {heroUrl && (
+              <div className="fullscreen-info-side">
+                {lyricsMode && hasLyrics && !expanded && expandButton}
+                <img className="fullscreen-info-logo" src="/logoBoltwo.webp" alt="" aria-hidden="true" />
+              </div>
+            )}
           </div>
 
           {/* Desktop: lyrics appear to the right of art+info */}
@@ -799,7 +973,24 @@ function FullScreenPlayer() {
             <LyricsPanel isolateTouches />
           </div>
         )}
+        {lyricsMode && hasLyrics && (!heroUrl || expanded) && expandButton}
       </div>
+
+      {expanded && (
+        <div className="fullscreen-lyrics-bar">
+          <div className="fullscreen-lyrics-bar-info">
+            <div className="fullscreen-lyrics-bar-title">{shownTrack.title}</div>
+            <div className="fullscreen-lyrics-bar-artist">{shownTrack.artist}</div>
+          </div>
+          <button
+            className="fullscreen-play fullscreen-lyrics-bar-play"
+            onClick={togglePlayPause}
+            aria-label={isPlaying ? 'Пауза' : 'Играть'}
+          >
+            {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
+          </button>
+        </div>
+      )}
 
       <FullScreenProgress />
 

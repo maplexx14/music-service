@@ -32,6 +32,16 @@ const COVER_VARIANTS = {
     spotify: 'ab67616d0000b273',
     deezer: '500x500',
   },
+  // hero — обложка во весь верх полноэкранного плеера: ~400×560 CSS px на
+  // экране, 500px там уже мылится.
+  hero: {
+    google: 'w1200-h1200',
+    googleQuality: 75,
+    yandex: '1000x1000',
+    soundcloud: 't500x500',
+    spotify: 'ab67616d0000b273',
+    deezer: '1000x1000',
+  },
 }
 
 // Spotify кодирует размер префиксом id картинки: 4851 — 64px, 1e02 — 300px,
@@ -48,7 +58,7 @@ const sizeCover = (url, size) => {
     return v.googleQuality ? sized.replace(/(=w\d+-h\d+)-l\d+/, `$1-l${v.googleQuality}`) : sized
   }
   if (url.includes('ytimg.com')) {
-    return size === 'full'
+    return size === 'full' || size === 'hero'
       ? url.replace(/\/(default|mqdefault|hqdefault|sddefault)\.jpg/, '/maxresdefault.jpg')
       : url
   }
@@ -73,7 +83,7 @@ const sizeCover = (url, size) => {
 // оно идёт через наш прокси. Бэкенд тянет обложку через свой выход и кэширует.
 const proxyExternalCover = (url) => `${API_URL}/tracks/cover-proxy?url=${encodeURIComponent(url)}`
 
-// Резолвит URL обложки. Второй аргумент — размер: 'thumb' | 'card' | 'full'.
+// Резолвит URL обложки. Второй аргумент — размер: 'thumb' | 'card' | 'full' | 'hero'.
 // true — прежняя форма записи для 'full', по умолчанию 'card'. Свои
 // (загруженные) обложки лежат одним файлом — размер на них не влияет.
 export const resolveCoverUrl = (coverUrl, size = 'card') => {

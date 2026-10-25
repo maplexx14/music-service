@@ -78,6 +78,221 @@ html.no-gpu .fullscreen-backdrop::after {
   will-change: auto;
 }
 
+/* Режим текста песни: обложка размыта во
+   весь экран. Размывается маленькая картинка (12vmax), а до экрана её
+   растягивает transform: blur по сотне пикселей вместо полноэкранного, и
+   растяжение само добавляет мягкости. Растянута с запасом — размытые края
+   уходят за экран. Сверху затемнение, чтобы строки читались на любой
+   обложке. */
+.fullscreen-blur {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.fullscreen-blur::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.fullscreen-blur .fullscreen-hero-img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12vmax;
+  height: 12vmax;
+  object-fit: cover;
+  filter: blur(3px) saturate(1.3);
+  transform: translate(-50%, -50%) scale(12);
+  will-change: opacity;
+}
+
+.fullscreen-blur .fullscreen-hero-img.is-entering {
+  animation: fs-tint-in 0.6s ease both;
+}
+
+html.no-gpu .fullscreen-blur .fullscreen-hero-img {
+  will-change: auto;
+}
+
+html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
+  animation: none;
+}
+
+/* Обложка во весь верх экрана, книзу
+   растворяется в цвет обложки — под подписью и кнопками ровный фон.
+   Только на телефоне: на широком экране квадрат во всю ширину обрезался бы
+   до полоски. Высота больше ширины — бока обложки срезаются, как у Apple
+   Music; центр, где обычно герой картинки, остаётся. */
+.fullscreen-hero,
+.fullscreen-info-side {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .fullscreen-player.has-hero .fullscreen-hero {
+    display: block;
+    position: absolute;
+    inset: 0 0 auto;
+    height: max(100vw, 64dvh);
+    /* Срезанные чёрные поля обложки (cropStyle) уходят за край. */
+    overflow: hidden;
+    /* Растворение начинается заметно выше подписи: внизу обложек часто
+       название альбома или лого группы, и оно лезло под название трека. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+    mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+  }
+
+  /* Логотип в шапке лежал бы на картинке и спорил с надписями обложки —
+     он переезжает в строку названия, справа, где обложка уже растворилась
+     в фон. Место в шапке остаётся, чтобы кнопки не съехали. */
+  .fullscreen-player.has-cover-info .fullscreen-logo {
+    visibility: hidden;
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-info {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  /* Текст во весь экран: подписи с логотипом нет, фон размыт — логотип
+     возвращается в шапку, только мельче обычного. */
+  .fullscreen-player.has-cover-info.lyrics-expanded .fullscreen-logo {
+    visibility: visible;
+    height: 30px;
+  }
+
+  /* Правая колонка подписи: кнопка «текст во весь экран» по верхней строке
+     (название), логотип — по нижней (артист). Правые края значка и
+     логотипа — на одной линии с концом полосы перемотки. */
+  .fullscreen-player.has-cover-info .fullscreen-info-side {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: flex-end;
+    align-self: stretch;
+    position: relative;
+  }
+
+  /* Значок 18px в кнопке 32px: right −7px ставит сам значок вровень с правым
+     краем логотипа, bottom — центр значка на середину заглавных букв
+     названия (замер по скрину). Абсолютно: в потоке колонка выходила выше
+     подписи и флекс выталкивал значок вверх. Зона нажатия остаётся 32px. */
+  .fullscreen-player.has-cover-info.has-lyrics .fullscreen-info-side .fullscreen-lyrics-expand {
+    display: grid;
+    position: absolute;
+    right: -7px;
+    bottom: 18px;
+    width: 32px;
+    height: 32px;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.86);
+  }
+
+  .fullscreen-info-logo {
+    height: 22px;
+    width: auto;
+    opacity: 0.9;
+  }
+
+  /* Центр логотипа — на середине строки артиста (замер по скрину): подпись
+     приподнята на 2px над низом колонки. Не сдвигом логотипа вниз — блок
+     подписи обрезан (overflow: hidden у .fullscreen-content), и вылезший за
+     него низ логотипа срезался. */
+  .fullscreen-player.has-cover-info .fullscreen-info > div:first-child {
+    padding-bottom: 2px;
+  }
+
+
+  /* Затемнение под шапкой: стрелка и «Поделиться» белые, а обложка сверху
+     бывает светлой (небо, белый фон). */
+  .fullscreen-player.has-hero .fullscreen-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(env(safe-area-inset-top, 0px) + 120px);
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
+  }
+
+  .fullscreen-hero-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    will-change: opacity;
+  }
+
+  .fullscreen-hero-img.is-entering {
+    animation: fs-tint-in 0.6s ease both;
+  }
+
+  html.no-gpu .fullscreen-hero-img {
+    will-change: auto;
+  }
+
+  html.no-gpu .fullscreen-hero-img.is-entering {
+    animation: none;
+  }
+
+  /* Квадрата карусели нет — его место пустое и ловит двойной тап (лайк),
+     подпись прижата книзу, на растворяющийся край обложки. */
+  .fullscreen-player.has-hero:not(.has-lyrics) .fullscreen-content {
+    justify-content: flex-end;
+  }
+
+  .fullscreen-player.has-hero:not(.has-lyrics) .fullscreen-art {
+    flex: 1 1 auto;
+    align-self: stretch;
+    margin: 0;
+  }
+
+  .fullscreen-player.has-hero .fullscreen-art img {
+    display: none;
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-info {
+    text-align: left;
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-track-name {
+    font-size: clamp(22px, 6.6vw, 28px);
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-track-name,
+  .fullscreen-player.has-cover-info .fullscreen-artist {
+    /* Тень короткая: у названия и артиста overflow: hidden (многоточие,
+       две строки), и широкое размытие обрезалось по их рамке — за текстом
+       проступал тёмный прямоугольник. Под подписью обложка уже растворена,
+       для читаемости хватает и такой. */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-artist {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .fullscreen-player.has-cover-info .fullscreen-progress {
+    margin-top: 22px;
+  }
+
+  /* Текст песни включён: подпись та же, что без него, — без черты сверху и
+     без уменьшенного шрифта режима текста (см. has-lyrics ниже). */
+  .fullscreen-player.has-cover-info.has-lyrics .fullscreen-info {
+    padding: 14px 0 0;
+    border-top: 0;
+  }
+
+  .fullscreen-player.has-cover-info.has-lyrics .fullscreen-track-name {
+    font-size: clamp(22px, 6.6vw, 28px);
+    font-weight: 800;
+  }
+}
+
 @starting-style {
   .fullscreen-player {
     transform: translateY(100%);
@@ -288,6 +503,9 @@ html.no-gpu .fullscreen-art-strip img {
   border-radius: 12px;
   object-fit: cover;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  /* Край тёмной обложки на тёмном фоне иначе пропадает. */
+  outline: 1px solid rgba(255, 255, 255, 0.1);
+  outline-offset: -1px;
   /* Под картинкой — её маленькая версия (background-image инлайном из
      FullScreenPlayer), пока полноразмерная не загрузилась. */
   background-color: var(--surface-1);
@@ -732,6 +950,19 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   background: var(--brand-accent-hover);
 }
 
+/* В капсуле кольцо не нужно: её отступ (6px) и так обводит кнопку, а кольцо
+   той же толщины упиралось в край капсулы. Круг и капсула концентричны:
+   радиус капсулы = радиус кнопки + отступ. */
+.fullscreen-transport .fullscreen-play {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Треугольник «Играть» по центру рамки смотрится сдвинутым влево — масса
+   фигуры у основания. Сдвиг на глаз. */
+.fullscreen-play .lucide-play {
+  translate: 2px 0;
+}
+
 .fullscreen-play:active {
   background: var(--brand-accent-active);
   transition-duration: 100ms;
@@ -762,7 +993,10 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     overflow: visible;
   }
 
+  /* Полоса перемотки — во всю ширину контента: от того же края, что
+     подпись, кнопки и нижняя панель. */
   .fullscreen-progress {
+    max-width: none;
     margin-top: 28px;
   }
 
@@ -772,6 +1006,16 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
   .fullscreen-header {
     gap: 10px;
+  }
+
+  /* Значок 22px в кнопке 40px: без сдвига стрелка и «Поделиться» стояли на
+     9px глубже края, по которому выровнены подпись, кнопки и панель. */
+  .fullscreen-header > .fullscreen-icon:first-child {
+    margin-left: -9px;
+  }
+
+  .fullscreen-header > .fullscreen-icon:last-child {
+    margin-right: -9px;
   }
 
   .fullscreen-icon {
@@ -1099,3 +1343,82 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
     animation: none;
   }
 }
+
+/* Текст песни во весь экран — только телефон: на широком экране текст и так
+   занимает свою колонку во всю высоту. */
+.fullscreen-lyrics-expand,
+.fullscreen-lyrics-bar {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* В правом нижнем углу текста: отдельный элемент тела сразу за текстом
+     (тот же order), поднятый на свою высоту поверх его низа. Не внутри
+     текста — там маска растворения строк погасила бы и кнопку. */
+  .fullscreen-player.has-lyrics .fullscreen-lyrics-expand {
+    display: grid;
+    order: 1;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    position: relative;
+    z-index: 1;
+    margin-top: -36px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    background: rgba(0, 0, 0, 0.28);
+    color: rgba(255, 255, 255, 0.86);
+  }
+
+  .fullscreen-player.lyrics-expanded .fullscreen-content,
+  .fullscreen-player.lyrics-expanded .fullscreen-progress,
+  .fullscreen-player.lyrics-expanded .fullscreen-controls,
+  .fullscreen-player.lyrics-expanded .fullscreen-tools {
+    display: none;
+  }
+
+  /* Внизу — название и плей одной строкой: пауза под рукой, а что играет,
+     видно без возврата к плееру. */
+  .fullscreen-player.lyrics-expanded .fullscreen-lyrics-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-top: 14px;
+    animation: fs-lyrics-in 240ms var(--ease-out) both;
+  }
+
+  .fullscreen-lyrics-bar-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .fullscreen-lyrics-bar-title {
+    font-size: var(--text-base);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fullscreen-lyrics-bar-artist {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: var(--text-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fullscreen-player .fullscreen-lyrics-bar-play {
+    width: 52px;
+    height: 52px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fullscreen-player.lyrics-expanded .fullscreen-lyrics-bar {
+    animation: none;
+  }
+}
+
