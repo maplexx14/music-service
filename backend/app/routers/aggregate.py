@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from itertools import zip_longest
 from types import SimpleNamespace
 from typing import List, Tuple
 
@@ -9,7 +10,8 @@ from fastapi import APIRouter, Query, Request
 from app import censorship
 from app.artist_utils import is_derivative_title
 from app.cache import get_cache_async, set_cache_async
-from app.routers import soulseek, soundcloud, ytdlp
+from app import deezer_links
+from app.routers import soulseek, soundcloud, spotify, ytdlp
 from app.routers.ytdlp import clean_title
 from app.schemas import (
     ExternalPlaylistResponse,
@@ -443,28 +445,55 @@ async def search_external_grouped(
     return ExternalSearchGrouped(top=top, ytmusic=ytmusic, soundcloud=soundcloud_tracks)
 
 
+_PLAYLIST_SEARCHERS = {
+    "soundcloud": lambda q, limit: soundcloud.search_soundcloud_playlists(q, limit),
+    "ytmusic": lambda q, limit: ytdlp.search_ytmusic_playlists(q, limit),
+    "deezer": lambda q, limit: deezer_links.search_playlists(q, limit),
+    "spotify": lambda q, limit: spotify.search_spotify_playlists(q, limit),
+}
+
+
+def _interleave(groups: List[List[ExternalPlaylistResponse]]) -> List[ExternalPlaylistResponse]:
+    """По одному из каждого источника по кругу: лента не начинается с десятка
+    плейлистов одного сервиса."""
+    out: List[ExternalPlaylistResponse] = []
+    for row in zip_longest(*groups):
+        out.extend(p for p in row if p is not None)
+    return out
+
+
 @router.get("/external/playlists", response_model=List[ExternalPlaylistResponse])
 async def search_external_playlists(
     q: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=30),
+    # Поиск зовёт все сервисы, главная — только SoundCloud (по умолчанию).
+    sources: str = Query("soundcloud"),
 ):
-    """Поиск плейлистов во внешних источниках (пока только SoundCloud).
+    """Поиск плейлистов во внешних источниках (SoundCloud, YouTube Music,
+    Deezer, Spotify — последний только с ключами).
 
     Главная дёргает этот эндпоинт веером по сидам вкуса на КАЖДЫЙ заход, а
     каждый запрос — это ход через прокси к api-v2 (~1с и платный трафик).
     Выдача от пользователя не зависит и меняется редко: короткий кэш, как у
-    /api/search (см. search.py).
+    /api/search (см. search.py). limit — на каждый источник.
     """
+    wanted = [s for s in dict.fromkeys(sources.split(",")) if s in _PLAYLIST_SEARCHERS]
+    if not wanted:
+        return []
     normalized_q = " ".join(q.lower().split())
-    cache_key = f"search:external:playlists:{normalized_q}:{limit}"
+    cache_key = f"search:external:playlists:{normalized_q}:{limit}:{','.join(wanted)}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
         return [ExternalPlaylistResponse(**item) for item in cached]
-    try:
-        playlists = await soundcloud.search_soundcloud_playlists(q, limit)
-    except Exception:  # noqa: BLE001
-        logger.exception("external playlist search failed")
-        return []
+
+    async def one(source: str) -> List[ExternalPlaylistResponse]:
+        try:
+            return await _PLAYLIST_SEARCHERS[source](q, limit)
+        except Exception:  # noqa: BLE001 — один сервис не роняет остальные
+            logger.exception("external playlist search failed for %s", source)
+            return []
+
+    playlists = _interleave(await asyncio.gather(*(one(s) for s in wanted)))
     await set_cache_async(
         cache_key,
         [p.model_dump(mode="json") for p in playlists],

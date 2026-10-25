@@ -37,6 +37,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.schemas import ExternalPlaylistResponse
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -286,6 +288,39 @@ async def search_spotify(query: str, limit: int = 20) -> List[SpotifyTrack]:
         if track:
             tracks.append(track)
     return tracks[:limit]
+
+
+async def search_spotify_playlists(query: str, limit: int = 10) -> List[ExternalPlaylistResponse]:
+    """Поиск публичных плейлистов Spotify. Пусто без ключей или при сбое."""
+    if not is_configured():
+        return []
+    try:
+        data = await _api_get(
+            "/search",
+            {"q": query, "type": "playlist", "limit": min(50, max(1, limit)), "market": SPOTIFY_MARKET},
+        )
+    except HTTPException as exc:
+        logger.warning("Spotify playlist search failed for %r: %s", query, exc.detail)
+        return []
+
+    results: List[ExternalPlaylistResponse] = []
+    # В выдаче плейлистов Spotify бывают null-элементы (удалённые плейлисты).
+    for item in (data.get("playlists") or {}).get("items") or []:
+        if not item or not item.get("id") or not item.get("name"):
+            continue
+        results.append(
+            ExternalPlaylistResponse(
+                id=f"spotify:playlist:{item['id']}",
+                source="spotify",
+                external_id=item["id"],
+                title=item["name"],
+                owner=(item.get("owner") or {}).get("display_name"),
+                cover_url=_biggest_image(item.get("images")),
+                permalink_url=f"https://open.spotify.com/playlist/{item['id']}",
+                track_count=int((item.get("tracks") or {}).get("total") or 0),
+            )
+        )
+    return results[:limit]
 
 
 async def get_playlist_tracks(playlist_id: str) -> Tuple[Optional[str], Optional[str], List[SpotifyTrack]]:

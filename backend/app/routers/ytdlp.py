@@ -8,8 +8,8 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
-from typing import List, Optional
-from urllib.parse import urlsplit
+from typing import List, Optional, Tuple
+from urllib.parse import parse_qs, urlsplit
 
 import aiofiles
 import httpx
@@ -19,7 +19,12 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
 from app.cache import get_cache_async, record_proxy_traffic, set_cache_async
-from app.schemas import ExternalAlbumDetail, ExternalAlbumResponse, ExternalTrackResponse
+from app.schemas import (
+    ExternalAlbumDetail,
+    ExternalAlbumResponse,
+    ExternalPlaylistResponse,
+    ExternalTrackResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -3072,3 +3077,63 @@ async def prefetch_ytmusic_ready(video_id: str):
         except Exception:  # noqa: BLE001 — проверка best-effort
             pass
     return {"ready": ready}
+
+
+# ─── Плейлисты YouTube Music (поиск и «послушать по ссылке») ───
+
+_PLAYLIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,}$")
+# Потолок треков плейлиста: get_playlist тянет их страницами по 100.
+_PLAYLIST_TRACK_LIMIT = 1000
+
+
+def parse_playlist_url(url: str) -> Optional[str]:
+    """music.youtube.com/playlist?list=… (и youtube.com) → playlistId или None."""
+    parts = urlsplit((url or "").strip())
+    host = (parts.netloc or "").lower()
+    if not (host.endswith("youtube.com") or host.endswith("youtu.be")):
+        return None
+    pid = (parse_qs(parts.query).get("list") or [""])[0]
+    # RD… — автомиксы «радио»: get_playlist их не отдаёт.
+    if not _PLAYLIST_ID_RE.match(pid) or pid.startswith("RD"):
+        return None
+    return pid
+
+
+async def search_ytmusic_playlists(q: str, limit: int = 10) -> List[ExternalPlaylistResponse]:
+    """Поиск плейлистов в YouTube Music (и редакционных, и пользовательских)."""
+    raw = await asyncio.to_thread(_ytmusic.search, q, filter="playlists", limit=limit)
+    results: List[ExternalPlaylistResponse] = []
+    for item in raw or []:
+        browse_id = item.get("browseId") or ""
+        pid = item.get("playlistId") or (browse_id[2:] if browse_id.startswith("VL") else browse_id)
+        if not pid or not item.get("title"):
+            continue
+        results.append(
+            ExternalPlaylistResponse(
+                id=f"ytmusic:playlist:{pid}",
+                source="ytmusic",
+                external_id=pid,
+                title=item["title"],
+                owner=item.get("author") or None,
+                cover_url=_thumb(item.get("thumbnails")),
+                permalink_url=f"https://music.youtube.com/playlist?list={pid}",
+                track_count=_metric_count(item.get("itemCount")),
+            )
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def ytmusic_playlist(pid: str) -> Tuple[Optional[str], Optional[str], List[ExternalTrackResponse]]:
+    """Плейлист YouTube Music → (название, обложка, треки без stream_url).
+
+    Треки уже ytmusic — подбирать их ни во что не нужно.
+    """
+    try:
+        data = await asyncio.to_thread(_ytmusic.get_playlist, pid, _PLAYLIST_TRACK_LIMIT)
+    except Exception as exc:  # noqa: BLE001 — приватный/удалённый/сеть
+        logger.warning("YouTube Music playlist %s failed: %s", pid, exc)
+        raise HTTPException(status_code=404, detail="Плейлист YouTube Music недоступен") from exc
+    tracks = [t for t in (_normalize(item) for item in (data or {}).get("tracks") or []) if t]
+    return (data or {}).get("title"), _thumb((data or {}).get("thumbnails")), tracks

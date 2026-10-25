@@ -239,3 +239,84 @@ def test_provider_search_rejects_unknown_and_unconfigured_spotify(client, db, mo
     assert client.get("/api/import/search/tidal", params={"q": "x"}, headers=headers).status_code == 404
     monkeypatch.setattr(spotify, "is_configured", lambda: False)
     assert client.get("/api/import/search/spotify", params={"q": "x"}, headers=headers).status_code == 503
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://music.youtube.com/playlist?list=PLM45J3xppbKcabc", "PLM45J3xppbKcabc"),
+        ("https://www.youtube.com/playlist?list=OLAK5uy_kXyz1234567&si=x", "OLAK5uy_kXyz1234567"),
+        ("https://music.youtube.com/watch?v=abc&list=RDAMVMabc12345678", None),  # автомикс
+        ("https://www.deezer.com/playlist/1", None),
+    ],
+)
+def test_ytmusic_playlist_url(url, expected):
+    from app.routers import ytdlp
+
+    assert ytdlp.parse_playlist_url(url) == expected
+
+
+def test_listen_ytmusic_playlist_plays_tracks_as_is(client, db, monkeypatch):
+    from app.routers import ytdlp
+    from app.schemas import ExternalTrackResponse
+
+    create_user(db)
+    headers = auth_headers(client)
+    tag = uuid.uuid4().hex[:12]
+
+    async def fake_playlist(pid):
+        assert pid == f"PL{tag}"
+        return "YT Mix", "https://yt/cover", [
+            ExternalTrackResponse(id=f"ytmusic:v{i}{tag}", source="ytmusic", external_id=f"v{i}{tag}",
+                                  title=f"T{i}", artist="A", duration=100, stream_url="")
+            for i in range(3)
+        ]
+
+    async def no_search(*_a, **_k):
+        raise AssertionError("ytmusic-плейлист не должен подбираться")
+
+    monkeypatch.setattr(ytdlp, "ytmusic_playlist", fake_playlist)
+    monkeypatch.setattr(importer.ytdlp, "search_ytmusic", no_search)
+    resp = client.get(
+        "/api/import/listen",
+        params={"url": f"https://music.youtube.com/playlist?list=PL{tag}", "limit": 2},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["source"], body["kind"], body["total"], body["next_offset"]) == ("ytmusic", "playlist", 3, 2)
+    assert body["tracks"][0]["stream_url"].endswith(f"/api/ytdlp/stream/v0{tag}")
+
+
+def test_external_playlists_mix_sources(client, monkeypatch):
+    from app.routers import aggregate
+    from app.schemas import ExternalPlaylistResponse
+
+    tag = uuid.uuid4().hex[:8]
+
+    def fake(source, n):
+        async def search(q, limit):
+            return [
+                ExternalPlaylistResponse(id=f"{source}:{i}", source=source, external_id=str(i),
+                                         title=f"{source}{i}", permalink_url="u")
+                for i in range(n)
+            ]
+        return lambda q, limit: search(q, limit)
+
+    async def broken(q, limit):
+        raise RuntimeError("down")
+
+    monkeypatch.setitem(aggregate._PLAYLIST_SEARCHERS, "soundcloud", fake("soundcloud", 2))
+    monkeypatch.setitem(aggregate._PLAYLIST_SEARCHERS, "ytmusic", fake("ytmusic", 1))
+    monkeypatch.setitem(aggregate._PLAYLIST_SEARCHERS, "deezer", lambda q, limit: broken(q, limit))
+
+    resp = client.get(
+        "/api/search/external/playlists",
+        params={"q": f"mix {tag}", "sources": "soundcloud,ytmusic,deezer,bogus"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert [p["id"] for p in resp.json()] == ["soundcloud:0", "ytmusic:0", "soundcloud:1"]
+
+    # Без sources — как раньше, только SoundCloud (главная).
+    only_sc = client.get("/api/search/external/playlists", params={"q": f"sc {tag}"})
+    assert [p["source"] for p in only_sc.json()] == ["soundcloud", "soundcloud"]

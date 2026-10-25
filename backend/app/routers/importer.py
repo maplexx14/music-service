@@ -1059,7 +1059,7 @@ async def provider_search(
 # Метаданные ссылки для /listen: страницы одной коллекции не должны каждый раз
 # заново ходить в Spotify/Deezer. Коллекции меняются редко, но не вечны.
 _LISTEN_META_TTL = 15 * 60
-_LISTEN_SOURCES = ("spotify", "deezer", "yandex")
+_LISTEN_SOURCES = ("spotify", "deezer", "yandex", "ytmusic")
 
 
 def _as_track_response(request: Request, imp: ExternalTrackImport) -> ExternalTrackResponse:
@@ -1094,22 +1094,34 @@ async def listen_link(
     limit: int = Query(50, ge=1, le=100),
     current_user=Depends(get_current_active_user),
 ):
-    """Ссылка Spotify/Deezer/Yandex → играбельные треки без импорта в БД.
+    """Ссылка Spotify/Deezer/Yandex или плейлист YouTube Music → играбельные
+    треки без импорта в БД.
 
     Подбор в YouTube Music тот же, что у импорта (и тот же кэш). skip считается
-    по трекам коллекции у источника; X-Total-Count — их число.
+    по трекам коллекции у источника; X-Total-Count — их число. Плейлист
+    YouTube Music подбирать не нужно — его треки играются как есть.
     """
     url = await _normalize_url(url)
-    source, kind = _detect(url)
+    yt_playlist = ytdlp.parse_playlist_url(url)
+    if yt_playlist:
+        source, kind = "ytmusic", "playlist"
+    else:
+        source, kind = _detect(url)
     if source not in _LISTEN_SOURCES or kind == "profile":
         raise HTTPException(
             status_code=400,
-            detail="Послушать можно трек, альбом или плейлист Spotify, Deezer или Yandex Music",
+            detail="Послушать можно трек, альбом или плейлист Spotify, Deezer, Yandex Music "
+            "или плейлист YouTube Music",
         )
 
     meta_key = f"link:listen:{hashlib.sha1(url.encode()).hexdigest()}"
     meta = await get_cache_async(meta_key)
-    if meta is None:
+    if meta is None and yt_playlist:
+        title, cover, yt_tracks = await ytdlp.ytmusic_playlist(yt_playlist)
+        meta = {"title": title, "cover": cover, "entries": [t.model_dump() for t in yt_tracks]}
+        if yt_tracks:
+            await set_cache_async(meta_key, meta, expire=_LISTEN_META_TTL)
+    elif meta is None:
         title, cover, entries = await _extract_collection(request, url, source, kind)
         if source == "yandex" and kind == "likes" and not title:
             title = "Избранное (Yandex Music)"
@@ -1122,7 +1134,11 @@ async def listen_link(
         raise HTTPException(status_code=404, detail="По ссылке не найдено треков")
 
     end = skip + limit
-    imports, _matched, skipped = await _resolve_entries(request, source, entries[skip:end])
+    if source == "ytmusic":
+        imports = [ExternalTrackImport.model_validate(e) for e in entries[skip:end]]
+        skipped = 0
+    else:
+        imports, _matched, skipped = await _resolve_entries(request, source, entries[skip:end])
     tracks = [_as_track_response(request, imp) for imp in imports]
 
     # Звук ytmusic-подбора берётся из Deezer, если там есть та же запись:

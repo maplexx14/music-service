@@ -306,12 +306,20 @@ function Search() {
       .finally(() => {
         if (!signal.aborted) setExternalLoading(false)
       })
-    const externalPlaylistsRequest = api
-      .get('/search/external/playlists', {
-        params: { q: searchQuery, limit: 10 },
-        skipErrorToast: true,
-        signal,
-      })
+    // Плейлисты всех сервисов одной лентой (бэк чередует источники); Spotify —
+    // только когда на бэке есть ключи.
+    const externalPlaylistsRequest = fetchSpotifyEnabled()
+      .then((spotify) =>
+        api.get('/search/external/playlists', {
+          params: {
+            q: searchQuery,
+            limit: 6,
+            sources: ['soundcloud', 'ytmusic', 'deezer', ...(spotify ? ['spotify'] : [])].join(','),
+          },
+          skipErrorToast: true,
+          signal,
+        }),
+      )
       .then((response) => {
         if (!signal.aborted) setExternalPlaylists(response.data)
       })
@@ -374,9 +382,14 @@ function Search() {
     playTrack(track, queue, 'external')
   }
 
-  const handleImportExternalPlaylist = (playlist) => {
+  const handleOpenExternalPlaylist = (playlist) => {
     // Открываем просмотр — импорт в библиотеку только по явной кнопке там.
-    navigate(`/external/soundcloud/playlists/${playlist.external_id}`)
+    // У SoundCloud своя страница со звуком, остальные слушаются по ссылке.
+    if (playlist.source === 'soundcloud') {
+      navigate(`/external/soundcloud/playlists/${playlist.external_id}`)
+    } else {
+      navigate(linkPagePath(playlist.permalink_url))
+    }
   }
 
   const showAll = filter === 'all'
@@ -602,30 +615,37 @@ function Search() {
 
           {showAll && externalPlaylists.length > 0 && (
             <div className="results-section">
-              <h2 className="results-title">Плейлисты SoundCloud</h2>
+              <h2 className="results-title">Плейлисты сервисов</h2>
               <Carousel
                 items={externalPlaylists}
-                label="Плейлисты SoundCloud"
+                label="Плейлисты сервисов"
                 renderItem={(playlist) => (
                   <div
                     key={playlist.id}
                     className="playlist-item"
-                    onClick={() => handleImportExternalPlaylist(playlist)}
-                    {...intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))}
+                    onClick={() => handleOpenExternalPlaylist(playlist)}
+                    {...(playlist.source === 'soundcloud'
+                      ? intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))
+                      : {})}
                     title="Открыть плейлист"
                   >
-                    <img
-                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
-                      alt={playlist.title}
-                      className="playlist-item-cover"
-                      loading="lazy"
-                      decoding="async"
-                      onError={handleCoverError}
-                    />
+                    <span className="source-cover">
+                      <img
+                        src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                        alt={playlist.title}
+                        className="playlist-item-cover"
+                        loading="lazy"
+                        decoding="async"
+                        onError={handleCoverError}
+                      />
+                      <SourceIcon source={playlist.source} />
+                    </span>
                     <div className="playlist-item-info">
                       <div className="playlist-item-name">{playlist.title}</div>
                       <div className="playlist-item-description">
-                        {`${playlist.owner ? playlist.owner + ' · ' : ''}${playlist.track_count} треков · SoundCloud`}
+                        {[playlist.owner, playlist.track_count > 0 && `${playlist.track_count} треков`]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </div>
                     </div>
                   </div>

@@ -233,6 +233,23 @@
   background-color: var(--surface-4);
 }
 
+/* Значок сервиса на обложке плейлиста — внутри угла, крупнее, чем у трека. */
+.playlist-item .source-cover {
+  margin-bottom: 12px;
+}
+
+.playlist-item .source-cover .playlist-item-cover {
+  margin-bottom: 0;
+}
+
+.playlist-item .source-icon {
+  right: 8px;
+  bottom: 8px;
+  width: 24px;
+  height: 24px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
 .playlist-item-cover.placeholder {
   display: flex;
   align-items: center;

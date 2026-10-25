@@ -17,14 +17,20 @@ import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
 import './Artist.css'
 
-// Ссылка Spotify/Deezer/Яндекс Музыки: слушать сразу, без импорта. Треки
+// Ссылка Spotify/Deezer/Яндекс Музыки или плейлист YouTube Music: слушать
+// сразу, без импорта. Треки
 // подбираются в YouTube Music на бэке страницами (секунды на страницу), поэтому
 // хвост длинной коллекции догружается по мере прокрутки, а очередь плеера
 // дотягивает его сама по курсору (playerStore.extendQueueIfNeeded).
 const PAGE_SIZE = 50
 const LISTEN_URL = '/import/listen'
 
-const SOURCE_LABELS = { spotify: 'Spotify', deezer: 'Deezer', yandex: 'Яндекс Музыка' }
+const SOURCE_LABELS = {
+  spotify: 'Spotify',
+  deezer: 'Deezer',
+  yandex: 'Яндекс Музыка',
+  ytmusic: 'YouTube Music',
+}
 const KIND_LABELS = {
   track: 'Трек',
   album: 'Альбом',
@@ -260,7 +266,8 @@ function LinkPlaylist() {
             <Play size={24} fill="currentColor" />
             <span className="round-actions__label">Воспроизвести</span>
           </button>
-          {info.kind !== 'track' && (
+          {/* Импорт ссылок YouTube Music бэк не умеет. */}
+          {info.kind !== 'track' && info.source !== 'ytmusic' && (
             <button
               className="btn btn--secondary btn--lg play-button-large round-actions__icon"
               onClick={handleImport}
@@ -310,7 +317,7 @@ function LinkPlaylist() {
         ) : (
           !loadingMore && nextOffset == null && (
             <div className="empty-playlist">
-              <p>Ни один трек не нашёлся в YouTube Music</p>
+              <p>{info.source === 'ytmusic' ? 'В плейлисте нет треков' : 'Ни один трек не нашёлся в YouTube Music'}</p>
             </div>
           )
         )}

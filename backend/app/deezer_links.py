@@ -15,6 +15,8 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from app.schemas import ExternalPlaylistResponse
+
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.deezer.com"
@@ -165,3 +167,26 @@ async def fetch_by_url(url: str) -> Tuple[Optional[str], Optional[str], List[Dee
     if not parsed:
         raise HTTPException(status_code=400, detail="Не распознана ссылка Deezer")
     return await fetch_entity(*parsed)
+
+
+async def search_playlists(query: str, limit: int = 10) -> List[ExternalPlaylistResponse]:
+    """Поиск публичных плейлистов Deezer."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        data = await _get(client, "/search/playlist", {"q": query, "limit": limit})
+    results: List[ExternalPlaylistResponse] = []
+    for item in data.get("data") or []:
+        if not item.get("id") or not item.get("title"):
+            continue
+        results.append(
+            ExternalPlaylistResponse(
+                id=f"deezer:playlist:{item['id']}",
+                source="deezer",
+                external_id=str(item["id"]),
+                title=item["title"],
+                owner=(item.get("user") or {}).get("name"),
+                cover_url=item.get("picture_xl") or item.get("picture_big"),
+                permalink_url=f"https://www.deezer.com/playlist/{item['id']}",
+                track_count=int(item.get("nb_tracks") or 0),
+            )
+        )
+    return results[:limit]
