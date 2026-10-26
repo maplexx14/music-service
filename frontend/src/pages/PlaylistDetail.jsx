@@ -17,11 +17,10 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
-import { useCoverColors } from '../hooks/useCoverColors'
+import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import { shareLink } from '../utils/shareLink'
-import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
-// Шапка — та же hero-карточка в тон обложки, что у исполнителя.
+// Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
 import './Artist.css'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
@@ -53,7 +52,7 @@ function PlaylistDetail() {
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
   const toggleTrackLike = usePlayerStore((s) => s.toggleTrackLike)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
-  const heroColors = useCoverColors(playlist?.cover_url) || DEFAULT_HERO_COLORS
+  const backdrop = useCoverBackdrop(playlist?.cover_url)
 
   useEffect(() => {
     // Смена id без размонтирования: подставляем кэш нового плейлиста, а не
@@ -189,30 +188,10 @@ function PlaylistDetail() {
     return null
   }
 
-  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у
-  // шапки в CSS свои дефолты, унаследованные она бы перекрыла.
-  const heroStyle = {
-    '--hero-c1': heroColors[0],
-    '--hero-c2': heroColors[1],
-    '--hero-c3': heroColors[2],
-  }
-
   return (
-    <div className="page-container hero-page" style={heroStyle}>
-      <header className="artist-hero" style={heroStyle}>
-        {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
-        {playlist.cover_url && (
-          <img
-            src={resolveCoverUrl(playlist.cover_url, 'thumb') || resolveCoverUrl(playlist.cover_url)}
-            alt=""
-            aria-hidden="true"
-            decoding="async"
-            className="artist-hero-backdrop"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-            }}
-          />
-        )}
+    <div className={`page-container hero-page${backdrop.hero ? ' has-cover-hero' : ''}`}>
+      <CoverBackdrop {...backdrop} />
+      <header className="artist-hero">
         <div className="artist-hero-content">
           <img
             src={resolveCoverUrl(playlist.cover_url) || defaultCover}

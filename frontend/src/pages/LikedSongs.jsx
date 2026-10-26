@@ -9,18 +9,33 @@ import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
-import logoHeart from '../assets/loader-heart.webp'
+// Сердце из логотипа (public/logoBoltwo.png), выровненное (в логотипе оно
+// наклонено на 19,5°), 271px: loader-heart всего 128px
+// и на весь верх экрана мылился.
+import logoHeart from '../assets/liked-hero-heart.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
 import { shareLink } from '../utils/shareLink'
-import { useCoverColors } from '../hooks/useCoverColors'
+import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import { useScreen } from '../hooks/useScreen'
-import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import './PlaylistDetail.css'
-// Шапка — та же hero-карточка в тон обложки, что у исполнителя.
+// Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
 import './Artist.css'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
+// Тёмный край градиента сердца (--hero-c3, Artist.css).
+const LIKED_TINT = '#440f85'
+// Молнии, что вылетают из сердца при открытии, — как у BoltLoader, но
+// веером только вверх и в стороны: вниз они летели бы по названию.
+// a — направление (0 — вверх), spin — доворот в полёте, v — форма спрайта,
+// k — масштаб.
+const LIKED_BOLTS = [
+  { a: -80, spin: -15, v: 1, k: 0.9 },
+  { a: -40, spin: 20, v: 2, k: 1.1 },
+  { a: 0, spin: -10, v: 3, k: 0.85 },
+  { a: 40, spin: 25, v: 1, k: 1 },
+  { a: 80, spin: -20, v: 2, k: 1.05 },
+]
 
 // «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
 // интерфейс страницы полностью повторяет PlaylistDetail.
@@ -33,7 +48,31 @@ function LikedSongs() {
   activeRef.current = active
   // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
   const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
-  const heroColors = useCoverColors(playlist?.cover_url) || DEFAULT_HERO_COLORS
+  const coverBackdrop = useCoverBackdrop(playlist?.cover_url)
+  // Своей обложки у «Понравившихся» обычно нет — тогда обложка во весь верх
+  // это сердце логотипа на фирменном градиенте (как квадрат в шапке), а
+  // фон — тёмный край этого градиента, в который оно растворяется.
+  const backdrop = playlist?.cover_url
+    ? coverBackdrop
+    : {
+        tint: LIKED_TINT,
+        art: (
+          <div className="liked-hero-cover liked-hero-art">
+            {/* Ключ по active: вылет молний проигрывается при каждом
+                открытии вкладки, а не один раз, пока она висела скрытой. */}
+            <span key={active ? 'on' : 'off'} className="liked-hero-heart">
+              {LIKED_BOLTS.map((b, i) => (
+                <i
+                  key={i}
+                  className={`liked-hero-bolt v${b.v}`}
+                  style={{ '--a': `${b.a}deg`, '--spin': `${b.spin}deg`, '--k': b.k, '--i': i }}
+                />
+              ))}
+              <img className="liked-heart-beat" src={logoHeart} alt="" decoding="async" />
+            </span>
+          </div>
+        ),
+      }
   const [loading, setLoading] = useState(() => !peekCache(LIKED_CACHE_KEY))
   const [totalTracks, setTotalTracks] = useState(() => peekCache(LIKED_CACHE_KEY)?.total ?? 0)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -230,30 +269,10 @@ function LikedSongs() {
       })
   }
 
-  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у шапки
-  // в CSS свои дефолты, унаследованные она бы перекрыла.
-  const heroStyle = {
-    '--hero-c1': heroColors[0],
-    '--hero-c2': heroColors[1],
-    '--hero-c3': heroColors[2],
-  }
-
   return (
-    <div className="page-container hero-page" style={heroStyle}>
-      <header className="artist-hero" style={heroStyle}>
-        {/* Размытая обложка — фактура под градиентом, как у исполнителя. */}
-        {playlist.cover_url && (
-          <img
-            src={resolveCoverUrl(playlist.cover_url, 'thumb') || resolveCoverUrl(playlist.cover_url)}
-            alt=""
-            aria-hidden="true"
-            decoding="async"
-            className="artist-hero-backdrop"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-            }}
-          />
-        )}
+    <div className={`page-container hero-page${backdrop.hero || backdrop.art ? ' has-cover-hero' : ''}`}>
+      <CoverBackdrop {...backdrop} />
+      <header className="artist-hero">
         <div className="artist-hero-content">
           {/* Своей обложки у «Понравившихся» обычно нет, а заглушка с нотой —
               чёрный квадрат. Вместо неё — сердце из логотипа на градиенте
@@ -268,7 +287,7 @@ function LikedSongs() {
             />
           ) : (
             <div className="artist-avatar playlist-hero-cover liked-hero-cover" aria-hidden="true">
-              <img src={logoHeart} alt="" decoding="async" />
+              <img className="liked-heart-beat" src={logoHeart} alt="" decoding="async" />
             </div>
           )}
           <div className="artist-hero-info">

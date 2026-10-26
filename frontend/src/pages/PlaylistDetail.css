@@ -89,6 +89,44 @@
   outline: none;
 }
 
+/* Сердце выпрыгивает при открытии и дальше мягко бьётся «тук-тук». Только
+   transform — композитор, без перерисовки. На скрытом экране (вкладка
+   висит в фоне, Layout.css) стук на паузе. */
+.liked-heart-beat {
+  will-change: transform;
+  animation:
+    liked-heart-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+    liked-heart-beat 2.4s ease-in-out 1.2s infinite;
+}
+
+.screen:not([data-active]) .liked-heart-beat {
+  animation-play-state: paused;
+}
+
+@keyframes liked-heart-pop {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes liked-heart-beat {
+  0%, 40%, 100% { transform: scale(1); }
+  8% { transform: scale(1.08); }
+  16% { transform: scale(1); }
+  24% { transform: scale(1.05); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liked-heart-beat {
+    animation: none;
+  }
+}
+
+html.no-gpu .liked-heart-beat,
+html.power-save .liked-heart-beat {
+  animation: none;
+  will-change: auto;
+}
+
 .playlist-hero-description {
   font-size: var(--text-base);
   color: rgba(255, 255, 255, 0.8);

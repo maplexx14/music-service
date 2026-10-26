@@ -1,49 +1,17 @@
-/* Страница исполнителя берёт у PlaylistDetail кнопки и таблицу треков; шапка
-   своя — hero-карточка в тон аватара. */
+/* Страница исполнителя берёт у PlaylistDetail кнопки и таблицу треков; шапка и
+   фон в тон обложки (CoverBackdrop) — свои. */
 
 /* --- Шапка --- */
 
-/* Hero-карточка в тон аватара. Цвета приходят инлайном из useCoverColors
-   (--hero-c1..c3, та же палитра, что у hero главной); здесь только дефолт на
-   случай, если инлайна нет. Карточка, а не заливка во всю ширину: отступы
-   .page-container живут в Home.css, и вылезать за них отрицательными полями —
-   значит зависеть от чужого файла. */
+/* Шапка: обложка, название, счётчики. Своего фона нет — его рисует
+   страница (.hero-page, CoverBackdrop). --hero-c* — фирменная палитра для
+   сердца «Понравившихся» без обложки (.liked-hero-cover, PlaylistDetail.css). */
 .artist-hero {
   --hero-c1: #b070ff;
   --hero-c2: #8929ff;
   --hero-c3: #440f85;
   position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  border-radius: var(--radius-lg);
-  padding: 72px 32px 32px;
-  background:
-    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--hero-c1) 55%, transparent), transparent 60%),
-    linear-gradient(160deg, var(--hero-c2) 0%, var(--hero-c3) 55%, var(--bg-app) 100%);
-  transition: background var(--duration-base) var(--ease-out);
-}
-
-/* Размытый аватар поверх градиента — фактура; сверху затемняем низ, чтобы
-   белый текст читался на любой обложке. */
-.artist-hero-backdrop {
-  position: absolute;
-  inset: -20%;
-  width: 140%;
-  height: 140%;
-  object-fit: cover;
-  filter: blur(64px) saturate(1.3);
-  opacity: 0.45;
-  z-index: -2;
-  pointer-events: none;
-}
-
-.artist-hero::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 30%, rgba(0, 0, 0, 0.55) 100%);
-  pointer-events: none;
+  padding: 24px 32px 32px;
 }
 
 .artist-hero-content {
@@ -234,60 +202,67 @@
   display: none;
 }
 
-/* --- Страница в два слоя (исполнитель, «Понравившиеся») ---
-   Сверху фон в тон шапки, его рисует сама страница одним градиентом: у шапки
-   своего фона нет, иначе на её нижнем крае два градиента сходились швом.
-   Ниже — содержимое (.hero-page-sheet) отдельной карточкой с закруглённым
-   верхом, на сером фоне как у остальных экранов на ПК (.main-content,
-   Layout.css). Цвета --hero-c* страница получает инлайном, как и шапка. */
+/* --- Страница в два слоя (исполнитель, альбом, плейлисты) ---
+   Сверху фон как у полноэкранного плеера (CoverBackdrop): приглушённый цвет
+   обложки, зерно и затемнение книзу, на телефоне — обложка во весь верх
+   экрана. Ниже — содержимое (.hero-page-sheet) отдельной карточкой с
+   закруглённым верхом, на сером фоне как у остальных экранов на ПК
+   (.main-content, Layout.css). */
 .hero-page {
   position: relative;
   isolation: isolate;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--hero-c3) 55%, var(--bg-app));
 }
 
-.hero-page::before {
-  content: '';
+/* Во всю страницу: под карточкой его не видно, а над ней цвет не
+   обрывается. overflow — параллакс обложки не растягивает прокрутку. */
+.cover-backdrop {
   position: absolute;
   /* На телефоне шапка заходит под плавающую панель — фон туда же. */
   top: calc(-1 * var(--main-pad-top, 0px));
   left: 0;
   right: 0;
-  height: calc(560px + var(--main-pad-top, 0px));
+  bottom: 0;
   z-index: -1;
+  overflow: hidden;
   pointer-events: none;
-  background:
-    radial-gradient(120% 420px at 0% 0%, color-mix(in srgb, var(--hero-c1) 55%, transparent), transparent 60%),
-    linear-gradient(
-      180deg,
-      var(--hero-c2) 0,
-      var(--hero-c3) 300px,
-      color-mix(in srgb, var(--hero-c3) 55%, var(--bg-app)) 100%
-    );
+  background-color: var(--surface-2);
 }
 
-.hero-page .artist-hero {
-  background: none;
+/* Слой цвета — только сплошной фон и свой слой: проявление нового цвета
+   ничего не перерисовывает (как .fullscreen-tint). */
+.cover-backdrop-tint {
+  position: absolute;
+  inset: 0;
+  animation: cover-backdrop-in 0.6s ease both;
 }
 
-.hero-page .artist-hero::after {
-  content: none;
+/* Фактура полноэкранного плеера: зерно и затемнение книзу под кнопками,
+   своим постоянным слоем поверх цвета и обложки. */
+.cover-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
+    linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.42) 560px);
 }
 
-/* Размытое фото под шапкой обрезано её рамкой: без заливки шапки на ПК
-   оно торчало прямоугольником посреди общего фона. */
-.hero-page .artist-hero-backdrop {
+@keyframes cover-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Обложка во весь верх — только на телефоне (как в плеере): на широком
+   экране квадрат во всю ширину обрезался бы до полоски. */
+.cover-backdrop-hero {
   display: none;
 }
 
-/* Без своей заливки шапке на ПК не нужен большой верхний отступ карточки
-   (72px, .artist-hero): вместе с полем страницы выходила пустая полоса. */
-@media (min-width: 769px) {
-  .hero-page .artist-hero {
-    padding-top: 24px;
-  }
+html.no-gpu .cover-backdrop-tint,
+html.no-gpu .cover-backdrop-hero-img {
+  animation: none;
 }
 
 /* Карточка во всю ширину до низа экрана: съедает нижние отступы страницы
@@ -328,7 +303,7 @@
    Где её нет или движение просили убрать — обычная прокрутка. */
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
-    .hero-page::before,
+    .cover-backdrop-hero,
     .hero-page .artist-hero,
     .hero-page .artist-toolbar {
       animation: hero-page-parallax linear both;
@@ -367,6 +342,130 @@
     align-items: center;
     text-align: center;
     gap: 16px;
+  }
+
+  /* Обложка во весь верх экрана, книзу растворяется в цвет — под
+     названием и кнопками ровный фон. Квадрата в шапке тогда нет, а
+     название прижато к растворяющемуся краю, как подпись в плеере. */
+  .hero-page.has-cover-hero .cover-backdrop-hero {
+    display: block;
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(100vw + 48px);
+    /* Срезанные чёрные поля обложки (heroImageStyle) уходят за край. */
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+    mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+  }
+
+  /* Под плавающей «Назад» и статус-баром — затемнение, как в плеере. */
+  .hero-page.has-cover-hero .cover-backdrop-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(var(--safe-top) + 120px);
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
+  }
+
+  .cover-backdrop-hero-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Подложка-миниатюра (heroImageStyle) ложится так же, как картинка. */
+    background-size: cover;
+    background-position: center;
+    animation: cover-backdrop-in 0.6s ease both;
+  }
+
+  /* Сердце «Понравившихся» вместо обложки — квадрат шапки во весь верх.
+     --hero-c* у фона свои: шапка, где они заданы, — не его предок. */
+  .liked-hero-art {
+    --hero-c1: #b070ff;
+    --hero-c2: #8929ff;
+    --hero-c3: #440f85;
+    position: absolute;
+    inset: 0;
+    /* Сердце по центру над названием, а не под ним: снизу место подписи. */
+    padding: var(--main-pad-top, 0px) 0 30vw;
+    animation: cover-backdrop-in 0.6s ease both;
+  }
+
+  /* Исходник 271px (liked-hero-heart.webp): крупнее он мылится. */
+  .liked-hero-heart {
+    position: relative;
+    width: 36vw;
+    height: 36vw;
+  }
+
+  .liked-hero-heart > img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    outline: none;
+  }
+
+  /* Молнии вылетают веером из-за сердца один раз, когда оно выпрыгнуло
+     (спрайты BoltLoader), и гаснут на подлёте к краю экрана. */
+  .liked-hero-bolt {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: calc(36vw * 0.42 * var(--k));
+    aspect-ratio: 76 / 136;
+    background: center / contain no-repeat;
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    animation: liked-bolt-burst 1.1s cubic-bezier(0.165, 0.84, 0.44, 1) calc(0.3s + var(--i) * 60ms) both;
+  }
+
+  .liked-hero-bolt.v1 { background-image: url('../assets/loader-bolt-1.svg'); }
+  .liked-hero-bolt.v2 { background-image: url('../assets/loader-bolt-2.svg'); }
+  .liked-hero-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
+
+  html.no-gpu .liked-hero-bolt,
+  html.power-save .liked-hero-bolt {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .liked-hero-bolt {
+    display: none;
+  }
+}
+
+@keyframes liked-bolt-burst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(-4vw) rotate(180deg) scale(0.45);
+  }
+  15% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(-46vw) rotate(calc(180deg + var(--spin))) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+
+  .hero-page.has-cover-hero .artist-hero {
+    min-height: 100vw;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  .hero-page.has-cover-hero .artist-avatar {
+    display: none;
+  }
+
+  .hero-page.has-cover-hero .artist-hero-info {
+    text-shadow: 0 1px 16px rgba(0, 0, 0, 0.35);
   }
 
   .artist-avatar {
@@ -497,31 +596,5 @@
 @media (max-width: 768px) and (prefers-reduced-motion: reduce) {
   .artist-compact-bar {
     transform: none;
-  }
-}
-
-/* Без color-mix (Android WebView до 111 — его на старых телефонах не
-   обновляют): объявление с var() внутри не откатывается на предыдущее, а
-   сбрасывается целиком, и вместо цветной шапки проступал чёрный фон
-   приложения. Повторяем те же слои без смешивания: полупрозрачность — через
-   затемняющий слой поверх цвета, а низ градиента уходит в прозрачный, где
-   под ним уже лежит затемнённый фон страницы. */
-@supports not (color: color-mix(in srgb, red, blue)) {
-  .artist-hero {
-    background:
-      radial-gradient(120% 90% at 0% 0%, var(--hero-c1), transparent 45%),
-      linear-gradient(160deg, var(--hero-c2) 0%, var(--hero-c3) 55%, var(--bg-app) 100%);
-  }
-
-  .hero-page {
-    background:
-      linear-gradient(rgb(18 18 18 / 0.45), rgb(18 18 18 / 0.45)),
-      var(--hero-c3);
-  }
-
-  .hero-page::before {
-    background:
-      radial-gradient(120% 420px at 0% 0%, var(--hero-c1), transparent 45%),
-      linear-gradient(180deg, var(--hero-c2) 0, var(--hero-c3) 300px, transparent 100%);
   }
 }

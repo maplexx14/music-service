@@ -12,8 +12,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
-import { useCoverColors } from '../hooks/useCoverColors'
-import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
+import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 import './Artist.css'
 
@@ -52,7 +51,7 @@ function LinkPlaylist() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState(null)
   const [importing, setImporting] = useState(false)
-  const heroColors = useCoverColors(info?.cover_url) || DEFAULT_HERO_COLORS
+  const backdrop = useCoverBackdrop(info?.cover_url)
 
   const playPlaylist = usePlayerStore((s) => s.playPlaylist)
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
@@ -213,29 +212,13 @@ function LinkPlaylist() {
     )
   }
 
-  const heroStyle = {
-    '--hero-c1': heroColors[0],
-    '--hero-c2': heroColors[1],
-    '--hero-c3': heroColors[2],
-  }
   const sourceLabel = SOURCE_LABELS[info.source] || info.source
   const title = info.title || sourceLabel
 
   return (
-    <div className="page-container hero-page" style={heroStyle}>
-      <header className="artist-hero" style={heroStyle}>
-        {info.cover_url && (
-          <img
-            src={resolveCoverUrl(info.cover_url, 'thumb') || resolveCoverUrl(info.cover_url)}
-            alt=""
-            aria-hidden="true"
-            decoding="async"
-            className="artist-hero-backdrop"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-            }}
-          />
-        )}
+    <div className={`page-container hero-page${backdrop.hero ? ' has-cover-hero' : ''}`}>
+      <CoverBackdrop {...backdrop} />
+      <header className="artist-hero">
         <div className="artist-hero-content">
           <img
             src={resolveCoverUrl(info.cover_url) || defaultCover}

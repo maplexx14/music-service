@@ -14,7 +14,7 @@ import { toast } from '../store/toastStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady } from '../utils/media'
-import { analyzeHeroCover, getHeroCover, guessHeroCover } from '../utils/heroCover'
+import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
@@ -117,52 +117,6 @@ function TintBackdrop({ color, children }) {
   )
 }
 
-// Обложка во весь верх экрана вместо квадрата в карусели (utils/heroCover).
-// Плеер открывается сразу в нужной раскладке: по готовому ответу, а если
-// обложку ещё не проверяли — по догадке от источника. На смене трека,
-// пока новую не проверили, держим прежний ответ: фон не мигает пустотой,
-// а раскладка не прыгает туда-обратно.
-function useHeroCover(url) {
-  const [hero, setHero] = useState(() => {
-    const known = getHeroCover(url)
-    return known !== undefined ? known : guessHeroCover(url)
-  })
-  useEffect(() => {
-    if (!url) {
-      setHero(null)
-      return undefined
-    }
-    const known = getHeroCover(url)
-    if (known !== undefined) {
-      setHero(known)
-      return undefined
-    }
-    let cancelled = false
-    analyzeHeroCover(url).then((result) => {
-      if (!cancelled) setHero(result)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [url])
-  return hero
-}
-
-// Срез чёрных полей: картинка выше рамки на их долю и сдвинута вверх на
-// верхнее — поля уходят за край (у .fullscreen-hero overflow: hidden).
-// Подложка — миниатюра из кэша (как у обложки в карусели): пока большая
-// качается, на её месте та же картинка, только мягче, а не пустой фон.
-function heroStyle(cover) {
-  const style = cover.thumb ? { backgroundImage: `url("${cover.thumb}")` } : {}
-  const visible = 1 - (cover.top || 0) - (cover.bottom || 0)
-  if (visible < 1) {
-    style.top = `${(-cover.top / visible) * 100}%`
-    style.bottom = 'auto'
-    style.height = `${100 / visible}%`
-  }
-  return style
-}
-
 function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
   const [layers, settle] = useFadeLayers(cover)
 
@@ -173,7 +127,7 @@ function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
           key={layer.key}
           className={`fullscreen-hero-img${layer.entering ? ' is-entering' : ''}`}
           src={layer.value.url}
-          style={heroStyle(layer.value)}
+          style={heroImageStyle(layer.value)}
           alt=""
           data-no-fade=""
           decoding="async"

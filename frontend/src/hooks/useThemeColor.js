@@ -87,6 +87,29 @@ export function warmThemeColor(coverUrl) {
   })
 }
 
+// Тот же приглушённый цвет обложки без статус-бара — фон шапок страниц
+// (CoverBackdrop). null — пока не посчитан; посчитанный приходит в том же
+// рендере.
+export function useCoverTint(coverUrl) {
+  const [color, setColor] = useState(null)
+  const known = coverUrl ? colorCache.get(coverUrl) : undefined
+
+  useEffect(() => {
+    if (!coverUrl || colorCache.has(coverUrl)) return undefined
+    let cancelled = false
+    extractDominantColor(coverUrl).then((next) => {
+      if (cancelled || !next) return
+      rememberColor(coverUrl, next)
+      setColor(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [coverUrl])
+
+  return known ?? color
+}
+
 // Пока полноэкранный плеер открыт, статус-бар Android (и заголовок окна
 // на десктопе) окрашивается в приглушённый цвет обложки — как это делают
 // нативные музыкальные приложения. При размонтировании цвет возвращается.

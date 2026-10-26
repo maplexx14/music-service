@@ -714,7 +714,6 @@ html.brush-icons:not(.no-gpu) .screen-scroll :is(
    дорого на каждом кадре:
    - backdrop-filter: размытие того, что под панелью, пересчитывается на
      каждый кадр скролла и анимаций под ней. Взамен — плотнее фон;
-   - filter: blur(64px) на фоне артиста: огромное ядро по слою 140% ширины;
    - тени на снапшотах перехода экрана: полноэкранная размытая тень едет
      вместе со снапшотом и растеризуется каждый кадр;
    - переходы width/height/margin/left: это раскладка всей страницы на
@@ -756,9 +755,6 @@ html.power-save .now-playing-bars span {
   animation: none;
 }
 
-html.no-gpu .artist-hero-backdrop {
-  display: none;
-}
 
 html.no-gpu::view-transition-old(page),
 html.no-gpu::view-transition-new(page) {

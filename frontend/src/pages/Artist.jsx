@@ -15,8 +15,7 @@ import { plural } from '../utils/format'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
-import { useCoverColors } from '../hooks/useCoverColors'
-import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
+import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 import './Artist.css'
 
@@ -115,9 +114,9 @@ function Artist() {
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
   const materializeTrack = usePlayerStore((s) => s.materializeTrack)
-  // Шапка красится в тон аватара — как hero на главной по обложке трека. До
-  // разбора (и без аватара) — фирменная палитра, чтобы не мигать серым.
-  const heroColors = useCoverColors(artist?.cover_url) || DEFAULT_HERO_COLORS
+  // Фон страницы — как у полноэкранного плеера: цвет аватара, на телефоне
+  // сам аватар во весь верх экрана (CoverBackdrop).
+  const backdrop = useCoverBackdrop(artist?.cover_url)
   // Шапка скрылась — на мобильном показываем компактную полосу с именем и
   // кнопкой воспроизведения (см. .artist-compact-bar). Следим не за самим
   // именем, а за маячком перед карточкой релизов: шапка отстаёт от прокрутки
@@ -343,37 +342,10 @@ function Artist() {
       ? 'Открыть в медиатеке'
       : 'Добавить в медиатеку'
 
-  // Цвета нужны и шапке, и фону страницы (.hero-page::before, Artist.css): у
-  // шапки в CSS свои дефолты, унаследованные она бы перекрыла.
-  const heroStyle = {
-    '--hero-c1': heroColors[0],
-    '--hero-c2': heroColors[1],
-    '--hero-c3': heroColors[2],
-  }
-
   return (
-    <div className="page-container hero-page" style={heroStyle}>
-      <header
-        className="artist-hero"
-        style={heroStyle}
-      >
-        {/* Размытый аватар — фактура под градиентом: сплошная заливка тоном
-            смотрится плоско. Декоративный, поэтому alt пустой. */}
-        {artist.cover_url && (
-          // Миниатюра, а не полное фото: под blur(64px) разрешение не видно,
-          // а полноразмерное декодировалось синхронно и растеризовалось с
-          // размытием на слое 140% экрана — кадр до полсекунды при открытии.
-          <img
-            src={resolveCoverUrl(artist.cover_url, 'thumb') || resolveCoverUrl(artist.cover_url)}
-            alt=""
-            aria-hidden="true"
-            decoding="async"
-            className="artist-hero-backdrop"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-            }}
-          />
-        )}
+    <div className={`page-container hero-page${backdrop.hero ? ' has-cover-hero' : ''}`}>
+      <CoverBackdrop {...backdrop} />
+      <header className="artist-hero">
         <div className="artist-hero-content">
           <img
             src={resolveCoverUrl(artist.cover_url) || defaultCover}
