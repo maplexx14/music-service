@@ -149,20 +149,6 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   const safeTop = isMobile && path !== '/'
   useDetailScrollRestoration(scrollerRef, location, isDetailId(id))
 
-  // В самом верху под часами пусто или шапка с обложкой — подложка там
-  // только темнит её полосой. Проявляется, когда контент уезжает под часы.
-  // Класс напрямую, без состояния: прокрутка не перерисовывает экран.
-  const scrimRef = useRef(null)
-  useEffect(() => {
-    const scroller = scrollerRef.current
-    const scrim = scrimRef.current
-    if (!scroller || !scrim) return
-    const sync = () => scrim.classList.toggle('is-visible', scroller.scrollTop > 4)
-    sync()
-    scroller.addEventListener('scroll', sync, { passive: true })
-    return () => scroller.removeEventListener('scroll', sync)
-  }, [safeTop])
-
   return (
     <div
       className="screen"
@@ -178,7 +164,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
           </button>
         </div>
       )}
-      {safeTop && <div ref={scrimRef} className="mobile-status-scrim" aria-hidden="true" />}
+      {safeTop && <div className="mobile-status-scrim" aria-hidden="true" />}
       <div
         ref={scrollerRef}
         className={`screen-scroll${topbar ? ' has-mobile-topbar' : safeTop ? ' has-safe-top' : ''}`}
