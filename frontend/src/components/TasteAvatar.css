@@ -1,0 +1,63 @@
+.taste-avatar {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 50%;
+  /* Без изоляции слои с transform в Safari вылезают за скругление. */
+  isolation: isolate;
+}
+
+.taste-avatar-orbit {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--start));
+  animation: taste-avatar-spin linear infinite;
+}
+
+.taste-avatar-blob {
+  position: absolute;
+  border-radius: 50%;
+  animation: taste-avatar-breathe ease-in-out infinite;
+}
+
+/* Затемнение ауры, чтобы металл читался на светлых пятнах. */
+.taste-avatar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.taste-avatar svg {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes taste-avatar-spin {
+  to {
+    transform: rotate(calc(var(--start) + 360deg));
+  }
+}
+
+@keyframes taste-avatar-breathe {
+  50% {
+    transform: scale(0.8);
+  }
+}
+
+/* Аура крутится всё время, пока аватарка на экране — в энергосбережении
+   (utils/powerSave) и при уменьшенной анимации она замирает. */
+html.power-save .taste-avatar-orbit,
+html.power-save .taste-avatar-blob {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taste-avatar-orbit,
+  .taste-avatar-blob {
+    animation: none;
+  }
+}

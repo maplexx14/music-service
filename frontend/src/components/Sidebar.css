@@ -390,11 +390,8 @@
   }
 }
 
-/* Аватарка по вкусу — инлайн-SVG: без display:block под ней остаётся
-   строчный зазор, без overflow углы узора торчат за круг. */
-svg.user-avatar,
-svg.user-avatar-collapsed {
-  display: block;
+/* Аватарка по вкусу: блок, обрезка по кругу и слои — в TasteAvatar.css. */
+.user-avatar.taste-avatar,
+.user-avatar-collapsed.taste-avatar {
   flex-shrink: 0;
-  overflow: hidden;
 }

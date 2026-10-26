@@ -1,27 +1,29 @@
 import { useEffect, useId, useState } from 'react'
 import api from '../services/api'
+import heartImage from '../assets/loader-heart.webp'
+import './TasteAvatar.css'
 
-// Аватарка по музыкальному вкусу в стилистике логотипа: у каждого жанра своё
-// животное — силуэт головы белым меловым контуром, как сердце в логотипе, без
-// черт лица, — на чёрном фоне
-// со свечением цвета жанра (как иконка приложения). Второй жанр подмешивает
-// второе свечение, а имя пользователя сдвигает его место и наклон головы,
-// чтобы у двух фанатов фонка картинки не совпадали.
+// Аватарка по музыкальному вкусу в стилистике логотипа: рисунок из жидкого
+// металла, как сердце на иконке приложения, поверх живой ауры — размытых
+// пятен цвета двух главных жанров, которые медленно кружат. Металл
+// подкрашен бликом главного жанра. Имя выбирает рисунок, наклон, свет и
+// раскладку пятен, чтобы у двух фанатов фонка картинки не совпадали.
 // Жанры — ключи из backend/app/genre_keywords.py (GENRE_KEYWORDS).
 
+// Цвета: тёмная основа под аурой, пятно, яркое пятно и блик металла.
 const GENRES = {
-  phonk: { colors: ['#2a0a3d', '#7b1fa2', '#ff3df5'], animal: 'cat' },
-  trap: { colors: ['#14080a', '#b3121f', '#ff5a3c'], animal: 'fox' },
-  'hip-hop': { colors: ['#1c1408', '#b8860b', '#ffd54a'], animal: 'bear' },
-  rock: { colors: ['#121212', '#5a1010', '#ff4433'], animal: 'wolf' },
-  electronic: { colors: ['#04102a', '#1440c8', '#21f0ff'], animal: 'rabbit' },
-  lofi: { colors: ['#3b2f4a', '#c48b9f', '#ffe3c2'], animal: 'panda' },
-  pop: { colors: ['#ff4f9a', '#ff9f43', '#fff35c'], animal: 'pig' },
-  jazz: { colors: ['#0b1a33', '#1f4e79', '#f2a541'], animal: 'owl' },
-  classical: { colors: ['#2b2216', '#8c7651', '#f5ead0'], animal: 'mouse' },
-  reggae: { colors: ['#0f6b2f', '#f2c418', '#d6261c'], animal: 'frog' },
-  folk: { colors: ['#22301a', '#6b7f3a', '#e0c48a'], animal: 'dog' },
-  chill: { colors: ['#123a46', '#4fa3a5', '#d6c6ff'], animal: 'koala' },
+  phonk: ['#2a0a3d', '#7b1fa2', '#ff3df5'],
+  trap: ['#14080a', '#b3121f', '#ff5a3c'],
+  'hip-hop': ['#1c1408', '#b8860b', '#ffd54a'],
+  rock: ['#121212', '#8a1414', '#ff4433'],
+  electronic: ['#04102a', '#1440c8', '#21f0ff'],
+  lofi: ['#3b2f4a', '#c48b9f', '#ffe3c2'],
+  pop: ['#3a0820', '#ff4f9a', '#ff9f43'],
+  jazz: ['#0b1a33', '#1f4e79', '#f2a541'],
+  classical: ['#2b2216', '#8c7651', '#f5ead0'],
+  reggae: ['#0f3b1f', '#1f9a4a', '#f2c418'],
+  folk: ['#22301a', '#6b7f3a', '#e0c48a'],
+  chill: ['#123a46', '#4fa3a5', '#d6c6ff'],
 }
 
 // Явные предпочтения бывают тегами Last.fm («drum and bass», «хип-хоп») —
@@ -57,6 +59,16 @@ const hash = (str) => {
   return h >>> 0
 }
 
+const hslHex = (h, s, l) => {
+  const a = (s / 100) * Math.min(l / 100, 1 - l / 100)
+  const f = (n) => {
+    const k = (n + h / 30) % 12
+    const c = l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(c * 255).toString(16).padStart(2, '0')
+  }
+  return `#${f(0)}${f(8)}${f(4)}`
+}
+
 // Детерминированный ГПСЧ от имени: одна и та же картинка на всех устройствах.
 const rng = (seed) => () => {
   seed = (seed + 0x6d2b79f5) >>> 0
@@ -66,92 +78,39 @@ const rng = (seed) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
-// Силуэты голов в координатах 0..100 — только формы, без черт лица: контур
-// по внешнему краю их объединения рисует фильтр (см. TasteAvatar ниже).
-const tri = (points) => <polygon points={points} />
-
-const ANIMALS = {
-  cat: (
-    <>
-      {tri('25,48 29,17 47,34')}
-      {tri('75,48 71,17 53,34')}
-      <ellipse cx="50" cy="58" rx="28" ry="24" />
-    </>
-  ),
-  fox: (
-    <>
-      {tri('20,52 25,12 49,40')}
-      {tri('80,52 75,12 51,40')}
-      <path d="M20 46 Q50 28 80 46 Q78 64 50 88 Q22 64 20 46Z" />
-    </>
-  ),
-  bear: (
-    <>
-      <circle cx="29" cy="35" r="10" />
-      <circle cx="71" cy="35" r="10" />
-      <circle cx="50" cy="58" r="27" />
-    </>
-  ),
-  wolf: (
-    <>
-      {tri('21,54 27,8 48,40')}
-      {tri('79,54 73,8 52,40')}
-      <path d="M18 50 Q50 26 82 50 L74 70 Q62 90 50 90 Q38 90 26 70Z" />
-    </>
-  ),
-  rabbit: (
-    <>
-      <ellipse cx="40" cy="26" rx="7" ry="22" transform="rotate(-8 40 26)" />
-      <ellipse cx="60" cy="26" rx="7" ry="22" transform="rotate(8 60 26)" />
-      <ellipse cx="50" cy="62" rx="24" ry="22" />
-    </>
-  ),
-  panda: (
-    <>
-      <circle cx="27" cy="36" r="11" />
-      <circle cx="73" cy="36" r="11" />
-      <ellipse cx="50" cy="59" rx="30" ry="25" />
-    </>
-  ),
-  pig: (
-    <>
-      {tri('24,44 22,22 42,32')}
-      {tri('76,44 78,22 58,32')}
-      <ellipse cx="50" cy="56" rx="28" ry="24" />
-      <ellipse cx="50" cy="76" rx="12" ry="8" />
-    </>
-  ),
-  owl: <path d="M24 42 L28 14 L44 32 Q50 30 56 32 L72 14 L76 42 Q84 72 50 88 Q16 72 24 42Z" />,
-  mouse: (
-    <>
-      <circle cx="27" cy="38" r="14" />
-      <circle cx="73" cy="38" r="14" />
-      <path d="M28 58 Q30 38 50 38 Q70 38 72 58 Q68 76 50 86 Q32 76 28 58Z" />
-    </>
-  ),
-  frog: (
-    <>
-      <circle cx="34" cy="44" r="11" />
-      <circle cx="66" cy="44" r="11" />
-      <ellipse cx="50" cy="64" rx="33" ry="20" />
-    </>
-  ),
-  dog: (
-    <>
-      <ellipse cx="50" cy="54" rx="24" ry="26" />
-      <ellipse cx="26" cy="56" rx="9" ry="20" transform="rotate(14 26 56)" />
-      <ellipse cx="74" cy="56" rx="9" ry="20" transform="rotate(-14 74 56)" />
-      <ellipse cx="50" cy="74" rx="13" ry="11" />
-    </>
-  ),
-  koala: (
-    <>
-      <circle cx="24" cy="42" r="15" />
-      <circle cx="76" cy="42" r="15" />
-      <ellipse cx="50" cy="58" rx="26" ry="25" />
-    </>
-  ),
+// Рисунки в координатах 0..100 — одна линия, как сердце в логотипе: её
+// обводят толстой трубкой, а фильтр делает из трубки жидкий металл.
+const DOODLES = {
+  star: <path d="M50 22l7.6 16 17.4 2.4-12.7 12.2 3.1 17.4L50 61.6 34.6 70l3.1-17.4L25 40.4 42.4 38z" />,
+  flame: <path d="M50 76c-13 0-20-9-18-20 2-10 10-14 12-24 7 6 8 13 7 18 4-2 6-6 6-9 7 6 11 13 10 20-1 9-8 15-17 15z" />,
+  flower: <>
+    <ellipse cx="50" cy="32" rx="7" ry="10" />
+    <ellipse cx="68" cy="46" rx="10" ry="7" />
+    <ellipse cx="32" cy="46" rx="10" ry="7" />
+    <ellipse cx="50" cy="60" rx="7" ry="10" />
+    <path d="M50 70v10" />
+  </>,
+  spiral: <path d="M50 50c0-3 4-3 4 0c0 5-8 6-9 0c-1-8 10-11 14-4c5 9-3 19-13 18c-12-1-17-14-11-23c7-11 25-10 31 2c6 13-3 28-18 29" />,
+  eye: <>
+    <path d="M22 50q28-28 56 0q-28 28-56 0z" />
+    <circle cx="50" cy="50" r="6" />
+  </>,
+  planet: <>
+    <circle cx="50" cy="50" r="15" />
+    <path d="M28 63c-10 6 2 9 22 3s32-15 22-20" />
+  </>,
+  // Сердце из логотипа — та же картинка, что у лайка и лоадера: фильтру
+  // металла нужна только её альфа, мазок кисти он и превращает в металл.
+  heart: <image href={heartImage} x="21" y="22" width="58" height="58" />,
+  mic: <>
+    <rect x="41" y="24" width="18" height="30" rx="9" />
+    <path d="M34 48q0 16 16 16t16-16M50 64v12" />
+  </>,
 }
+const DOODLE_NAMES = Object.keys(DOODLES)
+
+// '#rrggbb' → '0.5 0.2 0.9' для таблиц feComponentTransfer.
+const rgb01 = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
 
 // Вкус меняется медленно: держим последний ответ в localStorage, чтобы
 // аватарка рисовалась сразу, и один раз за сессию освежаем его.
@@ -198,7 +157,7 @@ function useDetectedGenres(userId) {
 }
 
 function TasteAvatar({ user, className }) {
-  const gradId = useId()
+  const id = useId()
   const detected = useDetectedGenres(user?.id)
   // Слушает сервис — верим ему; выбор в онбординге — запасной вариант.
   const keys = [...new Set([...(detected || []), ...(user?.preferred_genres || [])].map(toKey).filter(Boolean))]
@@ -207,54 +166,128 @@ function TasteAvatar({ user, className }) {
 
   let colors
   if (keys.length) {
-    colors = GENRES[keys[0]].colors
+    colors = GENRES[keys[0]]
   } else {
-    // Вкус ещё не известен — свечение своего оттенка по имени.
+    // Вкус ещё не известен — свой оттенок по имени. Хексом: из него же
+    // считаются таблицы металла.
     const hue = hash(name) % 360
-    colors = [`hsl(${hue} 35% 18%)`, `hsl(${(hue + 40) % 360} 45% 38%)`, `hsl(${(hue + 80) % 360} 70% 70%)`]
+    colors = [hslHex(hue, 35, 14), hslHex(hue + 40, 50, 42), hslHex(hue + 80, 75, 70)]
   }
-  const primary = keys[0] && GENRES[keys[0]]
-  const secondary = keys[1] && GENRES[keys[1]]
-  const glowX = Math.round(30 + rand() * 40)
-  const tilt = Math.round(rand() * 12 - 6)
-  const animal = primary ? primary.animal : 'bear'
+  const second = keys[1] ? GENRES[keys[1]] : colors
+  const doodleName = DOODLE_NAMES[hash(`${name}:doodle`) % DOODLE_NAMES.length]
+  const doodle = DOODLES[doodleName]
+  const tilt = doodleName === 'heart' ? 0 : Math.round(rand() * 24 - 12)
+  const lightX = Math.round(20 + rand() * 60)
+  const wobbleSeed = hash(name) % 97
+  const [tr, tg, tb] = rgb01(colors[2])
+
+  // Четыре пятна кружат вокруг центра с разной скоростью и в разные стороны.
+  // Крутятся HTML-слои transform'ом — это композитор без перерисовки; blur
+  // внутри SVG пересчитывался бы на каждом кадре.
+  const blobs = [colors[1], colors[2], second[1], second[2]].map((color, i) => ({
+    color,
+    offset: Math.round(14 + rand() * 16),
+    size: Math.round(100 + rand() * 40),
+    start: Math.round(rand() * 360),
+    spin: (9 + rand() * 10).toFixed(1),
+    reverse: i % 2 === 1,
+    opacity: i % 2 ? 0.75 : 0.95,
+  }))
 
   return (
-    <svg className={className} viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-      <defs>
-        <radialGradient id={`${gradId}-a`} cx={glowX / 100} cy="1.05" r="0.85">
-          <stop offset="0" stopColor={colors[1]} stopOpacity="0.95" />
-          <stop offset="1" stopColor={colors[1]} stopOpacity="0" />
-        </radialGradient>
-        {secondary && (
-          <radialGradient id={`${gradId}-b`} cx={(100 - glowX) / 100} cy="-0.05" r="0.6">
-            <stop offset="0" stopColor={secondary.colors[1]} stopOpacity="0.6" />
-            <stop offset="1" stopColor={secondary.colors[1]} stopOpacity="0" />
-          </radialGradient>
-        )}
-        {/* Контур по внешнему краю силуэта (кольцо = расширенная альфа минус
-            сама фигура) и неровный край, как у мела в логотипе. Цвет заливки —
-            литералом: currentColor/var() во feFlood WebKit не понимает. */}
-        <filter id={`${gradId}-chalk`} x="-10%" y="-10%" width="120%" height="120%">
-          <feMorphology in="SourceAlpha" operator="dilate" radius="2" result="wide" />
-          <feComposite in="wide" in2="SourceAlpha" operator="out" result="ring" />
-          <feFlood floodColor="#ffffff" floodOpacity="0.85" />
-          <feComposite in2="ring" operator="in" result="line" />
-          <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="noise" />
-          <feDisplacementMap in="line" in2="noise" scale="1.6" />
-        </filter>
-      </defs>
-      <rect width="100" height="100" fill="#000" />
-      <rect width="100" height="100" fill={`url(#${gradId}-a)`} />
-      {secondary && <rect width="100" height="100" fill={`url(#${gradId}-b)`} />}
-      <g
-        fill="#fff"
-        filter={`url(#${gradId}-chalk)`}
-        transform={`translate(50 56) scale(0.82) rotate(${tilt}) translate(-50 -50)`}
-      >
-        {ANIMALS[animal]}
-      </g>
-    </svg>
+    <span className={`taste-avatar ${className || ''}`} style={{ backgroundColor: colors[0] }} aria-hidden="true">
+      {blobs.map((b, i) => (
+        <span
+          key={i}
+          className="taste-avatar-orbit"
+          style={{
+            '--start': `${b.start}deg`,
+            animationDuration: `${b.spin}s`,
+            animationDirection: b.reverse ? 'reverse' : 'normal',
+          }}
+        >
+          <span
+            className="taste-avatar-blob"
+            style={{
+              left: `${50 + b.offset - b.size / 2}%`,
+              top: `${50 - b.size / 2}%`,
+              width: `${b.size}%`,
+              height: `${b.size}%`,
+              opacity: b.opacity,
+              background: `radial-gradient(circle closest-side, ${b.color} 25%, transparent)`,
+              animationDuration: `${(b.spin / 2).toFixed(1)}s`,
+            }}
+          />
+        </span>
+      ))}
+      <svg viewBox="0 0 100 100" focusable="false">
+        <defs>
+          {/* Жидкий металл: альфу линии размываем в рельеф, освещаем, и
+              немонотонная таблица яркости даёт полосы отражений, как у хрома;
+              середина таблицы — цвет блика жанра. Блёстки — точечный свет.
+              Цвета литералами: currentColor/var() во feFlood WebKit не
+              понимает. */}
+          <filter id={`${id}-metal`} x="-20%" y="-20%" width="140%" height="140%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2.2" result="bump" />
+            <feDiffuseLighting in="bump" surfaceScale="6" diffuseConstant="1" lightingColor="#fff" result="diffuse">
+              <feDistantLight azimuth="235" elevation="38" />
+            </feDiffuseLighting>
+            <feComponentTransfer in="diffuse" result="bands">
+              <feFuncR type="table" tableValues={`0.08 ${tr} 1 0.55 1`} />
+              <feFuncG type="table" tableValues={`0.06 ${tg} 1 0.5 1`} />
+              <feFuncB type="table" tableValues={`0.12 ${tb} 1 0.6 1`} />
+            </feComponentTransfer>
+            <feSpecularLighting
+              in="bump"
+              surfaceScale="6"
+              specularConstant="1.1"
+              specularExponent="28"
+              lightingColor="#fff"
+              result="spec"
+            >
+              <fePointLight x={lightX} y="10" z="60" />
+            </feSpecularLighting>
+            <feComposite in="bands" in2="spec" operator="arithmetic" k2="1" k3="0.9" />
+            {/* Рельеф из 8-битной альфы на ретине идёт ступеньками — сглаживаем. */}
+            <feGaussianBlur stdDeviation="0.5" result="lit" />
+            <feComposite in="lit" in2="SourceAlpha" operator="in" result="metal" />
+            <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="glowArea" />
+            <feFlood floodColor={colors[2]} floodOpacity="0.45" />
+            <feComposite in2="glowArea" operator="in" result="glow" />
+            <feOffset in="SourceAlpha" dx="1.5" dy="3" result="shadowArea" />
+            <feFlood floodColor="#000" floodOpacity="0.8" />
+            <feComposite in2="shadowArea" operator="in" result="shadow" />
+            <feMerge>
+              <feMergeNode in="glow" />
+              <feMergeNode in="shadow" />
+              <feMergeNode in="metal" />
+            </feMerge>
+          </filter>
+          {/* Неровный, как от руки, край линии. */}
+          <filter id={`${id}-wobble`} x="-10%" y="-10%" width="120%" height="120%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.04" seed={wobbleSeed} />
+            <feDisplacementMap in="SourceGraphic" scale="4" />
+          </filter>
+          {/* Мазок сердца тоньше трубок остальных рисунков — расширяем. */}
+          <filter id={`${id}-thick`} x="-10%" y="-10%" width="120%" height="120%">
+            <feMorphology operator="dilate" radius="1.2" />
+          </filter>
+        </defs>
+        <g filter={`url(#${id}-metal)`}>
+          <g
+            fill="none"
+            stroke="#fff"
+            strokeWidth="7.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            filter={`url(#${id}-wobble)`}
+            transform={`translate(50 50) scale(1.18) rotate(${tilt}) translate(-50 -50)`}
+          >
+            {doodleName === 'heart' ? <g filter={`url(#${id}-thick)`}>{doodle}</g> : doodle}
+          </g>
+        </g>
+      </svg>
+    </span>
   )
 }
 
