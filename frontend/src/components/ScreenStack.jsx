@@ -144,8 +144,9 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   // «Назад» — только у вложенных экранов, как в нативном стеке. Панель —
   // часть экрана: при свайпе и переходе едет вместе с ним.
   const topbar = isMobile && !isTabRoot(path)
-  // Подложка под статус-бар: контент уезжает под часы не «голым», а под
-  // матовую полосу. Главной не нужна — её hero заходит под статус-бар.
+  // Отступ под статус-бар, чтобы заголовок не прятался под часами. Подложки
+  // под часами нет: тёмная полоса резала шапки с обложкой во весь верх.
+  // Главной отступ не нужен — её hero заходит под статус-бар.
   const safeTop = isMobile && path !== '/'
   useDetailScrollRestoration(scrollerRef, location, isDetailId(id))
 
@@ -164,7 +165,6 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
           </button>
         </div>
       )}
-      {safeTop && <div className="mobile-status-scrim" aria-hidden="true" />}
       <div
         ref={scrollerRef}
         className={`screen-scroll${topbar ? ' has-mobile-topbar' : safeTop ? ' has-safe-top' : ''}`}
