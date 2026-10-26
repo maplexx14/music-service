@@ -216,7 +216,8 @@
 }
 
 /* Во всю страницу: под карточкой его не видно, а над ней цвет не
-   обрывается. overflow — параллакс обложки не растягивает прокрутку. */
+   обрывается. clip, а не hidden: hidden делал бы фон своим контейнером
+   прокрутки, и обложка (sticky) не держалась бы на месте. */
 .cover-backdrop {
   position: absolute;
   /* На телефоне шапка заходит под плавающую панель — фон туда же. */
@@ -226,6 +227,7 @@
   bottom: 0;
   z-index: -1;
   overflow: hidden;
+  overflow: clip;
   pointer-events: none;
   background-color: var(--surface-2);
 }
@@ -260,8 +262,7 @@
   display: none;
 }
 
-html.no-gpu .cover-backdrop-tint,
-html.no-gpu .cover-backdrop-hero-img {
+html.no-gpu .cover-backdrop-tint {
   animation: none;
 }
 
@@ -296,14 +297,13 @@ html.no-gpu .cover-backdrop-hero-img {
   margin-top: 0;
 }
 
-/* Параллакс: шапка, кнопки и фон под ними на первых 600px прокрутки едут
+/* Параллакс: шапка и кнопки на первых 600px прокрутки едут
    вниз на половину пути — то есть отстают от прокрутки вдвое, — а карточка
    идёт с обычной скоростью и наезжает на них сверху. Анимация по прокрутке
    (scroll-timeline) считается на композиторе, без JS и слушателей скролла.
    Где её нет или движение просили убрать — обычная прокрутка. */
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
-    .cover-backdrop-hero,
     .hero-page .artist-hero,
     .hero-page .artist-toolbar {
       animation: hero-page-parallax linear both;
@@ -347,10 +347,13 @@ html.no-gpu .cover-backdrop-hero-img {
   /* Обложка во весь верх экрана, книзу растворяется в цвет — под
      названием и кнопками ровный фон. Квадрата в шапке тогда нет, а
      название прижато к растворяющемуся краю, как подпись в плеере. */
+  /* Обложка стоит на месте, а треки карточкой наезжают на неё — как в
+     Apple Music. sticky, а не параллакс по scroll-timeline: в Safari его
+     нет, и обложка уезжала вместе со страницей. */
   .hero-page.has-cover-hero .cover-backdrop-hero {
     display: block;
-    position: absolute;
-    inset: 0 0 auto;
+    position: sticky;
+    top: 0;
     height: calc(100vw + 48px);
     /* Срезанные чёрные поля обложки (heroImageStyle) уходят за край. */
     overflow: hidden;
@@ -373,10 +376,10 @@ html.no-gpu .cover-backdrop-hero-img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    /* Подложка-миниатюра (heroImageStyle) ложится так же, как картинка. */
+    /* Подложка-миниатюра (heroImageStyle) ложится так же, как картинка:
+       обложка на экране сразу, без проявления, крупная — поверх. */
     background-size: cover;
     background-position: center;
-    animation: cover-backdrop-in 0.6s ease both;
   }
 
   /* Сердце «Понравившихся» вместо обложки — квадрат шапки во весь верх.

@@ -7,11 +7,22 @@ import { analyzeHeroCover, getHeroCover, guessHeroCover } from '../utils/heroCov
 // обложку ещё не проверяли — по догадке от источника. На смене обложки,
 // пока новую не проверили, держим прежний ответ: фон не мигает пустотой,
 // а раскладка не прыгает туда-обратно.
-export function useHeroCover(url) {
-  const [hero, setHero] = useState(() => {
+//
+// guessOnChange — на смене URL сразу ответ по догадке, а не прежний: у
+// страниц URL приходит с данными уже после первого рендера (до них — null),
+// и без догадки шапка сперва рисовалась с квадратом, а обложка во весь верх
+// приезжала только после загрузки и разбора картинки.
+export function useHeroCover(url, { guessOnChange = false } = {}) {
+  const initial = () => {
     const known = getHeroCover(url)
     return known !== undefined ? known : guessHeroCover(url)
-  })
+  }
+  const [hero, setHero] = useState(initial)
+  const [shownUrl, setShownUrl] = useState(url)
+  if (guessOnChange && url !== shownUrl) {
+    setShownUrl(url)
+    setHero(initial())
+  }
   useEffect(() => {
     if (!url) {
       setHero(null)

@@ -12,7 +12,7 @@ import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
 export function useCoverBackdrop(coverUrl) {
   const thumb = resolveCoverUrl(coverUrl, 'thumb')
   const tint = useCoverTint(thumb)
-  const heroInfo = useHeroCover(resolveCoverUrl(coverUrl, 'hero'))
+  const heroInfo = useHeroCover(resolveCoverUrl(coverUrl, 'hero'), { guessOnChange: true })
   const hero = useMemo(() => (heroInfo ? { ...heroInfo, thumb } : null), [heroInfo, thumb])
   return { tint, hero }
 }
