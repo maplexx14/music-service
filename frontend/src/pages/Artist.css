@@ -353,7 +353,10 @@ html.no-gpu .cover-backdrop-tint {
   .hero-page.has-cover-hero .cover-backdrop-hero {
     display: block;
     position: sticky;
-    top: 0;
+    /* sticky держит край по отступу контейнера прокрутки (--main-pad-top,
+       место под «Назад»): с top: 0 обложка сползала на этот отступ и над
+       ней оставалась полоса фона. Фон и так поднят на отступ — обложка тоже. */
+    top: calc(-1 * var(--main-pad-top, 0px));
     height: calc(100vw + 48px);
     /* Срезанные чёрные поля обложки (heroImageStyle) уходят за край. */
     overflow: hidden;
