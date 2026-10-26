@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { resolveCoverUrl } from '../utils/media'
 import { useCoverTint } from '../hooks/useThemeColor'
 import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
+import { useScreen } from '../hooks/useScreen'
 
 // Фон страниц с шапкой (исполнитель, альбом, плейлисты, «Понравившиеся») —
 // как у полноэкранного плеера: приглушённый цвет обложки (useCoverTint),
@@ -19,7 +20,26 @@ export function useCoverBackdrop(coverUrl) {
 
 // art — своя картинка во весь верх вместо обложки (сердце «Понравившихся»
 // без обложки); у страницы тогда тоже has-cover-hero.
+// Верх сердца «Понравившихся» (--hero-c1/--hero-c2 в Artist.css).
+const ART_THEME_COLOR = '#8f45f5'
+
+// iOS в PWA сама темнит зону под часами по theme-color, а у приложения он
+// почти чёрный — над обложкой во весь верх выходила тёмная полоса. Пока
+// страница на экране, статус-бар в цвет её шапки; уходим — возвращаем.
+function useHeaderThemeColor(color) {
+  const { active } = useScreen()
+  useEffect(() => {
+    if (!active || !color) return undefined
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (!meta) return undefined
+    const previous = meta.getAttribute('content')
+    meta.setAttribute('content', color)
+    return () => meta.setAttribute('content', previous)
+  }, [active, color])
+}
+
 function CoverBackdrop({ tint, hero, art }) {
+  useHeaderThemeColor(art ? ART_THEME_COLOR : hero ? tint : null)
   return (
     <div className="cover-backdrop" aria-hidden="true">
       {/* Новый цвет проявляется слоем поверх нейтрального (opacity ведёт
