@@ -121,6 +121,13 @@
     );
     z-index: 1003;
     pointer-events: none;
+    /* Видна, только когда экран прокручен (ScreenStack.jsx). */
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .mobile-status-scrim.is-visible {
+    opacity: 1;
   }
 
   /* «Назад» — плавающая капсула в стилистике таб-бара (.mobile-nav-global):

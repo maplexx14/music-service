@@ -364,8 +364,10 @@ html.no-gpu .cover-backdrop-tint {
     mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
   }
 
-  /* Под плавающей «Назад» и статус-баром — затемнение, как в плеере. */
-  .hero-page.has-cover-hero .cover-backdrop-hero::after {
+  /* Под плавающей «Назад» и статус-баром — затемнение, как в плеере.
+     Только где «Назад» есть: у вкладок (Понравившиеся) оно было просто
+     тёмной полосой над шапкой. */
+  .has-mobile-topbar .hero-page.has-cover-hero .cover-backdrop-hero::after {
     content: '';
     position: absolute;
     inset: 0 0 auto;
