@@ -4,6 +4,7 @@ import binascii
 import logging
 import os
 import re
+import uuid
 from typing import List, NamedTuple, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -1256,44 +1257,62 @@ async def _soundcloud_match_ready(video_id: str) -> bool:
 # обычный заархивированный файл (и prefetch_is_ready видит его готовым).
 # ---------------------------------------------------------------------------
 
-# Один ремукс на трек: браузер шлёт на один и тот же трек несколько
-# Range-запросов, и без блокировки каждый запускал бы свой ffmpeg.
-_hls_locks: dict[str, asyncio.Lock] = {}
+# Один ремукс на трек в пределах процесса. Задача (а не lock) нужна из-за
+# отмены запроса: вотчдог плеера рвёт долгий старт через audio.load(), и
+# отмена ожидания убивала бы и саму сборку — ремукс начинался заново на
+# каждой попытке и не доходил до os.replace ни разу (см. _ensure_hls_cached).
+_hls_tasks: dict[str, asyncio.Task] = {}
 
 
 async def _remux_hls_to_cache(cache_id: str, m3u8_url: str, ext: str) -> Optional[str]:
-    """Собирает HLS в файл дискового кэша. Возвращает путь или None."""
+    """Собирает HLS в файл дискового кэша. Возвращает путь или None.
+
+    Временный файл уникален для попытки. Прод крутит несколько воркеров
+    (GUNICORN_WORKERS=4), и прогрев с самим /stream они обслуживают в разных
+    процессах: общий asyncio.Lock их не различает, а раньше и имя ``*.part``
+    было общим. Первый ffmpeg успевал сделать os.replace, после чего второй
+    продолжал писать в уже ПЕРЕМЕЩЁННЫЙ файл — готовый кэш-файл оставался
+    битым навсегда (_cached_file отдаёт его без проверок), и трек не играл
+    уже никогда. С уникальным именем лишняя копия просто выбрасывается.
+    """
     from app.transcode import remux_hls_to_file
 
     final_path = os.path.join(CACHE_DIR, f"{cache_id}{ext}")
-    part_path = final_path + ".part"
+    part_path = f"{final_path}.{os.getpid()}-{uuid.uuid4().hex[:8]}.part"
     container = "mp3" if ext == ".mp3" else "mp4"
-    ok = await asyncio.to_thread(
-        remux_hls_to_file, m3u8_url, part_path, container, _HLS_MAX_BYTES
-    )
-    if not ok:
-        return None
     try:
-        # Атомарно: _cached_file игнорирует *.part, поэтому недособранный файл
-        # никогда не попадёт в отдачу.
-        os.replace(part_path, final_path)
-    except OSError:
-        logger.exception("hls: не удалось сохранить %s", final_path)
-        return None
+        ok = await asyncio.to_thread(
+            remux_hls_to_file, m3u8_url, part_path, container, _HLS_MAX_BYTES
+        )
+        if not ok:
+            return None
+        # Пока собирали, файл мог собрать другой воркер — его копия целая
+        # (установка ниже атомарна), свою не навязываем.
+        installed = _cached_file(cache_id)
+        if installed:
+            return installed
+        try:
+            # Атомарно: _cached_file игнорирует *.part, поэтому недособранный
+            # файл никогда не попадёт в отдачу.
+            os.replace(part_path, final_path)
+        except OSError:
+            logger.exception("hls: не удалось сохранить %s", final_path)
+            return None
+    finally:
+        # Свою копию убираем и при успехе (после replace её уже нет), и при
+        # ошибке/таймауте/отмене — иначе брошенные .part копятся в кэше.
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
     _enforce_cache_limit()
     return final_path
 
 
-async def _ensure_hls_cached(track_id: str) -> Optional[str]:
-    """Собирает HLS-only трек в дисковый кэш (если ещё нет) и возвращает путь.
-
-    None — пригодного HLS нет (транскодов нет или только DRM). Зовут и /stream,
-    и прогрев: собранный файл делает трек готовым (prefetch_is_ready видит
-    кэш-файл), а следующий /stream отдаёт его с диска без ремукса.
-    """
+async def _assemble_hls(track_id: str) -> Optional[str]:
+    """Собирает HLS-only трек в дисковый кэш. Никогда не кидает наружу."""
     cache_id = f"sc{track_id}"
-    lock = _hls_locks.setdefault(track_id, asyncio.Lock())
-    async with lock:
+    try:
         cached = _cached_file(cache_id)
         if cached:
             return cached
@@ -1317,6 +1336,41 @@ async def _ensure_hls_cached(track_id: str) -> Optional[str]:
         except Exception:  # noqa: BLE001 — архивация не важнее воспроизведения
             logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
         return cached
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — сборка best-effort, вызывающий отдаст 503
+        logger.warning("hls: сборка sc/%s не удалась", track_id, exc_info=True)
+        return None
+
+
+def _hls_task_done(track_id: str, task: asyncio.Task) -> None:
+    if _hls_tasks.get(track_id) is task:
+        _hls_tasks.pop(track_id, None)
+    if not task.cancelled():
+        # Забрать исключение: если единственный ожидающий был отменён, asyncio
+        # иначе ругался бы «Task exception was never retrieved».
+        task.exception()
+
+
+async def _ensure_hls_cached(track_id: str) -> Optional[str]:
+    """Собирает HLS-only трек в дисковый кэш (если ещё нет) и возвращает путь.
+
+    None — пригодного HLS нет (транскодов нет или только DRM). Зовут и /stream,
+    и прогрев: собранный файл делает трек готовым (prefetch_is_ready видит
+    кэш-файл), а следующий /stream отдаёт его с диска без ремукса.
+    """
+    cached = _cached_file(f"sc{track_id}")
+    if cached:
+        return cached
+    task = _hls_tasks.get(track_id)
+    if task is None or task.done():
+        task = asyncio.ensure_future(_assemble_hls(track_id))
+        _hls_tasks[track_id] = task
+        task.add_done_callback(lambda t, tid=track_id: _hls_task_done(tid, t))
+    # shield: разрыв клиентского запроса (вотчдог плеера зовёт load()) не
+    # должен отменять общую сборку — иначе ремукс не доходит до установки
+    # файла, и следующая попытка начинает всё заново.
+    return await asyncio.shield(task)
 
 
 async def _stream_via_hls(request: Request, track_id: str):

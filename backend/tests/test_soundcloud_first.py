@@ -217,3 +217,95 @@ def test_prefetch_does_not_touch_hls_for_unavailable_track(monkeypatch):
 
     with pytest.raises(TrackUnavailable):
         asyncio.run(soundcloud._resolve_for_prefetch("42", "https://soundcloud.com/a/b"))
+
+
+def test_concurrent_hls_remuxes_do_not_share_temp_file(tmp_path, monkeypatch):
+    """Прод: прогрев и /stream одного трека попадают в РАЗНЫЕ воркеры
+    gunicorn (GUNICORN_WORKERS=4), а asyncio.Lock живёт в одном процессе.
+    С общим именем ``*.part`` второй ffmpeg продолжал писать в уже
+    перемещённый на место готовый кэш-файл — тот оставался битым навсегда
+    (_cached_file отдаёт его без проверок), и трек не играл уже никогда."""
+    from app import transcode
+
+    monkeypatch.setattr(soundcloud, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(ytdlp, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(soundcloud, "_enforce_cache_limit", lambda: None)
+
+    outputs = []
+
+    def fake_remux(_url, output_path, container="mp4", max_bytes=0):
+        outputs.append(output_path)
+        with open(output_path, "wb") as fh:
+            fh.write(b"\x00" * 4096)
+        return True
+
+    monkeypatch.setattr(transcode, "remux_hls_to_file", fake_remux)
+
+    async def both():
+        return await asyncio.gather(
+            soundcloud._remux_hls_to_cache("sc42", "https://cdn/a.m3u8", ".m4a"),
+            soundcloud._remux_hls_to_cache("sc42", "https://cdn/a.m3u8", ".m4a"),
+        )
+
+    first, second = asyncio.run(both())
+
+    assert outputs[0] != outputs[1]
+    final = tmp_path / "sc42.m4a"
+    assert first == second == str(final)
+    assert final.stat().st_size == 4096
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_hls_assembly_survives_client_disconnect(monkeypatch):
+    """Вотчдог плеера рвёт долгий старт через audio.load(). Отмена ожидающего
+    не должна отменять общую сборку: иначе ремукс не доходит до установки
+    файла, и каждая попытка начинается с нуля."""
+    soundcloud._hls_tasks.clear()
+    monkeypatch.setattr(soundcloud, "_cached_file", lambda _id: None)
+
+    async def main():
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def assemble(track_id):
+            calls.append(track_id)
+            started.set()
+            await release.wait()
+            return "/cache/sc42.m4a"
+
+        monkeypatch.setattr(soundcloud, "_assemble_hls", assemble)
+
+        first = asyncio.ensure_future(soundcloud._ensure_hls_cached("42"))
+        await started.wait()
+        second = asyncio.ensure_future(soundcloud._ensure_hls_cached("42"))
+        await asyncio.sleep(0)
+
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        release.set()
+        assert await second == "/cache/sc42.m4a"
+        # Done-callback задачи выполняется отдельным тиком цикла.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert calls == ["42"]
+        assert soundcloud._hls_tasks == {}
+
+    try:
+        asyncio.run(main())
+    finally:
+        soundcloud._hls_tasks.clear()
+
+
+def test_assemble_hls_swallows_resolve_errors(monkeypatch):
+    """Сбой api-v2 не должен превращаться в 500: вызывающий отдаёт 503."""
+    monkeypatch.setattr(soundcloud, "_cached_file", lambda _id: None)
+
+    async def boom(_track_id):
+        raise RuntimeError("api-v2 down")
+
+    monkeypatch.setattr(soundcloud, "resolve_hls_via_api", boom)
+
+    assert asyncio.run(soundcloud._assemble_hls("42")) is None

@@ -58,6 +58,13 @@ const RETRY_DELAY_MS = 900
 // Проверочный range-запрос при ошибке не должен зависать дольше этого —
 // иначе зависший probe держит трек в состоянии "буферизуется" бесконечно.
 const PROBE_TIMEOUT_MS = 6000
+// Стартовый вотчдог для внешних треков без метаданных. Холодный старт там —
+// это резолв у источника плюс, у HLS-only треков SoundCloud, ещё и сборка
+// файла ffmpeg'ом на бэке (единицы-десятки секунд): байты в <audio> не идут,
+// событий progress нет, и прежние 8 с рвали ЕЩЁ ЛЕТЯЩИЙ запрос через load().
+// Трек стартовал заново, снова не успевал — и так до «не удалось
+// воспроизвести». Ждём дольше; мёртвый URL всё равно ловится событием error.
+const EXTERNAL_START_STALL_MS = 25000
 // За сколько секунд до конца трека начинать прогрев следующего во второй
 // <audio>, если текущий ещё не докачан целиком. Запас должен покрывать
 // холодный резолв на бэке (yt-dlp — единицы секунд) плюс загрузку первых
@@ -829,10 +836,22 @@ function PlayerInner() {
     const noteProgress = () => {
       lastProgressAt = Date.now()
     }
+    // Внешнему треку на самом старте нужен более длинный запас: на бэке может
+    // идти резолв/сборка HLS, и до первого байта событий progress просто нет.
+    // Как только метаданные пришли (readyState ≥ HAVE_METADATA), это уже
+    // обычная загрузка — возвращаемся к короткому порогу.
+    const stallGraceMs = () => {
+      const external = EXTERNAL_SOURCES.includes(
+        usePlayerStore.getState().currentTrack?.source
+      )
+      return external && audio.readyState < audio.HAVE_METADATA
+        ? EXTERNAL_START_STALL_MS
+        : NO_PROGRESS_STALL_MS
+    }
     const isStalledStart = () =>
       !audio.paused &&
       audio.currentTime === 0 &&
-      Date.now() - lastProgressAt > NO_PROGRESS_STALL_MS
+      Date.now() - lastProgressAt > stallGraceMs()
     const kickStalled = () => {
       // Микро-seek лечит замерший конвейер в Chromium, но в WebKit он его
       // ЛОМАЕТ — ровно как описано в handlePlaying ниже: перемотка по свежему
