@@ -336,6 +336,7 @@ services:
       -b 0.0.0.0:8000
       --timeout ${GUNICORN_TIMEOUT:-120}
       --forwarded-allow-ips='*'
+      --max-requests 1500 --max-requests-jitter 150
       --access-logfile - --error-logfile -"
 
   # Предрасчёт порций потока рекомендаций (app/flow_warmer.py). Отдельный
