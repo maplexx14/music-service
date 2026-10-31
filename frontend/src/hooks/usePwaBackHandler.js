@@ -5,6 +5,11 @@ import { useAddToPlaylistStore } from '../store/addToPlaylistStore'
 import { useCensorDialogStore } from '../store/censorDialogStore'
 import { canGoBack, isAndroid, isStandalone, isTabRoot, tabOf } from '../services/navigation'
 import { toast } from '../store/toastStore'
+import { isAndroidApp } from '../services/androidApp'
+
+// Старые APK по-прежнему используют историю: новый фронт не должен ломать
+// «назад», пока пользователь ещё не обновил оболочку.
+const usesNativeBack = () => isAndroidApp() && window.__boltNativeBack === true
 
 /**
  * Обработка жестов и кнопки «Назад» для PWA и Android (включая Vivo OriginOS / FuntouchOS).
@@ -56,11 +61,54 @@ export function usePwaBackHandler() {
     pathname: location.pathname,
   }
 
+  // APK: системный back сначала спрашивает страницу, а не историю WebView.
+  // Состояние читаем из stores в момент жеста: два быстрых back не должны
+  // повторно закрывать уже закрытый плеер из-за отложенного рендера React.
+  useEffect(() => {
+    if (!usesNativeBack()) return
+
+    const handleBack = () => {
+      const censor = useCensorDialogStore.getState()
+      if (censor.track !== null) {
+        censor.close()
+        return true
+      }
+      const add = useAddToPlaylistStore.getState()
+      if (add.request !== null) {
+        add.close()
+        return true
+      }
+      const player = usePlayerStore.getState()
+      if (player.isFullScreen) {
+        player.closeFullScreen()
+        return true
+      }
+
+      const pathname = window.location.pathname
+      if (canGoBack()) {
+        navigate(-1)
+        return true
+      }
+      if (pathname !== '/') {
+        navigate(isTabRoot(pathname) ? '/' : tabOf(pathname), { replace: true })
+        return true
+      }
+      // Только на главной без открытых окон оболочка может свернуть APK.
+      return false
+    }
+
+    window.__boltHandleBack = handleBack
+    return () => {
+      if (window.__boltHandleBack === handleBack) delete window.__boltHandleBack
+    }
+  }, [navigate])
+
   // 1. Инициализация и поддержание буфера истории для Android / standalone PWA.
   // Буфер создаётся ТОЛЬКО на корневой позиции стека (idx === 0), чтобы на вложенных
   // страницах сохранялся естественный возврат ровно за 1 жест.
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (usesNativeBack()) return
     if (!isAndroid && !isStandalone) return
 
     const isRootEntry = (window.history.state?.idx ?? 0) === 0
@@ -75,6 +123,7 @@ export function usePwaBackHandler() {
 
   // 2. Синхронизация полноэкранного плеера с историей
   useEffect(() => {
+    if (usesNativeBack()) return
     if (isFullScreen) {
       if (!isHandlingPopRef.current && !pushedModalsRef.current.includes('fullscreen')) {
         window.history.pushState(
@@ -96,6 +145,7 @@ export function usePwaBackHandler() {
 
   // 3. Синхронизация диалога «Добавить в плейлист»
   useEffect(() => {
+    if (usesNativeBack()) return
     if (isAddOpen) {
       if (!isHandlingPopRef.current && !pushedModalsRef.current.includes('add-to-playlist')) {
         window.history.pushState(
@@ -117,6 +167,7 @@ export function usePwaBackHandler() {
 
   // 4. Синхронизация диалога цензуры
   useEffect(() => {
+    if (usesNativeBack()) return
     if (isCensorOpen) {
       if (!isHandlingPopRef.current && !pushedModalsRef.current.includes('censor')) {
         window.history.pushState(
@@ -139,6 +190,7 @@ export function usePwaBackHandler() {
   // 5. Перехват события popstate (системный жест «Назад»)
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (usesNativeBack()) return
 
     const handlePopState = () => {
       isHandlingPopRef.current = true

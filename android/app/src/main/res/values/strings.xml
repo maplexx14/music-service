@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">bolt</string>
+    <string name="channel_playback">Воспроизведение</string>
+    <string name="offline_title">Нет соединения с сервером</string>
+    <string name="offline_retry">Повторить</string>
+    <string name="shortcut_wave">Поток</string>
+    <string name="shortcut_search">Поиск</string>
+    <string name="shortcut_liked">Любимое</string>
+</resources>

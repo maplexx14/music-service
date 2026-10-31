@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Долгое нажатие на иконку. /?app=wave запускает поток (services/androidApp.js). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="wave"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_wave"
+        android:shortcutShortLabel="@string/shortcut_wave">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="https://boltmusic.lat/?app=wave"
+            android:targetPackage="lat.boltmusic.app"
+            android:targetClass="lat.boltmusic.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_search"
+        android:shortcutShortLabel="@string/shortcut_search">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="https://boltmusic.lat/search"
+            android:targetPackage="lat.boltmusic.app"
+            android:targetClass="lat.boltmusic.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="liked"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_liked"
+        android:shortcutShortLabel="@string/shortcut_liked">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="https://boltmusic.lat/liked"
+            android:targetPackage="lat.boltmusic.app"
+            android:targetClass="lat.boltmusic.app.MainActivity" />
+    </shortcut>
+</shortcuts>
