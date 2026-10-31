@@ -5,6 +5,7 @@ import {
   holdHeavyAnimations,
   skipNextTransitionAnimation,
   swipeNextTransition,
+  isIOS,
 } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 
@@ -159,7 +160,6 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
     const transitionFor = (ms) => {
       if (ms) return `transform ${ms}ms ${EASE}`
-      if (frameMs > SLOW_FRAME_MS) return `transform ${Math.round(frameMs)}ms linear`
       return 'none'
     }
 
@@ -454,7 +454,10 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       target.closest(EDITABLE)?.focus()
       target.click()
     }
-    if (isStandalone()) {
+    // Edge-guard нужен только на iOS: WebKit в PWA имеет нативный жест «назад»
+    // со своей анимацией снапшота. На Android этот guard с e.preventDefault()
+    // блокирует касания и ломает системные жесты назад (особенно на Vivo/Funtouch).
+    if (isIOS && isStandalone()) {
       edgeGuard = document.createElement('div')
       edgeGuard.className = 'swipe-edge-guard'
       edgeGuard.setAttribute('aria-hidden', 'true')

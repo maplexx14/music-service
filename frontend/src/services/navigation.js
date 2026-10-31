@@ -33,6 +33,7 @@ export function tabOf(pathname) {
 }
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+export const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(ua)
 // iPadOS представляется Mac'ом — отличаем по тачу.
 export const isIOS =
   /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1)

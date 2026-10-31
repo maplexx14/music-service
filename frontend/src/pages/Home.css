@@ -501,6 +501,7 @@
   border-radius: 4px;
   margin-bottom: 12px;
   background-color: var(--surface-4);
+  transition: opacity var(--duration-base) var(--ease-out);
 }
 
 .track-cover.placeholder {
@@ -902,9 +903,12 @@
    и ту же переменную ширины, что и карусель, — подмена скелетона реальными
    карточками не двигает вёрстку. */
 .home-skeleton-row {
+  --carousel-item-width: 200px;
   display: flex;
   gap: 16px;
   overflow: hidden;
+  padding: 4px 0;
+  animation: cardFadeIn var(--duration-base) var(--ease-out);
 }
 
 .home-skeleton-card {
@@ -969,11 +973,21 @@
 }
 
 @media (max-width: 768px) {
-  .home-skeleton-row { gap: 12px; }
+  .home-skeleton-row {
+    --carousel-item-width: 150px;
+    gap: 12px;
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
   .home-skeleton-card { padding: 12px; }
 }
 
 @media (max-width: 380px) {
+  .home-skeleton-row {
+    --carousel-item-width: 140px;
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
   .home-skeleton-card { padding: 8px; }
 }
 

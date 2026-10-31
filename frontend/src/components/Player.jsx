@@ -298,7 +298,7 @@ function PlayerProgress({ audioRef, seekable }) {
       { ref: fillRef, frame: progressShift },
       { ref: headRef, frame: progressShift },
     ],
-    { stepped: liteMode || NO_GPU || powerSave },
+    { stepped: liteMode },
   )
 
   const handleSeek = (e) => {
@@ -2664,7 +2664,7 @@ function PlayerInner() {
             decoding="async"
             onError={handleCoverError}
           />
-          {isExternalTrack && isBuffering && (
+          {isBuffering && (
             <div className="player-cover-buffering" role="status" aria-label="Загрузка трека">
               <BoltLoader size={22} frame={50} />
             </div>
@@ -2673,7 +2673,7 @@ function PlayerInner() {
         <div className="player-info">
           <div className="player-track-title">{currentTrack.title}</div>
           <div className="player-track-artist">
-            {isExternalTrack && isBuffering ? (
+            {isBuffering ? (
               'Загрузка…'
             ) : (
               <ArtistLink artist={currentTrack.artist} className="player-artist-names" />

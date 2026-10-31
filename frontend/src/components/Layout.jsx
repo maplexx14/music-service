@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
+import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
 import MeterProfiler from './MeterProfiler'
 import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
@@ -95,6 +96,7 @@ const navIndexOf = (pathname) =>
   )
 
 function Layout({ renderRoutes }) {
+  usePwaBackHandler()
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('sidebar-collapsed')
     return saved && JSON.parse(saved) ? 72 : 240

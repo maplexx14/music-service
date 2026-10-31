@@ -15,6 +15,7 @@
 // кадров (главный поток стабильно занят), — ему облегчение тоже на пользу.
 
 import { diag } from './playerDiag'
+import { isAndroid } from '../services/navigation'
 
 const CLASS_NAME = 'power-save'
 // Результат на сессию вкладки, как детект GPU (utils/gpu.js): перезагрузка
@@ -90,7 +91,10 @@ function sample() {
     sampling = false
     const capped = intervals.filter((ms) => ms >= CAPPED_MIN_MS && ms <= CAPPED_MAX_MS).length
     const fast = intervals.filter((ms) => ms < FAST_FRAME_MS).length
-    if (capped >= intervals.length * CAPPED_SHARE) setActive(true, 'raf30')
+    // На Android с адаптивными экранами (Vivo, Xiaomi, Samsung) развёртка в
+    // покое падает до 30 Гц динамически — это нормальная работа дисплея,
+    // а не системный режим энергосбережения. Не считаем rAF30 режимом энергосбережения на Android.
+    if (!isAndroid && capped >= intervals.length * CAPPED_SHARE) setActive(true, 'raf30')
     else if (fast >= intervals.length * FAST_SHARE) setActive(false, 'raf')
   }
   requestAnimationFrame(tick)
