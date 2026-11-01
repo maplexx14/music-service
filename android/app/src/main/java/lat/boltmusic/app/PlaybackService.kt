@@ -360,7 +360,10 @@ class PlaybackService : Service() {
 
     private fun bindNotificationButton(view: RemoteViews, id: Int, action: String, enabled: Boolean) {
         view.setBoolean(id, "setEnabled", enabled)
-        view.setFloat(id, "setAlpha", if (enabled) 1f else 0.35f)
+        // View.setAlpha не разрешён в RemoteViews на Android 10/11:
+        // SystemUI не сможет развернуть уведомление и завершит приложение.
+        // ImageView.setImageAlpha поддерживается начиная с API 16.
+        view.setInt(id, "setImageAlpha", if (enabled) 255 else 89)
         if (enabled) view.setOnClickPendingIntent(id, servicePendingIntent(action))
     }
 

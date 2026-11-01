@@ -6,6 +6,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.TextView
 import org.junit.After
 import org.junit.Assert.*
@@ -22,7 +23,7 @@ import org.robolectric.util.ReflectionHelpers
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+@Config(sdk = [29, 30, 35])
 class PlaybackServiceTest {
     private lateinit var controller: ServiceController<PlaybackService>
     private lateinit var service: PlaybackService
@@ -116,6 +117,23 @@ class PlaybackServiceTest {
             val intent = shadowOf(context).nextStartedService
             service.onStartCommand(intent, 0, 10)
             assertEquals("previoustrack", commands.last())
+        }
+    }
+
+    @Test
+    fun unavailableTrackButtonsAreDisabledAndDimmedInBothLayouts() {
+        PlayerHub.setActions(setOf("play", "pause"))
+        val context = RuntimeEnvironment.getApplication()
+        for (remoteViews in listOf(notification().contentView, notification().bigContentView)) {
+            val view = remoteViews.apply(context, FrameLayout(context))
+            for (id in listOf(R.id.notification_previous, R.id.notification_next)) {
+                val button = view.findViewById<ImageView>(id)
+                assertFalse(button.isEnabled)
+                assertEquals(89, button.imageAlpha)
+            }
+            val toggle = view.findViewById<ImageView>(R.id.notification_toggle)
+            assertTrue(toggle.isEnabled)
+            assertEquals(255, toggle.imageAlpha)
         }
     }
 }
