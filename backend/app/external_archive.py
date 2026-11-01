@@ -230,7 +230,8 @@ async def _note_acoustic_features(
 
 
 async def adopt_local_file(
-    source: str, external_id: str, local_path: str, replace: bool = False
+    source: str, external_id: str, local_path: str, replace: bool = False,
+    *, archive_key: Optional[str] = None,
 ) -> Optional[str]:
     """Кладёт уже готовый локальный файл в MinIO как архивную копию трека.
 
@@ -259,7 +260,8 @@ async def adopt_local_file(
         return None
 
     ext = os.path.splitext(local_path)[1].lower() or ".m4a"
-    key = f"external/{source}/{external_id}{ext}"
+    destination = archive_key or f"{source}/{external_id}"
+    key = f"external/{destination}{ext}"
     acoustic_features = await asyncio.to_thread(analyze_file, local_path)
     old_path = None
     if replace:
@@ -275,7 +277,7 @@ async def adopt_local_file(
         logger.exception("adopt: не удалось загрузить %s/%s в MinIO", source, external_id)
         return None
 
-    await _note_archived(source, external_id, file_path)
+    await _note_archived(*destination.split("/", 1), file_path)
     await _note_acoustic_features(source, external_id, acoustic_features)
 
     # Привязываем объект к записи в БД, чтобы /tracks/{id}/stream отдавал трек
@@ -835,13 +837,14 @@ _inflight_ext: set[str] = set()
 
 
 async def _archive_external_core(
-    db: Session,
+    db: Optional[Session],
     source: str,
     external_id: str,
     permalink: Optional[str],
     track: Optional[Track],
     resume_path: Optional[str] = None,
     force_resolve: bool = False,
+    *, archive_key: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
     """Резолвит → скачивает → кладёт внешний трек в MinIO по (source, external_id).
 
@@ -887,7 +890,8 @@ async def _archive_external_core(
             return ArchiveResult.TRANSIENT, None
 
         await asyncio.to_thread(storage.ensure_buckets)
-        key = f"external/{source}/{external_id}{ext}"
+        destination = archive_key or f"{source}/{external_id}"
+        key = f"external/{destination}{ext}"
         dl_client, dl_owned = _download_client(url, client)
         try:
             tmp_path, _size = await _download_to_temp(url, ext, dl_client, resume_path=resume_path)
@@ -909,7 +913,7 @@ async def _archive_external_core(
                 pass
             tmp_path = aac_path
             ext = AAC_EXT
-            key = f"external/{source}/{external_id}{ext}"
+            key = f"external/{destination}{ext}"
 
         # Compute the content profile while the downloaded bytes are still
         # local.  The archive path may later be linked to a Track row; retain
@@ -930,7 +934,7 @@ async def _archive_external_core(
                 except OSError:
                     pass
 
-        await _note_archived(source, external_id, file_path)
+        await _note_archived(*destination.split("/", 1), file_path)
         await _note_acoustic_features(source, external_id, acoustic_features)
 
         # Если трек уже материализован — привязываем объект к записи и архивируем
@@ -949,7 +953,8 @@ async def _archive_external_core(
             db.commit()
         return ArchiveResult.ARCHIVED, None
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("archive-ext: не удалось заархивировать %s/%s", source, external_id)
         return ArchiveResult.FAILED, saved_tmp
     finally:

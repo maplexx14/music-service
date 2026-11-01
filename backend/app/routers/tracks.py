@@ -405,6 +405,22 @@ async def stream_track(
         # прямо из MinIO, мимо /api/ytdlp/stream (так «Клей» ни разу не
         # проверился после выката сравнения звука).
         censorship.schedule_suggestion(track.external_id)
+        # Треки из коллекции тоже попадают в поток. Архивная копия из
+        # каталога не должна перекрывать предпочитаемую версию SoundCloud.
+        try:
+            from app import soundcloud_originals
+            from app.routers import soundcloud, ytdlp
+
+            response = await soundcloud_originals.stream_from_archive(track.external_id, request)
+            if response is not None:
+                return response
+            match = await soundcloud.preferred_soundcloud_match_for(track.external_id)
+            if match:
+                return ytdlp._keep_fmt(
+                    ytdlp._soundcloud_redirect(track.external_id, match, original=True), request
+                )
+        except Exception:  # noqa: BLE001 — отказ поиска не должен ломать стрим
+            logger.warning("preferred soundcloud lookup failed for track %s", track_id, exc_info=True)
 
     # Заархивированный трек (в т.ч. изначально внешний ytmusic/soundcloud) лежит в
     # объектном хранилище. Проксируем его через бэкенд (тот же origin/https,

@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from app.cache import get_cache_async, set_cache_async
-from app.artist_utils import resolve_track_artist
+from app.artist_utils import is_derivative_title, names_whole_artist, resolve_track_artist
+from app.lang import is_cyrillic
 from app.routers.ytdlp import (
     CACHE_DIR,
     MEDIA_TYPES,
@@ -1068,6 +1069,9 @@ def _is_full_stream(item: dict) -> bool:
     )
 
 
+_SC_MATCH_VERSION = 2
+
+
 async def find_soundcloud_equivalent(
     video_id: str, title: str, artist: str, duration: int
 ) -> Optional[tuple[str, str]]:
@@ -1078,7 +1082,7 @@ async def find_soundcloud_equivalent(
     """
     key = f"ytmusic:scmatch:{video_id}"
     cached = await get_cache_async(key)
-    if cached:
+    if cached and cached.get("version") == _SC_MATCH_VERSION:
         # Промах тоже кэшируем — иначе каждый запрос на стрим гонял бы
         # поиск в SoundCloud заново.
         track_id = cached.get("track_id")
@@ -1090,12 +1094,18 @@ async def find_soundcloud_equivalent(
     if not title or not artist or duration <= 0:
         # Матчить нечего: без любого из трёх полей _is_exact_match всегда
         # False. Кэшируем промах, чтобы не гонять поиск на каждый вызов.
-        await set_cache_async(key, {"track_id": None}, expire=_MATCH_MISS_TTL)
+        await set_cache_async(
+            key, {"track_id": None, "version": _SC_MATCH_VERSION}, expire=_MATCH_MISS_TTL
+        )
         return None
 
     match: Optional[tuple[str, str]] = None
     full = False
+    best_rank = (-1, -1, -1)
+    matched_item = None
     try:
+        from app.routers.aggregate import is_clean_edit
+
         data = await _api_get("/search/tracks", {"q": f"{artist} {title}", "limit": 8})
         if not isinstance(data, dict):
             # Поиск недоступен (прокси лёг, 403): промах не доказан — не
@@ -1107,30 +1117,65 @@ async def find_soundcloud_equivalent(
             if not track_id or "soundcloud.com/" not in permalink:
                 continue
             cand_artist, cand_title = _api_artist_title(item)
+            if not names_whole_artist(cand_artist, artist):
+                continue
+            # Совпадение по вхождению названия не должно пропускать clean,
+            # ремикс или ускорение той же длительности.
+            if is_clean_edit(cand_title) or (
+                is_derivative_title(cand_title) and not is_derivative_title(title)
+            ):
+                continue
             candidate = _ScMatchCandidate(
                 title=clean_title(cand_title),
                 artist=cand_artist,
                 duration=round((item.get("duration") or 0) / 1000),
             )
             if _is_exact_match(candidate, title, artist, duration):
-                match = (track_id, permalink)
-                full = _is_full_stream(item)
-                break
+                item_full = _is_full_stream(item)
+                official = names_whole_artist(
+                    (item.get("user") or {}).get("username") or "", artist
+                )
+                exact_title = _match_key(candidate.title) == _match_key(title)
+                rank = (int(item_full), int(exact_title), int(official))
+                if rank > best_rank:
+                    match = (track_id, permalink)
+                    full = item_full
+                    best_rank = rank
+                    matched_item = item
     except Exception:  # noqa: BLE001 — матч не должен ломать воспроизведение
         logger.exception("soundcloud search failed for ytmusic track %s", video_id)
         return None
 
+    # Дистрибьютор мог заглушить слова и под флагом Explicit, в том числе
+    # в Deezer. У русскоязычной записи предпочитаем SoundCloud даже своей
+    # копии. Это предпочтение источника, не доказательство отсутствия цензуры
+    # (проверка звука остаётся в censorship). Язык выясняем в фоне, не в стриме.
+    preferred = False
+    language_known = True
+    if match and full and best_rank[1]:
+        cand_artist, cand_title = _api_artist_title(matched_item)
+        preferred = is_cyrillic(f"{artist} {title} {cand_artist} {cand_title}")
+        if not preferred:
+            from app import censorship
+
+            russian = await censorship.russian_lyrics(title, artist, duration)
+            preferred = russian is True
+            language_known = russian is not None
+
     await set_cache_async(
         key,
-        {"track_id": match[0], "permalink": match[1], "full": full}
+        {
+            "track_id": match[0], "permalink": match[1], "full": full,
+            "preferred": preferred, "version": _SC_MATCH_VERSION,
+        }
         if match
-        else {"track_id": None},
-        expire=_MATCH_TTL if match else _MATCH_MISS_TTL,
+        else {"track_id": None, "version": _SC_MATCH_VERSION},
+        expire=_MATCH_TTL if match and language_known else _MATCH_MISS_TTL,
     )
     if match:
         logger.info(
-            "ytmusic track %s (%s — %s) matched to soundcloud %s (full=%s)",
-            video_id, artist, title, match[0], full,
+            "ytmusic track %s (%s — %s) matched to soundcloud %s (full=%s, preferred=%s)",
+            video_id, artist, title, match[0], full, preferred,
         )
     else:
         logger.info("no soundcloud equivalent for ytmusic track %s", video_id)
@@ -1138,7 +1183,7 @@ async def find_soundcloud_equivalent(
 
 
 async def soundcloud_match_for(
-    video_id: str, full_only: bool = False
+    video_id: str, full_only: bool = False, *, preferred_only: bool = False
 ) -> Optional[tuple[str, str]]:
     """Известный soundcloud-эквивалент ytmusic-трека.
 
@@ -1146,11 +1191,15 @@ async def soundcloud_match_for(
     каждый чих, поиск там неуместен (запускается заранее, из поиска ytmusic).
     ``full_only`` — только матч, который SoundCloud отдаёт целиком (см.
     _is_full_stream); записи старого формата без флага сюда не проходят.
+    ``preferred_only`` — полная версия русскоязычной записи, приоритетная
+    даже при наличии архивной копии или Explicit-матча из Deezer.
     """
     cached = await get_cache_async(f"ytmusic:scmatch:{video_id}")
     if not cached or not cached.get("track_id"):
         return None
-    if full_only and not cached.get("full"):
+    if (full_only or preferred_only) and not cached.get("full"):
+        return None
+    if preferred_only and not cached.get("preferred"):
         return None
     return str(cached["track_id"]), cached.get("permalink") or ""
 
@@ -1209,6 +1258,10 @@ async def _sc_match_job(
     video_id: str, title: str, artist: str, duration: int
 ) -> Optional[tuple[str, str]]:
     try:
+        from app import soundcloud_originals
+
+        if await soundcloud_originals.archived_path(video_id):
+            return None
         return await find_soundcloud_equivalent(video_id, title, artist, duration)
     except Exception:  # noqa: BLE001 — фоновый матч, стрим его не ждёт
         logger.warning("sc match failed for ytmusic %s", video_id, exc_info=True)
@@ -1224,15 +1277,29 @@ async def await_soundcloud_match(
     YouTube). shield: таймаут стрима не отменяет общий поиск — его результата
     ждут и другие вызовы.
     """
+    await _wait_soundcloud_match(video_id, timeout)
+    return await soundcloud_match_for(video_id, full_only=full_only)
+
+
+async def _wait_soundcloud_match(video_id: str, timeout: float = _SC_MATCH_STREAM_WAIT) -> None:
     task = _sc_match_inflight.get(video_id)
     if task is not None:
         try:
-            return await asyncio.wait_for(asyncio.shield(task), timeout)
+            await asyncio.wait_for(asyncio.shield(task), timeout)
         except asyncio.TimeoutError:
             pass
         except Exception:  # noqa: BLE001 — матч не должен ломать стрим
             logger.warning("sc match wait failed for %s", video_id, exc_info=True)
-    return await soundcloud_match_for(video_id, full_only=full_only)
+
+
+async def preferred_soundcloud_match_for(video_id: str) -> Optional[tuple[str, str]]:
+    """Русскоязычная запись: полный SoundCloud-матч раньше копии и Deezer.
+
+    Коротко ждём уже запущенный фоновый матчинг первого трека порции.
+    Поиск здесь не запускается, таймаут не отменяет общую задачу.
+    """
+    await _wait_soundcloud_match(video_id)
+    return await soundcloud_match_for(video_id, preferred_only=True)
 
 
 async def _soundcloud_match_ready(video_id: str) -> bool:
@@ -1309,9 +1376,10 @@ async def _remux_hls_to_cache(cache_id: str, m3u8_url: str, ext: str) -> Optiona
     return final_path
 
 
-async def _assemble_hls(track_id: str) -> Optional[str]:
+async def _assemble_hls(track_id: str, cache_id: Optional[str] = None) -> Optional[str]:
     """Собирает HLS-only трек в дисковый кэш. Никогда не кидает наружу."""
-    cache_id = f"sc{track_id}"
+    original_cache = cache_id is not None
+    cache_id = cache_id or f"sc{track_id}"
     try:
         cached = _cached_file(cache_id)
         if cached:
@@ -1330,9 +1398,10 @@ async def _assemble_hls(track_id: str) -> Optional[str]:
         try:
             from app import external_archive
 
-            asyncio.create_task(
-                external_archive.adopt_local_file("soundcloud", track_id, cached)
-            )
+            if not original_cache:
+                asyncio.create_task(
+                    external_archive.adopt_local_file("soundcloud", track_id, cached)
+                )
         except Exception:  # noqa: BLE001 — архивация не важнее воспроизведения
             logger.exception("hls: не удалось запланировать архивацию sc/%s", track_id)
         return cached
@@ -1352,34 +1421,37 @@ def _hls_task_done(track_id: str, task: asyncio.Task) -> None:
         task.exception()
 
 
-async def _ensure_hls_cached(track_id: str) -> Optional[str]:
+async def _ensure_hls_cached(track_id: str, *, cache_id: Optional[str] = None) -> Optional[str]:
     """Собирает HLS-only трек в дисковый кэш (если ещё нет) и возвращает путь.
 
     None — пригодного HLS нет (транскодов нет или только DRM). Зовут и /stream,
     и прогрев: собранный файл делает трек готовым (prefetch_is_ready видит
     кэш-файл), а следующий /stream отдаёт его с диска без ремукса.
     """
-    cached = _cached_file(f"sc{track_id}")
+    cached = _cached_file(cache_id or f"sc{track_id}")
     if cached:
         return cached
-    task = _hls_tasks.get(track_id)
+    task_key = cache_id or track_id
+    task = _hls_tasks.get(task_key)
     if task is None or task.done():
-        task = asyncio.ensure_future(_assemble_hls(track_id))
-        _hls_tasks[track_id] = task
-        task.add_done_callback(lambda t, tid=track_id: _hls_task_done(tid, t))
+        job = _assemble_hls(track_id, cache_id) if cache_id else _assemble_hls(track_id)
+        task = asyncio.ensure_future(job)
+        _hls_tasks[task_key] = task
+        task.add_done_callback(lambda t, tid=task_key: _hls_task_done(tid, t))
     # shield: разрыв клиентского запроса (вотчдог плеера зовёт load()) не
     # должен отменять общую сборку — иначе ремукс не доходит до установки
     # файла, и следующая попытка начинает всё заново.
     return await asyncio.shield(task)
 
 
-async def _stream_via_hls(request: Request, track_id: str):
+async def _stream_via_hls(request: Request, track_id: str, *, cache_id: Optional[str] = None):
     """Отдаёт трек, у которого у SoundCloud остался только HLS.
 
     Возвращает None, если пригодного HLS нет — тогда вызывающий код оставляет
     исходную ошибку (503/404), как будто этого пути не существует.
     """
-    cached = await _ensure_hls_cached(track_id)
+    cached = (await _ensure_hls_cached(track_id, cache_id=cache_id) if cache_id
+              else await _ensure_hls_cached(track_id))
     if not cached:
         return None
     ext = os.path.splitext(cached)[1].lower()
@@ -1539,29 +1611,42 @@ async def playlist_detail_endpoint(playlist_id: str, request: Request):
 
 
 @router.get("/stream/{token}")
-async def stream_soundcloud(token: str, request: Request, vid: str = Query(default="")):
+async def stream_soundcloud(
+    token: str, request: Request, vid: str = Query(default=""), original: bool = False
+):
     track_id, permalink = _decode_token(token)
+    from app import soundcloud_originals
+
+    original = original and isinstance(vid, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]{5,20}", vid))
+    if original:
+        # Публичный URL не позволяет привязать произвольный SC-трек к чужому
+        # id каталога. Нужен наш найденный матч либо уже опубликованный архив.
+        match = await soundcloud_match_for(vid, preferred_only=True)
+        original = match == (track_id, permalink) or bool(await soundcloud_originals.archived_path(vid))
+    audio_cache_id = soundcloud_originals.cache_id(vid, track_id) if original else f"sc{track_id}"
+    audio_archive_key = soundcloud_originals.archive_key(vid) if original else f"soundcloud/{track_id}"
     try:
         from app import external_archive
 
-        asyncio.create_task(
-            external_archive.schedule_archive_external("soundcloud", track_id, permalink)
-        )
+        job = (soundcloud_originals.archive(vid, track_id, permalink) if original else
+               external_archive.schedule_archive_external("soundcloud", track_id, permalink))
+        asyncio.create_task(job)
     except Exception:  # noqa: BLE001 — архивация не должна ломать воспроизведение
         logger.exception("lazy-archive-ext: не удалось запланировать архивацию sc/%s", track_id)
     try:
         return await stream_cached_audio(
             request,
-            f"sc{track_id}",
+            audio_cache_id,
             lambda force: _resolve_cached(track_id, permalink, force=force),
-            archive_key=f"soundcloud/{track_id}",
+            archive_key=audio_archive_key,
         )
     except HTTPException as exc:
         # 503 значит «прогрессивного потока нет/резолв сорвался». У части
         # каталога (обычно лейбловые загрузки) прогрессивного транскода у
         # SoundCloud нет вовсе — такой трек играем через HLS, см. _stream_via_hls.
         if exc.status_code == 503:
-            response = await _stream_via_hls(request, track_id)
+            response = (await _stream_via_hls(request, track_id, cache_id=audio_cache_id) if original
+                        else await _stream_via_hls(request, track_id))
             if response is not None:
                 return response
         # vid — исходный ytmusic-трек, который подменили этим SoundCloud-матчем
@@ -1595,16 +1680,23 @@ async def stream_soundcloud(token: str, request: Request, vid: str = Query(defau
 
 
 @router.post("/prefetch/{token}")
-async def prefetch_soundcloud(token: str):
+async def prefetch_soundcloud(token: str, original_vid: str = ""):
     """Ставит трек в фоновую очередь прогрева (резолв в Redis + первые байты
     на диск, см. ytdlp.schedule_prefetch) и отвечает сразу."""
     track_id, permalink = _decode_token(token)
+    from app import soundcloud_originals
+
+    if original_vid and not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", original_vid):
+        raise HTTPException(status_code=400, detail="Некорректный id")
+    audio_cache_id = soundcloud_originals.cache_id(original_vid, track_id) if original_vid else f"sc{track_id}"
     status = schedule_prefetch(
-        f"sc{track_id}",
-        lambda force=False: _resolve_for_prefetch(track_id, permalink, force=force),
+        audio_cache_id,
+        (lambda force=False: _resolve_for_prefetch(
+            track_id, permalink, force=force, cache_id=audio_cache_id
+        )) if original_vid else (lambda force=False: _resolve_for_prefetch(track_id, permalink, force=force)),
         f"soundcloud:resolve:{track_id}",
         _RESOLVE_TTL,
-        archive_key=f"soundcloud/{track_id}",
+        archive_key=soundcloud_originals.archive_key(original_vid) if original_vid else f"soundcloud/{track_id}",
     )
     # Если у трека уже известна ytmusic-подмена (DRM), греем именно её: реально
     # играть будет она, и прогрев самого SoundCloud-резолва ничего не даст.
@@ -1615,7 +1707,7 @@ async def prefetch_soundcloud(token: str):
 
 
 async def _resolve_for_prefetch(
-    track_id: str, permalink: str, force: bool = False
+    track_id: str, permalink: str, force: bool = False, *, cache_id: Optional[str] = None
 ) -> tuple[str, str, Optional[int], bool]:
     """Резолв для прогрева. Прогрессивного потока нет — собираем HLS на диск,
     как это сделал бы /stream: иначе ready у такого трека не наступал никогда,
@@ -1624,7 +1716,10 @@ async def _resolve_for_prefetch(
     try:
         return await _resolve_cached(track_id, permalink, force=force)
     except TransientResolveError:
-        await _ensure_hls_cached(track_id)
+        if cache_id:
+            await _ensure_hls_cached(track_id, cache_id=cache_id)
+        else:
+            await _ensure_hls_cached(track_id)
         raise
 
 
@@ -1649,14 +1744,18 @@ async def _prefetch_ytmusic_match(track_id: str) -> None:
 
 
 @router.get("/prefetch/{token}/ready")
-async def prefetch_soundcloud_ready(token: str):
+async def prefetch_soundcloud_ready(token: str, original_vid: str = ""):
     """Готов ли прогрев трека (резолв в Redis или кэш-файл). Фронт поллит это
     после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
     track_id, _permalink = _decode_token(token)
+    from app import soundcloud_originals
+
+    if original_vid and not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", original_vid):
+        raise HTTPException(status_code=400, detail="Некорректный id")
     ready = await prefetch_is_ready(
-        f"sc{track_id}",
+        soundcloud_originals.cache_id(original_vid, track_id) if original_vid else f"sc{track_id}",
         f"soundcloud:resolve:{track_id}",
-        archive_key=f"soundcloud/{track_id}",
+        archive_key=soundcloud_originals.archive_key(original_vid) if original_vid else f"soundcloud/{track_id}",
     )
     if not ready:
         # У DRM-трека резолв SoundCloud не даст готовности никогда, и фронт

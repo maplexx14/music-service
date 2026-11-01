@@ -2665,14 +2665,17 @@ async def _soundcloud_first_redirect(video_id: str) -> Optional[RedirectResponse
     return _soundcloud_redirect(video_id, match)
 
 
-def _soundcloud_redirect(video_id: str, match: Optional[tuple[str, str]]) -> Optional[RedirectResponse]:
+def _soundcloud_redirect(
+    video_id: str, match: Optional[tuple[str, str]], *, original: bool = False
+) -> Optional[RedirectResponse]:
     if not match:
         return None
     from app.routers import soundcloud
 
     track_id, permalink = match
     return RedirectResponse(
-        f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}?vid={video_id}",
+        f"/api/soundcloud/stream/{soundcloud._encode_token(track_id, permalink)}?vid={video_id}"
+        + ("&original=1" if original else ""),
         status_code=307,
     )
 
@@ -2750,6 +2753,8 @@ async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming)
     # IP приближает bot-check. Матчи ищутся заранее из поисковых эндпоинтов и
     # сборки потока (см. _schedule_audio_matches). Идущий поиск первого трека
     # порции поток играет сразу после выдачи — коротко ждём его.
+    # Русскоязычная запись с полным SoundCloud-матчем — исключение: SC раньше
+    # Deezer и архива, поскольку цензура может оставлять Explicit-флаг.
     # Флаги-предохранители от зацикливания 307-редиректов: slskfallback=1 —
     # пир Soulseek отказал (повторная проверка зациклит его же), SoundCloud и
     # YouTube ещё не пробовались; scfallback=1 — 307 из /api/soundcloud/stream
@@ -2778,6 +2783,21 @@ async def _stream_ytmusic(video_id: str, request: Request, timing: _StageTiming)
         except Exception:  # noqa: BLE001 — привязки не должны ломать стрим
             logger.exception("censor override lookup failed for %s", video_id)
     timing.mark("censor")
+    if not scfallback:
+        try:
+            from app import soundcloud_originals
+            from app.routers import soundcloud
+
+            response = await soundcloud_originals.stream_from_archive(video_id, request)
+            if response is not None:
+                timing.mark("archive")
+                return response
+            match = await soundcloud.preferred_soundcloud_match_for(video_id)
+            if match:
+                timing.mark("soundcloud")
+                return _soundcloud_redirect(video_id, match, original=True)
+        except Exception:  # noqa: BLE001 — отказ поиска не должен ломать стрим
+            logger.warning("preferred soundcloud lookup failed for %s", video_id, exc_info=True)
     try:
         local_path = await _local_copy_path(video_id)
     except Exception:  # noqa: BLE001 — проверка best-effort, стрим не ломаем
@@ -2978,6 +2998,19 @@ async def prefetch_ytmusic(video_id: str):
     except Exception:  # noqa: BLE001 — прогрев best-effort
         logger.warning("censor override prefetch failed for %s", video_id, exc_info=True)
     try:
+        from app import soundcloud_originals
+        from app.routers import soundcloud
+
+        if await soundcloud_originals.prefetch_archive(video_id):
+            return {"status": "cached"}
+        match = await soundcloud.preferred_soundcloud_match_for(video_id)
+        if match:
+            return await soundcloud.prefetch_soundcloud(
+                soundcloud._encode_token(*match), original_vid=video_id
+            )
+    except Exception:  # noqa: BLE001 — прогрев best-effort
+        logger.warning("preferred soundcloud prefetch failed for %s", video_id, exc_info=True)
+    try:
         local_path = await _local_copy_path(video_id)
     except Exception:  # noqa: BLE001 — проверка best-effort
         logger.warning("local copy lookup failed for %s", video_id, exc_info=True)
@@ -3061,6 +3094,15 @@ async def prefetch_ytmusic_ready(video_id: str):
         if override is not None:
             return await soundcloud.prefetch_soundcloud_ready(
                 soundcloud._encode_token(override["original_id"], override["original_permalink"])
+            )
+        from app import soundcloud_originals
+
+        if await soundcloud_originals.archived_path(video_id):
+            return {"ready": True}
+        match = await soundcloud.soundcloud_match_for(video_id, preferred_only=True)
+        if match:
+            return await soundcloud.prefetch_soundcloud_ready(
+                soundcloud._encode_token(*match), original_vid=video_id
             )
     except Exception:  # noqa: BLE001 — проверка best-effort
         logger.warning("censor override ready check failed for %s", video_id, exc_info=True)
