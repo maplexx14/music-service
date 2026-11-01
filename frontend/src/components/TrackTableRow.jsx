@@ -62,34 +62,36 @@ function TrackTableRow({
         )}
       </td>
       <td className="track-name-cell">
-        <img
-          src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
-          alt={track.title}
-          className="track-table-cover"
-          // Первый экран строк — сразу: ленивую загрузку WebKit запускает
-          // только у самой кромки вьюпорта, и верх списка на iOS открывался
-          // с пустыми квадратами.
-          loading={index < EAGER_ROWS ? 'eager' : 'lazy'}
-          decoding="async"
-          onError={handleCoverError}
-        />
-        <div>
-          <div className="track-name">
-            {track.title}
-            {showBadges && track.is_explicit && <span className="track-badge track-badge-e">E</span>}
-            {showBadges && track.is_clean && <span className="track-badge track-badge-clean">CLEAN</span>}
-          </div>
-          <ArtistLink artist={track.artist} className="track-artist" />
-          {/* Колонки «Альбом» и «Длительность» на узких экранах скрыты —
-              источник и хронометраж возвращаем сюда строкой, иначе на
-              мобильном о треке не видно ничего, кроме названия. */}
-          {showInlineMeta && (
-            <div className="track-inline-meta">
-              {sourceLabel && <span>{sourceLabel}</span>}
-              {sourceLabel && duration && <span>·</span>}
-              {duration && <span>{duration}</span>}
+        <div className="track-name-content">
+          <img
+            src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+            alt={track.title}
+            className="track-table-cover"
+            // Первый экран строк — сразу: ленивую загрузку WebKit запускает
+            // только у самой кромки вьюпорта, и верх списка на iOS открывался
+            // с пустыми квадратами.
+            loading={index < EAGER_ROWS ? 'eager' : 'lazy'}
+            decoding="async"
+            onError={handleCoverError}
+          />
+          <div>
+            <div className="track-name" title={track.title}>
+              {track.title}
+              {showBadges && track.is_explicit && <span className="track-badge track-badge-e">E</span>}
+              {showBadges && track.is_clean && <span className="track-badge track-badge-clean">CLEAN</span>}
             </div>
-          )}
+            <ArtistLink artist={track.artist} className="track-artist" />
+            {/* Колонки «Альбом» и «Длительность» на узких экранах скрыты —
+                источник и хронометраж возвращаем сюда строкой, иначе на
+                мобильном о треке не видно ничего, кроме названия. */}
+            {showInlineMeta && (
+              <div className="track-inline-meta">
+                {sourceLabel && <span>{sourceLabel}</span>}
+                {sourceLabel && duration && <span>·</span>}
+                {duration && <span>{duration}</span>}
+              </div>
+            )}
+          </div>
         </div>
       </td>
       {showAlbum && (
