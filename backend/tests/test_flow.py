@@ -3270,6 +3270,161 @@ def test_favorite_pool_does_not_complete_collection_name(monkeypatch):
     assert [t.external_id for t in pool] == ["vid-own", "vid-feat"]
 
 
+@pytest.mark.parametrize("artist", ["Niche Artist", "Niche Artist, Guest"])
+def test_soundcloud_catalog_source_uses_real_artist_from_collection(db, artist):
+    user = create_user(db, username="soundcloud-catalog-profile")
+    _playlist, liked = _liked(
+        db, user, artist="Reupload Channel", title=f"{artist} - Song"
+    )
+    liked.source = "soundcloud"
+    liked.external_id = "sc-liked"
+    db.commit()
+
+    profile = _taste_profile(db, user.id)
+
+    assert profile["soundcloud_artist_keys"] == {"niche artist"}
+    assert "Niche Artist" in profile["catalog_artists"]
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_favorite_soundcloud_pool_keeps_niche_tracks_and_exact_artist(monkeypatch, cached):
+    from app.routers import soundcloud, ytdlp
+
+    def sc(artist, title, external_id, plays):
+        return ExternalTrackResponse(
+            id=f"soundcloud:{external_id}", source="soundcloud",
+            external_id=external_id, artist=artist, title=title, duration=180,
+            stream_url=f"https://soundcloud.test/{external_id}", play_count=plays,
+        )
+
+    tracks = [
+        sc("Niche", "Rare original", "own", 25),
+        sc("Niche, Guest", "Collaboration", "feat", 250),
+        sc("The Niche", "Unrelated hit", "foreign", 1_000_000),
+    ]
+    cache = {
+        "flow:favorite:niche": [_external("Niche", "YT hit", "yt-hit").model_dump()],
+    }
+    if cached:
+        cache["flow:favorite:sc:niche"] = [t.model_dump() for t in tracks]
+    searches = []
+
+    async def get(key):
+        return cache.get(key)
+
+    async def put(key, value, expire):
+        cache[key] = value
+
+    async def search(request, artist, limit):
+        searches.append(artist)
+        assert limit == flow_router._FAVORITE_CATALOG_LIMIT
+        return tracks
+
+    async def no_youtube(*args, **kwargs):
+        pytest.fail("SoundCloud collection artist must use SoundCloud's catalog")
+
+    monkeypatch.setattr(flow_router, "get_cache_async", get)
+    monkeypatch.setattr(flow_router, "set_cache_async", put)
+    monkeypatch.setattr(soundcloud, "search_soundcloud", search)
+    monkeypatch.setattr(ytdlp, "ytmusic_artist_catalog", no_youtube)
+    monkeypatch.setattr(ytdlp, "search_ytmusic", no_youtube)
+
+    for _ in range(2):
+        pool = asyncio.run(_favorite_artist_pool(None, "Niche", source="soundcloud"))
+        assert [t.external_id for t in pool] == ["own", "feat"]
+    assert searches == ([] if cached else ["Niche"])
+
+
+def test_flow_retrieves_two_soundcloud_favorites_with_full_youtube_pool(client, db, monkeypatch):
+    from app import mainstream
+    from app.routers import soundcloud, ytdlp
+
+    user = create_user(db, username="soundcloud-favorites-flow")
+    user.preferred_artists = ["Niche A", "Niche B", "YouTube Artist"]
+    playlist, seed = _liked(db, user, artist="YouTube Artist")
+    seed.source, seed.external_id = "ytmusic", "yt-seed"
+    for position, artist in enumerate(("Niche A", "Niche B"), start=1):
+        track = Track(
+            title="Collection song", artist=artist, duration=180,
+            source="soundcloud", external_id=f"sc-liked-{position}",
+            stream_url=f"https://soundcloud.test/liked-{position}",
+        )
+        db.add(track)
+        db.flush()
+        db.execute(playlist_tracks.insert().values(
+            playlist_id=playlist.id, track_id=track.id, position=position,
+        ))
+    db.commit()
+    searched = []
+
+    async def catalog(request, artist, **kwargs):
+        assert artist == "YouTube Artist"
+        return [_external(artist, f"YT song {i}", f"yt-{i}") for i in range(40)]
+
+    async def search(request, artist, limit):
+        searched.append(artist)
+        return [ExternalTrackResponse(
+            id=f"soundcloud:{artist}-{i}", source="soundcloud",
+            external_id=f"{artist}-{i}", artist=artist, title=f"SC song {i}",
+            duration=180, stream_url=f"https://soundcloud.test/{artist}/{i}",
+            play_count=25 + i,
+        ) for i in range(limit)]
+
+    async def radio(seed_video_id):
+        return [_external(f"Radio {i}", f"Radio song {i}", f"radio-{i}") for i in range(40)]
+
+    async def hits(artists, timeout, **kwargs):
+        assert not {"niche a", "niche b"} & set(artists)
+        return {artist: {"listeners": 1_000_000, "top": [f"Radio song {i}" for i in range(40)]}
+                for artist in artists}
+
+    async def empty(*args, **kwargs):
+        return []
+
+    async def no_reserve(*args, **kwargs):
+        pytest.fail("the primary YouTube pool is full; reserve search should be skipped")
+
+    monkeypatch.setattr(flow_router, "_favorite_artist_pool", _favorite_artist_pool)
+    monkeypatch.setattr(ytdlp, "ytmusic_artist_catalog", catalog)
+    monkeypatch.setattr(soundcloud, "search_soundcloud", search)
+    monkeypatch.setattr(flow_router, "_radio_pool", radio)
+    monkeypatch.setattr(flow_router, "_soundcloud_pool", no_reserve)
+    monkeypatch.setattr(flow_router, "_similar_hits_pool", empty)
+    monkeypatch.setattr(mainstream, "available", lambda: True)
+    monkeypatch.setattr(mainstream, "artist_hits", hits)
+
+    response = client.get(
+        "/api/recommendations/flow?limit=15",
+        headers=auth_headers(client, username=user.username),
+    )
+
+    assert response.status_code == 200, response.text
+    assert sorted(searched) == ["Niche A", "Niche B"]
+    tracks = response.json()
+    assert len(tracks) == 15
+    new_sc_tracks = [t for t in tracks if t["source"] == "soundcloud"
+                     and not t["external_id"].startswith("sc-liked-")]
+    assert {t["artist"] for t in new_sc_tracks} == {"Niche A", "Niche B"}, tracks
+    rows = db.execute(recommendation_impressions.select().where(
+        recommendation_impressions.c.request_id == tracks[0]["recommendation_id"],
+        recommendation_impressions.c.source == "soundcloud",
+    )).mappings().all()
+    assert any(row["features"]["origin"] == "favorite" for row in rows)
+
+    following = client.get(
+        f"/api/recommendations/flow?limit=15&exclude={_queue_ids(tracks)}",
+        headers=auth_headers(client, username=user.username),
+    )
+    assert following.status_code == 200, following.text
+    next_sc_tracks = [t for t in following.json() if t["source"] == "soundcloud"
+                      and not t["external_id"].startswith("sc-liked-")]
+    assert {t["artist"] for t in next_sc_tracks} == {"Niche A", "Niche B"}
+    assert not {t["external_id"] for t in new_sc_tracks} & {
+        t["external_id"] for t in next_sc_tracks
+    }
+    assert sorted(searched) == ["Niche A", "Niche B"], "reuse artist catalogs"
+
+
 def test_banned_artist_tracks_do_not_seed_radio(db):
     """Прод, 2026-10-10: Oxxxymiron в preferred_artists, но в бане от
     дизлайков — его треки всё равно были сидами радио."""

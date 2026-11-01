@@ -851,6 +851,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
     collection_rows = _collection_rows(db, user_id)
     collection_keys = set()
     collection_external_ids = set()
+    soundcloud_artist_keys = set()
     for _track_id, artist, title, source, external_id, album in collection_rows:
         effective_artist, effective_title = effective_artist_title(
             title or "",
@@ -861,6 +862,8 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         key = _norm_key(effective_artist, effective_title)
         if all(key):
             collection_keys.add(key)
+        if source == "soundcloud" and effective_artist:
+            soundcloud_artist_keys.add(primary_artist_key(effective_artist))
         if external_id:
             collection_external_ids.add(external_id)
     # Часто играемые: порог применяем к АРТИСТУ ниже (artist_play_totals), а не
@@ -1691,6 +1694,7 @@ def _taste_profile(db: Session, user_id: int) -> dict:
         "fresh_cluster_artist_keys": fresh_collection_artist_keys(db, user_id),
         "curated_artist_keys": curated_artist_keys,
         "catalog_artists":[artist_display.get(k, k) for k in catalog_artist_keys],
+        "soundcloud_artist_keys": soundcloud_artist_keys,
         "genres": list(dict.fromkeys(genres)),
         "genre_counts": dict(Counter(genres)),
         "explicit_genres": pref_genres,
@@ -3025,14 +3029,20 @@ def _pick_favorite_artists(
     return [candidates[key] for key in ordered[:limit]]
 
 
-async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalTrackResponse]:
+async def _favorite_artist_pool(
+    request: Request, artist: str, *, source: str = "ytmusic"
+) -> List[ExternalTrackResponse]:
     """Каталог любимого/знакомого артиста — как можно глубже.
 
     Порядок выдачи здесь НЕ решается: его выбирает вызывающий по тому, доказал
     ли артист «любимость» (см. _ARTIST_PROVEN_WEIGHT), поэтому пул кэшируется
-    один на артиста и переиспользуется всеми пользователями.
+    один на артиста и площадку и переиспользуется всеми пользователями.
     """
-    key = f"flow:favorite:{artist_key(artist)}"
+    # Каталог берём на площадке, где пользователь выбрал артиста. SC-артист
+    # может отсутствовать в YT Music; поздний резервный поиск тогда не давал
+    # ему кандидатов, если радио YouTube уже заполнило пул.
+    prefix = "flow:favorite:sc" if source == "soundcloud" else "flow:favorite"
+    key = f"{prefix}:{artist_key(artist)}"
     cached = await get_cache_async(key)
     if cached is not None:
         # Сверка и на чтении: пул общий и живёт до _SC_EXPLORE_TTL, а собранные
@@ -3041,13 +3051,32 @@ async def _favorite_artist_pool(request: Request, artist: str) -> List[ExternalT
             artist, [ExternalTrackResponse(**t) for t in cached]
         )
     return await _pool_single_flight(
-        key, lambda: _favorite_artist_pool_fetch(request, artist)
+        key, lambda: _favorite_artist_pool_fetch(request, artist, source=source)
     )
 
 
 async def _favorite_artist_pool_fetch(
-    request: Request, artist: str
+    request: Request, artist: str, *, source: str = "ytmusic"
 ) -> List[ExternalTrackResponse]:
+    if source == "soundcloud":
+        key = f"flow:favorite:sc:{artist_key(artist)}"
+        try:
+            tracks = await soundcloud.search_soundcloud(
+                request, artist, limit=_FAVORITE_CATALOG_LIMIT
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("flow favorite SoundCloud catalog failed for %s", artist)
+            tracks = []
+        # Это точный каталог своего артиста, а не поиск новых имён: нижний
+        # порог популярности _soundcloud_pool здесь не применим. Популярность
+        # остаётся мягким сигналом ранкера, как у любимых артистов YT Music.
+        tracks = _own_catalog_tracks(artist, tracks)
+        await set_cache_async(
+            key, [t.model_dump() for t in tracks],
+            expire=_SC_EXPLORE_TTL if tracks else 600,
+        )
+        return tracks
+
     key = f"flow:favorite:{artist_key(artist)}"
     # Страница артиста — его собственная выдача во всю глубину. Она нужна именно
     # доказанному артисту: «любой случайный трек» по верхушке поиска — это всё
@@ -4657,7 +4686,13 @@ async def _compute_flow(
             },
             expire=_FAVORITE_ROTATION_TTL,
         )
-    favorite_jobs = [_favorite_artist_pool(request, a) for a in favorite_artists]
+    soundcloud_artist_keys = set(profile.get("soundcloud_artist_keys") or [])
+    favorite_jobs = [
+        _favorite_artist_pool(request, artist, source="soundcloud")
+        if primary_artist_key(artist) in soundcloud_artist_keys
+        else _favorite_artist_pool(request, artist)
+        for artist in favorite_artists
+    ]
     favorite_window = max(limit, _FAVORITE_ARTIST_WINDOW)
 
     def _favorite_order(artist: str, pool) -> List[ExternalTrackResponse]:
