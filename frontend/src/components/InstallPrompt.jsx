@@ -6,15 +6,15 @@ import useAndroidRelease from '../hooks/useAndroidRelease'
 import {
   ANDROID_RELEASE_DISMISSED_KEY,
   androidDownloadUrl,
-  isAndroidReleaseBrowser,
+  installedAndroidVersion,
+  isAndroidReleaseClient,
   shouldShowAndroidRelease,
 } from '../services/androidRelease'
 import './InstallPrompt.css'
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
-// Внутри нашего APK (WebView с BoltAndroid в UA) предлагать нечего. Мост и так
-// выдаёт standalone, но на старом WebView без document-start скрипта не успевает.
-const isAndroid = isAndroidReleaseBrowser(ua)
+const isAndroid = isAndroidReleaseClient(ua)
+const installedVersion = installedAndroidVersion(ua)
 
 const DISMISSED_KEY = 'install-prompt-dismissed-at'
 // На iOS после «Не сейчас» напоминаем не чаще раза в две недели.
@@ -52,15 +52,15 @@ function dismissedAndroidVersion() {
 // На iPad подсказка не нужна в широком окне — там десктопная раскладка.
 const iosEligible = isIOS && typeof window !== 'undefined' && window.innerWidth <= 768
 
-// iOS: инструкция установки PWA. Android-браузеры и PWA: новая версия APK
-// из опубликованного манифеста. Нативное приложение проверяет обновления само.
+// iOS: инструкция установки PWA. Android-браузеры, PWA и старые APK:
+// новая версия из опубликованного манифеста.
 function InstallPrompt() {
   const [delayPassed, setDelayPassed] = useState(false)
   const [iosDismissed, setIosDismissed] = useState(() => isStandalone || wasDismissedRecently())
   const [dismissedVersion, setDismissedVersion] = useState(dismissedAndroidVersion)
   const release = useAndroidRelease(isAndroid)
   const eligible = isAndroid
-    ? shouldShowAndroidRelease(release, dismissedVersion)
+    ? shouldShowAndroidRelease(release, dismissedVersion, installedVersion)
     : iosEligible && !iosDismissed
 
   useEffect(() => {
@@ -102,7 +102,12 @@ function InstallPrompt() {
           Открой скачанный APK и разреши установку.
         </p>
         <div className="push-prompt-actions">
-          <a className="btn btn--primary btn--sm" href={androidDownloadUrl(release)} download="bolt.apk" onClick={dismiss}>
+          <a
+            className="btn btn--primary btn--sm"
+            href={androidDownloadUrl(release, installedVersion ? window.location.origin : null)}
+            download={installedVersion ? undefined : 'bolt.apk'}
+            onClick={dismiss}
+          >
             <Download size={14} aria-hidden="true" /> Скачать APK
           </a>
           <button type="button" className="btn btn--ghost btn--sm" onClick={dismiss}>
