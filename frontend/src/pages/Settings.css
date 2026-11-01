@@ -30,6 +30,11 @@
 .settings-menu {
   position: sticky;
   top: 16px;
+  max-height: calc(100vh - var(--bottom-controls-clearance, 0px) - 48px);
+  max-height: calc(100dvh - var(--bottom-controls-clearance, 0px) - 48px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-padding-block: 12px;
 }
 
 .settings-menu ul {
@@ -273,6 +278,8 @@ button.settings-menu-item {
 
   .settings-menu {
     position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .settings-menu ul {
@@ -386,6 +393,20 @@ button.settings-menu-item {
 
 .settings-card + .settings-card {
   margin-top: 16px;
+}
+
+.settings-apk-description {
+  margin: 8px 0 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.settings-apk-hint {
+  margin: 12px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* Под заголовком карточки первая строка без разделителя. */

@@ -12,6 +12,7 @@ import EmailChangeSettings from '../components/EmailChangeSettings'
 import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import PushSettings from '../components/PushSettings'
+import AndroidDownload from '../components/AndroidDownload'
 import ContactDeveloper from '../components/ContactDeveloper'
 import RateService from '../components/RateService'
 import TasteAvatar from '../components/TasteAvatar'
@@ -621,6 +622,7 @@ function Settings() {
 
           {activeTab === 'app' && (
             <div {...panelProps('app')}>
+              <AndroidDownload />
               <div className="settings-card">
                 <div className="settings-section-title">Звук</div>
                 <div className="settings-row settings-row-quality">

@@ -106,6 +106,7 @@ function Layout({ renderRoutes }) {
     return window.innerWidth <= 768
   })
   const isFullScreen = usePlayerStore((state) => state.isFullScreen)
+  const hasPlayer = usePlayerStore((state) => Boolean(state.currentTrack))
   const location = useLocation()
   const navigate = useNavigate()
   const mainRef = useRef(null)
@@ -390,7 +391,7 @@ function Layout({ renderRoutes }) {
   }
 
   return (
-    <div className="layout" style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
+    <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
       <Sidebar />
       <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
         <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />

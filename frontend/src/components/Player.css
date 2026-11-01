@@ -1,9 +1,9 @@
 .player {
   position: fixed;
-  bottom: 12px;
+  bottom: var(--player-bottom, 12px);
   left: calc(var(--sidebar-width, 240px) + 16px);
   right: 16px;
-  height: 76px;
+  height: var(--player-height, 76px);
   transition: left 0.3s var(--ease-morph);
   background: var(--surface-2);
   border: none;
@@ -488,8 +488,8 @@
     left: 12px;
     right: 12px;
     /* Такой же размер, как меню; выше меню с зазором. */
-    bottom: calc(var(--safe-bottom) + 80px);
-    height: 72px;
+    bottom: var(--player-bottom, calc(var(--safe-bottom) + 80px));
+    height: var(--player-height, 72px);
     padding: 0 16px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;

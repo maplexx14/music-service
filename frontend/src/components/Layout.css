@@ -1,4 +1,7 @@
 .layout {
+  --player-height: 76px;
+  --player-bottom: 12px;
+  --bottom-controls-clearance: 0px;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -6,10 +9,15 @@
   background-color: var(--bg-app);
 }
 
+.layout[data-has-player] {
+  --bottom-controls-clearance: calc(var(--player-bottom) + var(--player-height) + 16px);
+}
+
 /* Контейнер стека экранов (ScreenStack.jsx). Сам не прокручивается: у
    каждого экрана свой .screen-scroll, и скрытые вкладки помнят позицию. */
 .main-content {
   flex: 1;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   margin-left: 240px;
@@ -50,17 +58,31 @@
   /* Отступы через переменные: их же снимает полноэкранный Spinner, чтобы
      встать по центру экрана, а не области между шапкой и плеером. */
   --main-pad-top: 0px;
-  --main-pad-bottom: 90px;
+  --main-pad-bottom: calc(var(--bottom-controls-clearance) + 24px);
   padding-top: var(--main-pad-top);
   padding-bottom: var(--main-pad-bottom);
+  scroll-padding-top: var(--main-pad-top);
+  scroll-padding-bottom: var(--main-pad-bottom);
   /* Резинка отскролла не проваливается в системный pull-to-refresh —
      на главной им управляет наш индикатор (usePullToRefresh). На остальных
      страницах жест просто «гасится» контейнером, как в нативных списках. */
   overscroll-behavior-y: contain;
 }
 
+/* Меню и формы настроек прокручиваются только над нижними панелями:
+   ссылка обратной связи и кнопка отправки остаются в доступной области. */
+.screen-scroll.is-settings {
+  bottom: var(--bottom-controls-clearance);
+  --main-pad-bottom: 24px;
+}
+
 @media (max-width: 768px) {
   .layout {
+    --mobile-nav-height: 72px;
+    --mobile-nav-bottom: calc(var(--safe-bottom) - 2px);
+    --player-height: 72px;
+    --player-bottom: calc(var(--mobile-nav-bottom) + var(--mobile-nav-height) + 10px);
+    --bottom-controls-clearance: calc(var(--mobile-nav-bottom) + var(--mobile-nav-height) + 16px);
     background-color: var(--bg-app-mobile);
   }
 
@@ -86,7 +108,6 @@
        пальцем ехал рывками. Вложенные ленты-карусели — сами контейнеры
        прокрутки и своё горизонтальное листание сохраняют. */
     touch-action: pan-y pinch-zoom;
-    --main-pad-bottom: calc(var(--safe-bottom) + 180px);
   }
 
   /* Статус-бар прозрачный (black-translucent) — без отступа под него
@@ -150,8 +171,8 @@
     position: fixed;
     left: 6px;
     right: 6px;
-    bottom: calc(var(--safe-bottom) - 2px);
-    height: 72px;
+    bottom: var(--mobile-nav-bottom);
+    height: var(--mobile-nav-height);
     padding: 0;
     /* Сплошной фон, без просвета: hero и обложки под панелью не видны.
        Блюр подложки поэтому не нужен — и не пересчитывается каждый кадр

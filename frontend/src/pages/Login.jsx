@@ -2,10 +2,13 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { useNavigate } from 'react-router-dom'
+import { Download } from 'lucide-react'
+import { androidDownloadUrl, installedAndroidVersion } from '../services/androidRelease'
 import { safeNextPath } from '../services/navigation'
 import './Auth.css'
 
 function Login() {
+  const native = !!installedAndroidVersion(navigator.userAgent) || !!window.__boltAndroid
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -269,6 +272,11 @@ function Login() {
             <p>
               Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
             </p>
+            {!native && (
+              <a className="btn btn--ghost btn--sm auth-apk-download" href={androidDownloadUrl()} download="bolt.apk">
+                <Download size={16} aria-hidden="true" /> Скачать APK для Android
+              </a>
+            )}
           </div>
         )}
       </div>

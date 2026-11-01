@@ -2,18 +2,23 @@ import { useEffect, useState } from 'react'
 import { Download, Share, Plus, X } from 'lucide-react'
 import { isIOS, isStandalone } from '../services/navigation'
 import { setInstallPromptVisible } from '../services/installPrompt'
+import useAndroidRelease from '../hooks/useAndroidRelease'
+import {
+  ANDROID_RELEASE_DISMISSED_KEY,
+  androidDownloadUrl,
+  isAndroidReleaseBrowser,
+  shouldShowAndroidRelease,
+} from '../services/androidRelease'
 import './InstallPrompt.css'
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
 // Внутри нашего APK (WebView с BoltAndroid в UA) предлагать нечего. Мост и так
 // выдаёт standalone, но на старом WebView без document-start скрипта не успевает.
-const isAndroidApp = /BoltAndroid\//.test(ua)
-const isAndroid = /Android/.test(ua) && !isAndroidApp
+const isAndroid = isAndroidReleaseBrowser(ua)
 
 const DISMISSED_KEY = 'install-prompt-dismissed-at'
-const APK_URL = '/bolt.apk'
-// После «Не сейчас» напоминаем не чаще раза в две недели. На Android — при
-// каждом открытии сайта: из браузера звать в приложение, пока не поставят.
+// На iOS после «Не сейчас» напоминаем не чаще раза в две недели.
+// На Android запоминаем версию: следующее обновление покажется снова.
 const REPEAT_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 // Не встречаем подсказкой с порога: сначала даём человеку начать слушать.
 // На Android короче: приложение — главное, что мы там предлагаем.
@@ -27,7 +32,6 @@ const isIOSOtherBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/.test(ua)
 const isIOSInApp = !isIOSOtherBrowser && (/GSA\//.test(ua) || !/Safari\//.test(ua))
 
 function wasDismissedRecently() {
-  if (isAndroid) return false
   try {
     const at = Number(localStorage.getItem(DISMISSED_KEY))
     return at > 0 && Date.now() - at < REPEAT_AFTER_MS
@@ -36,35 +40,50 @@ function wasDismissedRecently() {
   }
 }
 
+function dismissedAndroidVersion() {
+  try {
+    const code = Number(localStorage.getItem(ANDROID_RELEASE_DISMISSED_KEY))
+    return Number.isSafeInteger(code) && code > 0 ? code : 0
+  } catch {
+    return 0
+  }
+}
+
 // На iPad подсказка не нужна в широком окне — там десктопная раскладка.
 const iosEligible = isIOS && typeof window !== 'undefined' && window.innerWidth <= 768
 
-// Подсказка «добавь на главный экран». iOS: события установки нет, только
-// вручную через «Поделиться». Android: предлагаем скачать APK — в любом
-// браузере, не только в Chrome, и с фоновым воспроизведением через
-// foreground service. Без установки нет ни свайпов, ни нормального фона.
+// iOS: инструкция установки PWA. Android-браузеры и PWA: новая версия APK
+// из опубликованного манифеста. Нативное приложение проверяет обновления само.
 function InstallPrompt() {
   const [delayPassed, setDelayPassed] = useState(false)
-  const [dismissed, setDismissed] = useState(() => isStandalone || wasDismissedRecently())
+  const [iosDismissed, setIosDismissed] = useState(() => isStandalone || wasDismissedRecently())
+  const [dismissedVersion, setDismissedVersion] = useState(dismissedAndroidVersion)
+  const release = useAndroidRelease(isAndroid)
+  const eligible = isAndroid
+    ? shouldShowAndroidRelease(release, dismissedVersion)
+    : iosEligible && !iosDismissed
 
   useEffect(() => {
-    if (dismissed || !(iosEligible || isAndroid)) return undefined
+    if (!eligible) return undefined
     const timer = setTimeout(() => setDelayPassed(true), SHOW_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [dismissed])
+  }, [eligible])
 
-  const visible = !dismissed && delayPassed && (iosEligible || isAndroid)
+  const visible = eligible && delayPassed
 
   useEffect(() => {
     setInstallPromptVisible(visible)
+    return () => setInstallPromptVisible(false)
   }, [visible])
 
   if (!visible) return null
 
   const dismiss = () => {
-    setDismissed(true)
+    if (isAndroid) setDismissedVersion(release.versionCode)
+    else setIosDismissed(true)
     try {
-      localStorage.setItem(DISMISSED_KEY, String(Date.now()))
+      if (isAndroid) localStorage.setItem(ANDROID_RELEASE_DISMISSED_KEY, String(release.versionCode))
+      else localStorage.setItem(DISMISSED_KEY, String(Date.now()))
     } catch {
       // Приватный режим: просто не запомним.
     }
@@ -73,19 +92,21 @@ function InstallPrompt() {
   let title = 'Добавь bolt на главный экран'
   let body
   if (isAndroid) {
-    title = 'Скачай приложение bolt для Android'
+    title = 'Вышла новая версия bolt для Android'
     body = (
       <>
         <p className="install-prompt-text">
-          Музыка играет в фоне и с выключенным экраном. После скачивания открой файл и разреши установку.
+          Версия {release.versionName}. {release.notes}
+        </p>
+        <p className="install-prompt-text install-prompt-install-hint">
+          Открой скачанный APK и разреши установку.
         </p>
         <div className="push-prompt-actions">
-          {/* Скачал — прячем до следующего открытия сайта. */}
-          <a className="btn btn--primary btn--sm" href={APK_URL} download="bolt.apk" onClick={dismiss}>
-            <Download size={14} aria-hidden="true" /> Скачать
+          <a className="btn btn--primary btn--sm" href={androidDownloadUrl(release)} download="bolt.apk" onClick={dismiss}>
+            <Download size={14} aria-hidden="true" /> Скачать APK
           </a>
           <button type="button" className="btn btn--ghost btn--sm" onClick={dismiss}>
-            Не сейчас
+            Позже
           </button>
         </div>
       </>
@@ -118,7 +139,7 @@ function InstallPrompt() {
   }
 
   return (
-    <div className="install-prompt" role="dialog" aria-label="Установка приложения">
+    <div className="install-prompt" role="dialog" aria-label={isAndroid ? 'Новая версия для Android' : 'Установка приложения'}>
       <div className="install-prompt-body">
         <p className="install-prompt-title">{title}</p>
         {body}

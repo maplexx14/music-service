@@ -2124,18 +2124,6 @@ function PlayerInner() {
         /* iOS может отклонить позицию во время смены источника */
       }
     }
-    const seekBy = (offset) => {
-      const audio = audioRef.current
-      if (!audio) return
-      const nextTime = Math.min(
-        Math.max(audio.currentTime + offset, 0),
-        Number.isFinite(audio.duration) ? audio.duration : audio.currentTime + offset,
-      )
-      diag('seek', { from: 'system-skip', to: Math.round(nextTime * 10) / 10 })
-      audio.currentTime = nextTime
-      setCurrentTime(nextTime)
-      syncPositionState(audio)
-    }
     // ⏭/⏮ из мягкой паузы: переход идёт фоновым путём (элемент для системы
     // всё ещё играет), и после него играем дальше, а не стоим на паузе.
     const leaveSoftPauseForSkip = () => {
@@ -2355,16 +2343,9 @@ function PlayerInner() {
       },
     }
 
-    // Перемотка ±N секунд кнопками виджета. Регистрируем ТОЛЬКО не на iOS:
-    // там Control Center, увидев seekbackward/seekforward, подменяет ими
-    // кнопки предыдущего/следующего трека — то есть перемотка появляется
-    // ценой пропуска треков. На iOS перемотка и так доступна: шкала виджета
-    // работает через seekto (он зарегистрирован выше), а положение бегунка
-    // питает setPositionState.
-    if (!isIOS) {
-      handlers.seekbackward = (details) => seekBy(-(details?.seekOffset || 10))
-      handlers.seekforward = (details) => seekBy(details?.seekOffset || 10)
-    }
+    // Прошивки Android, как и iOS, могут заменять переходы между треками
+    // перемоткой, если объявлены seekbackward/seekforward. Оставляем стрелки
+    // для previous/next; перемотка доступна ползунком через seekto.
     const registerHandlers = () => {
       for (const [action, handler] of Object.entries(handlers)) {
         try {

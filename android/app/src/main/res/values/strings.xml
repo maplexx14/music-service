@@ -1,6 +1,12 @@
 <resources>
     <string name="app_name">bolt</string>
     <string name="channel_playback">Воспроизведение</string>
+    <string name="playback_previous">Предыдущая композиция</string>
+    <string name="playback_next">Следующая композиция</string>
+    <string name="playback_play">Воспроизвести</string>
+    <string name="playback_pause">Пауза</string>
+    <string name="playback_like">Нравится</string>
+    <string name="playback_dislike">Не нравится</string>
     <string name="offline_title">Нет соединения с сервером</string>
     <string name="offline_retry">Повторить</string>
     <string name="shortcut_wave">Поток</string>

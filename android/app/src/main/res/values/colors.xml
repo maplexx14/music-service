@@ -1,3 +1,8 @@
 <resources>
     <color name="bg">#050505</color>
+    <color name="notification_background">#16131C</color>
+    <color name="notification_accent">#A259FF</color>
+    <color name="notification_text">#FFFFFF</color>
+    <color name="notification_text_secondary">#BEB8C9</color>
+    <color name="notification_progress_track">#403849</color>
 </resources>

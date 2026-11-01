@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
@@ -21,6 +22,8 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import android.view.View
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
@@ -28,6 +31,7 @@ import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
@@ -53,13 +57,22 @@ class PlaybackService : Service() {
         createChannel()
         session = MediaSessionCompat(this, "bolt").apply {
             setSessionActivity(openAppIntent())
+            setPlaybackToLocal(AudioManager.STREAM_MUSIC)
+            // Android 13+ и прошивки OEM строят кнопки из сессии. Резервируем
+            // места previous/next, чтобы их не занимали лайк или дизлайк.
+            setExtras(Bundle().apply {
+                putBoolean("android.media.playback.ALWAYS_RESERVE_SPACE_FOR.ACTION_SKIP_TO_PREVIOUS", true)
+                putBoolean("android.media.playback.ALWAYS_RESERVE_SPACE_FOR.ACTION_SKIP_TO_NEXT", true)
+            })
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() = PlayerHub.dispatch("play")
                 override fun onPause() = PlayerHub.dispatch("pause")
                 override fun onSkipToNext() = PlayerHub.dispatch("nexttrack")
                 override fun onSkipToPrevious() = PlayerHub.dispatch("previoustrack")
-                override fun onFastForward() = PlayerHub.dispatch("seekforward")
-                override fun onRewind() = PlayerHub.dispatch("seekbackward")
+                // Старые прошивки могут прислать rewind/fast-forward даже
+                // для стрелок перехода между песнями.
+                override fun onFastForward() = PlayerHub.dispatch("nexttrack")
+                override fun onRewind() = PlayerHub.dispatch("previoustrack")
                 override fun onStop() {
                     // Смахнули уведомление на паузе: убираем плеер до следующего play.
                     PlayerHub.dispatch("pause")
@@ -171,10 +184,22 @@ class PlaybackService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, meta.title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, meta.artist)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, meta.album)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, meta.title)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, meta.artist)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, meta.album)
+        if (meta.artworkUrl.isNotBlank()) {
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, meta.artworkUrl)
+                .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, meta.artworkUrl)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, meta.artworkUrl)
+        }
         if (PlayerHub.duration > 0) {
             builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (PlayerHub.duration * 1000).toLong())
         }
-        artwork?.let { builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+        artwork?.let {
+            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, it)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, it)
+        }
         return builder.build()
     }
 
@@ -186,8 +211,8 @@ class PlaybackService : Service() {
         if ("nexttrack" in actions) mask = mask or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
         if ("previoustrack" in actions) mask = mask or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
         if ("seekto" in actions) mask = mask or PlaybackStateCompat.ACTION_SEEK_TO
-        if ("seekforward" in actions) mask = mask or PlaybackStateCompat.ACTION_FAST_FORWARD
-        if ("seekbackward" in actions) mask = mask or PlaybackStateCompat.ACTION_REWIND
+        // Перемотка остаётся на ползунке (SEEK_TO). FAST_FORWARD/REWIND
+        // заставляют некоторые системные виджеты подменять previous/next.
 
         val state = when (PlayerHub.playbackState) {
             "playing" -> PlaybackStateCompat.STATE_PLAYING
@@ -248,26 +273,33 @@ class PlaybackService : Service() {
             .setSilent(true)
             .setShowWhen(false)
             .setOngoing(playing)
+            .setColor(getColor(R.color.notification_background))
+            .setColorized(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            // Собственная компоновка использует всю выделенную уведомлению
+            // ширину; MediaStyle сохраняет системный плеер и его сессию.
+            .setCustomContentView(buildNotificationView(meta, expanded = false))
+            .setCustomBigContentView(buildNotificationView(meta, expanded = true))
 
         val compact = mutableListOf<Int>()
         var index = 0
         if ("previoustrack" in PlayerHub.actions) {
             builder.addAction(
-                android.R.drawable.ic_media_previous,
+                R.drawable.ic_action_previous,
                 "Предыдущий",
                 servicePendingIntent(ACTION_PREVIOUS),
             )
             compact += index++
         }
         builder.addAction(
-            if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            if (playing) R.drawable.ic_action_pause else R.drawable.ic_action_play,
             if (playing) "Пауза" else "Играть",
             servicePendingIntent(ACTION_TOGGLE),
         )
         compact += index++
         if ("nexttrack" in PlayerHub.actions) {
             builder.addAction(
-                android.R.drawable.ic_media_next,
+                R.drawable.ic_action_next,
                 "Следующий",
                 servicePendingIntent(ACTION_NEXT),
             )
@@ -282,6 +314,63 @@ class PlaybackService : Service() {
                 .setShowActionsInCompactView(*compact.toIntArray()),
         )
         return builder.build()
+    }
+
+    private fun buildNotificationView(meta: PlayerHub.Metadata?, expanded: Boolean): RemoteViews {
+        val layout = if (expanded) R.layout.notification_player_expanded else R.layout.notification_player
+        return RemoteViews(packageName, layout).apply {
+            setTextViewText(R.id.notification_title, meta?.title ?: getString(R.string.app_name))
+            setTextViewText(R.id.notification_artist, meta?.artist ?: "")
+            artwork?.let { setImageViewBitmap(R.id.notification_cover, it) }
+                ?: setImageViewResource(R.id.notification_cover, R.mipmap.ic_launcher)
+            setOnClickPendingIntent(R.id.notification_metadata, openAppIntent())
+
+            bindNotificationButton(this, R.id.notification_previous, ACTION_PREVIOUS, "previoustrack" in PlayerHub.actions)
+            bindNotificationButton(this, R.id.notification_next, ACTION_NEXT, "nexttrack" in PlayerHub.actions)
+            bindNotificationButton(this, R.id.notification_toggle, ACTION_TOGGLE, enabled = true)
+            setImageViewResource(
+                R.id.notification_toggle,
+                if (PlayerHub.isPlaying) R.drawable.ic_action_pause else R.drawable.ic_action_play,
+            )
+            setContentDescription(
+                R.id.notification_toggle,
+                getString(if (PlayerHub.isPlaying) R.string.playback_pause else R.string.playback_play),
+            )
+
+            if (expanded) {
+                for ((id, action) in listOf(R.id.notification_dislike to ACTION_DISLIKE, R.id.notification_like to ACTION_LIKE)) {
+                    val button = feedbackButtons().firstOrNull { it.action == action }
+                    setViewVisibility(id, if (button != null) View.VISIBLE else View.INVISIBLE)
+                    if (button != null) {
+                        setImageViewResource(id, button.icon)
+                        setContentDescription(id, button.label)
+                        bindNotificationButton(this, id, action, enabled = true)
+                    }
+                }
+                val duration = PlayerHub.duration.takeIf { it.isFinite() && it > 0 } ?: 0.0
+                val position = PlayerHub.currentPosition().takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: 0.0
+                val progress = if (duration > 0) (position / duration * 1000).toInt() else 0
+                setProgressBar(R.id.notification_progress, 1000, progress, false)
+                setViewVisibility(R.id.notification_timeline, if (duration > 0) View.VISIBLE else View.GONE)
+                setTextViewText(R.id.notification_position, formatNotificationTime(position))
+                setTextViewText(R.id.notification_duration, formatNotificationTime(duration))
+            }
+        }
+    }
+
+    private fun bindNotificationButton(view: RemoteViews, id: Int, action: String, enabled: Boolean) {
+        view.setBoolean(id, "setEnabled", enabled)
+        view.setFloat(id, "setAlpha", if (enabled) 1f else 0.35f)
+        if (enabled) view.setOnClickPendingIntent(id, servicePendingIntent(action))
+    }
+
+    private fun formatNotificationTime(time: Double): String {
+        val seconds = time.toLong().coerceAtLeast(0)
+        return if (seconds >= 3600) {
+            String.format(Locale.ROOT, "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+        } else {
+            String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
+        }
     }
 
     private fun servicePendingIntent(action: String): PendingIntent {

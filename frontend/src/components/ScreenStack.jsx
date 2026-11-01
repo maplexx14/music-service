@@ -167,7 +167,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
       )}
       <div
         ref={scrollerRef}
-        className={`screen-scroll${topbar ? ' has-mobile-topbar' : safeTop ? ' has-safe-top' : ''}`}
+        className={`screen-scroll${topbar ? ' has-mobile-topbar' : safeTop ? ' has-safe-top' : ''}${path === '/settings' || path.startsWith('/settings/') ? ' is-settings' : ''}`}
       >
         <RouteContext.Provider value={ROOT_ROUTE_CONTEXT}>
           <LocationContext.Provider value={locationContext}>

@@ -511,6 +511,7 @@ class MainActivity : ComponentActivity() {
             offlineView.visibility = View.VISIBLE
         }
 
+        @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             // Рендер WebView упал или убит системой — пересоздаём экран, иначе
             // приложение упадёт следом.
