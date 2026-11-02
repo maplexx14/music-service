@@ -30,6 +30,9 @@ function ArtistLink({ artist, className = '', onNavigate }) {
           <Link
             to={artistPath(name)}
             className="artist-link"
+            // На таче браузер расширяет мелкие ссылки в соседнюю область
+            // трека. fastTap проверяет попадание по видимому имени.
+            data-precise-tap=""
             onClick={handleClick}
             title={`Открыть страницу «${name}»`}
             // Наведение/касание грузит страницу артиста заранее — к клику

@@ -36,6 +36,7 @@ const EDGE_PX = 20
 const SUPPRESS_MS = 700
 const SUPPRESS_RADIUS_PX = 30
 const FAST = '[data-fast-tap], button, [role="button"], a[href]'
+const PRECISE = '[data-precise-tap]'
 const NEVER =
   'input, select, textarea, label, [contenteditable="true"], [role="slider"], [data-no-fast-tap], a[target], a[download]'
 // Совместимые события мыши после тапа — в порядке, в каком их шлёт WebKit.
@@ -61,6 +62,18 @@ function fastTapTarget(target) {
   return el
 }
 
+function touchTapTarget(e) {
+  const target = fastTapTarget(e.target)
+  if (!target) return null
+  if (!target.matches(PRECISE) && !target.matches('[data-fast-tap]')) return target
+  // Браузер может перенаправить касание рядом с маленькой ссылкой на неё.
+  // Для имён артистов это крадёт область запуска трека. elementFromPoint
+  // проверяет геометрию без расширения тач-цели; остальные кнопки сохраняют
+  // обычное поведение браузера.
+  const hit = fastTapTarget(document.elementFromPoint(e.clientX, e.clientY))
+  return target.matches(PRECISE) || hit?.matches(PRECISE) ? hit : target
+}
+
 export function installFastTap() {
   if (installed || typeof document === 'undefined') return
   installed = true
@@ -73,8 +86,10 @@ export function installFastTap() {
     'pointerdown',
     (e) => {
       pending = null
+      // Новое осознанное нажатие — уже не дубль предыдущего тапа.
+      if (e.isPrimary) suppress = null
       if (e.pointerType !== 'touch' || !e.isPrimary || e.clientX <= EDGE_PX) return
-      const el = fastTapTarget(e.target)
+      const el = touchTapTarget(e)
       if (el) pending = { el, x: e.clientX, y: e.clientY, at: e.timeStamp }
     },
     { capture: true, passive: true },
@@ -102,8 +117,13 @@ export function installFastTap() {
       if (!tap || !e.isPrimary) return
       if (e.timeStamp - tap.at > LONG_PRESS_MS) return
       if (Math.abs(e.clientX - tap.x) > SLOP_PX || Math.abs(e.clientY - tap.y) > SLOP_PX) return
-      if (!tap.el.isConnected || fastTapTarget(e.target) !== tap.el) return
-      suppress = { x: e.clientX, y: e.clientY, until: performance.now() + SUPPRESS_MS }
+      if (!tap.el.isConnected || touchTapTarget(e) !== tap.el) return
+      suppress = {
+        x: e.clientX,
+        y: e.clientY,
+        scope: tap.el.closest('[data-fast-tap]') || tap.el,
+        until: performance.now() + SUPPRESS_MS,
+      }
       dispatching = true
       dispatchedFrom = e.timeStamp
       try {
@@ -116,17 +136,21 @@ export function installFastTap() {
   )
 
   // События WebKit после быстрого тапа — дубли. Гасим на window в фазе
-  // захвата, до корня React, и по месту касания, а не по элементу: экран под
-  // пальцем уже мог смениться, и клик ушёл бы в чужую кнопку. Клику отменяем
-  // и действие по умолчанию, mousedown/mouseup — только доставку.
+  // захвата, до корня React. Проверяем и место касания (экран под пальцем
+  // уже мог смениться), и исходную строку: браузер может сдвинуть координаты
+  // клика к ссылке артиста дальше радиуса. Клику отменяем и действие по
+  // умолчанию, mousedown/mouseup — только доставку.
   const swallow = (e) => {
     const s = suppress
     if (!s || !e.isTrusted) return
+    if (e.type === 'click' && e.detail === 0) return // Клавиатура, не дубль тапа.
     if (performance.now() > s.until) {
       suppress = null
       return
     }
-    if (Math.abs(e.clientX - s.x) > SUPPRESS_RADIUS_PX || Math.abs(e.clientY - s.y) > SUPPRESS_RADIUS_PX) return
+    const inScope = e.target instanceof Element && s.scope.contains(e.target)
+    const near = Math.abs(e.clientX - s.x) <= SUPPRESS_RADIUS_PX && Math.abs(e.clientY - s.y) <= SUPPRESS_RADIUS_PX
+    if (!inScope && !near) return
     if (e.type === 'click') {
       suppress = null
       e.preventDefault()

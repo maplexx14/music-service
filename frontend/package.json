@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:android": "node --experimental-vm-modules --test tests/androidNavigation.test.mjs tests/androidRelease.test.mjs tests/androidPlayback.test.mjs",
     "test:player": "node --experimental-vm-modules --test tests/playerQueue.test.mjs tests/playerStore.test.mjs tests/lyricsRetry.test.mjs",
+    "test:touch": "node --experimental-vm-modules --test tests/fastTap.test.mjs",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
