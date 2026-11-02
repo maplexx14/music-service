@@ -488,22 +488,41 @@
   z-index: 1;
 }
 
-/* На планшетах сохраняем место для названия; остальные действия доступны
-   в полном плеере, который открывается по обложке или названию. */
-@media (min-width: 769px) and (max-width: 1100px) {
-  .player-track-actions,
-  .player-right .lyrics-btn,
-  .player-controls .control-btn:first-child,
-  .player-controls .control-btn:last-child {
-    display: none;
+/* Сжимаем отступы, сохраняя все кнопки на планшетах и узких мониторах. */
+@media (min-width: 769px) and (max-width: 1200px) {
+  .player {
+    padding: 12px;
+    gap: 12px;
   }
 
   .player-left {
-    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .player-controls {
+    gap: 8px;
   }
 
   .player-right .volume-slider {
     width: 56px;
+  }
+}
+
+/* Если ряд слишком узок рядом с сайдбаром, управление занимает второй ряд.
+   Высоту и отступ контента под плеер задаёт Layout.css. */
+@media (min-width: 769px) and (max-width: 1000px) {
+  .player {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    border-radius: 28px;
+  }
+
+  .player-left {
+    flex: 1 0 100%;
+  }
+
+  .player-right {
+    margin-left: auto;
   }
 }
 
@@ -631,7 +650,7 @@
 .player-progress-surface {
   position: absolute;
   inset: 0;
-  border-radius: 999px;
+  border-radius: inherit;
   overflow: hidden;
   pointer-events: none;
   z-index: 0;

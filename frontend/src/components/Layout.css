@@ -13,6 +13,12 @@
   --bottom-controls-clearance: calc(var(--player-bottom) + var(--player-height) + 16px);
 }
 
+@media (min-width: 769px) and (max-width: 1000px) {
+  .layout {
+    --player-height: 128px;
+  }
+}
+
 /* Контейнер стека экранов (ScreenStack.jsx). Сам не прокручивается: у
    каждого экрана свой .screen-scroll, и скрытые вкладки помнят позицию. */
 .main-content {
