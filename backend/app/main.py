@@ -74,6 +74,23 @@ class AudioBufferingMiddleware:
 
 
 app.add_middleware(AudioBufferingMiddleware)
+from app.request_timing import RequestTimingMiddleware
+
+app.add_middleware(RequestTimingMiddleware)
+
+
+@app.on_event("startup")
+async def _start_request_diagnostics():
+    from app.request_timing import monitor_event_loop
+    app.state.request_diagnostics = asyncio.create_task(monitor_event_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_request_diagnostics():
+    task = getattr(app.state, "request_diagnostics", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

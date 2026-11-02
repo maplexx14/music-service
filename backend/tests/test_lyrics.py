@@ -5,7 +5,8 @@ from app.routers import lyrics
 
 
 def _clear(artist, title, duration):
-    redis_client.delete(f"lyrics:v1:{artist.lower()}|{title.lower()}|{duration}")
+    key = f"lyrics:v1:{artist.lower()}|{title.lower()}|{duration}"
+    redis_client.delete(key, key + ":failed")
 
 
 def test_search_prefers_synced_of_same_recording():
@@ -81,3 +82,56 @@ def test_lrclib_429_is_retried_with_app_user_agent(monkeypatch):
     assert asyncio.run(lyrics._lookup("Artist", "Song", 200)) == {"synced": "[00:01.00] hi"}
     assert len(seen) == 2
     assert all(ua and ua.startswith("bolt-music/") for ua in seen)
+
+
+def test_provider_failure_has_short_cooldown_and_recovers(client, monkeypatch):
+    import httpx
+    _clear("Recover", "Song", 0)
+    calls = []
+
+    async def lookup(*args):
+        calls.append(True)
+        if len(calls) == 1:
+            raise httpx.ConnectError("down")
+        return {"plain": "recovered"}
+
+    monkeypatch.setattr(lyrics, "_lookup", lookup)
+    params = {"artist": "Recover", "title": "Song"}
+    assert client.get("/api/lyrics", params=params).status_code == 502
+    assert client.get("/api/lyrics", params=params).status_code == 502
+    assert len(calls) == 1
+    key = "lyrics:v1:recover|song|0"
+    assert 0 < redis_client.ttl(key + ":failed") <= lyrics.FAILURE_TTL
+    redis_client.delete(key + ":failed")
+    assert client.get("/api/lyrics", params=params).json() == {"synced": None, "plain": "recovered"}
+
+
+def test_concurrent_lyrics_share_work_when_one_listener_disconnects(monkeypatch):
+    import asyncio
+    from app.main import app
+    import httpx
+    _clear("Concurrent", "Song", 0)
+    calls = []
+
+    async def run():
+        release = asyncio.Event()
+
+        async def lookup(*args):
+            calls.append(True)
+            await release.wait()
+            return {"plain": "shared"}
+
+        monkeypatch.setattr(lyrics, "_lookup", lookup)
+        async with httpx.AsyncClient(app=app, base_url="http://testserver") as client:
+            params = {"artist": "Concurrent", "title": "Song"}
+            first = asyncio.create_task(client.get("/api/lyrics", params=params))
+            second = asyncio.create_task(client.get("/api/lyrics", params=params))
+            while not calls:
+                await asyncio.sleep(0)
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+            release.set()
+            assert (await second).json() == {"synced": None, "plain": "shared"}
+
+    asyncio.run(run())
+    assert calls == [True]

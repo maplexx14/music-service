@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import api from '../services/api'
 import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
+import { isDislikedTrack, queueStep, trackKeys } from '../utils/playerQueue'
 
 function shuffleArray(arr) {
   const result = [...arr]
@@ -116,6 +117,7 @@ const FLOW_SESSION_GAP_MS = 30 * 60 * 1000
 const FLOW_FAST_SKIP_MS = 10 * 1000
 // Столько быстрых скипов подряд — и волна просит порцию спасения (rescueFlow).
 const FLOW_RESCUE_STREAK = 3
+const FLOW_PROTECTED_ARTIST_SKIP_LIMIT = 3
 const FLOW_NEGATIVE_CODES = new Set(['n', 's', 'd'])
 const FLOW_POSITIVE_CODES = new Set(['l', 'c', 'f'])
 // Переходы, которые сделал плеер, а не слушатель: ошибка воспроизведения и
@@ -347,6 +349,7 @@ const usePlayerStore = create((set, get) => ({
   // завершении — к тому моменту db-трек уже в likedTrackIds.
   pendingLikeKeys: [],
   dislikedTrackIds: [],
+  dislikedTrackKeys: [],
   dislikedTracksLoaded: false,
   dislikedTracksLoading: false,
 
@@ -491,13 +494,16 @@ const usePlayerStore = create((set, get) => ({
 
     // Лайк снимает дизлайк (это же делает бэк в like_track): иначе строка в
     // user_track_skips продолжала бы исключать трек из рекомендаций.
-    const { dislikedTrackIds } = get()
+    const { dislikedTrackIds, dislikedTrackKeys } = get()
+    const context = trackContext || get().currentTrack
+    const keys = [...trackKeys(context), `local:${trackId}`]
     set({
       likedTrackIds: nextLikedTrackIds,
       likedTracksLoaded: true,
       dislikedTrackIds: wasLiked
         ? dislikedTrackIds
         : dislikedTrackIds.filter((id) => id !== trackId),
+      dislikedTrackKeys: wasLiked ? dislikedTrackKeys : dislikedTrackKeys.filter((key) => !keys.includes(key)),
     })
 
     try {
@@ -506,7 +512,6 @@ const usePlayerStore = create((set, get) => ({
       } else {
         await api.post(`/tracks/${trackId}/like`)
       }
-      const context = trackContext || get().currentTrack
       syncLikedPageCache(trackId, !wasLiked, context)
       if (!wasLiked) set({ likeConfirmedAt: Date.now() })
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
@@ -515,7 +520,7 @@ const usePlayerStore = create((set, get) => ({
       }
       invalidateFlowPreload()
     } catch (error) {
-      set({ likedTrackIds, dislikedTrackIds })
+      set({ likedTrackIds, dislikedTrackIds, dislikedTrackKeys })
       throw error
     }
   },
@@ -526,8 +531,15 @@ const usePlayerStore = create((set, get) => ({
 
     set({ dislikedTracksLoading: true })
     try {
-      const response = await api.get('/tracks/me/disliked/ids')
-      set({ dislikedTrackIds: response.data, dislikedTracksLoaded: true })
+      const [ids, keys] = await Promise.all([
+        api.get('/tracks/me/disliked/ids'),
+        api.get('/tracks/me/disliked/keys'),
+      ])
+      set((state) => ({
+        dislikedTrackIds: [...new Set([...state.dislikedTrackIds, ...ids.data])],
+        dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...keys.data])],
+        dislikedTracksLoaded: true,
+      }))
     } finally {
       set({ dislikedTracksLoading: false })
     }
@@ -538,14 +550,19 @@ const usePlayerStore = create((set, get) => ({
   // локальном состоянии — иначе сердечко осталось бы залитым.
   toggleTrackDislike: async (trackId, trackContext = null) => {
     if (!trackId) return
-    const { dislikedTrackIds, likedTrackIds } = get()
+    const { dislikedTrackIds, dislikedTrackKeys, likedTrackIds } = get()
     const wasDisliked = dislikedTrackIds.includes(trackId)
+    const context = trackContext || get().currentTrack
+    const keys = [...trackKeys(context), `local:${trackId}`]
 
     set({
       dislikedTrackIds: wasDisliked
         ? dislikedTrackIds.filter((id) => id !== trackId)
         : [...dislikedTrackIds, trackId],
       dislikedTracksLoaded: true,
+      dislikedTrackKeys: wasDisliked
+        ? dislikedTrackKeys.filter((key) => !keys.includes(key))
+        : [...new Set([...dislikedTrackKeys, ...keys])],
       likedTrackIds: wasDisliked ? likedTrackIds : likedTrackIds.filter((id) => id !== trackId),
     })
 
@@ -555,7 +572,6 @@ const usePlayerStore = create((set, get) => ({
       } else {
         await api.post(`/tracks/${trackId}/dislike`)
       }
-      const context = trackContext || get().currentTrack
       if (!wasDisliked && likedTrackIds.includes(trackId)) syncLikedPageCache(trackId, false)
       if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
         postRecommendationEvent(context, wasDisliked ? 'undislike' : 'dislike')
@@ -563,9 +579,17 @@ const usePlayerStore = create((set, get) => ({
       }
       invalidateFlowPreload()
     } catch (error) {
-      set({ dislikedTrackIds, likedTrackIds })
+      set({ dislikedTrackIds, dislikedTrackKeys, likedTrackIds })
       throw error
     }
+  },
+
+  // Exclude provider aliases before navigation and asynchronous materialization.
+  markTrackDisliked: (track) => {
+    set((state) => ({
+      dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...trackKeys(track)])],
+    }))
+    invalidateFlowPreload()
   },
 
   // Явное удаление из понравившихся (всегда DELETE) — не зависит от того,
@@ -593,31 +617,17 @@ const usePlayerStore = create((set, get) => ({
   // и для прогрева резолва на бэке (в т.ч. на несколько треков вперёд), и для
   // ленивой подгрузки аудио-буфера следующего трека в плеере (см. Player.jsx).
   getNextTrack: (offset = 1) => {
-    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
-    let nextIndex = null
-    if (isShuffle) {
-      const idx = currentShuffleIndex + offset
-      if (currentShuffleIndex >= 0 && idx < shuffledOrder.length) {
-        nextIndex = shuffledOrder[idx]
-      }
-    } else {
-      const idx = currentIndex + offset
-      if (currentIndex >= 0 && idx < queue.length) {
-        nextIndex = idx
-      }
-    }
-    if (nextIndex == null) return null
-    return queue[nextIndex] || null
+    const state = get()
+    const step = queueStep(state, 1, offset)
+    return step ? state.queue[step.index] : null
   },
 
   // Трек, с которого уйдёт previousTrack() (с учётом шаффла), без побочных
   // эффектов. Нужен карусели обложек в полноэкранном плеере.
   getPrevTrack: () => {
-    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
-    if (isShuffle && shuffledOrder.length > 0) {
-      return currentShuffleIndex > 0 ? queue[shuffledOrder[currentShuffleIndex - 1]] || null : null
-    }
-    return currentIndex > 0 ? queue[currentIndex - 1] || null : null
+    const state = get()
+    const step = queueStep(state, -1)
+    return step ? state.queue[step.index] : null
   },
 
   // Заранее прогревает резолв на бэке для первых `count` треков списка (не
@@ -837,10 +847,9 @@ const usePlayerStore = create((set, get) => ({
   // маскирует задержку даже при быстрых пропусках подряд (готовый пул — десятки
   // мс); flowLoading не даёт запустить параллельные дублирующие запросы.
   extendFlowIfNeeded: async () => {
-    const { flowActive, flowLoading, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
+    const { flowActive, flowLoading, queue } = get()
     if (!flowActive || flowLoading) return
-    const pos = isShuffle ? currentShuffleIndex : currentIndex
-    if (pos < queue.length - FLOW_EXTEND_LEAD) return
+    if (get().getNextTrack(FLOW_EXTEND_LEAD)) return
 
     set({ flowLoading: true })
     try {
@@ -854,8 +863,10 @@ const usePlayerStore = create((set, get) => ({
           sess: get()._flowSessionParam(),
         },
       })
-      const known = new Set(get().queue.map((t) => t.id))
-      const fresh = (data || []).filter((t) => !known.has(t.id))
+      const state = get()
+      if (!state.flowActive) return
+      const known = new Set(state.queue.map((t) => t.id))
+      const fresh = (data || []).filter((t) => !known.has(t.id) && !isDislikedTrack(state, t))
       if (fresh.length === 0) return
 
       get().prefetchTracks(fresh.slice(0, 2), 2)
@@ -1157,12 +1168,17 @@ const usePlayerStore = create((set, get) => ({
     const entry = {
       code,
       id: String(track.id),
+      trackKey: track.recommendation_track_key || trackKeys(track).find((key) => !key.startsWith('local:')) || String(track.id),
       artist: flowArtistKey(track.artist),
       at: Date.now(),
       fast: fast || code === 'n' || code === 'd',
+      protected: !!track.recommendation_protected_artist,
     }
     set((state) => ({
       flowSession: [...state.flowSession, entry].slice(-FLOW_SESSION_MAX),
+      ...(code === 'd' ? {
+        dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...trackKeys(track)])],
+      } : {}),
     }))
     if (FLOW_NEGATIVE_CODES.has(code)) {
       get()._dropRejectedArtist(entry.artist, offset)
@@ -1198,11 +1214,14 @@ const usePlayerStore = create((set, get) => ({
   _dropRejectedArtist: (artist, offset = 1) => {
     const { flowActive, isShuffle, queue, currentIndex } = get()
     if (!artist || !flowActive || isShuffle) return
-    const accepted = get()
-      ._flowSessionEntries()
-      .some((entry) => entry.artist === artist && FLOW_POSITIVE_CODES.has(entry.code))
+    const entries = get()._flowSessionEntries().filter((entry) => entry.artist === artist)
+    const accepted = entries.some((entry) => FLOW_POSITIVE_CODES.has(entry.code))
     if (accepted) return
-    const keepUntil = currentIndex + offset
+    const protectedArtist = entries.some((entry) => entry.protected) ||
+      queue.some((track) => flowArtistKey(track.artist) === artist && track.recommendation_protected_artist)
+    const rejectedItems = new Set(entries.filter((entry) => FLOW_NEGATIVE_CODES.has(entry.code)).map((entry) => entry.trackKey || entry.id))
+    if (protectedArtist && rejectedItems.size < FLOW_PROTECTED_ARTIST_SKIP_LIMIT) return
+    const keepUntil = queueStep(get(), 1, offset)?.index ?? currentIndex + offset
     const kept = queue.filter(
       (track, index) =>
         index <= keepUntil ||
@@ -1254,9 +1273,10 @@ const usePlayerStore = create((set, get) => ({
       })
       const state = get()
       if (!state.flowActive || state.isShuffle) return
-      const head = state.queue.slice(0, state.currentIndex + 2)
+      const keepUntil = queueStep(state)?.index ?? state.currentIndex
+      const head = state.queue.slice(0, keepUntil + 1)
       const known = new Set(head.map((t) => t.id))
-      const fresh = (data || []).filter((t) => !known.has(t.id))
+      const fresh = (data || []).filter((t) => !known.has(t.id) && !isDislikedTrack(state, t))
       if (fresh.length === 0) return
       const queue = [...head, ...fresh]
       set({ queue, shuffledOrder: queue.map((_, i) => i) })
@@ -1271,38 +1291,17 @@ const usePlayerStore = create((set, get) => ({
   nextTrack: (via) => {
     get()._recordSkipIfNeeded(via)
     get()._recordListenProgress()
-    const { queue, currentIndex, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
-    if (isShuffle && shuffledOrder.length > 0) {
-      if (currentShuffleIndex < shuffledOrder.length - 1) {
-        const nextShuffleIndex = currentShuffleIndex + 1
-        const nextIndex = shuffledOrder[nextShuffleIndex]
-        set({
-          currentTrack: queue[nextIndex],
-          currentIndex: nextIndex,
-          currentShuffleIndex: nextShuffleIndex,
-          isPlaying: true,
-          source,
-          currentTime: 0,
-          seekRequest: null,
-        })
-      } else {
-        set({ isPlaying: false, seekRequest: null })
-      }
+    const state = get()
+    const step = queueStep(state)
+    if (!step) {
+      set({ isPlaying: false, seekRequest: null })
       return
     }
-    if (currentIndex < queue.length - 1) {
-      const nextIndex = currentIndex + 1
-      set({
-        currentTrack: queue[nextIndex],
-        currentIndex: nextIndex,
-        isPlaying: true,
-        source,
-        currentTime: 0,
-        seekRequest: null,
-      })
-    } else {
-      set({ isPlaying: false, seekRequest: null })
-    }
+    set({
+      currentTrack: state.queue[step.index], currentIndex: step.index,
+      currentShuffleIndex: step.shuffleIndex, isPlaying: true,
+      currentTime: 0, seekRequest: null,
+    })
   },
 
   // Переход сразу на n треков вперёд — когда промежуточные не загрузились
@@ -1316,56 +1315,26 @@ const usePlayerStore = create((set, get) => ({
     }
     get()._recordSkipIfNeeded(via, n)
     get()._recordListenProgress()
-    const { queue, currentIndex, isShuffle, shuffledOrder, currentShuffleIndex } = get()
+    const state = get()
     const moved = { isPlaying: true, currentTime: 0, seekRequest: null }
-    if (isShuffle && shuffledOrder.length > 0) {
-      const shuffleIndex = currentShuffleIndex + n
-      if (shuffleIndex >= shuffledOrder.length) {
-        set({ isPlaying: false, seekRequest: null })
-        return
-      }
-      const index = shuffledOrder[shuffleIndex]
-      set({ ...moved, currentTrack: queue[index], currentIndex: index, currentShuffleIndex: shuffleIndex })
-      return
-    }
-    const index = currentIndex + n
-    if (index >= queue.length) {
+    const step = queueStep(state, 1, n)
+    if (!step) {
       set({ isPlaying: false, seekRequest: null })
       return
     }
-    set({ ...moved, currentTrack: queue[index], currentIndex: index })
+    set({ ...moved, currentTrack: state.queue[step.index], currentIndex: step.index, currentShuffleIndex: step.shuffleIndex })
   },
 
   previousTrack: () => {
     get()._recordListenProgress()
-    const { currentIndex, queue, source, isShuffle, shuffledOrder, currentShuffleIndex } = get()
-    if (isShuffle && shuffledOrder.length > 0) {
-      if (currentShuffleIndex > 0) {
-        const prevShuffleIndex = currentShuffleIndex - 1
-        const prevIndex = shuffledOrder[prevShuffleIndex]
-        set({
-          currentTrack: queue[prevIndex],
-          currentIndex: prevIndex,
-          currentShuffleIndex: prevShuffleIndex,
-          isPlaying: true,
-          source,
-          currentTime: 0,
-          seekRequest: null,
-        })
-      }
-      return
-    }
-    if (currentIndex > 0) {
-      const prevIndex = currentIndex - 1
-      set({
-        currentTrack: queue[prevIndex],
-        currentIndex: prevIndex,
-        isPlaying: true,
-        source,
-        currentTime: 0,
-        seekRequest: null,
-      })
-    }
+    const state = get()
+    const step = queueStep(state, -1)
+    if (!step) return
+    set({
+      currentTrack: state.queue[step.index], currentIndex: step.index,
+      currentShuffleIndex: step.shuffleIndex, isPlaying: true,
+      currentTime: 0, seekRequest: null,
+    })
   },
   
   setVolume: (volume) => {

@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import requests
+from app.provider_work import provider_call
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, desc, func, or_, select, tuple_
@@ -2326,7 +2327,7 @@ async def _radio_pool_fetch(seed_video_id: str) -> List[ExternalTrackResponse]:
     """Сетевая часть _radio_pool — без проверки кэша, под single-flight."""
     key = f"flow:radio:{seed_video_id}"
     try:
-        raw = await asyncio.to_thread(_fetch_radio, seed_video_id)
+        raw = await provider_call(_fetch_radio, seed_video_id)
     except requests.exceptions.Timeout:
         # Таймаут — это медленный YouTube, а не сид без радио: в негативный
         # кэш не кладём, иначе сид выпал бы из потока на 10 минут.
@@ -2693,7 +2694,7 @@ async def _genre_artists(genre: str) -> List[str]:
     cached = await get_cache_async(key)
     if cached is not None:
         return cached
-    names = await asyncio.to_thread(_genre_artists_fetch, genre)
+    names = await provider_call(_genre_artists_fetch, genre)
     await set_cache_async(key, names, expire=_GENRE_TTL if names else 600)
     return names
 
@@ -3655,24 +3656,28 @@ async def _enqueue_precompute(user_id: int, meta: dict) -> None:
         logger.warning("flow precompute enqueue failed user=%s", user_id, exc_info=True)
 
 
-def _fresh_negatives(db: Session, user_id: int, since: datetime) -> tuple[set, set]:
+def _fresh_negatives(db: Session, user_id: int, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
     """Скипы и дизлайки после since: (идентичности треков, ключи артистов).
 
     Готовая порция посчитана до них — то, что юзер успел отвергнуть, пока
-    слушал прошлую, отфильтровываем при выдаче. Артист отпадает целиком и за
-    скип, не только за дизлайк: живой расчёт сразу штрафует артиста скипнутого
-    трека, а сравнение 2026-10-13 показало, что без этого готовые порции чаще
-    возвращали только что скипнутых артистов (3.3% треков против 0.8%).
+    слушал прошлую, отфильтровываем при выдаче. Для любимого артиста нужно
+    отвергнуть три разные песни; для остальных сохраняем отказ после одной.
     """
     try:
-        return _fresh_negatives_query(db, user_id, since)
+        return _fresh_negatives_query(db, user_id, since, protected)
     finally:
         db.rollback()
 
 
-def _fresh_negatives_query(db: Session, user_id: int, since: datetime) -> tuple[set, set]:
+def _fresh_negatives_query(db: Session, user_id: int, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
     identities: set = set()
-    artists: set = set()
+    negative_items: dict[str, set] = {}
+
+    def note_artist(artist, identity):
+        for name in (artist or "").split(","):
+            key = artist_key(name)
+            if key:
+                negative_items.setdefault(key, set()).add(identity)
     rows = db.execute(
         select(
             Track.id,
@@ -3691,8 +3696,7 @@ def _fresh_negatives_query(db: Session, user_id: int, since: datetime) -> tuple[
         identities.add(f"local:{track_id}")
         if source and external_id:
             identities.add(f"{source}:{external_id}")
-        if artist:
-            artists.update(artist_key(a) for a in artist.split(","))
+        note_artist(artist, f"{source}:{external_id}" if source and external_id else f"local:{track_id}")
     events = db.execute(
         select(
             recommendation_events.c.track_id,
@@ -3711,9 +3715,11 @@ def _fresh_negatives_query(db: Session, user_id: int, since: datetime) -> tuple[
             identities.add(f"local:{track_id}")
         if source and external_id:
             identities.add(f"{source}:{external_id}")
-        if artist:
-            artists.update(artist_key(a) for a in artist.split(","))
-    artists.discard("")
+        note_artist(artist, f"{source}:{external_id}" if source and external_id else f"local:{track_id}")
+    artists = {
+        artist for artist, items in negative_items.items()
+        if artist not in (protected or set()) or len(items) >= flow_session.PROTECTED_ARTIST_SKIP_LIMIT
+    }
     return identities, artists
 
 
@@ -3741,6 +3747,8 @@ async def _take_ready_portion(
     await asyncio.to_thread(delete_cache, key)
     if payload.get("context") != _ranking_context(user_id, history):
         return None, "context"
+    if payload.get("algorithm_version") != ALGORITHM_VERSION:
+        return None, "version"
     created = float(payload.get("created") or 0)
     if time.time() - created > _READY_MAX_AGE:
         return None, "stale"
@@ -3750,8 +3758,14 @@ async def _take_ready_portion(
     # Метку ставят скип/дизлайк после коммита (recommendation_cache.
     # mark_negative_signal). Нет её или она старше порции — в БД идти незачем.
     if isinstance(negative_at, (int, float)) and negative_at >= created:
+        protected = {
+            artist_key(name)
+            for item in payload.get("items") or []
+            if ((payload.get("features") or {}).get(_flow_item_identity(item)) or {}).get("protected_artist")
+            for name in _flow_item_artist_title(item)[0].split(",")
+        }
         negatives, bad_artists = await asyncio.to_thread(
-            _fresh_negatives, db, user_id, datetime.fromtimestamp(created, timezone.utc)
+            _fresh_negatives, db, user_id, datetime.fromtimestamp(created, timezone.utc), protected
         )
     else:
         negatives, bad_artists = set(), set()
@@ -3872,6 +3886,10 @@ async def _deliver_portion(
                 "recommendation_position": position,
                 "recommendation_score": score,
                 "recommendation_model_version": ALGORITHM_VERSION,
+                "recommendation_protected_artist": bool(
+                    (features.get(identity) or {}).get("protected_artist")
+                ),
+                "recommendation_track_key": (features.get(identity) or {}).get("track_key"),
             }
         )
         # Незнакомый артист подписывается в плеере: открытие, о котором
@@ -4364,6 +4382,8 @@ async def _compute_flow(
                 else {}
             ),
             "novel": _artist_affinity(artist, profile.get("artist_weight") or {}) is None,
+            "protected_artist": _is_core_artist(artist, core_artist_keys),
+            "track_key": "|".join(_norm_key(*_item_artist_title(item))),
             **({"in_collection": True} if identity in liked_identities else {}),
             **(
                 {"fresh_cluster": True}
@@ -5352,6 +5372,7 @@ async def _compute_flow(
             ytdlp._schedule_audio_matches(matched_items)
         return {
             "context": ranking_context,
+            "algorithm_version": ALGORITHM_VERSION,
             "limit": request_limit,
             "created": time.time(),
             "matched": schedule_matches,

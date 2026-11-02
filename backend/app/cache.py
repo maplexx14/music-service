@@ -9,6 +9,12 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 import threading
 import weakref
+from concurrent.futures import ThreadPoolExecutor
+from app.request_timing import run_blocking, timed_sync
+
+_cache_executor = ThreadPoolExecutor(
+    max_workers=int(os.getenv("CACHE_THREADS", "8")), thread_name_prefix="cache"
+)
 
 # Таймауты обязательны: без socket_timeout зависший/перегруженный Redis
 # блокирует вызывающий тред НАВСЕГДА. Все sync-эндпоинты живут в anyio
@@ -83,6 +89,7 @@ def record_proxy_traffic(proxy_url: Optional[str], amount: int) -> None:
         return
 
 
+@timed_sync("redis")
 def get_cache(key: str) -> Optional[Any]:
     """Get value from cache"""
     try:
@@ -94,6 +101,7 @@ def get_cache(key: str) -> Optional[Any]:
         return None
 
 
+@timed_sync("redis")
 def set_cache(key: str, value: Any, expire: int = 3600):
     """Set value in cache with expiration (default 1 hour)"""
     try:
@@ -121,6 +129,7 @@ class _ReadBatch:
 _read_batches: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
+@timed_sync("redis")
 def _mget_cache(keys: list) -> list:
     """MGET + json.loads с той же семантикой, что у get_cache: сбой — None."""
     try:
@@ -140,7 +149,7 @@ async def _flush_reads(batch: _ReadBatch) -> None:
     items, batch.items, batch.scheduled = batch.items, [], False
     keys = list(dict.fromkeys(key for key, _ in items))
     try:
-        values = await asyncio.to_thread(_mget_cache, keys)
+        values = await run_blocking(_cache_executor, "cache", _mget_cache, keys)
     except Exception as exc:
         for _key, fut in items:
             if not fut.done():
@@ -167,7 +176,7 @@ async def get_cache_async(key: str) -> Optional[Any]:
 
 
 async def set_cache_async(key: str, value: Any, expire: int = 3600):
-    await asyncio.to_thread(set_cache, key, value, expire)
+    await run_blocking(_cache_executor, "cache", set_cache, key, value, expire)
 
 
 def acquire_rate_slot(key: str, interval: float) -> float:
@@ -217,4 +226,4 @@ def clear_pattern(pattern: str):
 
 async def clear_pattern_async(pattern: str):
     """Async wrapper for clear_pattern — avoids blocking event loop."""
-    await asyncio.to_thread(clear_pattern, pattern)
+    await run_blocking(_cache_executor, "cache", clear_pattern, pattern)

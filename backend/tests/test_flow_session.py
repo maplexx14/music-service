@@ -695,6 +695,45 @@ def test_artist_rejected_in_session_leaves_both_arms():
         assert [item["artist"] for item in chosen] == ["b", "c", "d", "e"]
 
 
+def test_favorite_needs_three_distinct_rejected_songs():
+    meta = {str(i): {"artist": "goreshit", "protected_artist": True} for i in range(4)}
+    repeated = flow_session.SessionState(flow_session.parse_session("s0,n0,s0,s1"), meta.get)
+    assert repeated.rejected_artists() == set()
+    three = flow_session.SessionState(flow_session.parse_session("s0,s1,s2"), meta.get)
+    assert three.rejected_artists() == {"goreshit"}
+    accepted = flow_session.SessionState(flow_session.parse_session("s0,s1,s2,l3"), meta.get)
+    assert accepted.rejected_artists() == set()
+
+
+def test_materialized_alias_does_not_count_as_a_second_rejection():
+    meta = {key: {"artist": "a", "protected_artist": True, "track_key": "a|song"} for key in ("1", "ytmusic:abc")}
+    state = flow_session.SessionState(flow_session.parse_session("s1,sytmusic:abc"), meta.get)
+    assert len(state.artist_negative_items["a"]) == 1
+
+
+def test_protected_artist_stays_available_with_old_history_metadata():
+    state = flow_session.SessionState(flow_session.parse_session("s9"), lambda _: {"artist": "a"})
+    pool = _pool(["a", "b", "c", "d"])
+    chosen, _ = _select(pool, {0: {"protected_artist": True}}, state, arm="control")
+    assert "a" in [item["artist"] for item in chosen]
+
+
+def test_rescue_restores_familiar_music_after_skipping_favorites():
+    meta = {"1": {"artist": "goreshit", "protected_artist": True}}
+    state = flow_session.SessionState(flow_session.parse_session("s1"), meta.get)
+    pool = _pool(["new1", "new2", "new3", "goreshit", "known1", "known2", "known3", "known4"])
+    features = {item["id"]: {"novel": item["id"] < 3, "protected_artist": item["artist"] == "goreshit"} for item in pool}
+    chosen, _ = _select(pool, features, state, limit=6, rescue=True, novel_max=4)
+    assert sum(features[item["id"]]["novel"] for item in chosen) <= 1
+    assert "goreshit" in [item["artist"] for item in chosen]
+
+
+def test_rescue_does_not_stop_when_only_new_artists_are_available():
+    pool = _pool(["new1", "new2", "new3", "new4"])
+    chosen, _ = _select(pool, {item["id"]: {"novel": True} for item in pool}, rescue=True)
+    assert len(chosen) == 4
+
+
 def test_rejected_artist_fills_in_when_pool_runs_dry():
     """Своих не набирается и на половину порции — отвергнутые идут добором,
     чтобы порция не пустела (пустой ответ останавливает музыку)."""

@@ -3717,12 +3717,17 @@ def test_ready_portion_drops_fresh_skips_and_queue(client, db, monkeypatch):
 
 def test_ready_portion_falls_back_when_skip_empties_it(client, db, monkeypatch):
     """Скипнутый артист — вся готовая порция: считаем заново живым путём."""
-    from app.cache import get_cache
+    from app.cache import get_cache, set_cache
     from app.recommendation_cache import mark_negative_signal
 
     user, headers, first = _ready_setup(client, db, monkeypatch, "ready-skip-all")
     assert _precompute(user.id) is True
-    skipped = get_cache(f"flow:ready:{user.id}")["items"][0]
+    payload = get_cache(f"flow:ready:{user.id}")
+    # This branch covers an unprotected artist; favorite skips have a separate threshold.
+    for row in payload["features"].values():
+        row["protected_artist"] = False
+    set_cache(f"flow:ready:{user.id}", payload, expire=600)
+    skipped = payload["items"][0]
     db.execute(
         recommendation_events.insert().values(
             user_id=user.id,

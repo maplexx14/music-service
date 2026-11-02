@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import api from '../services/api'
 import { getActive } from '../services/audioEngine'
 
@@ -33,20 +33,29 @@ function parseLrc(lrc) {
 // фуллскрин, две панели текста), и раньше каждый слал свой запрос.
 const lyricsCache = new Map()
 const pendingLyrics = new Map()
+const retryListeners = new Map()
+const retryAfter = new Map()
 
 function loadLyrics(cacheKey, artist, title, duration) {
   if (lyricsCache.has(cacheKey)) return Promise.resolve(lyricsCache.get(cacheKey))
   if (pendingLyrics.has(cacheKey)) return pendingLyrics.get(cacheKey)
-  const request = api
-    .get('/lyrics', {
+  const delay = Math.max(0, (retryAfter.get(cacheKey) || 0) - Date.now())
+  const request = (delay ? new Promise((resolve) => setTimeout(resolve, delay)) : Promise.resolve())
+    .then(() => api.get('/lyrics', {
       params: { artist, title, duration: duration || undefined },
       skipErrorToast: true,
       timeout: 20000,
-    })
+    }))
     .then(({ data }) => {
       const entry = { synced: parseLrc(data?.synced), plain: data?.plain || '' }
       lyricsCache.set(cacheKey, entry)
+      retryAfter.delete(cacheKey)
       return entry
+    })
+    .catch((error) => {
+      const seconds = Number(error.response?.headers?.['retry-after'])
+      if (seconds > 0) retryAfter.set(cacheKey, Date.now() + Math.min(seconds, 60) * 1000)
+      throw error
     })
     .finally(() => pendingLyrics.delete(cacheKey))
   pendingLyrics.set(cacheKey, request)
@@ -58,6 +67,7 @@ export function useLyrics(track) {
   const [plainText, setPlainText] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [attempt, setAttempt] = useState(0)
 
   const artist = track?.artist
   const title = track?.title
@@ -67,6 +77,21 @@ export function useLyrics(track) {
     () => `${(artist || '').toLowerCase()}|${(title || '').toLowerCase()}`,
     [artist, title],
   )
+  const retry = useCallback(() => {
+    lyricsCache.delete(cacheKey)
+    for (const listener of retryListeners.get(cacheKey) || []) listener()
+  }, [cacheKey])
+
+  useEffect(() => {
+    const listeners = retryListeners.get(cacheKey) || new Set()
+    retryListeners.set(cacheKey, listeners)
+    const refresh = () => setAttempt((value) => value + 1)
+    listeners.add(refresh)
+    return () => {
+      listeners.delete(refresh)
+      if (listeners.size === 0) retryListeners.delete(cacheKey)
+    }
+  }, [cacheKey])
 
   useEffect(() => {
     if (!artist || !title) {
@@ -110,9 +135,9 @@ export function useLyrics(track) {
     }
     // duration в зависимостях нет намеренно: текст привязан к артисту и
     // названию, а длительность лишь помогает выбрать синхронную версию.
-  }, [artist, title, cacheKey])
+  }, [artist, title, cacheKey, attempt])
 
-  return { syncedLines, plainText, loading, error }
+  return { syncedLines, plainText, loading, error, retry }
 }
 
 // Строка загорается раньше своей метки времени. Метки lrclib запаздывают за

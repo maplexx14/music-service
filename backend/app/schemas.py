@@ -317,6 +317,8 @@ class TrackResponse(TrackBase):
     recommendation_position: Optional[int] = None
     recommendation_score: Optional[float] = None
     recommendation_model_version: Optional[str] = None
+    recommendation_protected_artist: bool = False
+    recommendation_track_key: Optional[str] = None
 
     @field_validator("cover_url")
     @classmethod
@@ -482,6 +484,8 @@ class ExternalTrackResponse(BaseModel):
     recommendation_position: Optional[int] = None
     recommendation_score: Optional[float] = None
     recommendation_model_version: Optional[str] = None
+    recommendation_protected_artist: bool = False
+    recommendation_track_key: Optional[str] = None
 
 
 class LinkListenResponse(BaseModel):

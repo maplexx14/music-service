@@ -1,7 +1,9 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
+import time
+from app.request_timing import note_span
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -45,6 +47,16 @@ if not DATABASE_URL.startswith("sqlite"):
         pool_timeout=30,
     )
 engine = create_engine(DATABASE_URL, **engine_options)
+
+
+@event.listens_for(engine, "before_cursor_execute")
+def _query_started(conn, cursor, statement, parameters, context, executemany):
+    context._timing_started = time.perf_counter()
+
+
+@event.listens_for(engine, "after_cursor_execute")
+def _query_finished(conn, cursor, statement, parameters, context, executemany):
+    note_span("db", time.perf_counter() - context._timing_started)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

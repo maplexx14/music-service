@@ -82,6 +82,21 @@ def test_dislike_unknown_track_404(client, db):
     assert client.post("/api/tracks/999999/dislike", headers=headers).status_code == 404
 
 
+def test_disliked_provider_keys_are_scoped_to_user_and_removed_by_like(client, db):
+    create_user(db, "keys-owner")
+    create_user(db, "keys-other")
+    track = make_track(db)
+    track.source, track.external_id = "ytmusic", "video-key"
+    db.commit()
+    owner = auth_headers(client, "keys-owner")
+    other = auth_headers(client, "keys-other")
+    assert client.post(f"/api/tracks/{track.id}/dislike", headers=owner).status_code == 200
+    assert client.get("/api/tracks/me/disliked/keys", headers=owner).json() == [f"local:{track.id}", "ytmusic:video-key"]
+    assert client.get("/api/tracks/me/disliked/keys", headers=other).json() == []
+    assert client.post(f"/api/tracks/{track.id}/like", headers=owner).status_code == 200
+    assert client.get("/api/tracks/me/disliked/keys", headers=owner).json() == []
+
+
 def test_delete_track_as_admin(client, db):
     create_user(db, "admin1", is_admin=True)
     track = make_track(db)

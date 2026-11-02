@@ -120,3 +120,21 @@ def test_404_without_fallback_stays_502(client):
         resp = client.get("/api/tracks/cover-proxy", params={"url": url})
     assert resp.status_code == 502
     assert mocked.call_count == 1
+
+
+def test_maxres_fallback_works_with_provider_query_parameters(client):
+    vid = uuid.uuid4().hex[:11]
+    url = f"https://i.ytimg.com/vi/{vid}/maxresdefault.jpg?sqp=abc&rs=xyz"
+    asked = []
+
+    async def get(self, target, **kwargs):
+        asked.append(target)
+        return httpx.Response(
+            404 if "maxresdefault" in target else 200,
+            content=b"fallback", request=httpx.Request("GET", target),
+        )
+
+    with patch.object(httpx.AsyncClient, "get", get):
+        response = client.get("/api/tracks/cover-proxy", params={"url": url})
+    assert response.status_code == 200
+    assert asked == [url, f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"]

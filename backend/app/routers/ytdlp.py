@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from app import storage
 from app.artist_utils import norm_artist_name, query_names_artist, translit_key
 from app.cache import get_cache_async, record_proxy_traffic, set_cache_async
+from app.provider_work import audio_call, background as provider_background, provider_call
 from app.schemas import (
     ExternalAlbumDetail,
     ExternalAlbumResponse,
@@ -378,7 +379,7 @@ async def search_ytmusic(
 
     try:
         # ytmusicapi синхронный — уводим в тредпул, чтобы не блокировать loop.
-        raw = await asyncio.to_thread(
+        raw = await provider_call(
             _ytmusic.search, q, filter="songs", limit=limit
         )
     except Exception:  # noqa: BLE001
@@ -409,7 +410,7 @@ async def search_ytmusic_artists(q: str, limit: int = 20) -> List[str]:
         return []
 
     try:
-        raw = await asyncio.to_thread(
+        raw = await provider_call(
             _ytmusic.search, q, filter="artists", limit=limit
         )
     except Exception:
@@ -447,7 +448,7 @@ async def search_ytmusic_artist_cards(q: str, limit: int = 6) -> List[dict]:
         return cached
 
     try:
-        raw = await asyncio.to_thread(
+        raw = await provider_call(
             _ytmusic.search, q, filter="artists", limit=limit
         )
     except Exception:  # noqa: BLE001 — провайдер, выдача поиска падать не должна
@@ -485,13 +486,13 @@ async def related_ytmusic_artists(artist: str, limit: int = 6) -> List[dict]:
         return []
 
     try:
-        found = await asyncio.to_thread(
+        found = await provider_call(
             _ytmusic.search, artist, filter="artists", limit=1
         )
         browse_id = (found or [{}])[0].get("browseId")
         if not browse_id:
             return []
-        info = await asyncio.to_thread(_ytmusic.get_artist, browse_id)
+        info = await provider_call(_ytmusic.get_artist, browse_id)
     except Exception:  # noqa: BLE001 — провайдер/разметка, волна не должна падать
         logger.warning("YouTube Music related artists failed for %s", artist)
         return []
@@ -517,7 +518,7 @@ async def _artist_info(browse_id: str) -> dict:
     if _ytmusic is None or not browse_id:
         return {}
     try:
-        return await asyncio.to_thread(_ytmusic.get_artist, browse_id) or {}
+        return await provider_call(_ytmusic.get_artist, browse_id) or {}
     except Exception:  # noqa: BLE001
         logger.warning("YouTube Music artist page failed for %s", browse_id)
         return {}
@@ -534,7 +535,7 @@ async def _songs_from_info(info: dict, limit: int) -> List[ExternalTrackResponse
         # сам playlistId. Ошибку глотаем — остаётся превью, а не пустая выдача.
         pid = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
         try:
-            full = await asyncio.to_thread(_ytmusic.get_playlist, pid, limit)
+            full = await provider_call(_ytmusic.get_playlist, pid, limit)
             items = (full or {}).get("tracks") or items
         except Exception:  # noqa: BLE001
             logger.warning("YouTube Music artist playlist failed for %s", playlist_id)
@@ -677,7 +678,7 @@ async def _fetch_artist_catalog(
     q: str, limit: int, schedule_matches: bool = True
 ) -> List[ExternalTrackResponse]:
     try:
-        found = await asyncio.to_thread(_ytmusic.search, q, filter="artists", limit=1)
+        found = await provider_call(_ytmusic.search, q, filter="artists", limit=1)
     except Exception:  # noqa: BLE001 — провайдер, агрегатор падать не должен
         logger.warning("YouTube Music artist lookup failed for %s", q)
         return []
@@ -747,7 +748,7 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
 async def _fetch_artist_profile(name: str, limit: int) -> dict:
     empty = {"name": name, "cover_url": None, "tracks": [], "albums": []}
     try:
-        found = await asyncio.to_thread(_ytmusic.search, name, filter="artists", limit=1)
+        found = await provider_call(_ytmusic.search, name, filter="artists", limit=1)
     except Exception:  # noqa: BLE001 — провайдер, страница падать не должна
         logger.warning("YouTube Music artist lookup failed for %s", name)
         return empty
@@ -806,7 +807,7 @@ async def ytmusic_album(request: Request, browse_id: str) -> Optional[ExternalAl
 
 async def _fetch_album(browse_id: str) -> Optional[ExternalAlbumDetail]:
     try:
-        info = await asyncio.to_thread(_ytmusic.get_album, browse_id)
+        info = await provider_call(_ytmusic.get_album, browse_id)
     except Exception:  # noqa: BLE001 — провайдер, страница падать не должна
         logger.warning("YouTube Music album failed for %s", browse_id)
         return None
@@ -1566,7 +1567,7 @@ async def _resolve_via_ytdlp(
     ненадолго, чтобы дать треку восстановиться).
     """
     primary, *rest = _CLIENT_CANDIDATES
-    pending = {asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, primary, egress))}
+    pending = {asyncio.create_task(audio_call(_extract_with_clients, video_id, primary, egress))}
     hedged = False
     info = None
     saw_transient = False
@@ -1590,7 +1591,7 @@ async def _resolve_via_ytdlp(
                 # конкретный запрос, а не клиент (см. _HEDGE_DELAY).
                 hedged = True
                 pending |= {
-                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients, egress))
+                    asyncio.create_task(audio_call(_extract_with_clients, video_id, clients, egress))
                     for clients in (primary, *rest)
                 }
                 continue
@@ -1630,7 +1631,7 @@ async def _resolve_via_ytdlp(
                 # available" из-за PO-token требований на некоторых клиентах).
                 hedged = True
                 pending |= {
-                    asyncio.create_task(asyncio.to_thread(_extract_with_clients, video_id, clients, egress))
+                    asyncio.create_task(audio_call(_extract_with_clients, video_id, clients, egress))
                     for clients in rest
                 }
     finally:
@@ -1907,11 +1908,28 @@ _WARM_SEM = asyncio.Semaphore(8)
 # заодно дедуплицирует заявки на один и тот же трек. Сильные ссылки на задачи
 # держим в _prefetch_tasks, иначе asyncio может собрать их до завершения.
 _PREFETCH_QUEUE_LIMIT = 64
+_PREFETCH_JOB_BUDGET = 30.0
 _prefetch_pending: set[str] = set()
 _prefetch_tasks: set[asyncio.Task] = set()
 
 
 async def _prefetch_job(
+    cache_id: str, resolver, cache_key: str, ttl: int, archive_key: Optional[str] = None
+) -> None:
+    token = provider_background.set(True)
+    async def run():
+        async with _PREFETCH_SEM:
+            await _perform_prefetch_job(cache_id, resolver, cache_key, ttl, archive_key)
+    try:
+        await asyncio.wait_for(run(), _PREFETCH_JOB_BUDGET)
+    except asyncio.TimeoutError:
+        logger.info("prefetch timed out for %s", cache_id)
+    finally:
+        provider_background.reset(token)
+        _prefetch_pending.discard(cache_id)
+
+
+async def _perform_prefetch_job(
     cache_id: str, resolver, cache_key: str, ttl: int, archive_key: Optional[str] = None
 ) -> None:
     try:
@@ -1921,8 +1939,7 @@ async def _prefetch_job(
         if archived:
             await storage.warm_music_object(archived)
             return
-        async with _PREFETCH_SEM:
-            url, ext, total, _ = await resolver(False)
+        url, ext, total, _ = await resolver(False)
         async with _WARM_SEM:
             warmed_total = await _warm_first_chunk(cache_id, url, ext)
         if warmed_total is not None and total is None:
@@ -2219,7 +2236,7 @@ async def archived_music_path(archive_key: Optional[str]) -> Optional[str]:
         if isinstance(cached, (list, tuple)):
             cached = cached[0] if cached else ""
         return cached or None
-    path = await asyncio.to_thread(storage.find_music_object, f"external/{archive_key}")
+    path = await audio_call(storage.find_music_object, f"external/{archive_key}")
     await set_cache_async(
         cache_key, path or "", expire=_ARCHIVE_HIT_TTL if path else _ARCHIVE_MISS_TTL
     )
@@ -2622,7 +2639,7 @@ async def _local_copy_path(video_id: str) -> Optional[str]:
     """Своя копия трека: файл дискового кэша или minio-путь архива, иначе None."""
     # В тред: glob по маске читает ВЕСЬ каталог кэша (тысячи файлов на проде),
     # а /flow зовёт это на каждый трек окна старта прямо из event loop.
-    cached = await asyncio.to_thread(_cached_file, video_id)
+    cached = await audio_call(_cached_file, video_id)
     return cached or await archived_music_path(f"ytmusic/{video_id}")
 
 
@@ -2963,6 +2980,42 @@ async def _stream_from_matches(
 
 @router.post("/prefetch/{video_id}")
 async def prefetch_ytmusic(video_id: str):
+    if _ytmusic is None:
+        raise HTTPException(status_code=503, detail="YouTube Music не настроен")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
+        raise HTTPException(status_code=400, detail="Некорректный id")
+    if video_id in _prefetch_preparing:
+        return {"status": "queued"}
+    if len(_prefetch_preparing) >= _PREFETCH_QUEUE_LIMIT:
+        return {"status": "dropped"}
+    _prefetch_preparing.add(video_id)
+    task = asyncio.create_task(_prepare_prefetch_job(video_id))
+    _prefetch_tasks.add(task)
+    task.add_done_callback(_prefetch_tasks.discard)
+    return {"status": "queued"}
+
+
+_prefetch_preparing: set[str] = set()
+_prepare_prefetch_sem = asyncio.Semaphore(2)
+
+
+async def _prepare_prefetch_job(video_id: str) -> None:
+    token = provider_background.set(True)
+    async def run():
+        async with _prepare_prefetch_sem:
+            await _prepare_prefetch_ytmusic(video_id)
+    try:
+        await asyncio.wait_for(run(), _PREFETCH_JOB_BUDGET)
+    except asyncio.TimeoutError:
+        logger.info("prefetch preparation timed out for %s", video_id)
+    except Exception:
+        logger.warning("prefetch preparation failed for %s", video_id, exc_info=True)
+    finally:
+        provider_background.reset(token)
+        _prefetch_preparing.discard(video_id)
+
+
+async def _prepare_prefetch_ytmusic(video_id: str):
     """Ставит трек в фоновую очередь прогрева (резолв в Redis + первые байты
     на диск, см. schedule_prefetch) и отвечает сразу. Фронт зовёт это для
     кликнутого и следующих в очереди треков."""
@@ -3086,6 +3139,8 @@ async def prefetch_ytmusic_ready(video_id: str):
     после POST /prefetch и снимает гейт скипа вперёд только на ready=True."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id):
         raise HTTPException(status_code=400, detail="Некорректный id")
+    if video_id in _prefetch_preparing:
+        return {"ready": False}
     try:
         from app import censorship
         from app.routers import soundcloud
@@ -3143,7 +3198,7 @@ def parse_playlist_url(url: str) -> Optional[str]:
 
 async def search_ytmusic_playlists(q: str, limit: int = 10) -> List[ExternalPlaylistResponse]:
     """Поиск плейлистов в YouTube Music (и редакционных, и пользовательских)."""
-    raw = await asyncio.to_thread(_ytmusic.search, q, filter="playlists", limit=limit)
+    raw = await provider_call(_ytmusic.search, q, filter="playlists", limit=limit)
     results: List[ExternalPlaylistResponse] = []
     for item in raw or []:
         browse_id = item.get("browseId") or ""
@@ -3173,7 +3228,7 @@ async def ytmusic_playlist(pid: str) -> Tuple[Optional[str], Optional[str], List
     Треки уже ytmusic — подбирать их ни во что не нужно.
     """
     try:
-        data = await asyncio.to_thread(_ytmusic.get_playlist, pid, _PLAYLIST_TRACK_LIMIT)
+        data = await provider_call(_ytmusic.get_playlist, pid, _PLAYLIST_TRACK_LIMIT)
     except Exception as exc:  # noqa: BLE001 — приватный/удалённый/сеть
         logger.warning("YouTube Music playlist %s failed: %s", pid, exc)
         raise HTTPException(status_code=404, detail="Плейлист YouTube Music недоступен") from exc

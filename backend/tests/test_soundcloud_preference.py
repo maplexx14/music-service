@@ -234,7 +234,7 @@ def test_preferred_prefetch_uses_soundcloud_even_with_local_copy(monkeypatch, ca
     monkeypatch.setattr(soundcloud, "prefetch_soundcloud", prefetch)
     monkeypatch.setattr(ytdlp, "_local_copy_path", must_not_run)
 
-    assert asyncio.run(ytdlp.prefetch_ytmusic("VIDEOID1")) == {"status": "downloading"}
+    assert asyncio.run(ytdlp._prepare_prefetch_ytmusic("VIDEOID1")) == {"status": "downloading"}
     assert seen == [("42", "https://soundcloud.com/artist/42")]
 
 

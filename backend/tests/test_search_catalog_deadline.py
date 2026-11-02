@@ -72,3 +72,53 @@ def test_grouped_keeps_catalog_that_makes_the_deadline(monkeypatch):
     grouped = asyncio.run(aggregate.search_external_grouped(None, "q", 30))
 
     assert _titles(grouped) == {"From Catalog", "Song", "Cloud"}
+
+
+def test_slow_song_provider_does_not_hold_fast_results(monkeypatch):
+    cancelled = []
+    _patch(monkeypatch, catalog_delay=0, finished=[])
+    monkeypatch.setattr(aggregate, "_EXTERNAL_SEARCH_BUDGET", 0.04)
+
+    async def slow(*args, **kwargs):
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled.append(True)
+
+    monkeypatch.setattr(aggregate.ytdlp, "search_ytmusic", slow)
+
+    async def run():
+        started = asyncio.get_running_loop().time()
+        result = await aggregate.search_external_grouped(None, "q", 30)
+        await asyncio.sleep(0)
+        return result, asyncio.get_running_loop().time() - started
+
+    result, elapsed = asyncio.run(run())
+    assert elapsed < 0.2
+    assert _titles(result) == {"From Catalog", "Cloud"}
+    assert cancelled == [True]
+
+
+def test_aborted_search_cancels_all_three_sources(monkeypatch):
+    started, cancelled = [], []
+
+    async def slow(*args, **kwargs):
+        started.append(True)
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cancelled.append(True)
+
+    for owner, name in ((aggregate.ytdlp, "ytmusic_artist_catalog"), (aggregate.ytdlp, "search_ytmusic"), (aggregate.soundcloud, "search_soundcloud")):
+        monkeypatch.setattr(owner, name, slow)
+
+    async def run():
+        task = asyncio.create_task(aggregate.search_external_grouped(None, "q", 30))
+        while len(started) < 3:
+            await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+    assert len(cancelled) == 3

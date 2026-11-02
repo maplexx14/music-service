@@ -121,6 +121,7 @@ def _is_current(payload, context: str, limit: int, signal_at: float = 0.0) -> bo
     created = float(payload.get("created") or 0)
     return (
         payload.get("context") == context
+        and payload.get("algorithm_version") == flow.ALGORITHM_VERSION
         and len(payload.get("items") or []) >= 2 * limit
         and created > signal_at
         and time.time() - created < REFRESH_AFTER

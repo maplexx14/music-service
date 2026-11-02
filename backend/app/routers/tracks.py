@@ -171,7 +171,7 @@ _COVER_PROXY_MAX_BYTES = 10 * 1024 * 1024  # 10 MB — потолок на од�
 _COVER_CACHE_TTL = 24 * 3600
 # Негативный кэш короче: CDN может отдать 403/timeout мигом, а через минуту
 # ответить 200 — не выпарываем обложку на сутки из-за одного флапа.
-_COVER_NEGATIVE_TTL = 300
+_COVER_NEGATIVE_TTL = 30
 # Таймауты fetch'а: короткий connect — недоступный/зафильтрованный CDN должен
 # отваливаться быстро (залп обложек стартовой страницы иначе виснет по 15с),
 # read длиннее — на медленный канал прокси-выхода: обложка — десятки килобайт.
@@ -193,12 +193,11 @@ _YTIMG_FALLBACKS = ("hqdefault.jpg",)
 
 
 def _ytimg_fallbacks(url: str) -> List[str]:
-    if urllib.parse.urlsplit(url).netloc.lower() != "i.ytimg.com" or not url.endswith(
-        "/maxresdefault.jpg"
-    ):
+    parts = urllib.parse.urlsplit(url)
+    if parts.netloc.lower() != "i.ytimg.com" or not parts.path.endswith("/maxresdefault.jpg"):
         return []
-    base = url[: -len("maxresdefault.jpg")]
-    return [base + name for name in _YTIMG_FALLBACKS]
+    base = parts.path[: -len("maxresdefault.jpg")]
+    return [urllib.parse.urlunsplit((parts.scheme, parts.netloc, base + name, "", "")) for name in _YTIMG_FALLBACKS]
 
 
 def _is_allowed_cover_url(url: str) -> bool:
@@ -337,7 +336,7 @@ async def proxy_external_cover(url: str):
             _cover_inflight.pop(key, None)
 
         task.add_done_callback(_release)
-    return await task
+    return await asyncio.shield(task)
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
@@ -1436,6 +1435,22 @@ def get_disliked_track_ids(
         )
     ).scalars()
     return list(rows)
+
+
+@router.get("/me/disliked/keys", response_model=List[str])
+def get_disliked_track_keys(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        select(Track.id, Track.source, Track.external_id)
+        .join(user_track_skips, user_track_skips.c.track_id == Track.id)
+        .where(user_track_skips.c.user_id == current_user.id, user_track_skips.c.disliked.is_(True))
+    )
+    return list(dict.fromkeys(
+        key for track_id, source, external_id in rows
+        for key in ([f"local:{track_id}", f"{source}:{external_id}"] if source and external_id else [f"local:{track_id}"])
+    ))
 
 
 class ListenEventPayload(BaseModel):

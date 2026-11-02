@@ -218,7 +218,7 @@ def test_prefetch_and_ready_use_new_archive_without_soundcloud(monkeypatch, arch
     monkeypatch.setattr(storage, "warm_music_object", warm)
     monkeypatch.setattr(soundcloud, "preferred_soundcloud_match_for", must_not_search)
 
-    assert asyncio.run(ytdlp.prefetch_ytmusic("VIDEOID1")) == {"status": "cached"}
+    assert asyncio.run(ytdlp._prepare_prefetch_ytmusic("VIDEOID1")) == {"status": "cached"}
     assert asyncio.run(ytdlp.prefetch_ytmusic_ready("VIDEOID1")) == {"ready": True}
     assert warmed == [path]
 

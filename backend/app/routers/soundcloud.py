@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from app.cache import get_cache_async, set_cache_async
+from app.provider_work import audio_call, provider_call
 from app.artist_utils import is_derivative_title, names_whole_artist, resolve_track_artist
 from app.lang import is_cyrillic
 from app.routers.ytdlp import (
@@ -401,7 +402,7 @@ async def _search_soundcloud_uncached(
 
     try:
         raw = await asyncio.wait_for(
-            asyncio.to_thread(_search_blocking, q, limit),
+            provider_call(_search_blocking, q, limit),
             timeout=_SC_SEARCH_BUDGET,
         )
     except asyncio.TimeoutError:
@@ -521,7 +522,7 @@ async def _resolve_and_cache(
     track_id: str, permalink: str, key: str
 ) -> tuple[str, str, Optional[int], bool]:
     try:
-        url, ext, total = await asyncio.to_thread(_resolve_blocking, permalink)
+        url, ext, total = await audio_call(_resolve_blocking, permalink)
     except Exception as ytdlp_exc:  # noqa: BLE001
         # yt-dlp получает метаданные по permalink. SoundCloud иногда отвечает
         # на этот запрос 404, хотя трек с тем же числовым id воспроизводится в
@@ -992,7 +993,7 @@ async def find_ytmusic_equivalent(track_id: str) -> Optional[str]:
         # для базового URL не нужен.
         if ytdlp._ytmusic is None:
             return None
-        raw = await asyncio.to_thread(
+        raw = await provider_call(
             ytdlp._ytmusic.search, f"{artist} {title}", "songs", None, 5
         )
         for item in raw or []:
@@ -1006,7 +1007,7 @@ async def find_ytmusic_equivalent(track_id: str) -> Optional[str]:
             # исполнителей это единственное место, где она лежит, а играется
             # она тем же /api/ytdlp/stream/{videoId}: эндпоинт резолвит любой
             # videoId, а не только из каталога Music.
-            entries = await asyncio.to_thread(
+            entries = await provider_call(
                 _search_youtube_blocking, f"{artist} {title}"
             )
             for entry in entries:
@@ -1348,7 +1349,7 @@ async def _remux_hls_to_cache(cache_id: str, m3u8_url: str, ext: str) -> Optiona
     part_path = f"{final_path}.{os.getpid()}-{uuid.uuid4().hex[:8]}.part"
     container = "mp3" if ext == ".mp3" else "mp4"
     try:
-        ok = await asyncio.to_thread(
+        ok = await provider_call(
             remux_hls_to_file, m3u8_url, part_path, container, _HLS_MAX_BYTES
         )
         if not ok:

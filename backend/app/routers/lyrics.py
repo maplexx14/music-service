@@ -13,7 +13,7 @@ import re
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.cache import get_cache, set_cache
+from app.cache import get_cache_async, set_cache_async
 from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,23 @@ SYNC_DURATION_TOLERANCE = 3
 # Найденный текст не меняется; ненайденный могут добавить на lrclib позже.
 FOUND_TTL = 30 * 24 * 3600
 MISSING_TTL = 24 * 3600
+FAILURE_TTL = 5
+LOOKUP_BUDGET = 8.0
+_lyrics_inflight: dict[str, asyncio.Task] = {}
+
+
+async def _lookup_and_cache(key: str, artist: str, title: str, duration: int) -> dict:
+    try:
+        found = await asyncio.wait_for(_lookup(artist, title, duration), LOOKUP_BUDGET)
+    except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as error:
+        logger.info("lyrics: lookup failed for %s — %s: %s", artist, title, error)
+        await set_cache_async(key + ":failed", True, expire=FAILURE_TTL)
+        raise HTTPException(
+            status_code=502, detail="lyrics provider unavailable", headers={"Retry-After": str(FAILURE_TTL)}
+        )
+    result = {"synced": found.get("synced"), "plain": found.get("plain")}
+    await set_cache_async(key, result, expire=FOUND_TTL if (result["synced"] or result["plain"]) else MISSING_TTL)
+    return result
 
 
 def _strip_timestamps(lrc: str) -> str:
@@ -104,14 +121,23 @@ async def get_lyrics(
 ):
     """Текст трека: {"synced": LRC | null, "plain": str | null}."""
     key = f"lyrics:v1:{artist.strip().lower()}|{title.strip().lower()}|{duration}"
-    cached = get_cache(key)
+    cached = await get_cache_async(key)
     if cached is not None:
         return cached
-    try:
-        found = await _lookup(artist.strip(), title.strip(), duration)
-    except (httpx.HTTPError, ValueError) as error:
-        logger.info("lyrics: lrclib lookup failed for %s — %s: %s", artist, title, error)
-        raise HTTPException(status_code=502, detail="lyrics provider unavailable")
-    result = {"synced": found.get("synced"), "plain": found.get("plain")}
-    set_cache(key, result, expire=FOUND_TTL if (result["synced"] or result["plain"]) else MISSING_TTL)
-    return result
+    if await get_cache_async(key + ":failed"):
+        raise HTTPException(
+            status_code=502, detail="lyrics provider unavailable", headers={"Retry-After": str(FAILURE_TTL)}
+        )
+    task = _lyrics_inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_lookup_and_cache(key, artist.strip(), title.strip(), duration))
+        _lyrics_inflight[key] = task
+
+        def release(done):
+            if _lyrics_inflight.get(key) is done:
+                _lyrics_inflight.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(release)
+    return await asyncio.shield(task)

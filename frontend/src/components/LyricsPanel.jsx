@@ -10,7 +10,7 @@ function LyricsPanel({ isolateTouches = false }) {
   const currentTime = usePlayerStore((s) => s.currentTime)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
-  const { syncedLines, plainText, loading } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading, error, retry } = useLyrics(currentTrack)
   const containerRef = useRef(null)
   const activeRef = useRef(null)
   const [isUserScrolling, setIsUserScrolling] = useState(false)
@@ -82,7 +82,8 @@ function LyricsPanel({ isolateTouches = false }) {
       <div className="lyrics-panel">
         <div className="lyrics-empty">
           <AlignLeft size={32} strokeWidth={1.5} />
-          <div className="lyrics-empty-text">Текст не найден</div>
+          <div className="lyrics-empty-text">{error ? 'Не удалось загрузить текст' : 'Текст не найден'}</div>
+          {error && <button type="button" className="lyrics-retry" onClick={retry}>Повторить</button>}
         </div>
       </div>
     )

@@ -298,7 +298,7 @@ function FullScreenPlayer() {
     setLyricsMode(Boolean(karaokeMode))
   }, [karaokeMode])
 
-  const { syncedLines, plainText, loading: lyricsLoading } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(currentTrack)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
 
   const coverUrl = useMemo(
@@ -659,7 +659,10 @@ function FullScreenPlayer() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сети:
     // кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) handleSkipForward('dislike')
+    if (!wasDislikedBefore) {
+      usePlayerStore.getState().markTrackDisliked(dislikedTrack)
+      handleSkipForward('dislike')
+    }
     try {
       const id = dbTrackId ?? (await materializeTrack(dislikedTrack))
       if (!id) return
@@ -972,10 +975,10 @@ function FullScreenPlayer() {
           type="button"
           className={`fullscreen-tool${lyricsMode ? ' active' : ''}`}
           onClick={toggleLyrics}
-          disabled={!hasLyrics && !lyricsLoading}
+          disabled={!hasLyrics && !lyricsLoading && !lyricsError}
           aria-pressed={lyricsMode}
           aria-label={lyricsMode ? 'Скрыть текст' : 'Показать текст'}
-          title={hasLyrics ? undefined : 'Текст не найден'}
+          title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? undefined : 'Текст не найден'}
         >
           <AlignLeft size={22} />
         </button>

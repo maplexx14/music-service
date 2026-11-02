@@ -284,5 +284,5 @@ def test_prefetch_warms_the_archived_copy(disk, monkeypatch):
     monkeypatch.setattr(ytdlp, "_local_copy_path", archived)
     monkeypatch.setattr(storage, "warm_music_object", fake_warm)
 
-    assert asyncio.run(ytdlp.prefetch_ytmusic("PREFETCH01")) == {"status": "cached"}
+    assert asyncio.run(ytdlp._prepare_prefetch_ytmusic("PREFETCH01")) == {"status": "cached"}
     assert warmed == ["minio://music/external/ytmusic/PREFETCH01.mp3"]

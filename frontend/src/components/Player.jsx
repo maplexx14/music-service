@@ -421,7 +421,7 @@ function PlayerInner() {
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const prefetchNext = usePlayerStore((s) => s.prefetchNext)
 
-  const { syncedLines, plainText } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(currentTrack)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const seekRequest = usePlayerStore((s) => s.seekRequest)
   const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
@@ -2487,7 +2487,10 @@ function PlayerInner() {
     invalidateFlowPreload()
     // Уход на следующий трек — сразу, не дожидаясь материализации и сетевого
     // запроса: кнопка обязана отзываться мгновенно, сеть догонит в фоне.
-    if (!wasDislikedBefore) handleSkipForward('dislike')
+    if (!wasDislikedBefore) {
+      usePlayerStore.getState().markTrackDisliked(dislikedTrack)
+      handleSkipForward('dislike')
+    }
     try {
       const id = dbTrackId ?? (await usePlayerStore.getState().materializeTrack(dislikedTrack))
       if (!id) return
@@ -2795,13 +2798,13 @@ function PlayerInner() {
 
       <div className="player-right">
         <button
-          className={`lyrics-btn${hasLyrics ? '' : ' disabled'}`}
+          className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
           onClick={(event) => {
             event.stopPropagation()
-            if (hasLyrics) openFullScreenWithTransition(true)
+            if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
           }}
-          disabled={!hasLyrics}
-          title={hasLyrics ? 'Текст песни' : 'Текст не найден'}
+          disabled={!hasLyrics && !lyricsError && !lyricsLoading}
+          title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
         >
           <AlignLeft size={18} />
         </button>

@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+from app.provider_work import background as provider_background
 import re
 from itertools import zip_longest
 from types import SimpleNamespace
@@ -26,6 +28,36 @@ router = APIRouter()
 # TTL кэша поиска внешних плейлистов (как _SEARCH_TTL в search.py: выдача
 # не от пользователя, сиды на главной меняются редко).
 _EXTERNAL_PLAYLISTS_TTL = 180
+_EXTERNAL_SEARCH_BUDGET = float(os.getenv("EXTERNAL_SEARCH_BUDGET", "2.5"))
+_search_tasks: set[asyncio.Task] = set()
+
+
+async def _bounded_sources(coroutines, timeout=None):
+    """Return completed sources by one deadline; cancel obsolete provider work."""
+    tasks = [asyncio.create_task(coro) for coro in coroutines]
+    for task in tasks:
+        _search_tasks.add(task)
+
+        def release(done):
+            _search_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(release)
+    try:
+        done, pending = await asyncio.wait(
+            tasks, timeout=_EXTERNAL_SEARCH_BUDGET if timeout is None else timeout
+        )
+        for task in pending:
+            task.cancel()
+        return [
+            (task.exception() or task.result()) if task in done and not task.cancelled() else []
+            for task in tasks
+        ]
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
 # Приоритет источников при дедупе одинаковых треков.
 # В гибриде по умолчанию показываем быстрый ytmusic, но lossless (soulseek)
@@ -342,12 +374,11 @@ async def search_external(
     """
     per_source = max(10, limit)
 
-    results = await asyncio.gather(
+    results = await _bounded_sources([
         ytdlp.ytmusic_artist_catalog(request, q, limit=per_source),
         ytdlp.search_ytmusic(request, q, limit=per_source),
         soundcloud.search_soundcloud(request, q, limit=per_source),
-        return_exceptions=True,
-    )
+    ])
 
     sources: List[List[ExternalTrackResponse]] = []
     for res in results:
@@ -386,6 +417,15 @@ async def _await_catalog(task: asyncio.Future, started: float, loop) -> list | E
         return exc
 
 
+async def _search_catalog(request, q, limit):
+    # Late catalogue work continues in the limited background pool for the cache.
+    token = provider_background.set(True)
+    try:
+        return await asyncio.wait_for(ytdlp.ytmusic_artist_catalog(request, q, limit=limit), 10)
+    finally:
+        provider_background.reset(token)
+
+
 @router.get("/external/grouped", response_model=ExternalSearchGrouped)
 async def search_external_grouped(
     request: Request,
@@ -407,14 +447,17 @@ async def search_external_grouped(
     loop = asyncio.get_running_loop()
     started = loop.time()
     catalog_task = asyncio.ensure_future(
-        ytdlp.ytmusic_artist_catalog(request, q, limit=per_source)
+        _search_catalog(request, q, per_source)
     )
-    songs, sc = await asyncio.gather(
-        ytdlp.search_ytmusic(request, q, limit=per_source),
-        soundcloud.search_soundcloud(request, q, limit=per_source),
-        return_exceptions=True,
-    )
-    catalog = await _await_catalog(catalog_task, started, loop)
+    try:
+        songs, sc = await _bounded_sources([
+            ytdlp.search_ytmusic(request, q, limit=per_source),
+            soundcloud.search_soundcloud(request, q, limit=per_source),
+        ])
+        catalog = await _await_catalog(catalog_task, started, loop)
+    except BaseException:
+        catalog_task.cancel()
+        raise
 
     def ok(res) -> List[ExternalTrackResponse]:
         if isinstance(res, Exception):
@@ -493,10 +536,11 @@ async def search_external_playlists(
             logger.exception("external playlist search failed for %s", source)
             return []
 
-    playlists = _interleave(await asyncio.gather(*(one(s) for s in wanted)))
+    groups = await _bounded_sources([one(s) for s in wanted])
+    playlists = _interleave(groups)
     await set_cache_async(
         cache_key,
         [p.model_dump(mode="json") for p in playlists],
-        expire=_EXTERNAL_PLAYLISTS_TTL,
+        expire=_EXTERNAL_PLAYLISTS_TTL if all(groups) else 15,
     )
     return playlists

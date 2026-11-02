@@ -71,6 +71,8 @@ MIN_ARTIST_GAP = 4
 # Доля запросов выхода из серии, которые получают обычную выдачу (holdout,
 # features.rescue = "holdout"): без неё не с чем сравнить порции спасения.
 RESCUE_HOLDOUT = 0.2
+PROTECTED_ARTIST_SKIP_LIMIT = 3
+RESCUE_NOVEL_SHARE = 0.25
 
 
 def pick_arm(rng: Optional[random.Random] = None) -> str:
@@ -109,6 +111,8 @@ class SessionState:
         # Без затухания: сколько раз артиста в сессии приняли и отвергли.
         self.artist_pos = Counter()
         self.artist_neg = Counter()
+        self.artist_negative_items: dict[str, set] = {}
+        self.protected_artists: set[str] = set()
         self.origin_pos = Counter()
         self.origin_neg = Counter()
         self.novel_pos = Counter()
@@ -130,6 +134,10 @@ class SessionState:
             if artist:
                 self.artist[artist] += _ARTIST_WEIGHTS[code] * weight
                 (self.artist_pos if good else self.artist_neg)[artist] += 1
+                if meta.get("protected_artist"):
+                    self.protected_artists.add(artist)
+                if not good:
+                    self.artist_negative_items.setdefault(artist, set()).add(meta.get("track_key") or item_id)
             target = (
                 (self.origin_pos, self.novel_pos, self.script_pos)
                 if good
@@ -168,11 +176,19 @@ class SessionState:
     def empty(self) -> bool:
         return self.count == 0
 
-    def rejected_artists(self) -> set:
+    def rejected_artists(self, protected: Iterable[str] = ()) -> set:
         """Артисты, которых в этой сессии только отвергали: скип или дизлайк
         и ни одного «понравилось». Лайк или дослушанный трек артиста снимает
         отказ — значит, не понравилась песня, а не он сам."""
-        return {artist for artist, n in self.artist_neg.items() if n and not self.artist_pos[artist]}
+        protected = self.protected_artists | set(protected)
+        return {
+            artist for artist, n in self.artist_neg.items()
+            if n and not self.artist_pos[artist]
+            and (
+                artist not in protected
+                or len(self.artist_negative_items.get(artist, ())) >= PROTECTED_ARTIST_SKIP_LIMIT
+            )
+        }
 
     def accepted_artists(self) -> set:
         """Артисты, которых в этой сессии принимали не реже, чем отвергали."""
@@ -489,8 +505,12 @@ def select(
 
     # Без отвергнутых порядок пула уже не тот, что разносил предрасчёт: разнос
     # артистов (и на стыке с прошлой порцией) нужно делать заново.
+    protected = {
+        primary_of(item) for item in pool
+        if (features.get(identity_of(item)) or {}).get("protected_artist")
+    }
     filtered = (
-        _without_rejected(pool, session.rejected_artists(), primary_of, limit)
+        _without_rejected(pool, session.rejected_artists(protected), primary_of, limit)
         if session is not None
         else pool
     )
@@ -510,7 +530,10 @@ def select(
         chosen = _apply_caps(
             chosen,
             [item for item in ranked if item not in chosen],
-            [(capped, capped_max), (is_liked, liked_max)],
+            [
+                (capped, capped_max), (is_liked, liked_max),
+                (is_novel, max(0, int(limit * RESCUE_NOVEL_SHARE))),
+            ],
         )
         chosen = _cap_artist_count(
             chosen, [item for item in ranked if item not in chosen], primary_of, affinity_of, kind_of
@@ -620,7 +643,7 @@ def artist_meta_key(artist: str) -> str:
 def history_meta(item_id: str, artist: str, features: dict) -> dict:
     """Что помнить об отданном треке для разбора сессии (history["meta"])."""
     row = {"artist": artist_meta_key(artist)}
-    for name in ("origin", "novel", "script"):
+    for name in ("origin", "novel", "script", "protected_artist", "track_key"):
         if features.get(name) is not None:
             row[name] = features[name]
     return row
