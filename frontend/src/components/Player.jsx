@@ -366,7 +366,7 @@ function MiniGhost({ track, slot }) {
         onError={handleCoverError}
       />
       <div className="player-info">
-        <div className="player-track-title">{track.title}</div>
+        <div className="player-track-title" title={track.title}>{track.title}</div>
         <div className="player-track-artist">{splitArtists(track.artist).join(', ')}</div>
       </div>
     </div>
@@ -2652,7 +2652,7 @@ function PlayerInner() {
           )}
         </button>
         <div className="player-info">
-          <div className="player-track-title">{currentTrack.title}</div>
+          <div className="player-track-title" title={currentTrack.title}>{currentTrack.title}</div>
           <div className="player-track-artist">
             {isBuffering ? (
               'Загрузка…'

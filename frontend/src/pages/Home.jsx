@@ -144,7 +144,7 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
         onError={handleCoverError}
       />
       <div className="track-info">
-        <div className="track-title">{track.title}</div>
+        <div className="track-title" title={track.title}>{track.title}</div>
         <ArtistLink artist={track.artist} className="track-artist" />
       </div>
     </div>
@@ -695,7 +695,7 @@ function Home() {
                       onError={handleCoverError}
                     />
                     <div className="playlist-info">
-                      <div className="playlist-name">{release.title}</div>
+                      <div className="playlist-name" title={release.title}>{release.title}</div>
                       <div className="playlist-description">
                         {release.artist} · {RELEASE_TYPE[release.type] || 'релиз'} · {releaseAge(release.date)}
                       </div>
@@ -755,7 +755,7 @@ function Home() {
                       onError={handleCoverError}
                     />
                     <div className="playlist-info">
-                      <div className="playlist-name">{playlist.title}</div>
+                      <div className="playlist-name" title={playlist.title}>{playlist.title}</div>
                       <div className="playlist-description">
                         {playlist.owner ? `${playlist.owner} · ` : ''}
                         {playlist.track_count} треков · SoundCloud
@@ -788,7 +788,7 @@ function Home() {
                       onError={handleCoverError}
                     />
                     <div className="playlist-info">
-                      <div className="playlist-name">{playlist.name}</div>
+                      <div className="playlist-name" title={playlist.name}>{playlist.name}</div>
                       {playlist.description && (
                         <div className="playlist-description">{playlist.description}</div>
                       )}

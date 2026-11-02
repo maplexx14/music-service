@@ -122,7 +122,7 @@ function Sidebar() {
                 />
                 {!isCollapsed && (
                   <div className="sidebar-playlist-text">
-                    <div className="sidebar-playlist-name">{playlist.name}</div>
+                    <div className="sidebar-playlist-name" title={playlist.name}>{playlist.name}</div>
                     <div className="sidebar-playlist-meta">
                       {count} {plural(count, 'трек', 'трека', 'треков')}
                     </div>

@@ -146,12 +146,6 @@
   width: 40px;
 }
 
-.track-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .track-table-cover {
   width: 40px;
   height: 40px;
@@ -279,8 +273,7 @@
     min-width: 0;
   }
 
-  /* Название/артист не должны растягивать строку — обрезаем длинные. */
-  .track-row .track-name,
+  /* Имя артиста остаётся одной строкой; название переносит PlaylistDetail.css. */
   .track-row .track-artist {
     overflow: hidden;
     text-overflow: ellipsis;

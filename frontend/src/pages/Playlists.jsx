@@ -358,7 +358,7 @@ function Playlists() {
                     onError={handleCoverError}
                   />
                   <div className="playlist-info">
-                    <div className="playlist-name">{playlist.name}</div>
+                    <div className="playlist-name" title={playlist.name}>{playlist.name}</div>
                     {playlist.description && (
                       <div className="playlist-description">{playlist.description}</div>
                     )}

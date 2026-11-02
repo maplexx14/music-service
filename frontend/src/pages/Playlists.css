@@ -80,6 +80,7 @@
 }
 
 .playlist-card {
+  min-width: 0;
   background-color: var(--surface-1);
   border-radius: 8px;
   padding: 16px;
@@ -163,6 +164,13 @@
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .playlist-description {
@@ -170,6 +178,11 @@
   color: var(--text-secondary);
   margin-bottom: 8px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .playlist-tracks-count {
@@ -331,7 +344,7 @@
 
   /* Сетка плейлистов — 2 колонки на телефоне. */
   .playlists-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
   }
 

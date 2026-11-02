@@ -12,6 +12,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 18px;
   z-index: 1000;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
@@ -238,7 +239,11 @@
   font-weight: 600;
   line-height: 1.2;
   color: var(--text-primary);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
   margin-bottom: 4px;
@@ -392,7 +397,7 @@
 }
 
 .player-center {
-  flex: 1;
+  flex: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -474,13 +479,32 @@
 }
 
 .player-right {
-  flex: 1;
+  flex: none;
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 6px;
   position: relative;
   z-index: 1;
+}
+
+/* На планшетах сохраняем место для названия; остальные действия доступны
+   в полном плеере, который открывается по обложке или названию. */
+@media (min-width: 769px) and (max-width: 1100px) {
+  .player-track-actions,
+  .player-right .lyrics-btn,
+  .player-controls .control-btn:first-child,
+  .player-controls .control-btn:last-child {
+    display: none;
+  }
+
+  .player-left {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .player-right .volume-slider {
+    width: 56px;
+  }
 }
 
 @media (max-width: 768px) {
@@ -491,6 +515,7 @@
     bottom: var(--player-bottom, calc(var(--safe-bottom) + 80px));
     height: var(--player-height, 72px);
     padding: 0 16px;
+    gap: 10px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;
     background: rgba(10, 10, 14, 0.65);
@@ -509,7 +534,8 @@
   }
 
   .player-left {
-    flex: 2;
+    flex: 1;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 10px;
   }
 
@@ -523,10 +549,6 @@
   .player-cover {
     width: 42px;
     height: 42px;
-  }
-
-  .player-center {
-    flex: 1;
   }
 
   .player-right,

@@ -6,6 +6,7 @@
 }
 
 .playlist-header-cover {
+  flex: none;
   width: 232px;
   height: 232px;
   object-fit: cover;
@@ -24,6 +25,7 @@
 
 .playlist-header-info {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -44,6 +46,7 @@
   color: var(--text-primary);
   margin-bottom: 16px;
   line-height: 1;
+  overflow-wrap: anywhere;
   /* Unbounded — широкий дисплейный гротеск: на 72px межбуквенные просветы
      читаются рыхло, tightened по правилу «крупный кегль — отрицательный
      трекинг». */
@@ -182,12 +185,12 @@ html.power-save .liked-heart-beat {
 
 /* Название шире альбома; колонка длительности — фиксированная. В таблице
    альбома колонки «Альбом» нет, и название забирает всё оставшееся. */
-.tracks-table th:nth-child(2):nth-last-child(4) {
-  width: 55%;
+.tracks-table th:nth-child(3):nth-last-child(3) {
+  width: 24%;
 }
 
 .tracks-table th:nth-last-child(2) {
-  width: 120px;
+  width: 88px;
 }
 
 /* Колонка действий: при fixed min-width ячейки не работает, ширину держит
@@ -286,6 +289,17 @@ html.power-save .liked-heart-beat {
   font-weight: 500;
   color: var(--text-primary);
   margin-bottom: 4px;
+}
+
+/* Две строки дают прочитать больше названия и сохраняют компактный список.
+   Специфичность нужна из-за общих правил страницы «Понравившиеся». */
+.track-row .track-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .track-artist {
@@ -521,7 +535,9 @@ html.power-save .liked-heart-beat {
   .playlist-tracks {
     margin-top: 20px;
   }
+}
 
+@media (max-width: 1024px) {
   /* Прячем шапку таблицы и превращаем строки во флекс-ряды. */
   .tracks-table thead {
     display: none;
@@ -558,7 +574,7 @@ html.power-save .liked-heart-beat {
     display: none;
   }
 
-  .track-row .track-name-cell {
+  .tracks-table .track-row .track-name-cell {
     display: block;
     flex: 1;
     min-width: 0;

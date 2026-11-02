@@ -867,7 +867,7 @@ function FullScreenPlayer() {
 
           <div className="fullscreen-info">
             <div>
-              <div className="fullscreen-track-name">{shownTrack.title}</div>
+              <div className="fullscreen-track-name" title={shownTrack.title}>{shownTrack.title}</div>
               <ArtistLink
                 artist={shownTrack.artist}
                 className="fullscreen-artist"
