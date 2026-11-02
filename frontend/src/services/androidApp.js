@@ -4,6 +4,26 @@ import { usePlayerStore } from '../store/playerStore'
 
 export const isAndroidApp = () => typeof window !== 'undefined' && !!window.__boltAndroid
 
+// Намерение продолжать очередь отдельно от mediaSession.playbackState:
+// загрузка нового src временно ставит элемент на паузу, но фоновый сервис
+// в этот момент должен продолжать защищать WebView от сна.
+export function subscribeAndroidPlayback() {
+  if (!isAndroidApp() || typeof window.__boltSetPlaybackRequested !== 'function') return
+  let previous
+  const sync = (state) => {
+    const requested = Boolean(state.currentTrack && state.isPlaying)
+    if (requested === previous) return
+    previous = requested
+    window.__boltSetPlaybackRequested(requested)
+  }
+  sync(usePlayerStore.getState())
+  const unsubscribe = usePlayerStore.subscribe(sync)
+  return () => {
+    unsubscribe()
+    window.__boltSetPlaybackRequested(false)
+  }
+}
+
 // Действие из ярлыка на иконке приложения: оболочка открывает /?app=<действие>.
 export function runAppAction(action) {
   if (action !== 'wave') return

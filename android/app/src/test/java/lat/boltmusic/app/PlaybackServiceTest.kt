@@ -1,6 +1,10 @@
 package lat.boltmusic.app
 
 import android.app.Notification
+import android.app.NotificationManager
+import android.net.wifi.WifiManager
+import android.os.Looper
+import android.os.PowerManager
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -19,11 +23,14 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
 import org.robolectric.util.ReflectionHelpers
 import org.robolectric.util.ReflectionHelpers.ClassParameter
+import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 30, 35])
+@LooperMode(LooperMode.Mode.PAUSED)
 class PlaybackServiceTest {
     private lateinit var controller: ServiceController<PlaybackService>
     private lateinit var service: PlaybackService
@@ -53,6 +60,130 @@ class PlaybackServiceTest {
 
     private fun notification(): Notification = shadowOf(service).lastForegroundNotification
 
+    private fun assertProtection(active: Boolean) {
+        assertEquals(active, ReflectionHelpers.getField<Boolean>(service, "isForeground"))
+        assertEquals(active, ReflectionHelpers.getField<PowerManager.WakeLock>(service, "wakeLock").isHeld)
+        assertEquals(active, ReflectionHelpers.getField<WifiManager.WifiLock>(service, "wifiLock").isHeld)
+    }
+
+    private fun playbackState(): PlaybackStateCompat =
+        ReflectionHelpers.callInstanceMethod(service, "buildPlaybackState")
+
+    private fun sessionCallback(): MediaSessionCompat.Callback {
+        val session = ReflectionHelpers.getField<MediaSessionCompat>(service, "session")
+        val implementation = ReflectionHelpers.getField<Any>(session, "mImpl")
+        return ReflectionHelpers.getField(implementation, "mCallback")
+    }
+
+    @Test
+    fun sourceReloadInBackgroundKeepsProtectionAndShowsBuffering() {
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackState("paused")
+        PlayerHub.setMetadata(PlayerHub.Metadata("Следующая композиция", "Исполнитель", "Альбом", ""))
+        PlayerHub.setPosition(200.0, 0.0, 1.0)
+
+        assertProtection(true)
+        assertEquals(PlaybackStateCompat.STATE_BUFFERING, playbackState().state)
+        assertEquals(0f, playbackState().playbackSpeed)
+        val context = RuntimeEnvironment.getApplication()
+        for (remoteViews in listOf(notification().contentView, notification().bigContentView)) {
+            val view = remoteViews.apply(context, FrameLayout(context))
+            assertEquals(context.getString(R.string.playback_pause), view.findViewById<View>(R.id.notification_toggle).contentDescription)
+        }
+        val toggle = notification().actions.first { it.title == "Пауза" }
+        service.onStartCommand(shadowOf(toggle.actionIntent).savedIntent, 0, 2)
+        assertEquals("pause", commands.last())
+        assertProtection(false)
+
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackState("playing")
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(2))
+        assertProtection(true)
+        assertEquals(PlaybackStateCompat.STATE_PLAYING, playbackState().state)
+    }
+
+    @Test
+    fun initialLoadIsProtectedBeforeTheFirstPlayingEvent() {
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackState("none")
+        assertProtection(true)
+        assertEquals(PlaybackStateCompat.STATE_BUFFERING, playbackState().state)
+        assertFalse(shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test
+    fun explicitPauseReleasesProtectionBeforeTheMediaPauseEventArrives() {
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackRequested(false)
+        assertProtection(false)
+        PlayerHub.setPlaybackState("paused")
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(2))
+        assertProtection(false)
+        assertEquals(PlaybackStateCompat.STATE_PAUSED, playbackState().state)
+    }
+
+    @Test
+    fun failedLoadTimesOutEvenWhenMetadataAndPositionKeepUpdating() {
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackState("paused")
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30))
+        assertProtection(true)
+        PlayerHub.setPosition(200.0, 0.0, 1.0)
+        PlayerHub.setMetadata(PlayerHub.metadata!!.copy(title = "Следующая композиция"))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(31))
+        assertProtection(false)
+        assertEquals(PlaybackStateCompat.STATE_PAUSED, playbackState().state)
+
+        val updated = shadowOf(service.getSystemService(NotificationManager::class.java)).getNotification(1)
+        val toggle = updated.actions.first { it.title == "Играть" }
+        service.onStartCommand(shadowOf(toggle.actionIntent).savedIntent, 0, 2)
+        assertEquals("play", commands.last())
+        assertProtection(true)
+        assertEquals(PlaybackStateCompat.STATE_BUFFERING, playbackState().state)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30))
+        assertProtection(true)
+        PlayerHub.setPlaybackState("playing")
+        assertProtection(true)
+    }
+
+    @Test
+    fun systemPlayAndPauseUpdateProtectionBeforeTheWebViewResponds() {
+        PlayerHub.setPlaybackRequested(false)
+        PlayerHub.setPlaybackState("paused")
+        sessionCallback().onPlay()
+        assertEquals("play", commands.last())
+        assertProtection(true)
+        assertEquals(PlaybackStateCompat.STATE_BUFFERING, playbackState().state)
+        sessionCallback().onPause()
+        assertEquals("pause", commands.last())
+        assertProtection(false)
+    }
+
+    @Test
+    fun olderFrontendsStillReleaseProtectionWhenTheirPlaybackStateIsPaused() {
+        PlayerHub.setPlaybackState("paused")
+        assertProtection(false)
+        PlayerHub.setPlaybackState("playing")
+        assertProtection(true)
+    }
+
+    @Test
+    fun destroyedServiceCannotReacquireLocksAfterItsReplacementStarts() {
+        PlayerHub.setPlaybackRequested(true)
+        PlayerHub.setPlaybackState("paused")
+        val previous = service
+        controller.destroy()
+        controller = Robolectric.buildService(PlaybackService::class.java).create()
+        service = controller.get()
+        service.onStartCommand(null, 0, 2)
+        assertProtection(true)
+        // Загрузка обложки может завершиться уже после onDestroy старого сервиса.
+        ReflectionHelpers.callInstanceMethod<Unit>(previous, "render")
+        assertFalse(ReflectionHelpers.getField<PowerManager.WakeLock>(previous, "wakeLock").isHeld)
+        assertFalse(ReflectionHelpers.getField<WifiManager.WifiLock>(previous, "wifiLock").isHeld)
+        assertProtection(true)
+    }
+
     @Test
     fun notificationButtonsDispatchPreviousPauseAndNextAsDistinctCommands() {
         val buttons = notification().actions.take(3)
@@ -66,11 +197,9 @@ class PlaybackServiceTest {
 
     @Test
     fun systemSessionAndLegacyArrowsBothSwitchTracks() {
-        val session = ReflectionHelpers.getField<MediaSessionCompat>(service, "session")
         // Robolectric не реализует Binder-команды MediaController. Вызываем
         // callback, который сервис действительно зарегистрировал в сессии.
-        val implementation = ReflectionHelpers.getField<Any>(session, "mImpl")
-        val callback = ReflectionHelpers.getField<MediaSessionCompat.Callback>(implementation, "mCallback")
+        val callback = sessionCallback()
         callback.onSkipToPrevious()
         callback.onSkipToNext()
         callback.onRewind()

@@ -19,6 +19,8 @@ object PlayerHub {
         private set
     var playbackState: String = "none"
         private set
+    // null — старый фронт, который сообщает только mediaSession.playbackState.
+    private var playbackRequested: Boolean? = null
     var actions: Set<String> = emptySet()
         private set
 
@@ -52,6 +54,14 @@ object PlayerHub {
     }
 
     val isPlaying: Boolean get() = playbackState == "playing"
+    val hasPlaybackRequest: Boolean get() = playbackRequested != null
+    val isPlaybackRequested: Boolean get() = playbackRequested ?: isPlaying
+
+    fun setPlaybackRequested(value: Boolean) {
+        if (value == playbackRequested) return
+        playbackRequested = value
+        notifyListeners()
+    }
 
     fun setMetadata(value: Metadata?) {
         metadata = value
@@ -107,6 +117,7 @@ object PlayerHub {
     fun reset() {
         metadata = null
         playbackState = "none"
+        playbackRequested = null
         actions = emptySet()
         liked = false
         disliked = false

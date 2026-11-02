@@ -146,6 +146,12 @@
     send({ t: 'feedback', liked: !!liked, disliked: !!disliked })
   }
 
+  // Во время смены src mediaSession сообщает paused. Отдельное намерение
+  // продолжать очередь не даёт сервису снять foreground и wake lock в этом окне.
+  window.__boltSetPlaybackRequested = function (requested) {
+    send({ t: 'requested', v: !!requested })
+  }
+
   // Системный лист «Поделиться» вместо копирования в буфер.
   try {
     Object.defineProperty(navigator, 'share', {

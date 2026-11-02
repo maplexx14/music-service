@@ -47,13 +47,24 @@ class PlaybackService : Service() {
     private var artworkUrl: String? = null
     private var artwork: Bitmap? = null
     private var isForeground = false
+    private var destroyed = false
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var bufferingTimeoutScheduled = false
+    private var bufferingExpired = false
+    private val bufferingTimeout = Runnable {
+        bufferingTimeoutScheduled = false
+        bufferingExpired = true
+        render()
+    }
+    private val keepPlaybackActive: Boolean
+        get() = PlayerHub.isPlaybackRequested && !bufferingExpired
 
     private val listener: () -> Unit = { render() }
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         createChannel()
         session = MediaSessionCompat(this, "bolt").apply {
             setSessionActivity(openAppIntent())
@@ -65,21 +76,21 @@ class PlaybackService : Service() {
                 putBoolean("android.media.playback.ALWAYS_RESERVE_SPACE_FOR.ACTION_SKIP_TO_NEXT", true)
             })
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() = PlayerHub.dispatch("play")
-                override fun onPause() = PlayerHub.dispatch("pause")
-                override fun onSkipToNext() = PlayerHub.dispatch("nexttrack")
-                override fun onSkipToPrevious() = PlayerHub.dispatch("previoustrack")
+                override fun onPlay() = dispatchMediaAction("play")
+                override fun onPause() = dispatchMediaAction("pause")
+                override fun onSkipToNext() = dispatchMediaAction("nexttrack")
+                override fun onSkipToPrevious() = dispatchMediaAction("previoustrack")
                 // Старые прошивки могут прислать rewind/fast-forward даже
                 // для стрелок перехода между песнями.
-                override fun onFastForward() = PlayerHub.dispatch("nexttrack")
-                override fun onRewind() = PlayerHub.dispatch("previoustrack")
+                override fun onFastForward() = dispatchMediaAction("nexttrack")
+                override fun onRewind() = dispatchMediaAction("previoustrack")
                 override fun onStop() {
                     // Смахнули уведомление на паузе: убираем плеер до следующего play.
-                    PlayerHub.dispatch("pause")
+                    dispatchMediaAction("pause")
                     stopSelf()
                 }
-                override fun onSeekTo(pos: Long) = PlayerHub.dispatch("seekto", pos / 1000.0)
-                override fun onCustomAction(action: String, extras: Bundle?) = PlayerHub.dispatch(action)
+                override fun onSeekTo(pos: Long) = dispatchMediaAction("seekto", pos / 1000.0)
+                override fun onCustomAction(action: String, extras: Bundle?) = dispatchMediaAction(action)
             })
             isActive = true
         }
@@ -93,15 +104,15 @@ class PlaybackService : Service() {
         // Явные команды обходят преобразование кнопок уведомления в media-key
         // события прошивкой. Гарнитура и системная сессия остаются на callbacks.
         when (intent?.action) {
-            ACTION_PREVIOUS -> PlayerHub.dispatch("previoustrack")
-            ACTION_NEXT -> PlayerHub.dispatch("nexttrack")
-            ACTION_TOGGLE -> PlayerHub.dispatch(if (PlayerHub.isPlaying) "pause" else "play")
+            ACTION_PREVIOUS -> dispatchMediaAction("previoustrack")
+            ACTION_NEXT -> dispatchMediaAction("nexttrack")
+            ACTION_TOGGLE -> dispatchMediaAction(if (keepPlaybackActive) "pause" else "play")
             ACTION_STOP -> {
-                PlayerHub.dispatch("pause")
+                dispatchMediaAction("pause")
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_LIKE, ACTION_DISLIKE -> PlayerHub.dispatch(intent.action!!)
+            ACTION_LIKE, ACTION_DISLIKE -> dispatchMediaAction(intent.action!!)
             else -> MediaButtonReceiver.handleIntent(session, intent)
         }
         render()
@@ -110,12 +121,34 @@ class PlaybackService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun dispatchMediaAction(action: String, seekTime: Double? = null) {
+        if (action != "pause") {
+            // Повтор с системного плеера открывает новое окно загрузки,
+            // даже если предыдущая попытка уже исчерпала минутный таймаут.
+            mainHandler.removeCallbacks(bufferingTimeout)
+            bufferingTimeoutScheduled = false
+            bufferingExpired = false
+        }
+        if (PlayerHub.hasPlaybackRequest) {
+            // Защита меняется до асинхронного ответа WebView на команду.
+            when (action) {
+                "play", "nexttrack", "previoustrack" -> PlayerHub.setPlaybackRequested(true)
+                "pause" -> PlayerHub.setPlaybackRequested(false)
+            }
+        }
+        PlayerHub.dispatch(action, seekTime)
+        render()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         stopSelf()
     }
 
     override fun onDestroy() {
+        destroyed = true
+        isRunning = false
         PlayerHub.removeListener(listener)
+        mainHandler.removeCallbacksAndMessages(null)
         releaseLocks()
         session.isActive = false
         session.release()
@@ -126,17 +159,19 @@ class PlaybackService : Service() {
     }
 
     private fun render() {
+        if (destroyed) return
         val meta = PlayerHub.metadata
-        if (meta == null || PlayerHub.playbackState == "none") {
+        if (meta == null || (PlayerHub.playbackState == "none" && !PlayerHub.isPlaybackRequested)) {
             stopSelf()
             return
         }
+        updateBufferingTimeout()
         loadArtwork(meta.artworkUrl)
         session.setMetadata(buildMetadata(meta))
         session.setPlaybackState(buildPlaybackState())
 
         val notification = buildNotification(meta)
-        if (PlayerHub.isPlaying) {
+        if (keepPlaybackActive) {
             acquireLocks()
             goForeground(notification)
         } else {
@@ -147,6 +182,19 @@ class PlaybackService : Service() {
                 isForeground = false
             }
             notify(notification)
+        }
+    }
+
+    private fun updateBufferingTimeout() {
+        if (PlayerHub.isPlaying || !PlayerHub.isPlaybackRequested) {
+            mainHandler.removeCallbacks(bufferingTimeout)
+            bufferingTimeoutScheduled = false
+            bufferingExpired = false
+        } else if (!bufferingTimeoutScheduled && !bufferingExpired) {
+            // paused между треками — ещё не отказ от воспроизведения.
+            // Но при недоступной сети или системной паузе не держим CPU вечно.
+            bufferingTimeoutScheduled = true
+            mainHandler.postDelayed(bufferingTimeout, BUFFERING_PROTECTION_MS)
         }
     }
 
@@ -214,9 +262,10 @@ class PlaybackService : Service() {
         // Перемотка остаётся на ползунке (SEEK_TO). FAST_FORWARD/REWIND
         // заставляют некоторые системные виджеты подменять previous/next.
 
-        val state = when (PlayerHub.playbackState) {
-            "playing" -> PlaybackStateCompat.STATE_PLAYING
-            "paused" -> PlaybackStateCompat.STATE_PAUSED
+        val state = when {
+            PlayerHub.isPlaying -> PlaybackStateCompat.STATE_PLAYING
+            keepPlaybackActive -> PlaybackStateCompat.STATE_BUFFERING
+            PlayerHub.playbackState == "paused" || bufferingExpired -> PlaybackStateCompat.STATE_PAUSED
             else -> PlaybackStateCompat.STATE_NONE
         }
         val rate = if (PlayerHub.isPlaying) PlayerHub.rate.toFloat() else 0f
@@ -256,7 +305,7 @@ class PlaybackService : Service() {
     }
 
     private fun buildNotification(meta: PlayerHub.Metadata?): Notification {
-        val playing = PlayerHub.isPlaying
+        val playing = keepPlaybackActive
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_bolt)
             .setContentTitle(meta?.title ?: getString(R.string.app_name))
@@ -330,11 +379,11 @@ class PlaybackService : Service() {
             bindNotificationButton(this, R.id.notification_toggle, ACTION_TOGGLE, enabled = true)
             setImageViewResource(
                 R.id.notification_toggle,
-                if (PlayerHub.isPlaying) R.drawable.ic_action_pause else R.drawable.ic_action_play,
+                if (keepPlaybackActive) R.drawable.ic_action_pause else R.drawable.ic_action_play,
             )
             setContentDescription(
                 R.id.notification_toggle,
-                getString(if (PlayerHub.isPlaying) R.string.playback_pause else R.string.playback_play),
+                getString(if (keepPlaybackActive) R.string.playback_pause else R.string.playback_play),
             )
 
             if (expanded) {
@@ -445,13 +494,11 @@ class PlaybackService : Service() {
                 .apply { setReferenceCounted(false) }
         }
         if (wifiLock == null) {
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-            } else {
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            }
+            // LOW_LATENCY действует только при включённом экране и приложении
+            // на переднем плане — для фонового потока нужен HIGH_PERF.
+            // На Android 14+ дальнейший выбор режима Wi-Fi определяет система.
             wifiLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
-                .createWifiLock(mode, "bolt:playback")
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "bolt:playback")
                 .apply { setReferenceCounted(false) }
         }
         wakeLock?.takeIf { !it.isHeld }?.acquire()
@@ -477,7 +524,10 @@ class PlaybackService : Service() {
     }
 
     companion object {
+        internal var isRunning = false
+            private set
         private const val TAG = "BoltPlayback"
+        private const val BUFFERING_PROTECTION_MS = 60_000L
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_PREVIOUS = "lat.boltmusic.app.PREVIOUS"

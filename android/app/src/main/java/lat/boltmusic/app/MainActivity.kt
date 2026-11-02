@@ -332,6 +332,10 @@ class MainActivity : ComponentActivity() {
                 PlayerHub.setPlaybackState(message.optString("v", "none"))
                 syncPlaybackService()
             }
+            "requested" -> {
+                PlayerHub.setPlaybackRequested(message.optBoolean("v"))
+                syncPlaybackService()
+            }
             "pos" -> PlayerHub.setPosition(
                 message.optDouble("d", 0.0),
                 message.optDouble("p", 0.0),
@@ -355,7 +359,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun syncPlaybackService() {
-        if (!PlayerHub.isPlaying || PlayerHub.metadata == null) return
+        if (!PlayerHub.isPlaybackRequested || PlayerHub.metadata == null || PlaybackService.isRunning) return
         askNotificationPermission()
         try {
             ContextCompat.startForegroundService(this, Intent(this, PlaybackService::class.java))

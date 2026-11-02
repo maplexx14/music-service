@@ -36,7 +36,7 @@ import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality
 import * as engine from '../services/audioEngine'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
-import { isAndroidApp, sendTrackFeedback } from '../services/androidApp'
+import { isAndroidApp, sendTrackFeedback, subscribeAndroidPlayback } from '../services/androidApp'
 
 // Сколько ждать фонового прогрева hi-res обложки (см. эффект прогрева).
 const COVER_WARM_TIMEOUT_MS = 10000
@@ -376,6 +376,8 @@ function MiniGhost({ track, slot }) {
 function PlayerInner() {
   // Определяем платформу для iOS-специфичной логики
   const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+
+  useEffect(subscribeAndroidPlayback, [])
 
   // Атомарные селекторы вместо деструктуризации всего store: подписка на
   // весь store означала перерисовку всего Player на КАЖДОМ изменении любого
@@ -880,10 +882,12 @@ function PlayerInner() {
       // «нет аудио» и поход в PWA. Вместо самолечения честно показываем паузу:
       // на виджете появляется рабочая ▶, её нажатие уже жест, и handlers.play
       // делает ровно то же самое, но легально.
-      if (document.hidden) {
+      if (document.hidden && !isAndroidApp()) {
         syncSystemPlaybackState('paused')
         return
       }
+      // WebView в APK разрешает play() без жеста. Фоновый сервис держит
+      // процесс на время загрузки, поэтому зависший запрос можно перезапустить.
       audio.load()
       playWithDiag(audio, 'kickStalled:load')
     }
@@ -1460,14 +1464,15 @@ function PlayerInner() {
   // заблокированном экране нам больше не нужно ни load(), ни успешная загрузка
   // нового потока — только play() на уже тёплом элементе.
   //
-  // Медленный путь (буфера нет) РАЗРЕШЁН ТОЛЬКО НА ВИДИМОМ ЭКРАНЕ. В фоне он
+  // Медленный путь (буфера нет) в браузере разрешён только на видимом экране. В фоне он
   // даёт ровно тот отказ, ради которого всё это писалось: iOS принимает play()
   // и рапортует системе «играем», но поток не начинает грузиться — на экране
   // блокировки идёт время (ОС экстраполирует его из setPositionState), а звука
   // нет. Молчаливое «играет» хуже, чем не переключиться вовсе: очередь уезжает
   // вперёд, трек считается прослушанным, и вернуть звук можно только руками.
-  // Поэтому в фоне вместо старта с нуля запускаем прогрев и честно отвечаем
-  // «не смог» — вызывающая сторона не двигает очередь.
+  // Поэтому в фоне браузера вместо старта с нуля запускаем прогрев и отвечаем
+  // «не смог». В Android APK WebView разрешает play() без жеста, а сервис
+  // защищает загрузку от сна: отсутствие прогрева не должно останавливать очередь.
   //
   // Возвращает true, если воспроизведение действительно начато.
   const playAdjacentNow = (offset) => {
@@ -1571,7 +1576,7 @@ function PlayerInner() {
       return true
     }
 
-    if (document.hidden) {
+    if (document.hidden && !isAndroidApp()) {
       diag('swap:refused:bg', { offset })
       // Отказ не должен быть тупиком: заряжаем элемент прямо сейчас, чтобы
       // следующая попытка (авто по onIdleReady либо повторное нажатие) прошла
