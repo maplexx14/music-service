@@ -488,6 +488,25 @@
   z-index: 1;
 }
 
+/* На широком экране сохраняем исходную раскладку: управление по центру,
+   название в одну строку, громкость у правого края. */
+@media (min-width: 1280px) {
+  .player {
+    gap: 0;
+  }
+
+  .player-center,
+  .player-right {
+    flex: 1;
+  }
+
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
+  }
+}
+
 /* Сжимаем отступы, сохраняя все кнопки на планшетах и узких мониторах. */
 @media (min-width: 769px) and (max-width: 1200px) {
   .player {
