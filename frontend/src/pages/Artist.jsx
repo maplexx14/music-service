@@ -6,6 +6,7 @@ import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge, artistCacheKey } from '../services/pageCache'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
 import Carousel from '../components/Carousel'
 import { useLazyBatch } from '../hooks/useLazyBatch'
@@ -190,16 +191,12 @@ function Artist() {
       setLoading(true)
     }
     try {
-      const { data } = await api.get('/artists', { params: { name } })
+      const { data } = await api.get('/artists', { params: { name }, skipErrorToast: true })
       writeCache(key, data)
       applyArtist(data)
     } catch (error) {
       console.error('Error fetching artist:', error)
       // Фоновое обновление упало — на экране остаётся кэш, уходить некуда.
-      if (!cached) {
-        toast.error('Не удалось загрузить страницу исполнителя')
-        navigate(-1)
-      }
     } finally {
       setLoading(false)
     }
@@ -329,7 +326,7 @@ function Artist() {
     )
   }
 
-  if (!artist) return null
+  if (!artist) return <PageLoadError title={`Не удалось загрузить ${name}`} onRetry={fetchArtist} />
 
   // Альбомы и всё остальное (синглы, EP) — двумя каруселями: в одной ленте
   // сингл выглядит таким же релизом, как двойной альбом.

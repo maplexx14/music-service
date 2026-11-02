@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { useAddToPlaylistStore } from '../store/addToPlaylistStore'
 import { useCensorDialogStore } from '../store/censorDialogStore'
-import { canGoBack, isAndroid, isStandalone, isTabRoot, tabOf } from '../services/navigation'
+import { canGoBack, isAndroid, isStandalone, isTabRoot, tabForLocation } from '../services/navigation'
 import { toast } from '../store/toastStore'
 import { isAndroidApp } from '../services/androidApp'
 
@@ -53,12 +53,14 @@ export function usePwaBackHandler() {
     isAddOpen,
     isCensorOpen,
     pathname: location.pathname,
+    tab: tabForLocation(location),
   })
   stateRef.current = {
     isFullScreen,
     isAddOpen,
     isCensorOpen,
     pathname: location.pathname,
+    tab: tabForLocation(location),
   }
 
   // APK: системный back сначала спрашивает страницу, а не историю WebView.
@@ -85,12 +87,17 @@ export function usePwaBackHandler() {
       }
 
       const pathname = window.location.pathname
+      if (isTabRoot(pathname)) {
+        if (pathname === '/') return false
+        navigate('/', { replace: true })
+        return true
+      }
       if (canGoBack()) {
         navigate(-1)
         return true
       }
       if (pathname !== '/') {
-        navigate(isTabRoot(pathname) ? '/' : tabOf(pathname), { replace: true })
+        navigate(tabForLocation({ pathname, state: window.history.state?.usr }), { replace: true })
         return true
       }
       // Только на главной без открытых окон оболочка может свернуть APK.
@@ -196,7 +203,7 @@ export function usePwaBackHandler() {
       isHandlingPopRef.current = true
 
       try {
-        const { isFullScreen: fs, isAddOpen: add, isCensorOpen: cen, pathname } = stateRef.current
+        const { isFullScreen: fs, isAddOpen: add, isCensorOpen: cen, pathname, tab } = stateRef.current
 
         // Приоритет 1: Открытые диалоги
         if (cen) {
@@ -223,12 +230,12 @@ export function usePwaBackHandler() {
 
         // Приоритет 3: Вложенный экран при холодном старте (в истории пусто, но экран вложенный)
         if (!isTabRoot(pathname) && !canGoBack()) {
-          navigate(tabOf(pathname), { replace: true })
+          navigate(tab, { replace: true })
           return
         }
 
         // Приоритет 4: Второстепенная вкладка (/search, /liked, /playlists) при отсутствии истории -> возврат на Главную (/)
-        if (isTabRoot(pathname) && pathname !== '/' && !canGoBack()) {
+        if (isTabRoot(pathname) && pathname !== '/') {
           navigate('/', { replace: true })
           return
         }

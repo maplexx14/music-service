@@ -14,6 +14,7 @@ import {
   LIBRARY_CACHE_KEY,
 } from '../services/pageCache'
 import { useImportStore } from '../store/importStore'
+import { isTabRoot, tabForLocation } from '../services/navigation'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { plural } from '../utils/format'
@@ -72,7 +73,7 @@ function Sidebar() {
       <nav className="sidebar-nav">
         {navItems.map((item) => {
           const Icon = item.icon
-          const isActive = location.pathname === item.path
+          const isActive = isTabRoot(item.path) ? tabForLocation(location) === item.path : location.pathname === item.path
           return (
             <Link
               key={item.path}

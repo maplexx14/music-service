@@ -10,6 +10,7 @@ import { useAuthStore } from '../store/authStore'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import api from '../services/api'
+import { peekCache, writeCache } from '../services/pageCache'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { splitArtists } from '../utils/artists'
@@ -157,14 +158,13 @@ const TrackCard = memo(function TrackCard({ track, queue }) {
 // выдача рисуется сразу, а свежая подменяет её по ответу; если выдача та же
 // (кэш бэка), React оставляет те же <img>. Снимок привязан к юзеру: после
 // смены аккаунта чужая выдача не покажется.
-let homeSnapshot = null
-
 function readHomeSnapshot(userId) {
-  return homeSnapshot && homeSnapshot.userId === userId ? homeSnapshot : null
+  const snapshot = peekCache('home:snapshot')
+  return snapshot?.userId === userId ? snapshot : null
 }
 
 function writeHomeSnapshot(userId, patch) {
-  homeSnapshot = { ...(readHomeSnapshot(userId) || { userId }), ...patch }
+  writeCache('home:snapshot', { ...(readHomeSnapshot(userId) || { userId }), ...patch })
 }
 
 // Индикатор pull-to-refresh: выезжает из-под шапки по мере жеста. Состояние

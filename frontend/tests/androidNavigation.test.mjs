@@ -6,7 +6,7 @@ import vm from 'node:vm'
 const hookSource = await readFile(new URL('../src/hooks/usePwaBackHandler.js', import.meta.url), 'utf8')
 const bridgeSource = await readFile(new URL('../../android/app/src/main/assets/bridge.js', import.meta.url), 'utf8')
 
-async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullscreen = false, karaoke = false } = {}) {
+async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullscreen = false, karaoke = false, tab } = {}) {
   const effects = []
   const navigation = []
   const pushes = []
@@ -32,7 +32,7 @@ async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullsc
     __boltNativeBack: native,
     location: { pathname, href: `https://boltmusic.lat${pathname}` },
     history: {
-      state: { idx },
+      state: { idx, usr: { __boltTab: tab } },
       pushState(state) { this.state = state; pushes.push(state) },
       back() { navigation.push('history.back') },
     },
@@ -54,7 +54,7 @@ async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullsc
       isStandalone: true,
       canGoBack: () => window.history.state.idx > 0,
       isTabRoot: (path) => ['/', '/search', '/liked', '/playlists'].includes(path),
-      tabOf: (path) => path.startsWith('/albums') ? '/playlists' : path.startsWith('/artists') ? '/search' : '/',
+      tabForLocation: ({ pathname, state }) => state?.__boltTab ?? (pathname.startsWith('/albums') ? '/playlists' : pathname.startsWith('/artists') ? '/search' : '/'),
     },
     '../store/toastStore': { toast: { info() {} } },
     '../services/androidApp': { isAndroidApp: () => window.__boltAndroid },
@@ -111,6 +111,29 @@ test('Native back traverses actual route history', async () => {
   const app = await mountBackHandler({ pathname: '/artists/1', idx: 1 })
   assert.equal(app.window.__boltHandleBack(), true)
   assert.deepEqual(app.navigation, [[-1]])
+  app.cleanup()
+})
+
+test('Native back from a tab ignores stale route history and returns home', async () => {
+  const app = await mountBackHandler({ pathname: '/liked', idx: 8 })
+  assert.equal(app.window.__boltHandleBack(), true)
+  assert.equal(app.navigation[0][0], '/')
+  assert.equal(app.navigation[0][1].replace, true)
+  app.cleanup()
+})
+
+test('Native back on home minimizes even with older routes in history', async () => {
+  const app = await mountBackHandler({ idx: 8 })
+  assert.equal(app.window.__boltHandleBack(), false)
+  assert.deepEqual(app.navigation, [])
+  app.cleanup()
+})
+
+test('Cold restored artist returns to the tab that opened it', async () => {
+  const app = await mountBackHandler({ pathname: '/artists/1', tab: '/liked' })
+  assert.equal(app.window.__boltHandleBack(), true)
+  assert.equal(app.navigation[0][0], '/liked')
+  assert.equal(app.navigation[0][1].replace, true)
   app.cleanup()
 })
 

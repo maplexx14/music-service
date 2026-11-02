@@ -5,7 +5,7 @@ import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
 import MeterProfiler from './MeterProfiler'
-import { isTabRoot, tabOf, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
+import { isTabRoot, tabForLocation, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
@@ -202,11 +202,11 @@ function Layout({ renderRoutes }) {
   // вернуться некуда, и navigate(-1) ничего бы не сделал — идём в корень
   // его вкладки.
   // Стабильная ссылка: кнопка «Назад» живёт в мемоизированном экране.
-  const pathnameRef = useRef(location.pathname)
-  pathnameRef.current = location.pathname
+  const locationRef = useRef(location)
+  locationRef.current = location
   const goBack = useCallback(() => {
     if (canGoBack()) navigate(-1)
-    else navigate(tabOf(pathnameRef.current), { replace: true })
+    else navigate(tabForLocation(locationRef.current), { replace: true })
   }, [navigate])
 
   // Свайпы — только в установленном PWA: во вкладке браузера горизонтальный
@@ -224,7 +224,7 @@ function Layout({ renderRoutes }) {
   if (showMobileBack) {
     const entryIdx = entryIndexOf(location.key)
     const below = canGoBack() ? entryAt(entryIdx - 1) : null
-    backPath = canGoBack() ? below?.pathname : tabOf(location.pathname)
+    backPath = canGoBack() ? below?.pathname : tabForLocation(location)
     if (backPath && isTabRoot(backPath)) backTarget = tabScreenId(backPath)
     else if (below) backTarget = detailScreenId(entryIdx - 1)
   }
@@ -287,7 +287,7 @@ function Layout({ renderRoutes }) {
   // Подсветка активного пункта — одна плавающая капсула на всю навигацию, как
   // в iOS-приложении: она едет между ячейками и на ходу растягивается. Индекс
   // активной ячейки считается один раз на рендер, положение — в CSS.
-  const activeNavIndex = navIndexOf(location.pathname)
+  const activeNavIndex = navIndexOf(tabForLocation(location))
   // Деформация включается только на смене вкладки: на первом рендере капсула
   // должна стоять на месте, а не пульсировать.
   const [navDeform, setNavDeform] = useState(false)
@@ -432,10 +432,7 @@ function Layout({ renderRoutes }) {
             <span className="mobile-nav-global-pill-inner" />
           </span>
           {MOBILE_NAV.map(({ to, icon: Icon, label }, index) => {
-            const isActive =
-              to === '/'
-                ? location.pathname === '/'
-                : location.pathname.startsWith(to)
+            const isActive = to === tabForLocation(location)
             // Подсветка иконки идёт за пальцем (и за выбранной, пока экран
             // меняется); aria-current — только за реальным маршрутом.
             const isLit = index === displayNavIndex

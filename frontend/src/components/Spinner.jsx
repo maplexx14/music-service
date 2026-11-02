@@ -9,13 +9,22 @@ import './Spinner.css'
 // Экранный спиннер заодно задерживает анимированный переход, пока экран не
 // загрузится (services/navigation.js, markScreenLoading). Только на видимом
 // экране: скрытая вкладка, догружающаяся в фоне, переход не держит.
-function Spinner({ label = 'Загрузка...', page = false }) {
-  const { active } = useScreen()
+function Spinner({ label, page = false }) {
+  const { active, pathname = '' } = useScreen()
+  const pageLabel = pathname.startsWith('/artists/') ? 'Загрузка исполнителя…'
+    : pathname.startsWith('/albums/') ? 'Загрузка альбома…'
+      : pathname.startsWith('/playlists/') || pathname.startsWith('/external/') ? 'Загрузка плейлиста…'
+        : pathname === '/playlists' ? 'Загрузка медиатеки…'
+          : pathname === '/liked' ? 'Загрузка любимых треков…'
+            : pathname === '/search' ? 'Загрузка поиска…'
+              : pathname.startsWith('/track/') ? 'Загрузка трека…'
+                : pathname.startsWith('/settings') ? 'Загрузка настроек…' : 'Загрузка…'
+  const shownLabel = label ?? (page ? pageLabel : 'Загрузка…')
   useLayoutEffect(() => (page && active ? markScreenLoading() : undefined), [page, active])
   return (
-    <div className={`spinner-wrap${page ? ' spinner-wrap--page' : ''}`} role="status" aria-label={label}>
+    <div className={`spinner-wrap${page ? ' spinner-wrap--page' : ''}`} role="status" aria-label={shownLabel}>
       <BoltLoader size={40} frame={104} />
-      <span className="spinner-label">{label}</span>
+      <span className="spinner-label">{shownLabel}</span>
     </div>
   )
 }

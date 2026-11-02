@@ -1,10 +1,27 @@
 import { create } from 'zustand'
+import { readUiSession, writeUiSession } from '../services/uiSession'
 
 const emptyResults = { tracks: [], playlists: [] }
 const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
 // Поиск по Deezer/Spotify идёт только под своим фильтром; выдача помнит свой
 // запрос: { [provider]: { q, tracks } }.
 const emptyProviderTracks = {}
+
+function restoredSearch() {
+  const saved = readUiSession('search')
+  if (!saved || typeof saved.query !== 'string') return {}
+  return {
+    query: saved.query.slice(0, 2000),
+    filter: ['all', 'top', 'library', 'ytmusic', 'soundcloud', 'deezer', 'spotify'].includes(saved.filter) ? saved.filter : 'all',
+    results: saved.results && Array.isArray(saved.results.tracks) && Array.isArray(saved.results.playlists) ? saved.results : emptyResults,
+    resultsQuery: typeof saved.resultsQuery === 'string' ? saved.resultsQuery : '',
+    externalTracks: saved.externalTracks && ['top', 'ytmusic', 'soundcloud'].every((key) => Array.isArray(saved.externalTracks[key])) ? saved.externalTracks : emptyExternalTracks,
+    externalPlaylists: Array.isArray(saved.externalPlaylists) ? saved.externalPlaylists : [],
+    providerTracks: saved.providerTracks && typeof saved.providerTracks === 'object' ? saved.providerTracks : {},
+    artists: Array.isArray(saved.artists) ? saved.artists : [],
+    cachedQuery: Date.now() - saved.savedAt < 5 * 60000 && typeof saved.cachedQuery === 'string' ? saved.cachedQuery : '',
+  }
+}
 
 // Выдача поиска живёт в сторе, а не в состоянии страницы: роутер размонтирует
 // /search при уходе на другую вкладку, и локальный useState терял и запрос, и
@@ -77,12 +94,24 @@ const useSearchStore = create((set) => ({
       searchError: '',
       cachedQuery: '',
     }),
+  ...restoredSearch(),
 }))
+
+useSearchStore.subscribe((state) => {
+  const { query, filter, results, resultsQuery, externalTracks, externalPlaylists, providerTracks, artists, cachedQuery } = state
+  writeUiSession('search', { query, filter, results, resultsQuery, externalTracks, externalPlaylists, providerTracks, artists, cachedQuery, savedAt: Date.now() })
+})
 
 // Стор живёт на уровне модуля и переживает конец сессии — без сброса запрос и
 // выдача прошлого пользователя встречали бы следующего. Явный выход сбрасывает
 // стор из authStore, здесь ловим истёкший токен.
 if (typeof window !== 'undefined') {
+  window.addEventListener('ui-session:changed', () => {
+    // Сначала читаем: resetSearch тоже вызывает подписчика записи.
+    const restored = restoredSearch()
+    useSearchStore.getState().resetSearch()
+    useSearchStore.setState(restored)
+  })
   window.addEventListener('auth:unauthorized', () => {
     useSearchStore.getState().resetSearch()
   })

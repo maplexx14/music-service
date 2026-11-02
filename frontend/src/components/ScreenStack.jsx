@@ -9,6 +9,7 @@ import { ArrowLeft } from 'lucide-react'
 import Spinner from './Spinner'
 import MeterProfiler from './MeterProfiler'
 import { ScreenContext } from '../hooks/useScreen'
+import { rememberScroll, savedScroll, restoreScrollPosition, scrollKey } from '../services/scrollRestoration'
 import {
   TAB_ROOTS,
   clearShownTab,
@@ -54,76 +55,52 @@ const isDetailId = (id) => id.startsWith('detail:')
 // возвращает туда, откуда ушёл, вперёд — сверху. Живым экранам это не
 // нужно — их контейнер помнит позицию сам; нужно экрану, созданному заново
 // (глубже двух вложенных или после перезагрузки).
-const RESTORE_WINDOW_MS = 1200
-const MAX_POSITIONS = 100
-const positions = new Map()
-
-function remember(key, top) {
-  positions.delete(key)
-  positions.set(key, top)
-  if (positions.size > MAX_POSITIONS) positions.delete(positions.keys().next().value)
-}
-
-// Экран без кэша дорастает до прежней высоты не сразу: докручиваем позицию
-// по мере роста, пока пользователь сам не взялся за скролл.
-function restoreWhenTallEnough(el, target) {
-  let frame = 0
-  const deadline = performance.now() + RESTORE_WINDOW_MS
-  const stop = () => {
-    cancelAnimationFrame(frame)
-    el.removeEventListener('touchstart', stop)
-    el.removeEventListener('wheel', stop)
-  }
-  const tick = () => {
-    el.scrollTop = target
-    if (Math.abs(el.scrollTop - target) <= 1 || performance.now() > deadline) {
-      stop()
-      return
-    }
-    frame = requestAnimationFrame(tick)
-  }
-  el.addEventListener('touchstart', stop, { passive: true })
-  el.addEventListener('wheel', stop, { passive: true })
-  frame = requestAnimationFrame(tick)
-  return stop
-}
-
-function useDetailScrollRestoration(scrollerRef, location, enabled) {
+function useScrollRestoration(scrollerRef, location) {
   const navigationType = useNavigationType()
-  const keyRef = useRef(location.key)
+  const locationRef = useRef(location)
   const pathRef = useRef(null)
   const cancelRestoreRef = useRef(null)
+  const restoringRef = useRef(false)
 
   useEffect(() => {
     const el = scrollerRef.current
-    if (!el || !enabled) return undefined
-    const onScroll = () => remember(keyRef.current, el.scrollTop)
+    if (!el) return undefined
+    const onScroll = () => {
+      if (!restoringRef.current) rememberScroll(locationRef.current, el.scrollTop)
+    }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [scrollerRef, enabled])
+  }, [scrollerRef])
 
   // Layout-эффект: в том же коммите, что и новый экран, до снапшота view
   // transition — анимация сразу едет с правильной позиции.
   useLayoutEffect(() => {
-    if (!enabled) return
     const el = scrollerRef.current
-    const samePath = pathRef.current === location.pathname
-    keyRef.current = location.key
-    pathRef.current = location.pathname
-    cancelRestoreRef.current?.()
-    cancelRestoreRef.current = null
+    const path = scrollKey(location)
+    const firstMount = pathRef.current === null
+    const samePath = pathRef.current === path
+    locationRef.current = location
+    pathRef.current = path
     // Смена query/hash на том же экране (фильтры, разделы) скролл не трогает.
     if (!el || samePath) return
-    const saved = navigationType === 'POP' ? positions.get(location.key) : undefined
-    if (!saved) {
+    cancelRestoreRef.current?.()
+    cancelRestoreRef.current = null
+    const saved = firstMount || navigationType === 'POP' ? savedScroll(location) : 0
+    // Новый вложенный экран открывается сверху. Возврат и новый запуск
+    // восстанавливают позицию; вкладки остаются смонтированными.
+    const restore = navigationType === 'POP' || isTabRoot(location.pathname) || (firstMount && location.state?.__boltResume)
+    if (!saved || !restore) {
       el.scrollTop = 0
       return
     }
-    el.scrollTop = saved
-    if (Math.abs(el.scrollTop - saved) > 1) cancelRestoreRef.current = restoreWhenTallEnough(el, saved)
-  }, [location.key, enabled])
+    restoringRef.current = true
+    cancelRestoreRef.current = restoreScrollPosition(el, saved, () => { restoringRef.current = false })
+  }, [location.key])
 
-  useEffect(() => () => cancelRestoreRef.current?.(), [])
+  useEffect(() => () => {
+    cancelRestoreRef.current?.()
+    pathRef.current = null
+  }, [])
 }
 
 // Контексты роутера, которые экран отдаёт своему поддереву. Вложенный
@@ -138,7 +115,7 @@ const ROOT_ROUTE_CONTEXT = { outlet: null, matches: [], isDataRoute: false }
 
 const Screen = memo(function Screen({ id, location, active, isMobile, renderRoutes, onBack }) {
   const scrollerRef = useRef(null)
-  const context = useMemo(() => ({ active, scrollerRef }), [active])
+  const context = useMemo(() => ({ active, scrollerRef, pathname: location.pathname }), [active, location.pathname])
   const locationContext = useMemo(() => ({ location, navigationType: 'POP' }), [location])
   const path = location.pathname
   // «Назад» — только у вложенных экранов, как в нативном стеке. Панель —
@@ -148,7 +125,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   // под часами нет: тёмная полоса резала шапки с обложкой во весь верх.
   // Главной отступ не нужен — её hero заходит под статус-бар.
   const safeTop = isMobile && path !== '/'
-  useDetailScrollRestoration(scrollerRef, location, isDetailId(id))
+  useScrollRestoration(scrollerRef, location)
 
   return (
     <div

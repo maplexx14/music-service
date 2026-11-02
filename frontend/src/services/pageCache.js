@@ -1,15 +1,16 @@
 import api from './api'
+import { readUiSession, writeUiSession } from './uiSession'
 
 // Кэш данных страниц в памяти (stale-while-revalidate). Роутер размонтирует
 // страницу при уходе, и возврат на неё начинался со спиннера и повторного
 // ожидания сети — даже когда данные только что были на экране. Теперь страница
 // сразу рисует то, что видела в прошлый раз, и тихо обновляет это в фоне.
 //
-// Живёт только в памяти вкладки: переживает навигацию, но не перезагрузку, и
-// чистится на выходе из аккаунта — выдача прошлого пользователя не должна
-// встречать следующего.
+// В памяти — до конца сессии, недавние страницы — ещё и локально на 5 минут.
+// Оба слоя чистятся на выходе и смене аккаунта.
 const entries = new Map()
 const inflight = new Map()
+let generation = 0
 // Подписчики на запись ключа: место вне страницы (сайдбар) следует за тем,
 // что страница положила в кэш, не перезапрашивая сеть.
 const listeners = new Map()
@@ -17,8 +18,33 @@ const listeners = new Map()
 // Верхняя граница, чтобы долгая сессия с сотней открытых артистов не копила
 // мегабайты: вытесняем самые старые записи.
 const MAX_ENTRIES = 60
+const DISK_FRESH_MS = 5 * 60000
+const DISK_MAX_BYTES = 750000
+
+function persistCache() {
+  // Сохраняем только недавние страницы; длинные очереди не забивают storage.
+  const recent = []
+  let size = 0
+  const stored = readUiSession('page-cache')
+  const candidates = new Map(Array.isArray(stored) ? stored.filter((row) => Array.isArray(row) && typeof row[0] === 'string' && Number.isFinite(row[1]?.at)) : [])
+  for (const [key, entry] of entries) candidates.set(key, entry)
+  for (const [key, entry] of [...candidates].sort(([, a], [, b]) => b.at - a.at)) {
+    if (Date.now() - entry.at > DISK_FRESH_MS) continue
+    const bytes = JSON.stringify(entry).length
+    if (size + bytes > DISK_MAX_BYTES) continue
+    size += bytes
+    recent.push([key, entry])
+    if (recent.length === 12) break
+  }
+  writeUiSession('page-cache', recent.reverse())
+}
 
 export function peekCache(key) {
+  if (!entries.has(key)) {
+    const stored = readUiSession('page-cache')
+    const entry = Array.isArray(stored) ? stored.find((row) => Array.isArray(row) && row[0] === key)?.[1] : null
+    if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < DISK_FRESH_MS) entries.set(key, entry)
+  }
   return entries.get(key)?.data
 }
 
@@ -35,6 +61,7 @@ export function writeCache(key, data) {
   while (entries.size > MAX_ENTRIES) {
     entries.delete(entries.keys().next().value)
   }
+  persistCache()
   listeners.get(key)?.forEach((fn) => fn(data))
 }
 
@@ -50,17 +77,22 @@ export function subscribeCache(key, fn) {
 export function patchCache(key, patch) {
   const entry = entries.get(key)
   if (entry) entry.data = { ...entry.data, ...patch }
+  if (entry) persistCache()
 }
 
 export function invalidateCache(prefix) {
   for (const key of entries.keys()) {
     if (key.startsWith(prefix)) entries.delete(key)
   }
+  const stored = readUiSession('page-cache')
+  if (Array.isArray(stored)) writeUiSession('page-cache', stored.filter((row) => Array.isArray(row) && typeof row[0] === 'string' && !row[0].startsWith(prefix)))
 }
 
 export function clearPageCache() {
+  generation += 1
   entries.clear()
   inflight.clear()
+  writeUiSession('page-cache', [])
 }
 
 // Прогрев по намерению (наведение, касание): к моменту клика данные уже в
@@ -69,11 +101,16 @@ export function clearPageCache() {
 // кладёт в кэш сама, — формат записи должен совпадать.
 export function prefetchCache(key, url, { params, select = (res) => res.data, maxAgeMs = 60000 } = {}) {
   if (cacheAge(key) < maxAgeMs || inflight.has(key)) return
+  const startedIn = generation
   const request = api
     .get(url, { params, skipErrorToast: true })
-    .then((response) => writeCache(key, select(response)))
+    .then((response) => {
+      if (generation === startedIn) writeCache(key, select(response))
+    })
     .catch(() => {})
-    .finally(() => inflight.delete(key))
+    .finally(() => {
+      if (inflight.get(key) === request) inflight.delete(key)
+    })
   inflight.set(key, request)
 }
 
@@ -111,6 +148,11 @@ export function intentPrefetchHandlers(prefetch) {
 }
 
 if (typeof window !== 'undefined') {
+  window.addEventListener('ui-session:changed', () => {
+    generation += 1
+    entries.clear()
+    inflight.clear()
+  })
   window.addEventListener('auth:unauthorized', clearPageCache)
 }
 

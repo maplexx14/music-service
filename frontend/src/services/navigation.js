@@ -1,5 +1,6 @@
 import { createBrowserHistory } from '@remix-run/router'
 import { prefetchInFlight } from './pageCache'
+import { readUiSession, writeUiSession } from './uiSession'
 
 // Навигация «как в нативном приложении»: анимированные переходы экранов
 // (push — новый экран въезжает справа, back — уезжает вправо, вкладки —
@@ -31,6 +32,17 @@ export function tabOf(pathname) {
   if (pathname.startsWith('/search') || pathname.startsWith('/artists')) return '/search'
   return '/'
 }
+
+// Вложенный экран принадлежит вкладке, из которой его открыли. Артист
+// с главной и тот же артист из поиска должны возвращаться в разные места.
+export function tabForLocation(location) {
+  if (isTabRoot(location.pathname)) return location.pathname
+  return TAB_ROOTS.includes(location.state?.__boltTab) ? location.state.__boltTab : tabOf(location.pathname)
+}
+
+const resumablePath = (path) => typeof path === 'string' &&
+  /^\/(?:$|search(?:[?#]|$)|liked(?:[?#]|$)|playlists(?:[/?#]|$)|artists\/|albums\/|track\/|external\/|settings(?:[/?#]|$))/.test(path) &&
+  !path.startsWith('//')
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
 export const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(ua)
@@ -279,7 +291,7 @@ let activeTransition = null
 // Записи истории этой сессии по индексу (history.state.idx): какой экран
 // лежит под текущим. Свайп «Назад» показывает его под пальцем, если он
 // смонтирован (ScreenStack держит вкладки и предыдущий вложенный экран).
-// После перезагрузки страницы прошлые записи неизвестны — тогда null.
+// Последние записи сохраняются локально; неизвестные дают null.
 //
 // Индекс записи по ключу локации запоминается здесь, в момент навигации:
 // роутер коммитит экран позже (startTransition), и history.state к рендеру
@@ -288,11 +300,29 @@ const entries = []
 const indexByKey = new Map()
 const currentIdx = () => window.history.state?.idx ?? 0
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('ui-session:changed', () => {
+    entries.length = 0
+    indexByKey.clear()
+    clearShownTab()
+  })
+}
+
 function recordEntry(location, action) {
   const idx = currentIdx()
   if (action === 'PUSH') entries.length = idx
   if (action !== 'POP' || !entries[idx]) entries[idx] = location
   indexByKey.set(location.key, idx)
+  const path = location.pathname + location.search + location.hash
+  if (resumablePath(path)) {
+    // Только маршруты и принадлежность вкладке, без произвольного state
+    // (там могут быть большие ответы API или данные форм).
+    const recent = entries.flatMap((entry, index) => entry ? [{
+      idx: index, pathname: entry.pathname, search: entry.search, hash: entry.hash,
+      key: entry.key, state: { __boltTab: tabForLocation(entry) },
+    }] : []).slice(-50)
+    writeUiSession('navigation', { path, tab: tabForLocation(location), key: location.key, idx, entries: recent })
+  }
 }
 
 export const entryIndexOf = (key) => indexByKey.get(key) ?? currentIdx()
@@ -307,6 +337,23 @@ export function finishActiveTransition() {
 
 export function createAppHistory() {
   const history = createBrowserHistory({ v5Compat: true })
+  const saved = readUiSession('navigation')
+  // Новый запуск установленного приложения открывает последний экран.
+  // Адреса из ссылок, «Поделиться» и ярлыков имеют приоритет.
+  if ((isStandalone || window.__boltAndroid) && history.location.pathname === '/' &&
+      !history.location.search && !history.location.hash && resumablePath(saved?.path) && saved.path !== '/') {
+    history.replace(saved.path, { __boltTab: saved.tab, __boltResume: true })
+  }
+  // При обычной перезагрузке история браузера ещё существует. Восстанавливаем
+  // сведения о ней, чтобы «Назад» и свайп знали предыдущий экран.
+  if (saved?.key === history.location.key && saved.idx === currentIdx() && Array.isArray(saved.entries)) {
+    for (const entry of saved.entries) {
+      if (!Number.isInteger(entry?.idx) || entry.idx < 0 || entry.idx > currentIdx() ||
+          !resumablePath(entry.pathname) || typeof entry.key !== 'string') continue
+      entries[entry.idx] = entry
+      indexByKey.set(entry.key, entry.idx)
+    }
+  }
   let current = history.location
   let active = null
   recordEntry(history.location, 'REPLACE')
@@ -351,6 +398,13 @@ export function createAppHistory() {
   return new Proxy(history, {
     get(target, prop) {
       if (prop === 'listen') return listen
+      if (prop === 'push' || prop === 'replace') return (to, state) => {
+        const path = typeof to === 'string' ? to.split(/[?#]/)[0] || target.location.pathname : to.pathname || target.location.pathname
+        const nextState = { ...state, __boltTab: isTabRoot(path) ? path : tabForLocation(target.location) }
+        // Вкладки — точки входа, а не дополнительные ступени стека.
+        const method = prop === 'push' && isTabRoot(path) && resumablePath(target.location.pathname) ? 'replace' : prop
+        return target[method](to, nextState)
+      }
       const value = target[prop]
       return typeof value === 'function' ? value.bind(target) : value
     },

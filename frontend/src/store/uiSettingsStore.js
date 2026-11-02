@@ -26,14 +26,14 @@ const isMobileDevice = () => {
 const defaultQualityMode = () => 'high'
 
 // rememberPlayer — запоминать очередь и позицию между запусками
-// (services/playerPersist). Включает сам юзер в настройках.
+// (services/playerPersist). Включено по умолчанию; явный выбор сохраняется.
 // brushIcons — иконки кистью логотипа (фильтр #brush-icon в index.html).
 // vinylDisc — диск на главной в виде пластинки; выключено — прежний диск
 // из размытой обложки (HeroDisc).
 const defaultSettings = () => ({
   liteMode: false,
   streamQuality: defaultQualityMode(),
-  rememberPlayer: false,
+  rememberPlayer: true,
   brushIcons: true,
   vinylDisc: true,
 })
@@ -52,7 +52,7 @@ const loadSettings = () => {
       streamQuality: QUALITY_MODES.includes(parsed.streamQuality)
         ? parsed.streamQuality
         : fallback.streamQuality,
-      rememberPlayer: parsed.rememberPlayer === true,
+      rememberPlayer: typeof parsed.rememberPlayer === 'boolean' ? parsed.rememberPlayer : fallback.rememberPlayer,
       brushIcons: typeof parsed.brushIcons === 'boolean' ? parsed.brushIcons : fallback.brushIcons,
       vinylDisc: typeof parsed.vinylDisc === 'boolean' ? parsed.vinylDisc : fallback.vinylDisc,
     }

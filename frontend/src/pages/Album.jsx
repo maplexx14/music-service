@@ -5,6 +5,7 @@ import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import ArtistLink from '../components/ArtistLink'
 import TrackTableRow from '../components/TrackTableRow'
 import { useLazyBatch } from '../hooks/useLazyBatch'
@@ -91,7 +92,7 @@ function Album() {
       setLoading(true)
     }
     try {
-      const { data } = await api.get(`/albums/${source}/${id}`)
+      const { data } = await api.get(`/albums/${source}/${id}`, { skipErrorToast: true })
       writeCache(cacheKey, { album: data.album, tracks: data.tracks || [] })
       setAlbum(data.album)
       setTracks(data.tracks || [])
@@ -99,10 +100,6 @@ function Album() {
       if (!cached) usePlayerStore.getState().prefetchTracks(data.tracks || [], 6)
     } catch (error) {
       console.error('Error fetching album:', error)
-      if (!cached) {
-        toast.error('Не удалось загрузить альбом')
-        navigate(-1)
-      }
     } finally {
       setLoading(false)
     }
@@ -189,7 +186,7 @@ function Album() {
     )
   }
 
-  if (!album) return null
+  if (!album) return <PageLoadError title="Не удалось загрузить альбом" onRetry={fetchAlbum} />
 
   const typeLabel = TYPE_LABEL[(album.album_type || '').toLowerCase()] || album.album_type || 'Альбом'
   const sourceLabel = SOURCE_LABEL[album.source]

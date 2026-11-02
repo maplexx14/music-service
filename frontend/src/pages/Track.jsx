@@ -4,6 +4,7 @@ import { Pause, Play } from 'lucide-react'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import ArtistLink from '../components/ArtistLink'
 import LikeHeart from '../components/LikeHeart'
 import { haptic, HAPTIC } from '../utils/haptics'
@@ -20,6 +21,8 @@ function Track() {
   const [track, setTrack] = useState(null)
   const [loading, setLoading] = useState(true)
   const [missing, setMissing] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const [retry, setRetry] = useState(0)
   const playTrack = usePlayerStore((s) => s.playTrack)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
@@ -33,13 +36,17 @@ function Track() {
     let cancelled = false
     setLoading(true)
     setMissing(false)
+    setLoadError(false)
     api
       .get(`/tracks/${id}`, { skipErrorToast: true })
       .then(({ data }) => {
         if (!cancelled) setTrack(data)
       })
-      .catch(() => {
-        if (!cancelled) setMissing(true)
+      .catch((error) => {
+        if (!cancelled) {
+          if (error.response?.status === 404) setMissing(true)
+          else setLoadError(true)
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -47,13 +54,14 @@ function Track() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, retry])
 
   useEffect(() => {
     fetchLikedTracks().catch(() => {})
   }, [fetchLikedTracks])
 
   if (loading) return <Spinner page />
+  if (loadError) return <PageLoadError title="Не удалось загрузить трек" onRetry={() => setRetry((value) => value + 1)} />
 
   if (missing || !track) {
     return (

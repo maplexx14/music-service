@@ -11,6 +11,7 @@ import {
   PLAYLIST_PAGE_SIZE,
 } from '../services/pageCache'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
@@ -80,9 +81,11 @@ function PlaylistDetail() {
   }, [playlist, totalTracks, loading, id])
 
   const fetchPlaylist = async () => {
+    if (!peekCache(playlistCacheKey(id))) setLoading(true)
     try {
       const response = await api.get(`/playlists/${id}`, {
         params: { skip: 0, limit: TRACKS_PAGE_SIZE },
+        skipErrorToast: true,
       })
       const fresh = response.data
       const total = Number(response.headers['x-total-count']) || fresh.tracks.length
@@ -100,7 +103,7 @@ function PlaylistDetail() {
       // когда плейлиста больше нет.
       if (error.response?.status === 404 || !peekCache(playlistCacheKey(id))) {
         invalidateCache(playlistCacheKey(id))
-        navigate('/playlists')
+        setPlaylist(null)
       }
     } finally {
       setLoading(false)
@@ -184,9 +187,7 @@ function PlaylistDetail() {
     )
   }
 
-  if (!playlist) {
-    return null
-  }
+  if (!playlist) return <PageLoadError title="Не удалось загрузить плейлист" onRetry={fetchPlaylist} />
 
   return (
     <div className={`page-container hero-page${backdrop.hero ? ' has-cover-hero' : ''}`}>

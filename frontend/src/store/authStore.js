@@ -5,6 +5,7 @@ import { clearPageCache } from '../services/pageCache'
 import { invalidateFlowPreload } from './playerStore'
 import { dropLocalPushSubscription } from '../services/push'
 import { claimHandoff, shouldClaimHandoff } from '../services/sessionHandoff'
+import { clearUiSession, setUiSessionUser } from '../services/uiSession'
 
 // Simple localStorage persistence
 const getStoredAuth = () => {
@@ -525,6 +526,7 @@ const useAuthStore = create((set, get) => ({
       },
 
       logout: () => {
+        clearUiSession()
         dropLocalPushSubscription()
         // Токен для приложения на экране «Домой» (services/sessionHandoff)
         // не должен пережить выход. Заголовок явно: ниже он снимается раньше,
@@ -605,6 +607,7 @@ const useAuthStore = create((set, get) => ({
 
 // Persist state changes
 useAuthStore.subscribe((state) => {
+  setUiSessionUser(state.isAuthenticated ? state.user?.id : null)
   if (state.token) {
     setStoredAuth({
       token: state.token,
