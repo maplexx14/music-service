@@ -518,13 +518,15 @@ def select(
     pool = filtered
 
     if rescue:
+        accepted = session.accepted_artists() if session is not None else set()
+        rescue_hits = hits or set()
         ranked = rescue_order(
             pool,
             identity_of=identity_of,
             artist_of=primary_of,
             features=features,
-            accepted=session.accepted_artists() if session is not None else set(),
-            hits=hits or set(),
+            accepted=accepted,
+            hits=rescue_hits,
         )
         chosen = _one_per_artist(list(ranked[:limit]), list(ranked[limit:]), primary_of)
         chosen = _apply_caps(
@@ -537,6 +539,17 @@ def select(
         )
         chosen = _cap_artist_count(
             chosen, [item for item in ranked if item not in chosen], primary_of, affinity_of, kind_of
+        )
+        # Restore evidence tiers after replacements, keeping their artist
+        # diversity inside each tier. Sorting by the original pool positions
+        # would undo that diversity among equally proven tracks.
+        chosen = rescue_order(
+            chosen,
+            identity_of=identity_of,
+            artist_of=primary_of,
+            features=features,
+            accepted=accepted,
+            hits=rescue_hits,
         )
         for item in chosen:
             extra[identity_of(item)] = {"arm": "rescue", "rescue": "on"}

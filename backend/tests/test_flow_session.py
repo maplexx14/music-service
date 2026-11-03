@@ -777,3 +777,42 @@ def test_rescue_keeps_the_usual_like_quota():
                              rescue=True, liked_max=1)
     liked = [item for item in chosen if features[item["id"]]["origin"] == "liked"]
     assert len(chosen) == 4 and len(liked) == 1
+
+
+def test_rescue_keeps_discovery_after_familiar_tracks_when_caps_replace_items():
+    """A replacement must not put exploration before the familiar recovery candidates."""
+    pool, features = _kinds_pool(
+        ["liked", "liked", "liked", "fam", "fam", "fam", "novel", "fam"]
+    )
+    chosen, _extra = _select(pool, features, limit=6, rescue=True, liked_max=1)
+
+    assert len(chosen) == 6
+    assert sum(features[item["id"]]["origin"] == "liked" for item in chosen) == 1
+    assert sum(features[item["id"]]["novel"] for item in chosen) == 1
+    assert features[chosen[-1]["id"]]["novel"]
+
+
+def test_rescue_short_pool_keeps_collection_tracks_before_novel_fallback():
+    """Prod 2026-11-03: Take That followed the first like ahead of four more likes."""
+    pool, features = _kinds_pool(["liked"] * 7 + ["novel"])
+    chosen, _extra = _select(pool, features, limit=6, rescue=True, liked_max=1)
+
+    assert len(chosen) == 6
+    # The like cap is necessarily soft: this pool has no familiar alternatives.
+    assert sum(features[item["id"]]["origin"] == "liked" for item in chosen) == 5
+    assert all(features[item["id"]]["origin"] == "liked" for item in chosen[:-1])
+    assert features[chosen[-1]["id"]]["novel"]
+
+
+def test_rescue_preserves_artist_diversity_between_equally_proven_tracks():
+    """Restoring rescue priority must keep cap replacements between equal-tier likes."""
+    pool = _pool(["a", "a", "a", "b", "c", "d", "e"])
+    features = {
+        item["id"]: {"origin": "liked", "novel": False, "components": {"affinity": 2.4}}
+        for item in pool
+    }
+    chosen, _extra = _select(pool, features, limit=6, rescue=True, liked_max=1)
+
+    # Diversity replaces the second A with E. All candidates have equal
+    # evidence, so restoring priority must leave E between the two retained As.
+    assert [item["artist"] for item in chosen] == ["a", "e", "a", "b", "c", "d"]
