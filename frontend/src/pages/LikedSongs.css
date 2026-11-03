@@ -273,7 +273,7 @@
     min-width: 0;
   }
 
-  /* Имя артиста остаётся одной строкой; название переносит PlaylistDetail.css. */
+  /* Имя артиста, как и название, занимает одну строку. */
   .track-row .track-artist {
     overflow: hidden;
     text-overflow: ellipsis;

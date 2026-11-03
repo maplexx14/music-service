@@ -1,8 +1,3 @@
-.page-container {
-  padding: 32px;
-  min-height: 100%;
-}
-
 /* Pull-to-refresh: маленький системного вида индикатор под шапкой.
    Появляется по мере жеста (opacity/transform управляются инлайном из
    usePullToRefresh), на освежении из сердца вылетают молнии (BoltLoader). */
@@ -523,11 +518,8 @@
   color: var(--text-primary);
   margin-bottom: 4px;
   line-height: 1.35;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -705,10 +697,6 @@
 }
 
 @media (max-width: 768px) {
-  .page-container {
-    padding: 0 16px 150px;
-  }
-
   .home-tabs {
     margin: -8px 0 20px;
   }
@@ -888,10 +876,6 @@
 }
 
 @media (max-width: 380px) {
-  .page-container {
-    padding-inline: 12px;
-  }
-
   .hero-section {
     margin-inline: -12px;
     width: calc(100% + 24px);

@@ -569,6 +569,7 @@
      скроллить нечего: жест целиком отдаём JS. */
   .player {
     touch-action: none;
+    transition: none;
   }
 
   .player-left {
@@ -582,6 +583,12 @@
      внезапно открывалась страница артиста. */
   .player-info {
     pointer-events: none;
+  }
+
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
   }
 
   .player-cover {

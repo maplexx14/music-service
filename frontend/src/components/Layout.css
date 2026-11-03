@@ -222,7 +222,7 @@
     left: 0;
     width: 25%;
     transform: translateX(calc(var(--nav-index, 0) * 100%));
-    transition: transform 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: transform 240ms var(--ease-out);
     pointer-events: none;
   }
 
@@ -232,22 +232,6 @@
     border-radius: 999px;
     /* Как подсветка переключателя Главная ⇄ История (.home-tabs в Home.css). */
     background: #55308a;
-  }
-
-  /* Растяжение на ходу: в покое подсветка вписана в ячейку, в полёте
-     вытягивается по X и сжимается по Y — капля тянется к цели. */
-  .mobile-nav-global-pill.moving .mobile-nav-global-pill-inner {
-    animation: nav-pill-squash 0.4s ease-in-out;
-  }
-
-  @keyframes nav-pill-squash {
-    0%,
-    100% {
-      transform: scale(1, 1);
-    }
-    50% {
-      transform: scale(1.14, 0.92);
-    }
   }
 
   .mobile-nav-global-item {

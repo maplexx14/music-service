@@ -275,7 +275,7 @@ html.no-gpu .cover-backdrop-tint {
 }
 
 /* Карточка во всю ширину до низа экрана: съедает нижние отступы страницы
-   (.page-container, Home.css) и прокрутки (--main-pad-bottom, Layout.css —
+   (.page-container, index.css) и прокрутки (--main-pad-bottom, Layout.css —
    под плеер) и сама держит их внутри, иначе под ней полоса фона страницы. */
 .hero-page-sheet {
   flex: 1;
@@ -603,7 +603,7 @@ html.no-gpu .cover-backdrop-tint {
 }
 
 @media (max-width: 380px) {
-  /* На самых узких экранах поля страницы 12px (Home.css). */
+  /* На самых узких экранах поля страницы 12px (index.css). */
   .artist-hero {
     margin-inline: -12px;
     padding-inline: 12px;

@@ -291,15 +291,12 @@ html.power-save .liked-heart-beat {
   margin-bottom: 4px;
 }
 
-/* Две строки дают прочитать больше названия и сохраняют компактный список.
-   Специфичность нужна из-за общих правил страницы «Понравившиеся». */
+/* Одна строка: длинное название не меняет высоту трека. */
 .track-row .track-name {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  display: block;
   line-height: 1.35;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .track-artist {
@@ -553,14 +550,16 @@ html.power-save .liked-heart-beat {
     display: flex;
     align-items: center;
     gap: 12px;
+    height: 72px;
     padding: 10px 4px;
     border-bottom: 1px solid var(--border-subtle);
-    /* Строки за пределами экрана браузер не раскладывает и не рисует —
-       длинные плейлисты и «Понравившиеся» прокручиваются легче. auto в
-       размере: после первого показа запоминается настоящая высота строки,
-       и полоса прокрутки не прыгает. */
+    /* Фиксированная высота сохраняется и у пропущенных строк: уточнение
+       размеров при прокрутке больше не сдвигает весь список. */
     content-visibility: auto;
-    contain-intrinsic-size: auto 64px;
+  }
+
+  .track-row .track-artist {
+    line-height: 1.35;
   }
 
   .track-row td {
@@ -595,6 +594,12 @@ html.power-save .liked-heart-beat {
   .track-table-cover {
     width: 48px;
     height: 48px;
+  }
+}
+
+@media (max-width: 768px) {
+  .tracks-table tr.track-row--with-meta {
+    height: 88px;
   }
 }
 

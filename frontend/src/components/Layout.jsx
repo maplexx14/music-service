@@ -284,25 +284,8 @@ function Layout({ renderRoutes }) {
     haptic(HAPTIC.selection)
   }
 
-  // Подсветка активного пункта — одна плавающая капсула на всю навигацию, как
-  // в iOS-приложении: она едет между ячейками и на ходу растягивается. Индекс
-  // активной ячейки считается один раз на рендер, положение — в CSS.
+  // Одна капсула перемещается между ячейками без дополнительной деформации.
   const activeNavIndex = navIndexOf(tabForLocation(location))
-  // Деформация включается только на смене вкладки: на первом рендере капсула
-  // должна стоять на месте, а не пульсировать.
-  const [navDeform, setNavDeform] = useState(false)
-  // Капсула едет сразу на выбранную ячейку, поэтому и растягивается вместе с
-  // этим, а не на коммите маршрута.
-  const targetNavIndex = pendingNavIndex ?? activeNavIndex
-  const lastNavIndex = useRef(targetNavIndex)
-
-  useEffect(() => {
-    if (lastNavIndex.current === targetNavIndex) return
-    lastNavIndex.current = targetNavIndex
-    setNavDeform(true)
-    const timer = setTimeout(() => setNavDeform(false), 400)
-    return () => clearTimeout(timer)
-  }, [targetNavIndex])
 
   // Роутер закоммитил экран — подсветку дальше ведёт маршрут.
   useEffect(() => {
@@ -336,8 +319,7 @@ function Layout({ renderRoutes }) {
     const rect = navRef.current.getBoundingClientRect()
     return { rect, cell: rect.width / MOBILE_NAV.length }
   }
-  const navIndexAt = (clientX) => {
-    const { rect, cell } = navGeometry()
+  const navIndexAt = (clientX, { rect, cell }) => {
     return Math.min(MOBILE_NAV.length - 1, Math.max(0, Math.floor((clientX - rect.left) / cell)))
   }
   const releaseNavPill = () => {
@@ -349,7 +331,16 @@ function Layout({ renderRoutes }) {
 
   const handleNavPointerDown = (event) => {
     if (event.pointerType === 'mouse' || !event.isPrimary) return
-    navDragRef.current = { id: event.pointerId, x: event.clientX, dragging: false, index: navIndexAt(event.clientX) }
+    // Геометрию читаем до движения: замеры после записи transform на каждом
+    // pointermove заставляли браузер синхронно пересчитывать стили.
+    const geometry = navGeometry()
+    navDragRef.current = {
+      ...geometry,
+      id: event.pointerId,
+      x: event.clientX,
+      dragging: false,
+      index: navIndexAt(event.clientX, geometry),
+    }
   }
   const handleNavPointerMove = (event) => {
     const drag = navDragRef.current
@@ -360,14 +351,14 @@ function Layout({ renderRoutes }) {
       navRef.current.setPointerCapture?.(event.pointerId)
       setNavHoverIndex(drag.index)
     }
-    const { rect, cell } = navGeometry()
+    const { rect, cell } = drag
     const x = Math.min(rect.width - cell, Math.max(0, event.clientX - rect.left - cell / 2))
     const pill = navPillRef.current
     if (pill) {
       pill.style.transition = 'none'
       pill.style.transform = `translateX(${x}px)`
     }
-    const index = navIndexAt(event.clientX)
+    const index = navIndexAt(event.clientX, drag)
     if (index !== drag.index) {
       drag.index = index
       haptic(HAPTIC.selection)
@@ -425,7 +416,7 @@ function Layout({ renderRoutes }) {
         >
           <span
             ref={navPillRef}
-            className={`mobile-nav-global-pill ${navDeform || navHoverIndex !== null ? 'moving' : ''}`}
+            className="mobile-nav-global-pill"
             style={{ '--nav-index': displayNavIndex }}
             aria-hidden="true"
           >

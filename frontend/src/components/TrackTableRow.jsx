@@ -45,7 +45,7 @@ function TrackTableRow({
   const duration = formatDuration(track.duration)
   return (
     <tr
-      className={`track-row${isCurrent ? ' playing' : ''}`}
+      className={`track-row${showInlineMeta ? ' track-row--with-meta' : ''}${isCurrent ? ' playing' : ''}`}
       // Тап на таче срабатывает на отпускании, без задержки клика WebKit
       // (services/fastTap).
       data-fast-tap=""

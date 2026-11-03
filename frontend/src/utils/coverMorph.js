@@ -8,6 +8,9 @@
 
 let activeCount = 0
 const subscribers = new Set()
+let flight = null
+let pendingOpen = null
+const morphNodes = new Set()
 
 // FullScreenPlayer прячет свою обложку, пока морф активен: клон летит
 // поверх слайдящегося плеера, и вторая обложка внутри него не нужна.
@@ -26,7 +29,10 @@ function setActive(delta) {
   subscribers.forEach((fn) => fn(activeCount))
 }
 
-const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const animationsDisabled = () =>
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+  document.documentElement.classList.contains('lite-mode') ||
+  typeof Element.prototype.animate !== 'function'
 
 function drawerEase() {
   const value = getComputedStyle(document.documentElement).getPropertyValue('--ease-drawer').trim()
@@ -69,74 +75,102 @@ function scaledShadow(shadow, scale) {
   return shadow.replace(/(-?[\d.]+)px/g, (_, n) => `${parseFloat(n) / scale}px`)
 }
 
-function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
-  const fromStyle = getComputedStyle(fromImg)
-  const toStyle = getComputedStyle(toImg)
-  const fromRadius = parseFloat(fromStyle.borderRadius) || 0
-  const toRadius = parseFloat(toStyle.borderRadius) || 0
-  // Клон живёт в размере БОЛЬШЕГО прямоугольника и только уменьшается
-  // (scale ≤ 1). WebKit растеризует слой в его собственном размере: клон
-  // мини-обложки, растянутый scale(8), мылился бы весь полёт и резко
-  // «прояснялся» в конце, а его радиус раздувался бы в круг.
-  const base = toRect.width >= fromRect.width ? toRect : fromRect
-  // Кадр морфа: прямоугольник rect с экранным радиусом radius и тенью
-  // shadow. Радиус и тень — в координатах клона (до scale), иначе после
-  // масштаба они будут не те. Тень летит вместе с клоном: без неё обложка
-  // летела голой, а тень настоящей появлялась рывком в конце.
-  const frame = (rect, radius, shadow) => {
+// Внешний вид в экранных координатах. При прерывании полёта img уже
+// масштабирован родителем — CSS-радиус и тень нужно умножить на этот масштаб.
+function snapshot(img, rect, srcOverride) {
+  const style = getComputedStyle(img)
+  const scale = img.offsetWidth ? rect.width / img.offsetWidth : 1
+  return {
+    rect,
+    src: srcOverride || img.currentSrc || img.src,
+    radius: (parseFloat(style.borderRadius) || 0) * scale,
+    shadow: scaledShadow(style.boxShadow, 1 / scale),
+  }
+}
+
+export function cancelCoverMorph() {
+  pendingOpen?.cancel()
+  flight?.cancel()
+  // Завершившийся клон ещё может ждать кадр с настоящей обложкой.
+  for (const node of morphNodes) node.remove()
+  morphNodes.clear()
+}
+
+function fly(from, to, duration) {
+  // Растр сразу в большем размере, а движение — только transform. Два
+  // статических варианта скругления и тени проявляются через opacity:
+  // анимация border-radius/box-shadow перерисовывала обложку каждый кадр.
+  const base = to.rect.width >= from.rect.width ? to.rect : from.rect
+  const frame = (rect) => {
     const scale = rect.width / base.width
     return {
       transform: `translate(${rect.left - base.left}px, ${rect.top - base.top}px) scale(${scale})`,
-      borderRadius: `${radius / scale}px`,
-      boxShadow: scaledShadow(shadow, scale),
     }
   }
-  const clone = document.createElement('img')
-  // srcOverride — hi-res обложка на открытии: мини-плеер показывает
-  // уменьшенную, растянутая до размеров фуллскрина она мылилась бы в полёте.
-  clone.src = srcOverride || fromImg.currentSrc || fromImg.src
-  clone.alt = ''
-  // Клон летит уже видимым — проявление новых картинок (services/imageFade) не для него.
-  clone.dataset.noFade = ''
-  clone.style.cssText = [
+  const node = document.createElement('div')
+  node.dataset.coverMorph = ''
+  node.setAttribute('aria-hidden', 'true')
+  node.style.cssText = [
     'position:fixed',
     `left:${base.left}px`,
     `top:${base.top}px`,
     `width:${base.width}px`,
     `height:${base.height}px`,
-    'object-fit:cover',
     'transform-origin:top left',
+    'isolation:isolate',
     'z-index:1300',
     'pointer-events:none',
   ].join(';')
-  const first = frame(fromRect, fromRadius, fromStyle.boxShadow)
-  // Стартовый кадр сразу в стиле: до первого тика анимации клон не должен
-  // мелькнуть в полном размере.
-  clone.style.transform = first.transform
-  clone.style.borderRadius = first.borderRadius
-  clone.style.boxShadow = first.boxShadow
-  document.body.appendChild(clone)
-
-  const anim = clone.animate([first, frame(toRect, toRadius, toStyle.boxShadow)], {
-    duration,
-    easing: drawerEase(),
-    fill: 'forwards',
+  const images = [from, to].map((appearance, index) => {
+    const img = document.createElement('img')
+    const scale = appearance.rect.width / base.width
+    img.src = from.src
+    img.alt = ''
+    img.dataset.noFade = ''
+    img.style.cssText = [
+      'position:absolute', 'inset:0', 'width:100%', 'height:100%',
+      'object-fit:cover', 'outline:none', 'mix-blend-mode:plus-lighter',
+      `border-radius:${appearance.radius / scale}px`,
+      `box-shadow:${scaledShadow(appearance.shadow, scale)}`,
+      `opacity:${index ? 0 : 1}`,
+    ].join(';')
+    node.appendChild(img)
+    return img
   })
+  const first = frame(from.rect)
+  node.style.transform = first.transform
+  document.body.appendChild(node)
+  morphNodes.add(node)
+
+  const options = { duration, easing: drawerEase(), fill: 'forwards' }
+  const anim = node.animate([first, frame(to.rect)], options)
+  const fades = images.map((img, index) => img.animate(
+    [{ opacity: index ? 0 : 1 }, { opacity: index ? 1 : 0 }], options,
+  ))
   return new Promise((resolve) => {
-    anim.onfinish = () => {
-      // Сначала открываем настоящую обложку (resolve → setActive(-1) →
-      // рендер React), клон снимаем через кадр: снятый сразу, он оставлял
-      // кадр с пустым местом, пока React не перерисовал visibility.
-      resolve(true)
-      // Пока клон дожидается снятия, тень уже рисует настоящая обложка —
-      // две наложенные тени на эти кадры темнели бы.
-      clone.animate([{ boxShadow: 'none' }], { duration: 0, fill: 'forwards' })
-      requestAnimationFrame(() => requestAnimationFrame(() => clone.remove()))
+    let finished = false
+    const remove = () => {
+      node.remove()
+      morphNodes.delete(node)
     }
-    anim.oncancel = () => {
-      clone.remove()
-      resolve(false)
+    const finish = (ok) => {
+      if (finished) return
+      finished = true
+      if (flight === current) flight = null
+      resolve(ok)
+      if (ok) {
+        // Настоящую обложку открывает React. Клон убираем после её кадра.
+        images.forEach((img) => { img.style.boxShadow = 'none' })
+        requestAnimationFrame(() => requestAnimationFrame(remove))
+      } else {
+        fades.forEach((fade) => fade.cancel())
+        remove()
+      }
     }
+    const current = { images, cancel: () => { anim.cancel(); finish(false) } }
+    flight = current
+    anim.onfinish = () => finish(true)
+    anim.oncancel = () => finish(false)
   })
 }
 
@@ -145,12 +179,27 @@ function fly(fromImg, fromRect, toImg, toRect, duration, srcOverride) {
 // смонтирован, слайд пошёл) меряем финальный прямоугольник и летим туда.
 // 400ms — в такт слайду входа (.fullscreen-player transition transform).
 export function beginOpenMorph(miniImg, hiResSrc) {
+  cancelCoverMorph()
   const from = usableRect(miniImg)
-  if (!from || reducedMotion()) return Promise.resolve(false)
+  if (!from || animationsDisabled()) return Promise.resolve(false)
+  const source = snapshot(miniImg, from, hiResSrc)
   setActive(1)
   return new Promise((resolve) => {
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
+    const job = {
+      frame: 0,
+      cancel: () => {
+        if (pendingOpen !== job) return
+        pendingOpen = null
+        cancelAnimationFrame(job.frame)
+        setActive(-1)
+        resolve(false)
+      },
+    }
+    pendingOpen = job
+    job.frame = requestAnimationFrame(() => {
+      job.frame = requestAnimationFrame(() => {
+        if (pendingOpen !== job) return
+        pendingOpen = null
         const fullImg = document.querySelector('.fullscreen-art img.is-current')
         const to = fullImg ? usable(settledRect(fullImg)) : null
         if (!fullImg || !to) {
@@ -158,12 +207,12 @@ export function beginOpenMorph(miniImg, hiResSrc) {
           resolve(false)
           return
         }
-        fly(miniImg, from, fullImg, to, 400, hiResSrc).finally(() => {
+        fly(source, snapshot(fullImg, to), 400).then((ok) => {
           setActive(-1)
-          resolve(true)
+          resolve(ok)
         })
-      }),
-    )
+      })
+    })
   })
 }
 
@@ -171,11 +220,21 @@ export function beginOpenMorph(miniImg, hiResSrc) {
 // меряем оба и летим вниз к мини-плееру. 300ms — в такт .is-closing.
 export function beginCloseMorph() {
   const fullImg = document.querySelector('.fullscreen-art img.is-current')
-  const miniImg = document.querySelector('.player-cover')
-  const from = fullImg ? usableRect(fullImg) : null
+  const miniImg = document.querySelector('.player-cover-wrap .player-cover')
+  // Быстрое закрытие продолжает полёт из текущей позиции клона. Старый
+  // полёт отменяем: две обложки, летящие в разные стороны, давали скачок.
+  const flyingImg = flight?.images.reduce((a, b) =>
+    Number(getComputedStyle(a).opacity) >= Number(getComputedStyle(b).opacity) ? a : b,
+  )
+  const fromImg = flyingImg || fullImg
+  const from = usableRect(fromImg)
   const to = usableRect(miniImg)
-  if (!from || !to || reducedMotion()) return false
+  const source = from ? snapshot(fromImg, from) : null
+  const target = to ? snapshot(miniImg, to) : null
+  const waitingForOpen = Boolean(pendingOpen)
+  cancelCoverMorph()
+  if (!source || !target || waitingForOpen || animationsDisabled()) return false
   setActive(1)
-  fly(fullImg, from, miniImg, to, 300).finally(() => setActive(-1))
+  fly(source, target, 300).then(() => setActive(-1))
   return true
 }

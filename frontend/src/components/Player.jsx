@@ -13,7 +13,7 @@ import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady, preloadCover } from '../utils/media'
 import { analyzeHeroCover, guessHeroCover } from '../utils/heroCover'
-import { beginOpenMorph } from '../utils/coverMorph'
+import { beginOpenMorph, cancelCoverMorph } from '../utils/coverMorph'
 import { useTrackCarousel } from '../hooks/useTrackCarousel'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { usePowerSave } from '../hooks/usePowerSave'
@@ -407,6 +407,11 @@ function PlayerInner() {
   const openFullScreen = usePlayerStore((s) => s.openFullScreen)
   // Фуллскрин открыт/закрыт: мини-плеер скрывается, пока открыт фуллскрин.
   const isFullScreen = usePlayerStore((s) => s.isFullScreen)
+  // Системная кнопка «Назад» закрывает плеер напрямую через store. Убираем
+  // летящую обложку в том же коммите, до кадра с открывшейся страницей.
+  useLayoutEffect(() => {
+    if (!isFullScreen) cancelCoverMorph()
+  }, [isFullScreen])
   const isRepeatOne = usePlayerStore((s) => s.isRepeatOne)
   const isShuffle = usePlayerStore((s) => s.isShuffle)
   const toggleRepeatOne = usePlayerStore((s) => s.toggleRepeatOne)
@@ -646,6 +651,7 @@ function PlayerInner() {
   // если она уже прогрета и декодирована, иначе — с мини-обложкой, а в
   // плеере под картинкой лежит та же маленькая.
   const openFullScreenWithTransition = async (karaoke) => {
+    if (usePlayerStore.getState().isFullScreen) return
     try {
       await import('./FullScreenPlayer')
     } catch {
@@ -657,7 +663,9 @@ function PlayerInner() {
     // Прогретая в простое (эффект ниже) летит сразу в полном размере; нет —
     // клон летит с мини-обложкой, мягче, но не пустой, а полная проявится в
     // плеере, когда догрузится.
-    const hiRes = resolveCoverUrl(currentTrack.cover_url, true)
+    const state = usePlayerStore.getState()
+    if (state.isFullScreen || !state.currentTrack) return
+    const hiRes = resolveCoverUrl(state.currentTrack.cover_url, true)
     beginOpenMorph(miniCoverRef.current, isCoverReady(hiRes) ? hiRes : undefined)
     openFullScreen(karaoke)
   }
