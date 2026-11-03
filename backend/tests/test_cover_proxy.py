@@ -6,6 +6,7 @@ import uuid
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from app.routers import tracks
 
@@ -30,8 +31,11 @@ def test_rejects_non_http_scheme(client):
     assert resp.status_code == 400
 
 
-def test_proxies_allowed_cdn_url(client):
-    url = "https://i.ytimg.com/vi/abc/hqdefault.jpg"
+@pytest.mark.parametrize("url", [
+    "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+    "https://a1.sndcdn.com/images/default_avatar_large.png",
+])
+def test_proxies_allowed_cdn_url(client, url):
     with patch.object(
         httpx.AsyncClient, "get", return_value=_ok_response()
     ):

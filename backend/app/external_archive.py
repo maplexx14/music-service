@@ -229,6 +229,31 @@ async def _note_acoustic_features(
         )
 
 
+async def _archive_db_call(operation, *args, **kwargs):
+    # A cancelled background job still has to finish the worker operation
+    # before its finally block can close the same SQLAlchemy session.
+    pending = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError as cancelled:
+        try:
+            await pending
+        finally:
+            raise cancelled
+
+
+def _archive_track_snapshot(track: Track) -> Track:
+    # commit/rollback expire ORM attributes; a retry must reload them in a
+    # worker too, rather than issue an implicit SELECT on the event loop.
+    return Track(**{column.key: getattr(track, column.key) for column in Track.__table__.columns})
+
+
+def _commit_archive_changes(db: Session, track: Track, **changes) -> None:
+    for name, value in changes.items():
+        setattr(track, name, value)
+    db.commit()
+
+
 async def adopt_local_file(
     source: str, external_id: str, local_path: str, replace: bool = False,
     *, archive_key: Optional[str] = None,
@@ -282,39 +307,48 @@ async def adopt_local_file(
 
     # Привязываем объект к записи в БД, чтобы /tracks/{id}/stream отдавал трек
     # прямо из MinIO, а ленивая архивация больше не бралась за него.
-    db = SessionLocal()
+    def link_records():
+        # Keep the whole transaction, including pool checkout and close, in
+        # one worker. It must not stop live streams on this event loop.
+        db = SessionLocal()
+        try:
+            query = db.query(Track).filter(
+                Track.source == source, Track.external_id == str(external_id)
+            )
+            # Замена перепривязывает все записи трека: удаляемый объект не должен
+            # остаться чьим-то file_path.
+            tracks = query.all() if replace else [t for t in [query.first()] if t is not None]
+            stale = {old_path} if old_path else set()
+            for track in tracks:
+                if storage.is_minio_path(track.file_path):
+                    if not replace or track.file_path == file_path:
+                        continue
+                    stale.add(track.file_path)
+                track.file_path = file_path
+                track.file_size = file_size
+                if acoustic_features:
+                    track.acoustic_features = acoustic_features
+                    track.acoustic_analyzed_at = datetime.now(timezone.utc)
+                    track.acoustic_analyzer_version = ANALYZER_VERSION
+            if tracks:
+                db.commit()
+            return stale - {file_path}
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     try:
-        query = db.query(Track).filter(
-            Track.source == source, Track.external_id == str(external_id)
-        )
-        # Замена перепривязывает все записи трека: удаляемый объект не должен
-        # остаться чьим-то file_path.
-        tracks = query.all() if replace else [t for t in [query.first()] if t is not None]
-        stale = {old_path} if old_path else set()
-        for track in tracks:
-            if storage.is_minio_path(track.file_path):
-                if not replace or track.file_path == file_path:
-                    continue
-                stale.add(track.file_path)
-            track.file_path = file_path
-            track.file_size = file_size
-            if acoustic_features:
-                track.acoustic_features = acoustic_features
-                track.acoustic_analyzed_at = datetime.now(timezone.utc)
-                track.acoustic_analyzer_version = ANALYZER_VERSION
-        if tracks:
-            db.commit()
+        stale = await _archive_db_call(link_records)
         # Удаляем только после перепривязки записей: иначе /tracks/{id}/stream
         # успел бы сходить в уже удалённый объект. Другое расширение — другой
         # ключ, и без удаления поиск архива по префиксу мог бы снова найти
         # старую копию.
-        for path in stale - {file_path}:
+        for path in stale:
             await asyncio.to_thread(storage.remove_object_path, path)
     except Exception:  # noqa: BLE001
-        db.rollback()
         logger.exception("adopt: не удалось привязать %s/%s к записи", source, external_id)
-    finally:
-        db.close()
 
     logger.info("adopt: %s/%s → %s", source, external_id, file_path)
     return file_path
@@ -639,6 +673,8 @@ async def archive_track(
     """
     from app.routers.ytdlp import BotCheckError, TrackUnavailable, TransientResolveError
 
+    db_track = track
+    track = await _archive_db_call(_archive_track_snapshot, track)
     if track.source == "local":
         return ArchiveResult.LOCAL, None
     if storage.is_minio_path(track.file_path):
@@ -721,18 +757,19 @@ async def archive_track(
         new_cover = await _archive_cover(track, f"{track.source}/{track.external_id}", client)
 
         # Обновляем запись атомарно: file_path → MinIO, source сохраняем.
-        track.file_path = file_path
-        track.file_size = file_size
+        changes = {"file_path": file_path, "file_size": file_size}
         if acoustic_features:
-            track.acoustic_features = acoustic_features
-            track.acoustic_analyzed_at = datetime.now(timezone.utc)
-            track.acoustic_analyzer_version = ANALYZER_VERSION
+            changes.update(
+                acoustic_features=acoustic_features,
+                acoustic_analyzed_at=datetime.now(timezone.utc),
+                acoustic_analyzer_version=ANALYZER_VERSION,
+            )
         if new_cover:
-            track.cover_url = new_cover
-        db.commit()
+            changes["cover_url"] = new_cover
+        await _archive_db_call(_commit_archive_changes, db, db_track, **changes)
         return ArchiveResult.ARCHIVED, None
     except Exception:
-        db.rollback()
+        await _archive_db_call(db.rollback)
         logger.exception("archive: не удалось заархивировать трек %s", track.id)
         return ArchiveResult.FAILED, saved_tmp
     finally:
@@ -786,7 +823,7 @@ async def schedule_archive(track_id: int) -> None:
         async with _lazy_sem:
             db = SessionLocal()
             try:
-                track = db.get(Track, track_id)
+                track = await _archive_db_call(db.get, Track, track_id)
                 if track is None or storage.is_minio_path(track.file_path):
                     return
                 if track.source not in ARCHIVABLE_SOURCES:
@@ -823,7 +860,7 @@ async def schedule_archive(track_id: int) -> None:
                     await set_cache_async(fail_key, status, expire=ARCHIVE_FAIL_TTL)
                 logger.info("lazy-archive: трек %s → %s", track_id, status)
             finally:
-                db.close()
+                await _archive_db_call(db.close)
     except Exception:
         logger.exception("lazy-archive: ошибка для трека %s", track_id)
     finally:
@@ -859,6 +896,9 @@ async def _archive_external_core(
     client = httpx.AsyncClient(timeout=_DL_TIMEOUT, follow_redirects=True)
     saved_tmp = None
     try:
+        db_track = track
+        if track is not None:
+            track = await _archive_db_call(_archive_track_snapshot, track)
         try:
             if source == "ytmusic":
                 # _resolve_cached, а не _resolve_audio: см. _resolve_for_track —
@@ -941,20 +981,21 @@ async def _archive_external_core(
         # обложку. Если записи нет (трек играется из поиска/потока) — объект
         # просто лежит в MinIO и будет подхвачен при последующем импорте (find_music_object).
         if track is not None and not storage.is_minio_path(track.file_path):
-            track.file_path = file_path
-            track.file_size = file_size
+            changes = {"file_path": file_path, "file_size": file_size}
             if acoustic_features:
-                track.acoustic_features = acoustic_features
-                track.acoustic_analyzed_at = datetime.now(timezone.utc)
-                track.acoustic_analyzer_version = ANALYZER_VERSION
+                changes.update(
+                    acoustic_features=acoustic_features,
+                    acoustic_analyzed_at=datetime.now(timezone.utc),
+                    acoustic_analyzer_version=ANALYZER_VERSION,
+                )
             new_cover = await _archive_cover(track, f"{source}/{external_id}", client)
             if new_cover:
-                track.cover_url = new_cover
-            db.commit()
+                changes["cover_url"] = new_cover
+            await _archive_db_call(_commit_archive_changes, db, db_track, **changes)
         return ArchiveResult.ARCHIVED, None
     except Exception:
         if db is not None:
-            db.rollback()
+            await _archive_db_call(db.rollback)
         logger.exception("archive-ext: не удалось заархивировать %s/%s", source, external_id)
         return ArchiveResult.FAILED, saved_tmp
     finally:
@@ -1006,7 +1047,7 @@ async def schedule_archive_external(
             try:
                 # SQL — блокирующий вызов, а мы висим на том же event loop, что
                 # и живые стримы (архивация запускается из стрим-эндпоинта).
-                track = await asyncio.to_thread(
+                track = await _archive_db_call(
                     lambda: db.query(Track)
                     .filter(Track.source == source, Track.external_id == external_id)
                     .first()
@@ -1021,8 +1062,7 @@ async def schedule_archive_external(
                     # лежат в MinIO. Линкуем — следующий /tracks/{id}/stream
                     # отдаст файл напрямую из MinIO.
                     if track is not None:
-                        track.file_path = existing
-                        db.commit()
+                        await _archive_db_call(_commit_archive_changes, db, track, file_path=existing)
                         logger.info(
                             "lazy-archive-ext: %s/%s → linked existing object", source, external_id
                         )
@@ -1054,7 +1094,7 @@ async def schedule_archive_external(
                     )
                 logger.info("lazy-archive-ext: %s/%s → %s", source, external_id, status)
             finally:
-                db.close()
+                await _archive_db_call(db.close)
     except Exception:
         logger.exception("lazy-archive-ext: ошибка для %s/%s", source, external_id)
     finally:

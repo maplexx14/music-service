@@ -15,7 +15,7 @@ const noop = () => {}
 
 // Run the real Player effects, audio engine and APK bridge with controllable
 // media events. UI imports are stubs; no browser or device is needed.
-async function mountPlayer({ apk = true, ios = false, legacy = false } = {}) {
+async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = false } = {}) {
   let now = 0
   let dirty = true
   let hookIndex = 0
@@ -72,6 +72,7 @@ async function mountPlayer({ apk = true, ios = false, legacy = false } = {}) {
       this.buffered = { length: 0 }
       this.HAVE_METADATA = 1
       this.HAVE_CURRENT_DATA = 2
+      this.HAVE_FUTURE_DATA = 3
       this.HAVE_ENOUGH_DATA = 4
       this.NETWORK_EMPTY = 0
       this.NETWORK_IDLE = 1
@@ -171,7 +172,7 @@ async function mountPlayer({ apk = true, ios = false, legacy = false } = {}) {
     },
   }
   const navigator = {
-    userAgent: ios ? 'iPhone AppleWebKit/605.1 Safari/605.1' : 'Android vivo Chrome/130.0 BoltAndroid/1.8',
+    userAgent: ios ? 'iPhone AppleWebKit/605.1 Safari/605.1' : desktop ? 'Windows NT 10.0 Chrome/130.0 Edg/130.0' : 'Android vivo Chrome/130.0 BoltAndroid/1.8',
     mediaSession: {
       setActionHandler: (action, handler) => actions.set(action, handler),
       setPositionState: noop,
@@ -196,6 +197,7 @@ async function mountPlayer({ apk = true, ios = false, legacy = false } = {}) {
     '../utils/streamQuality': { withQuality: (url) => url, sameStream: (a, b) => a === b, isLowQuality: () => false },
     '../utils/playerDiag': { snapshotAudio: () => ({}), playWithDiag: (audio) => audio.play() },
     '../services/playerPersist': { takeRestorePosition: () => 0 },
+    '../services/api': { default: { post: async () => ({ data: {} }) } },
     '../config': { API_URL: '/api', SERVER_URL: window.location.origin },
     '../assets/default-cover.webp': { default: '/cover.webp' },
   }
@@ -235,11 +237,97 @@ async function mountPlayer({ apk = true, ios = false, legacy = false } = {}) {
   flush()
   const engine = cached.get('../services/audioEngine').namespace
   return {
-    state, messages, document, window, engine, flush,
+    state, messages, document, window, engine, actions, flush,
     elapse: (ms) => { now += ms },
     cleanup: () => { for (const hook of hooks) hook?.cleanup?.() },
   }
 }
+
+function bufferTo(audio, end) {
+  audio.buffered = { length: 1, start: () => 0, end: () => end }
+}
+
+test('desktop playback waits for thirty buffered seconds before competing with the current download', async () => {
+  const app = await mountPlayer({ apk: false, desktop: true })
+  const audio = app.engine.getActive()
+  audio.start()
+  bufferTo(audio, 9)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.getIdle().src, '')
+  audio.currentTime = 2
+  bufferTo(audio, 32)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.hasPrimedSrc('/api/tracks/2/stream'), true)
+  app.cleanup()
+})
+
+test('a fully downloaded track can prime its successor immediately', async () => {
+  const app = await mountPlayer({ apk: false, desktop: true })
+  const audio = app.engine.getActive()
+  audio.start()
+  bufferTo(audio, 180)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.hasPrimedSrc('/api/tracks/2/stream'), true)
+  app.cleanup()
+})
+
+test('an early desktop skip loads the requested track immediately while speculative preload is deferred', async () => {
+  const app = await mountPlayer({ apk: false, desktop: true })
+  const audio = app.engine.getActive()
+  audio.start()
+  bufferTo(audio, 9)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.getIdle().src, '')
+  app.actions.get('nexttrack')()
+  app.flush()
+  assert.equal(app.state.currentTrack.id, 2)
+  assert.equal(app.engine.getActive(), audio)
+  assert.equal(audio.src, 'https://boltmusic.lat/api/tracks/2/stream')
+  assert.equal(audio.paused, false)
+  app.cleanup()
+})
+
+test('background playback still primes near the end when the current buffer is small', async () => {
+  const app = await mountPlayer({ apk: false, ios: true })
+  const audio = app.engine.getActive()
+  app.document.hidden = true
+  audio.start()
+  audio.currentTime = 140
+  bufferTo(audio, 145)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.hasPrimedSrc('/api/tracks/2/stream'), true)
+  app.cleanup()
+})
+
+test('repeat-one avoids downloading another track even with a full buffer', async () => {
+  const app = await mountPlayer({ apk: false, desktop: true })
+  const audio = app.engine.getActive()
+  app.state.isRepeatOne = true
+  audio.start()
+  bufferTo(audio, 180)
+  audio.emit('timeupdate')
+  assert.equal(app.engine.getIdle().src, '')
+  app.cleanup()
+})
+
+test('a primed background successor starts through the existing audio slot without another load', async () => {
+  const app = await mountPlayer({ apk: false, ios: true })
+  const audio = app.engine.getActive()
+  audio.start()
+  bufferTo(audio, 180)
+  audio.emit('timeupdate')
+  const next = app.engine.getIdle()
+  next.readyState = next.HAVE_FUTURE_DATA
+  const loads = next.loadCalls
+  app.document.hidden = true
+  app.actions.get('nexttrack')()
+  app.flush()
+  assert.equal(app.engine.getActive(), next)
+  assert.equal(app.state.currentTrack.id, 2)
+  assert.equal(next.loadCalls, loads)
+  assert.ok(next.playCalls > 0)
+  app.cleanup()
+})
 
 test('APK plays four cold tracks in the background and releases playback intent at the end', async () => {
   const app = await mountPlayer()

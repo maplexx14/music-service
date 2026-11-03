@@ -155,6 +155,7 @@ _COVER_CDN_HOSTS = (
     "i3.sndcdn.com",
     "i4.sndcdn.com",
     "i.sndcdn.com",
+    "a1.sndcdn.com",
     "cf-media.sndcdn.com",
     # Spotify-обложки (i.scdn.co) и аватары Yandex Music: фронт заворачивает
     # ВСЕ http(s)-cover_url в этот прокси (utils/media.js), без хоста в списке
