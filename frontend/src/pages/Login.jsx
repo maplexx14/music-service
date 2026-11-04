@@ -1,16 +1,19 @@
 import { useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
-import { useNavigate } from 'react-router-dom'
-import { Download } from 'lucide-react'
+import { Download, Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-react'
 import { androidDownloadUrl, installedAndroidVersion } from '../services/androidRelease'
 import { safeNextPath } from '../services/navigation'
+import loginHeart from '../assets/liked-hero-heart.webp'
+import loginWordmark from '../assets/bolt-wordmark.webp'
 import './Auth.css'
+import './Login.css'
 
 function Login() {
   const native = !!installedAndroidVersion(navigator.userAgent) || !!window.__boltAndroid
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [passwordVisible, setPasswordVisible] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   // Второй шаг входа. mfaToken держим в стейте формы, а не в сторе: он не
@@ -119,6 +122,7 @@ function Login() {
 
   const resetMfaStep = () => {
     setMfaToken(null)
+    setPasswordVisible(false)
     setCode('')
     setMfaMethods([])
     setEmailMasked('')
@@ -136,151 +140,185 @@ function Login() {
   const hasEmail = mfaMethods.includes('email')
   const codeHint = `Введите 6-значный код, отправленный на ${emailMasked || 'вашу почту'}.`
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <div className="auth-header">
-          <h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}
-          <p>{mfaToken ? 'Подтвердите вход' : 'Войдите в свой аккаунт'}</p>
+    <main className="auth-container login-page" data-scrollable>
+      <div className="auth-card login-card">
+        <div className="login-art" aria-hidden="true">
+          <img src={loginHeart} alt="" width="269" height="271" draggable="false" />
         </div>
 
-        {mfaToken ? (
-          <form onSubmit={handleMfaSubmit} className="auth-form">
-            {error && <div className="error-message">{error}</div>}
-
-            {emailNotice && <div className="success-message">{emailNotice}</div>}
-
-            {/* Юзер, не включавший 2FA, иначе не понимает, почему у него вдруг
-                спрашивают код, и принимает это за поломку входа. */}
-            {newDevice && (
-              <div className="auth-notice">
-                Вход с нового устройства. Подтвердите, что это вы — устройство
-                запомнится, и в следующий раз код не понадобится.
-              </div>
-            )}
-
-            <p className="auth-hint">{codeHint}</p>
-
-            <div className="form-group">
-              <label htmlFor="mfa-code">Код подтверждения</label>
-              <input className="field"
-                id="mfa-code"
-                type="text"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-                autoFocus
-                autoComplete="one-time-code"
-                inputMode="numeric"
-                placeholder="123456"
-              />
+        <section className="login-panel" aria-labelledby="login-title">
+          <div className="login-content">
+            <div className="auth-header">
+              <h1 id="login-title">
+                <img className="login-wordmark" src={loginWordmark} alt="bolt" width="665" height="248" />
+              </h1>
+              {mfaToken && <p>Подтвердите вход</p>}
             </div>
 
-            <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
-              {loading ? 'Проверка...' : 'Подтвердить'}
-            </button>
+            {mfaToken ? (
+              <form onSubmit={handleMfaSubmit} className="auth-form">
+                {error && <div className="error-message" role="alert">{error}</div>}
 
-            {hasEmail && (
-              <button
-                type="button"
-                className="btn btn--secondary btn--lg btn--block auth-button"
-                onClick={handleSendEmailCode}
-                disabled={emailSending}
-              >
-                {emailSending
-                  ? 'Отправка...'
-                  : emailCodeSent
-                    ? 'Отправить код ещё раз'
-                    : 'Прислать код на почту'}
-              </button>
-            )}
+                {emailNotice && <div className="success-message" role="status">{emailNotice}</div>}
 
-            <button type="button" className="auth-link-button" onClick={handleBackToPassword}>
-              Войти под другим аккаунтом
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleSubmit} className="auth-form">
-            {justVerified && !error && (
-              <div className="success-message">
-                Почта подтверждена. Войдите, чтобы продолжить.
-              </div>
-            )}
-
-            {error && <div className="error-message">{error}</div>}
-
-            {unverified && (
-              <>
-                {resendState === 'sent' && (
-                  <div className="success-message">
-                    Отправили новое письмо со ссылкой
+                {/* Юзер, не включавший 2FA, иначе не понимает, почему у него вдруг
+                    спрашивают код, и принимает это за поломку входа. */}
+                {newDevice && (
+                  <div className="auth-notice">
+                    Вход с нового устройства. Подтвердите, что это вы — устройство
+                    запомнится, и в следующий раз код не понадобится.
                   </div>
                 )}
-                {resendState && !['sending', 'sent'].includes(resendState) && (
-                  <div className="error-message">{resendState}</div>
-                )}
-                <button
-                  type="button"
-                  className="btn btn--secondary btn--lg btn--block auth-button"
-                  onClick={handleResend}
-                  disabled={resendState === 'sending'}
-                >
-                  {resendState === 'sending'
-                    ? 'Отправка...'
-                    : 'Отправить письмо ещё раз'}
+
+                <p className="auth-hint" id="login-code-hint">{codeHint}</p>
+
+                <div className="form-group">
+                  <label htmlFor="mfa-code">Код подтверждения</label>
+                  <input className="field"
+                    id="mfa-code"
+                    type="text"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    required
+                    autoFocus
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
+                    aria-describedby="login-code-hint"
+                    placeholder="123456"
+                  />
+                </div>
+
+                <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
+                  {loading ? 'Проверка...' : 'Подтвердить'}
                 </button>
-              </>
+
+                {hasEmail && (
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--lg btn--block auth-button"
+                    onClick={handleSendEmailCode}
+                    disabled={emailSending}
+                  >
+                    {emailSending
+                      ? 'Отправка...'
+                      : emailCodeSent
+                        ? 'Отправить код ещё раз'
+                        : 'Прислать код на почту'}
+                  </button>
+                )}
+
+                <button type="button" className="auth-link-button" onClick={handleBackToPassword}>
+                  Войти под другим аккаунтом
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="auth-form">
+                {justVerified && !error && (
+                  <div className="success-message" role="status">
+                    Почта подтверждена. Войдите, чтобы продолжить.
+                  </div>
+                )}
+
+                {error && <div className="error-message" role="alert">{error}</div>}
+
+                {unverified && (
+                  <>
+                    {resendState === 'sent' && (
+                      <div className="success-message" role="status">
+                        Отправили новое письмо со ссылкой
+                      </div>
+                    )}
+                    {resendState && !['sending', 'sent'].includes(resendState) && (
+                      <div className="error-message" role="alert">{resendState}</div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--lg btn--block auth-button"
+                      onClick={handleResend}
+                      disabled={resendState === 'sending'}
+                    >
+                      {resendState === 'sending'
+                        ? 'Отправка...'
+                        : 'Отправить письмо ещё раз'}
+                    </button>
+                  </>
+                )}
+
+                <div className="form-group">
+                  <label className="login-sr-only" htmlFor="username">Имя пользователя или email</label>
+                  <div className="login-field-wrap">
+                    <UserRound className="login-field-icon" size={18} aria-hidden="true" />
+                    <input className="field"
+                      id="username"
+                      name="username"
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      required
+                      autoComplete="username"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      placeholder="Логин или email"
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="login-sr-only" htmlFor="password">Пароль</label>
+                  <div className="login-field-wrap">
+                    <LockKeyhole className="login-field-icon" size={18} aria-hidden="true" />
+                    <input className="field login-password-input"
+                      id="password"
+                      name="password"
+                      type={passwordVisible ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      autoComplete="current-password"
+                      placeholder="Пароль"
+                    />
+                    <button
+                      className="login-password-toggle"
+                      type="button"
+                      onClick={() => setPasswordVisible((visible) => !visible)}
+                      aria-label={passwordVisible ? 'Скрыть пароль' : 'Показать пароль'}
+                      aria-pressed={passwordVisible}
+                      aria-controls="password"
+                    >
+                      {passwordVisible
+                        ? <EyeOff size={18} aria-hidden="true" />
+                        : <Eye size={18} aria-hidden="true" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="login-actions">
+                  <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
+                    {loading ? 'Вход...' : 'Войти'}
+                  </button>
+                  <Link className="login-forgot" to="/forgot-password">Забыли пароль?</Link>
+                </div>
+              </form>
             )}
 
-            <div className="form-group">
-              <label htmlFor="username">Имя пользователя или email</label>
-              <input className="field"
-                id="username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                autoComplete="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-              />
-            </div>
-
-            <div className="form-group">
-              <div className="form-label-row">
-                <label htmlFor="password">Пароль</label>
-                <Link to="/forgot-password">Забыли пароль?</Link>
+            {!mfaToken && (
+              <div className="login-footer">
+                <div className="login-divider"><span>или</span></div>
+                <Link className="btn btn--secondary btn--lg btn--block" to="/register">
+                  Создать аккаунт
+                </Link>
+                {!native && (
+                  <a className="btn btn--ghost btn--sm auth-apk-download" href={androidDownloadUrl()} download="bolt.apk">
+                    <Download size={16} aria-hidden="true" /> Скачать для Android
+                  </a>
+                )}
               </div>
-              <input className="field"
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-              />
-            </div>
-
-            <button type="submit" className="btn btn--primary btn--lg btn--block auth-button" disabled={loading}>
-              {loading ? 'Вход...' : 'Войти'}
-            </button>
-          </form>
-        )}
-
-        {!mfaToken && (
-          <div className="auth-footer">
-            <p>
-              Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
-            </p>
-            {!native && (
-              <a className="btn btn--ghost btn--sm auth-apk-download" href={androidDownloadUrl()} download="bolt.apk">
-                <Download size={16} aria-hidden="true" /> Скачать APK для Android
-              </a>
             )}
           </div>
-        )}
+        </section>
       </div>
-    </div>
+    </main>
   )
 }
 

@@ -1,0 +1,285 @@
+/* Цвета, поля, кнопки и фокус наследуются от общих стилей bolt. */
+.login-page {
+  color-scheme: dark;
+  padding: max(28px, var(--safe-top)) max(24px, env(safe-area-inset-right))
+    max(28px, var(--safe-bottom)) max(24px, env(safe-area-inset-left));
+}
+
+.login-page .login-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: 100%;
+  max-width: 960px;
+  min-height: 640px;
+  padding: 8px;
+  border-radius: var(--radius-dialog);
+}
+
+.login-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 36px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-app);
+}
+
+/* Фирменное сердце с молнией в точечной фактуре референса. */
+.login-art img {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  object-fit: contain;
+  -webkit-mask-image: radial-gradient(circle, #000 1.5px, transparent 1.8px);
+  mask-image: radial-gradient(circle, #000 1.5px, transparent 1.8px);
+  -webkit-mask-size: 5px 5px;
+  mask-size: 5px 5px;
+  pointer-events: none;
+}
+
+.login-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 40px clamp(24px, 3vw, 40px);
+}
+
+.login-content {
+  width: 100%;
+  max-width: 350px;
+}
+
+.login-page .auth-header {
+  margin-bottom: 32px;
+}
+
+.login-page .auth-header h1 {
+  margin-bottom: 0;
+  line-height: 1;
+}
+
+.login-wordmark {
+  display: block;
+  width: 176px;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+
+.login-page .auth-header p {
+  margin-top: 16px;
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  text-wrap: balance;
+}
+
+.login-page .auth-form {
+  gap: 16px;
+}
+
+.login-page .form-group {
+  gap: 8px;
+}
+
+.login-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.login-field-wrap {
+  position: relative;
+}
+
+.login-field-icon {
+  position: absolute;
+  top: 15px;
+  left: 16px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.login-field-wrap .field {
+  padding-left: 44px;
+}
+
+.login-field-wrap .login-password-input {
+  padding-right: 48px;
+}
+
+.login-password-toggle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.login-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.login-forgot {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  min-height: 32px;
+  color: var(--brand-accent-text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.5;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor, transparent 55%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+/* Длинные подписи помещаются и на экране шириной 320px. */
+.login-page .btn--lg {
+  height: auto;
+  min-height: var(--control-h-lg);
+  padding: 12px 20px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.login-page .auth-button {
+  margin-top: 4px;
+}
+
+.login-actions .auth-button {
+  margin-top: 0;
+}
+
+.login-footer {
+  margin-top: 24px;
+  text-align: center;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.login-page .auth-apk-download {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 16px;
+  padding: 0 6px;
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+.login-page .auth-hint,
+.login-page .auth-notice,
+.login-page .error-message,
+.login-page .success-message {
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.login-page .auth-link-button {
+  min-height: 44px;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .login-password-toggle:hover,
+  .login-forgot:hover {
+    color: var(--text-primary);
+  }
+
+  .login-forgot:hover {
+    text-decoration: underline;
+  }
+}
+
+/* На телефоне меняется раскладка; поверхности и тени общие с версией для ПК. */
+@media (max-width: 760px) {
+  .login-page .login-card {
+    position: relative;
+    isolation: isolate;
+    max-width: 440px;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .login-art {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    padding: 0;
+    border-radius: inherit;
+    background: transparent;
+    opacity: 0.14;
+    pointer-events: none;
+  }
+
+  .login-art img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .login-panel {
+    position: relative;
+    z-index: 1;
+    padding: 40px 24px;
+  }
+}
+
+@media (max-width: 380px) {
+  .login-page {
+    padding-inline: max(14px, env(safe-area-inset-left)) max(14px, env(safe-area-inset-right));
+  }
+
+  .login-panel {
+    padding-inline: 16px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .login-forgot {
+    min-height: 44px;
+  }
+}
