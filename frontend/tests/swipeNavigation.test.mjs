@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
+import { swipeSpring } from '../src/utils/swipeSpring.js'
 
 const source = await readFile(new URL('../src/hooks/useSwipeNavigation.js', import.meta.url), 'utf8')
 const { code } = await transform(source, { format: 'cjs', target: 'es2020' })
@@ -15,6 +16,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
   const routeCommits = new Set()
   const pans = []
   const navigation = []
+  const commits = []
   const operations = []
   let holds = 0
   let timerId = 0
@@ -73,6 +75,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
       finishActiveTransition() {},
     },
     '../utils/haptics': { haptic() {}, HAPTIC: { selection: 1 } },
+    '../utils/swipeSpring': { swipeSpring },
   }
   const hook = { exports: {} }
   script.runInContext(vm.createContext({
@@ -92,10 +95,11 @@ function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
     enabled: true,
     onNext: hasNext ? () => navigation.push('/search') : null,
     onPan: (...args) => pans.push(args),
+    onCommit: (direction) => commits.push(direction),
     targets: { left: 'tab:/search' },
   })
   return {
-    screen, under, pans, navigation, operations, timers, routeCommits, listeners,
+    screen, under, pans, navigation, commits, operations, timers, routeCommits, listeners,
     get holds() { return holds },
     touch(name, x, y = 200, timeStamp = 0) {
       const point = { clientX: x, clientY: y }
@@ -131,13 +135,18 @@ test('A fast swipe starts from its release position and navigates when both scre
   const exit = app.screen.animations[0]
   const enter = app.under.animations[0]
   assert.equal(exit.frames[0].transform, 'translate3d(-100px, 0, 0)')
-  assert.equal(exit.frames[1].transform, 'translate3d(-438px, 0, 0)')
-  assert.equal(enter.frames[0].transform, 'translate3d(72.5px, 0, 0)')
-  assert.equal(enter.frames[1].transform, 'translate3d(0px, 0, 0)')
+  assert.equal(exit.frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  assert.equal(enter.frames[0].transform, 'translate3d(290px, 0, 0)')
+  assert.equal(enter.frames.at(-1).transform, 'translate3d(0px, 0, 0)')
   assert.deepEqual(exit.options, enter.options)
-  const y1 = Number(exit.options.easing.split(',')[1])
-  const initialVelocity = (y1 / 0.23) * 338 / exit.options.duration
-  assert.ok(Math.abs(initialVelocity - 2.5) < 0.001, `Unexpected release velocity: ${initialVelocity}`)
+  assert.equal(exit.options.easing, 'linear')
+  const motion = app.pans.at(-1)[3]
+  assert.deepEqual(motion.samples.map(({ offset }) => offset), exit.frames.map(({ offset }) => offset))
+  for (let index = 0; index < exit.frames.length; index += 1) {
+    const outgoing = motion.samples[index].value
+    const incoming = Number(enter.frames[index].transform.match(/translate3d\(([-\d.]+)/)[1])
+    assert.ok(Math.abs(incoming - outgoing - 390) < 0.0001, 'Tab screens drifted apart')
+  }
   assert.equal(app.timers.size, 0)
   assert.equal(app.holds, 1)
   exit.finish()
@@ -294,4 +303,119 @@ test('A cold destination fallback is cleaned up when the swipe hook unmounts', a
   assert.equal(app.routeCommits.size, 0)
   assert.equal(app.timers.size, 0)
   assert.equal(app.holds, 0)
+})
+
+test('The release coordinate is included before a spring takes over', () => {
+  const app = mountSwipe()
+  app.touch('start', 300)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 180, 200, 50)
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-120px, 0, 0)')
+  app.cleanup()
+})
+
+test('Pausing before release does not reuse the earlier flick velocity', () => {
+  const app = mountSwipe()
+  app.touch('start', 300)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 110)
+  const samples = app.pans.at(-1)[3].samples
+  // A spring released at rest builds speed gently; the old flick would
+  // travel around 20 px in its first 8 ms.
+  assert.ok(Math.abs(samples[1].value - samples[0].value) < 12)
+  app.cleanup()
+})
+
+test('Reversing a far drag before release cancels the tab change', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300)
+  app.touch('move', 80, 200, 80)
+  app.touch('move', 120, 200, 100)
+  app.touch('move', 160, 200, 120)
+  app.touch('end', 160, 200, 121)
+  assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+  app.screen.animations[0].finish()
+  app.under.animations[0].finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, [])
+  app.cleanup()
+})
+
+test('Touching an in-flight tab transition grabs its visible position without committing or jumping', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  const original = app.screen.animations[0]
+  app.screen.presentationOffset = -180
+  app.touch('start', 250, 200, 100)
+  assert.equal(app.screen.style.transform, 'translate3d(-180px, 0, 0)')
+  assert.equal(original.cancelled, true)
+  assert.deepEqual(app.navigation, [])
+  app.touch('move', 230, 200, 120)
+  assert.equal(app.screen.style.transform, 'translate3d(-200px, 0, 0)')
+  await flushAnimations()
+  assert.deepEqual(app.navigation, [])
+  app.cleanup()
+})
+
+test('Cancelling a grabbed tab transition also clears its pending navigation highlight', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  assert.deepEqual(app.commits, [-1])
+  app.screen.presentationOffset = -180
+  app.touch('start', 200, 200, 100)
+  app.touch('move', 240, 200, 120)
+  app.touch('end', 240, 200, 121)
+  assert.deepEqual(app.commits, [-1, null])
+  app.screen.animations.at(-1).finish()
+  app.under.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, [])
+  assert.equal(app.holds, 0)
+  app.cleanup()
+})
+
+test('A tap or cancelled touch on an in-flight transition resumes instead of leaving screens frozen', async () => {
+  for (const end of ['end', 'cancel']) {
+    const app = mountSwipe()
+    app.touch('start', 300)
+    app.touch('move', 200, 200, 40)
+    app.touch('end', 200, 200, 41)
+    app.screen.presentationOffset = -180
+    app.touch('start', 250, 200, 100)
+    app.touch(end, 250, 200, 120)
+    assert.equal(app.screen.animations[1].frames[0].transform, 'translate3d(-180px, 0, 0)')
+    app.screen.animations[1].finish()
+    app.under.animations[1].finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search'])
+    app.commit()
+    assert.equal(app.holds, 0)
+    app.cleanup()
+  }
+})
+
+test('A fast flick close to the destination settles promptly with no overshoot or long tail', () => {
+  const motion = swipeSpring(-380, -390, -2.5)
+  assert.ok(motion.duration < 100, `Near-complete flick took ${motion.duration} ms`)
+  assert.equal(motion.samples[0].value, -380)
+  assert.equal(motion.samples.at(-1).value, -390)
+  for (let index = 1; index < motion.samples.length; index += 1) {
+    assert.ok(motion.samples[index].value <= motion.samples[index - 1].value)
+    assert.ok(motion.samples[index].value >= -390)
+  }
+})
+
+test('The final spring frame removes less than a fraction of a pixel at rest', () => {
+  for (const [from, to, velocity] of [[-100, -390, -2.5], [-30, 0, 0], [-120, 0, 1], [-300, -390, 0]]) {
+    const motion = swipeSpring(from, to, velocity)
+    const last = motion.samples.at(-1)
+    const previous = motion.samples.at(-2)
+    assert.ok(Math.abs(last.value - previous.value) < 0.3)
+    assert.equal(last.offset, 1)
+    assert.ok(motion.duration < 400)
+  }
 })

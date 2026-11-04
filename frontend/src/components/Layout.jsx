@@ -108,6 +108,7 @@ function Layout({ renderRoutes }) {
   const location = useLocation()
   const navigate = useNavigate()
   const mainRef = useRef(null)
+  const navPillAnimationRef = useRef(null)
   // Ячейка, куда уже едет подсветка меню, пока роутер не закоммитил экран:
   // переход идёт в startTransition и под стеком смонтированных экранов
   // коммитится заметно позже тапа или свайпа.
@@ -209,15 +210,21 @@ function Layout({ renderRoutes }) {
   // Подсветка меню переезжает в момент отпускания пальца: иначе она ждала бы
   // доезда экранов и коммита роутера и отставала от свайпа.
   const handleSwipeCommit = (dir) => {
+    if (dir === null) {
+      setPendingNavIndex(null)
+      return
+    }
     const to = showMobileBack ? backPath : dir > 0 ? prevTab : nextTab
     if (to) setPendingNavIndex(navIndexOf(to))
   }
   // Капсула меню едет вместе с экраном: сдвиг экрана на ширину — ровно одна
-  // ячейка, тем же переходом. Инлайн-сдвиг снимается в конце жеста, когда
+  // ячейка, теми же кадрами. Инлайн-сдвиг снимается в конце жеста, когда
   // капсулу уже держит pendingNavIndex или маршрут — на том же месте.
-  const handleSwipePan = (x, width, transition) => {
+  const handleSwipePan = (x, width, transition, motion) => {
     const pill = navPillRef.current
     if (!pill) return
+    navPillAnimationRef.current?.cancel()
+    navPillAnimationRef.current = null
     if (x === null || tabIndex < 0) {
       pill.style.transition = ''
       pill.style.transform = ''
@@ -226,6 +233,14 @@ function Layout({ renderRoutes }) {
     const pos = Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - x / width))
     pill.style.transition = transition
     pill.style.transform = `translateX(${pos * 100}%)`
+    if (motion?.duration) {
+      // Те же кадры пружины, что у экранов: отдельный CSS-переход расходился
+      // с ними по скорости при отпускании и по моменту остановки.
+      navPillAnimationRef.current = pill.animate(motion.samples.map(({ value, offset }) => ({
+        transform: `translateX(${Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - value / width)) * 100}%)`,
+        offset,
+      })), { duration: motion.duration, easing: 'linear' })
+    }
   }
   useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
