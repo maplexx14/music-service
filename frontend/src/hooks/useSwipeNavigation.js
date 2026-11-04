@@ -61,6 +61,7 @@ const SHADOW_REACH = 48
 // идёт в 2.25 раза быстрее средней скорости доезда.
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 const EASE_START_SLOPE = 2.25
+const SETTLE_EASE_X1 = 0.23
 const IGNORE = 'input, textarea, select, [contenteditable="true"], [role="slider"], [data-swipe-ignore]'
 // Полоса у левой кромки, где iOS в установленной PWA запускает свой жест
 // «назад» по истории: он листает снапшот WebKit без наших экранов, и после
@@ -80,25 +81,6 @@ const TAP_SLOP_PX = 10
 const isStandalone = () =>
   window.navigator.standalone === true || window.matchMedia?.('(display-mode: standalone)').matches
 
-// Энергосбережение на iOS режет обновление страницы до 30 кадров/с (касания
-// приходят чаще, но рисуется каждое второе), и экран под пальцем шёл
-// ступеньками. При таком темпе каждый сдвиг отдаём CSS-переходу длиной в
-// кадр: промежуточные положения дорисовывает системный композитор, который
-// не урезан, — визуально снова плавно, ценой отставания от пальца на кадр.
-// Темп меряется по rAF во время жеста и помнится до следующего.
-const SLOW_FRAME_MS = 25
-let frameMs = 16.7
-
-function trackFrameRate() {
-  let last = 0
-  let raf = requestAnimationFrame(function tick(now) {
-    if (last) frameMs = 0.8 * frameMs + 0.2 * Math.min(100, now - last)
-    last = now
-    raf = requestAnimationFrame(tick)
-  })
-  return () => cancelAnimationFrame(raf)
-}
-
 // Есть ли между целью касания и контейнером горизонтально прокручиваемый
 // элемент — такой жест принадлежит ему.
 function insideHorizontalScroller(target, root) {
@@ -116,8 +98,8 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
   // сразу, не дожидаясь доезда экранов и коммита роутера.
-  // onPan(x, width, transition) — экран под пальцем сдвинут на x px тем же
-  // CSS-переходом (капсула нижнего меню едет синхронно с ним); onPan(null) —
+  // onPan(x, width, transition) — экран под пальцем сдвинут на x px;
+  // капсула нижнего меню едет с той же кривой и длительностью; onPan(null) —
   // жест закончен, сдвиг снят.
   actionsRef.current = {
     right: onBack || onPrev || null,
@@ -132,8 +114,8 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     if (!container || !enabled) return undefined
 
     let g = null
-    // Экраны текущего жеста: тот, что под пальцем, его контейнер прокрутки и
-    // экран под ним (under, сторона underDir). Живут до конца доезда.
+    // Экраны текущего жеста: тот, что под пальцем, и экран под ним (under,
+    // сторона underDir). Живут до конца доезда.
     let pan = null
     // Переход через View Transition: новый жест ждёт его конца.
     let busy = false
@@ -144,23 +126,40 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     let finishLive = null
     // Маршрут сменён, но роутер ещё не закоммитил экран — новый жест ждёт.
     let committing = false
-    let settleTimer = 0
+    let cancelRouteCommit = null
+    let routeCommitTimer = 0
     // Пауза WebGL-фона, пока экран под пальцем или доезжает (см. navigation.js).
     let releaseHeavy = null
-    let stopFrameTrack = null
 
     const activeScreen = () => container.querySelector(':scope > .screen[data-active]')
     const screenById = (id) => (id ? container.querySelector(`:scope > .screen[data-screen="${id}"]`) : null)
 
     // Сколько ехать distance px, чтобы стартовать со скоростью пальца v (px/мс).
-    const settleMs = (distance, v) => {
+    const settleMotion = (distance, v) => {
+      if (distance < 0.5 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        return { duration: 0, easing: EASE }
+      }
       const ms = v > 0 ? (EASE_START_SLOPE * distance) / v : MAX_MS
-      return Math.round(Math.min(MAX_MS, Math.max(MIN_MS, ms)))
+      const duration = Math.round(Math.min(MAX_MS, Math.max(MIN_MS, ms)))
+      // Ограничение длительности меняет начальную скорость фиксированной
+      // кривой. Подбираем её наклон по скорости пальца уже после ограничения.
+      const y1 = Math.min(1, (Math.max(0, v) * duration * SETTLE_EASE_X1) / distance)
+      return { duration, easing: `cubic-bezier(${SETTLE_EASE_X1}, ${y1.toFixed(4)}, 0.32, 1)` }
     }
 
-    const transitionFor = (ms) => {
-      if (ms) return `transform ${ms}ms ${EASE}`
+    const transitionFor = ({ duration, easing }) => {
+      if (duration) return `transform ${duration}ms ${easing}`
       return 'none'
+    }
+
+    const transformAt = (x) => `translate3d(${x}px, 0, 0)`
+    const underOffset = (x) => -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
+
+    const cancelAnimations = () => {
+      if (!pan) return
+      const animations = pan.animations
+      pan.animations = null
+      animations?.forEach((animation) => animation.cancel())
     }
 
     const clearScreen = (el) => {
@@ -175,16 +174,14 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
     const reset = () => {
       if (pan) {
+        cancelAnimations()
         actionsRef.current.onPan?.(null)
         clearScreen(pan.screen)
         if (pan.under) clearScreen(pan.under)
-        if (pan.scroller) pan.scroller.style.overflowY = ''
         pan = null
       }
       releaseHeavy?.()
       releaseHeavy = null
-      stopFrameTrack?.()
-      stopFrameTrack = null
     }
 
     // Экран под пальцем со стороны dir (0 — никакого). Порядок слоёв — инлайн
@@ -206,61 +203,85 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       pan.screen.style.boxShadow = shadow ? `${-dir * 12}px 0 32px rgba(0, 0, 0, 0.55)` : ''
     }
 
-    const setOffset = (x, ms = 0) => {
-      const transition = transitionFor(ms)
+    const setOffset = (x, transition = 'none') => {
       const st = pan.screen.style
-      st.transition = transition
-      st.transform = x ? `translate3d(${x}px, 0, 0)` : ''
+      st.transition = 'none'
+      st.transform = transformAt(x)
+      pan.offset = x
       // Довод за край ради тени (SHADOW_REACH) — не сдвиг вкладки: индикатор
       // таб-бара проскочил бы свою ячейку.
       actionsRef.current.onPan?.(Math.sign(x) * Math.min(Math.abs(x), pan.width), pan.width, transition)
       if (pan.under) {
         // Нижний экран едет с параллаксом: от сдвига на четверть ширины к нулю.
-        const ux = -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
-        pan.under.style.transition = transition
-        pan.under.style.transform = `translate3d(${ux}px, 0, 0)`
+        pan.under.style.transition = 'none'
+        pan.under.style.transform = transformAt(underOffset(x))
       }
     }
 
-    // Возврат экрана на место. Таймер сброса снимается новым жестом: иначе
-    // reset() сработал бы посреди следующей протяжки — кадр с экраном на нуле
-    // и прокрутка списка под пальцем.
-    const settle = (ms) => {
-      setOffset(0, ms)
-      clearTimeout(settleTimer)
-      settleTimer = setTimeout(reset, ms + 40)
+    // Явные начальные кадры не дают браузеру склеить последнее движение
+    // пальца с доездом. Оба экрана анимирует композитор; конец сообщает сама
+    // анимация, без паузы таймера после визуальной остановки.
+    const animateOffset = (x, motion, done) => {
+      const finished = pan
+      const from = pan.offset
+      const underFrom = underOffset(from)
+      cancelAnimations()
+      setOffset(x, transitionFor(motion))
+      if (!motion.duration) {
+        done()
+        return
+      }
+      const animations = [pan.screen.animate(
+        [{ transform: transformAt(from) }, { transform: transformAt(x) }], motion,
+      )]
+      if (pan.under) {
+        animations.push(pan.under.animate(
+          [{ transform: transformAt(underFrom) }, { transform: transformAt(underOffset(x)) }], motion,
+        ))
+      }
+      pan.animations = animations
+      Promise.all(animations.map((animation) => animation.finished)).then(() => {
+        if (pan === finished && pan.animations === animations) done()
+      }, () => {})
     }
+
+    const settle = (motion, done) => animateOffset(0, motion, () => {
+      reset()
+      done?.()
+    })
 
     // Живой переход: экраны доезжают, потом меняется маршрут. Новый экран к
     // этому моменту уже на месте, поэтому коммит роутера ничего не двигает, а
     // инлайн-стили снимаются в его layout-эффекте — до отрисовки кадра.
-    const commitLive = (dir, ms, action) => {
+    const commitLive = (dir, motion, action) => {
       const finished = pan
-      setOffset(dir * (pan.width + SHADOW_REACH), ms)
-      let timer = 0
+      let navigated = false
       const navigateNow = () => {
-        clearTimeout(timer)
+        if (navigated || pan !== finished) return
+        navigated = true
         finishLive = null
+        cancelAnimations()
         committing = true
         // Новое касание оборвало доезд — ставим экраны в конечные точки сразу.
         finished.screen.style.transition = 'none'
         finished.under.style.transition = 'none'
         finished.under.style.transform = ''
         const done = () => {
-          clearTimeout(fallback)
+          clearTimeout(routeCommitTimer)
+          cancelRouteCommit = null
           committing = false
           if (pan === finished) reset()
         }
-        const cancel = afterNextRouteCommit(done)
-        const fallback = setTimeout(() => {
-          cancel()
+        cancelRouteCommit = afterNextRouteCommit(done)
+        routeCommitTimer = setTimeout(() => {
+          cancelRouteCommit?.()
           done()
         }, 1000)
         skipNextTransitionAnimation()
         action()
       }
-      timer = setTimeout(navigateNow, ms + 20)
       finishLive = navigateNow
+      animateOffset(dir * (pan.width + SHADOW_REACH), motion, navigateNow)
     }
 
     const onStart = (e) => {
@@ -281,7 +302,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const target = e.target instanceof Element ? e.target : null
       if (!target || target.closest(IGNORE) || insideHorizontalScroller(target, container)) return
       const t = e.touches[0]
-      g = { x: t.clientX, y: t.clientY, dx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
+      // Геометрия до записей стилей: первый кадр свайпа не должен ждать
+      // синхронной раскладки после показа соседнего экрана.
+      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
     }
 
     const onMove = (e) => {
@@ -292,7 +315,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         return
       }
       const t = e.touches[0]
-      const dx = t.clientX - g.x
+      let dx = t.clientX - g.x
       const dy = t.clientY - g.y
       if (!g.axis) {
         if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
@@ -305,24 +328,30 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           return
         }
         g.axis = 'x'
-        clearTimeout(settleTimer)
+        // Новый жест во время возврата подхватывает экран там, где он сейчас
+        // виден, вместо скачка к логическому нулю.
+        if (pan?.screen === screen) {
+          const offset = new DOMMatrixReadOnly(getComputedStyle(screen).transform).m41
+          const offsetAction = offset > 0 ? actionsRef.current.right : actionsRef.current.left
+          const rawOffset = offsetAction ? offset : offset / RESISTANCE
+          g.x -= rawOffset
+          dx += rawOffset
+        }
         reset()
         releaseHeavy = holdHeavyAnimations()
-        stopFrameTrack = trackFrameRate()
         pan = {
           screen,
-          scroller: screen.querySelector(':scope > .screen-scroll'),
           under: null,
           underDir: 0,
-          width: container.clientWidth || window.innerWidth,
+          width: g.width,
+          offset: 0,
+          animations: null,
         }
         screen.style.willChange = 'transform'
         screen.style.zIndex = '2'
-        // Горизонтальный жест забираем целиком: список под пальцем не должен
-        // одновременно прокручиваться. Через overflow, а не preventDefault —
-        // тот требует непассивного touchmove, и тогда КАЖДОЕ движение пальца
-        // при обычной прокрутке ждало бы главный поток.
-        if (pan.scroller) pan.scroller.style.overflowY = 'hidden'
+        // touch-action: pan-y pinch-zoom уже разделяет оси. Менять overflow
+        // здесь нельзя: WebKit пересоздаёт слой прокрутки в начале и конце
+        // жеста, заново растеризуя содержимое экрана.
       }
       g.lastT = e.timeStamp
       g.samples.push({ x: t.clientX, t: e.timeStamp })
@@ -341,28 +370,27 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x' || !pan) return
-      stopFrameTrack?.()
-      stopFrameTrack = null
       const dir = dx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       const width = pan.width
       const commit =
         action && (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > FLING_MIN_PX))
       if (!commit) {
-        settle(settleMs(Math.abs(dx), -v * dir))
+        settle(settleMotion(Math.abs(dx), -v * dir))
         return
       }
       haptic(HAPTIC.selection)
       actionsRef.current.onCommit?.(dir)
-      const ms = settleMs(width - Math.abs(dx), v * dir)
+      const motion = settleMotion(Math.max(0, width + SHADOW_REACH - Math.abs(dx)), v * dir)
+      const ms = motion.duration
 
       if (pan.under) {
-        commitLive(dir, ms, action)
+        commitLive(dir, motion, action)
         return
       }
 
       busy = true
-      actionsRef.current.onPan?.(dir * width, width, transitionFor(ms))
+      actionsRef.current.onPan?.(dir * width, width, transitionFor(motion))
       // Под пальцем пусто — переход доигрывает View Transition: старый экран
       // (снапшот) уезжает от того места, где его отпустил палец, новый
       // одновременно въезжает из-под него.
@@ -372,12 +400,12 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       root.setProperty('--swipe-under', `${-dir * ENTER_SHIFT * width}px`)
       root.setProperty('--swipe-shadow', `${-dir * 12}px`)
       root.setProperty('--swipe-ms', `${ms}ms`)
-      let fallback = 0
       // Новый жест — только когда переход доиграл: дерево ::view-transition
       // пропускает касания к живому экрану под снапшотами, и протяжка во
       // время анимации невидимо двигала бы его, а по окончании он прыгал бы.
       const cancelSwipe = swipeNextTransition((finished) => {
-        clearTimeout(fallback)
+        clearTimeout(routeCommitTimer)
+        cancelRouteCommit = null
         reset()
         interruptible = true
         finished.finally(() => {
@@ -386,13 +414,14 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         })
       })
       if (cancelSwipe) {
+        cancelRouteCommit = cancelSwipe
         // Навигации не случилось — вернуть экран на место.
-        fallback = setTimeout(() => {
+        routeCommitTimer = setTimeout(() => {
           cancelSwipe()
-          settle(MAX_MS)
-          setTimeout(() => {
+          cancelRouteCommit = null
+          settle(settleMotion(Math.abs(pan.offset), 0), () => {
             busy = false
-          }, MAX_MS + 40)
+          })
         }, 1000)
         action()
         return
@@ -400,10 +429,11 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
       // Без View Transitions (старый WebKit, lite-mode, reduced motion):
       // старый экран доезжает, новый на коммите въезжает коротким сдвигом.
-      setOffset(dir * width, ms)
+      animateOffset(dir * width, motion, () => {})
       skipNextTransitionAnimation()
-      const cancel = afterNextRouteCommit(() => {
-        clearTimeout(fallback)
+      cancelRouteCommit = afterNextRouteCommit(() => {
+        clearTimeout(routeCommitTimer)
+        cancelRouteCommit = null
         reset()
         busy = false
         if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
@@ -412,8 +442,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           { duration: ENTER_MS, easing: EASE },
         )
       })
-      fallback = setTimeout(() => {
-        cancel()
+      routeCommitTimer = setTimeout(() => {
+        cancelRouteCommit?.()
+        cancelRouteCommit = null
         reset()
         busy = false
       }, 1500)
@@ -427,7 +458,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const wasDragging = g.axis === 'x'
       g = null
       if (!wasDragging || !pan) return
-      settle(MAX_MS)
+      settle(settleMotion(Math.abs(pan.offset), 0))
     }
 
     // Касание у кромки, забранное у системы. preventDefault отменяет и
@@ -478,7 +509,8 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       container.removeEventListener('touchmove', onMove)
       container.removeEventListener('touchend', onEnd)
       container.removeEventListener('touchcancel', onCancel)
-      clearTimeout(settleTimer)
+      cancelRouteCommit?.()
+      clearTimeout(routeCommitTimer)
       finishLive = null
       reset()
     }
