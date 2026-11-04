@@ -20,20 +20,9 @@ import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { plural } from '../utils/format'
 import './Sidebar.css'
 
-function Sidebar() {
+function Sidebar({ isCollapsed, onToggleCollapse }) {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
-  const [isCollapsed, setIsCollapsed] = useState(() => {
-    const saved = localStorage.getItem('sidebar-collapsed')
-    return saved ? JSON.parse(saved) : false
-  })
-
-  useEffect(() => {
-    localStorage.setItem('sidebar-collapsed', JSON.stringify(isCollapsed))
-    // Dispatch custom event to notify Layout
-    window.dispatchEvent(new Event('sidebarToggle'))
-  }, [isCollapsed])
-
   // Плейлисты медиатеки — тот же список и кэш, что у вкладки «Медиатека»:
   // создание и удаление там сразу видны здесь. null — ещё не загрузили:
   // подсказку «пусто» не показываем, пока ответ не пришёл.
@@ -46,10 +35,6 @@ function Sidebar() {
       .then((response) => writeCache(LIBRARY_CACHE_KEY, response.data))
       .catch(() => {})
   }, [importsCompleted])
-
-  const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed)
-  }
 
   const navItems = [
     { path: '/', icon: Home, label: 'Главная' },
@@ -65,7 +50,14 @@ function Sidebar() {
         <Link to="/" className="logo" aria-label="На главную">
           {!isCollapsed && <img src="/logoBolt1.webp" alt="" className="logo-img" />}
         </Link>
-        <button className="collapse-btn" onClick={toggleCollapse} title={isCollapsed ? 'Развернуть' : 'Свернуть'}>
+        <button
+          type="button"
+          className="collapse-btn"
+          onClick={onToggleCollapse}
+          title={isCollapsed ? 'Развернуть' : 'Свернуть'}
+          aria-label={isCollapsed ? 'Развернуть боковую панель' : 'Свернуть боковую панель'}
+          aria-expanded={!isCollapsed}
+        >
           {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
         </button>
       </div>

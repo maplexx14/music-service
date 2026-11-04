@@ -1,4 +1,5 @@
 .layout {
+  --page-padding: 32px;
   --player-height: 76px;
   --player-bottom: 12px;
   --bottom-controls-clearance: 0px;
@@ -82,7 +83,28 @@
   --main-pad-bottom: 24px;
 }
 
+/* Общие отступы доступны и при открытии страницы по прямой ссылке. */
+.page-container {
+  padding: var(--page-padding, 32px);
+  min-height: 100%;
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .layout {
+    --page-padding: 24px;
+    --player-height: 116px;
+  }
+
+  .main-content {
+    transition: none;
+  }
+}
+
 @media (max-width: 768px) {
+  .page-container {
+    padding: 0 16px 150px;
+  }
+
   .layout {
     --mobile-nav-height: 72px;
     --mobile-nav-bottom: calc(var(--safe-bottom) - 2px);
@@ -263,4 +285,10 @@
     color: var(--text-primary);
   }
 
+}
+
+@media (max-width: 380px) {
+  .page-container {
+    padding-inline: 12px;
+  }
 }

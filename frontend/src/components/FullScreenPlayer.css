@@ -1449,3 +1449,43 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 }
 
+/* В книжной ориентации текст получает всю ширину под обложкой и названием. */
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-content {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 16px;
+    max-width: 880px;
+    padding: 16px 0 0;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-art {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-art img {
+    width: min(300px, 32vw, 22dvh);
+    height: min(300px, 32vw, 22dvh);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-info {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: center;
+    align-items: center;
+    max-width: 640px;
+    padding: 0;
+    text-align: center;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-lyrics-desktop {
+    grid-column: 1;
+    grid-row: 3;
+    max-width: none;
+    min-height: 0;
+    padding: 0;
+  }
+}
+

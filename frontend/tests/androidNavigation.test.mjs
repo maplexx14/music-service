@@ -6,11 +6,20 @@ import vm from 'node:vm'
 const hookSource = await readFile(new URL('../src/hooks/usePwaBackHandler.js', import.meta.url), 'utf8')
 const bridgeSource = await readFile(new URL('../../android/app/src/main/assets/bridge.js', import.meta.url), 'utf8')
 
-async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullscreen = false, karaoke = false, tab } = {}) {
+async function mountBackHandler({ native = true, android = true, standalone = true, pathname = '/', idx = 0, fullscreen = false, karaoke = false, tab } = {}) {
   const effects = []
+  const refs = []
+  let effectIndex = 0
+  let refIndex = 0
+  let pendingEffects = []
   const navigation = []
   const pushes = []
   const listeners = new Map()
+  const timers = []
+  const toasts = []
+  const entries = [{ state: { idx, key: 'page', usr: { from: 'library', __boltTab: tab } }, href: `https://boltmusic.lat${pathname}` }]
+  let historyIndex = 0
+  let pendingBacks = 0
   const player = {
     isFullScreen: fullscreen,
     karaokeMode: karaoke,
@@ -28,35 +37,53 @@ async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullsc
   }
   const storeHook = (state) => Object.assign((select) => select(state), { getState: () => state })
   const window = {
-    __boltAndroid: true,
+    __boltAndroid: android,
     __boltNativeBack: native,
-    location: { pathname, href: `https://boltmusic.lat${pathname}` },
+    location: new URL(entries[0].href),
     history: {
-      state: { idx, usr: { __boltTab: tab } },
-      pushState(state) { this.state = state; pushes.push(state) },
-      back() { navigation.push('history.back') },
+      get state() { return entries[historyIndex].state },
+      pushState(state, _, href) {
+        entries.splice(historyIndex + 1, Infinity, { state, href })
+        historyIndex += 1
+        window.location = new URL(href)
+        pushes.push(state)
+      },
+      back() { navigation.push('history.back'); pendingBacks += 1 },
     },
     addEventListener(name, listener) { listeners.set(name, listener) },
     removeEventListener(name, listener) { if (listeners.get(name) === listener) listeners.delete(name) },
   }
-  const context = vm.createContext({ window, setTimeout, Date })
+  const navigate = (...args) => navigation.push(args)
+  const context = vm.createContext({ window, setTimeout: (fn) => timers.push(fn), Date })
   const modules = {
-    react: { useEffect: (effect) => effects.push(effect), useRef: (current) => ({ current }) },
+    react: {
+      useEffect(effect, deps) {
+        const index = effectIndex++
+        const previous = effects[index]
+        if (!previous || !deps || deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+          pendingEffects.push(() => {
+            previous?.cleanup?.()
+            effects[index] = { deps, cleanup: effect() }
+          })
+        }
+      },
+      useRef(current) { return refs[refIndex++] ??= { current } },
+    },
     'react-router-dom': {
-      useLocation: () => window.location,
-      useNavigate: () => (...args) => navigation.push(args),
+      useLocation: () => ({ pathname: window.location.pathname, state: window.history.state.usr }),
+      useNavigate: () => navigate,
     },
     '../store/playerStore': { usePlayerStore: storeHook(player) },
     '../store/addToPlaylistStore': { useAddToPlaylistStore: storeHook(add) },
     '../store/censorDialogStore': { useCensorDialogStore: storeHook(censor) },
     '../services/navigation': {
-      isAndroid: true,
-      isStandalone: true,
+      isAndroid: android,
+      isStandalone: standalone,
       canGoBack: () => window.history.state.idx > 0,
       isTabRoot: (path) => ['/', '/search', '/liked', '/playlists'].includes(path),
       tabForLocation: ({ pathname, state }) => state?.__boltTab ?? (pathname.startsWith('/albums') ? '/playlists' : pathname.startsWith('/artists') ? '/search' : '/'),
     },
-    '../store/toastStore': { toast: { info() {} } },
+    '../store/toastStore': { toast: { info: (...args) => toasts.push(args) } },
     '../services/androidApp': { isAndroidApp: () => window.__boltAndroid },
   }
   const hook = new vm.SourceTextModule(hookSource, { context })
@@ -68,9 +95,29 @@ async function mountBackHandler({ native = true, pathname = '/', idx = 0, fullsc
     }, { context })
   })
   await hook.evaluate()
-  hook.namespace.usePwaBackHandler()
-  const cleanups = effects.map((effect) => effect()).filter(Boolean)
-  return { window, player, add, censor, navigation, pushes, listeners, cleanup: () => cleanups.forEach((fn) => fn()) }
+  const rerender = () => {
+    effectIndex = 0
+    refIndex = 0
+    pendingEffects = []
+    hook.namespace.usePwaBackHandler()
+    pendingEffects.forEach((effect) => effect())
+  }
+  // Like browser history, back() schedules a popstate after the closing render.
+  const flushBack = () => {
+    assert.ok(pendingBacks > 0, 'Expected a pending history.back()')
+    assert.ok(historyIndex > 0, 'Expected a previous history entry')
+    pendingBacks -= 1
+    historyIndex -= 1
+    window.location = new URL(entries[historyIndex].href)
+    listeners.get('popstate')?.({ state: window.history.state })
+    rerender()
+    timers.splice(0).forEach((timer) => timer())
+  }
+  rerender()
+  return {
+    window, player, add, censor, navigation, pushes, listeners, toasts, rerender, flushBack,
+    cleanup: () => effects.forEach((effect) => effect.cleanup?.()),
+  }
 }
 
 for (const karaoke of [false, true]) {
@@ -161,8 +208,76 @@ test('Older APKs retain browser history support until the shell is updated', asy
   assert.equal(app.pushes.length, 2)
   assert.equal(app.pushes[0].__boltBuffer, true)
   assert.equal(app.pushes[1].__boltModal, 'fullscreen')
-  app.listeners.get('popstate')()
+  app.window.history.back()
+  app.flushBack()
   assert.equal(app.player.isFullScreen, false)
+  app.cleanup()
+})
+
+for (const [platform, android, standalone] of [
+  ['Android browser', true, false],
+  ['iOS PWA', false, true],
+]) {
+  for (const pathname of ['/', '/search?q=test#results', '/liked', '/playlists', '/playlists/42', '/albums/1', '/artists/1', '/settings/playback']) {
+    test(`${platform}: closing the player preserves ${pathname} and its history state`, async () => {
+      const app = await mountBackHandler({ native: false, android, standalone, pathname })
+      const originalUrl = app.window.location.href
+      const originalState = structuredClone(app.window.history.state)
+      app.player.isFullScreen = true
+      app.rerender()
+      app.player.closeFullScreen()
+      app.rerender()
+      app.flushBack()
+
+      assert.deepEqual(app.navigation, ['history.back'])
+      assert.equal(app.window.location.href, originalUrl)
+      assert.deepEqual(structuredClone(app.window.history.state), originalState)
+      assert.equal(app.player.isFullScreen, false)
+      assert.equal(app.player.isPlaying, true)
+      assert.deepEqual(app.toasts, [])
+      app.cleanup()
+    })
+  }
+}
+
+for (const dialog of ['add', 'censor']) {
+  test(`Closing the ${dialog} dialog leaves the fullscreen player open`, async () => {
+    const app = await mountBackHandler({ native: false, pathname: '/search', fullscreen: true })
+    if (dialog === 'add') app.add.request = { track: { id: 42 } }
+    else app.censor.track = { id: 42 }
+    app.rerender()
+    app[dialog].close()
+    app.rerender()
+    app.flushBack()
+
+    assert.equal(app.player.isFullScreen, true)
+    assert.equal(app.window.history.state.__boltModal, 'fullscreen')
+    assert.deepEqual(app.navigation, ['history.back'])
+
+    // A real back gesture still closes the player without navigating away.
+    app.window.history.back()
+    app.flushBack()
+    assert.equal(app.player.isFullScreen, false)
+    assert.deepEqual(app.navigation, ['history.back', 'history.back'])
+    app.cleanup()
+  })
+}
+
+test('Closing and reopening the player does not consume the next real back gesture', async () => {
+  const app = await mountBackHandler({ native: false, pathname: '/liked' })
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    app.player.isFullScreen = true
+    app.rerender()
+    assert.equal(app.window.history.state.__boltModal, 'fullscreen')
+    app.player.closeFullScreen()
+    app.rerender()
+    app.flushBack()
+  }
+  assert.deepEqual(app.navigation, ['history.back', 'history.back'])
+  app.window.history.back()
+  app.flushBack()
+  assert.equal(app.navigation.at(-1)[0], '/')
+  assert.equal(app.navigation.at(-1)[1].replace, true)
   app.cleanup()
 })
 

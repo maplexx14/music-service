@@ -4,6 +4,7 @@ import { Home, Search, Library, Heart } from 'lucide-react'
 import { usePlayerStore } from '../store/playerStore'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
+import { useSidebarLayout } from '../hooks/useSidebarLayout'
 import MeterProfiler from './MeterProfiler'
 import { isTabRoot, tabForLocation, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
@@ -97,10 +98,7 @@ const navIndexOf = (pathname) =>
 
 function Layout({ renderRoutes }) {
   usePwaBackHandler()
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('sidebar-collapsed')
-    return saved && JSON.parse(saved) ? 72 : 240
-  })
+  const { isCollapsed, sidebarWidth, toggleCollapse } = useSidebarLayout()
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false
     return window.innerWidth <= 768
@@ -140,26 +138,6 @@ function Layout({ renderRoutes }) {
     navigate(`${location.pathname}${rest ? `?${rest}` : ''}`, { replace: true })
     runAppAction(action)
   }, [location.search, location.pathname, navigate])
-
-  useEffect(() => {
-    const handleStorageChange = () => {
-      const saved = localStorage.getItem('sidebar-collapsed')
-      setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
-    }
-    
-    window.addEventListener('storage', handleStorageChange)
-    // Also listen for custom event from Sidebar
-    const handleSidebarToggle = () => {
-      const saved = localStorage.getItem('sidebar-collapsed')
-      setSidebarWidth(saved && JSON.parse(saved) ? 72 : 240)
-    }
-    window.addEventListener('sidebarToggle', handleSidebarToggle)
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange)
-      window.removeEventListener('sidebarToggle', handleSidebarToggle)
-    }
-  }, [])
 
   useEffect(() => {
     const handleResize = () => {
@@ -383,7 +361,7 @@ function Layout({ renderRoutes }) {
 
   return (
     <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
-      <Sidebar />
+      <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />
       <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
         <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />
       </main>

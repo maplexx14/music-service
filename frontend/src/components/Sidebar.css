@@ -17,6 +17,12 @@
   padding: 24px 12px;
 }
 
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .sidebar {
+    transition: none;
+  }
+}
+
 .sidebar.collapsed .nav-item {
   padding: 12px;
   justify-content: center;

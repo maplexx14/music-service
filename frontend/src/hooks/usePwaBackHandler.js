@@ -47,6 +47,7 @@ export function usePwaBackHandler() {
   const lastBackPressRef = useRef(0)
   const isHandlingPopRef = useRef(false)
   const pushedModalsRef = useRef([])
+  const pendingModalPopsRef = useRef(0)
 
   const stateRef = useRef({
     isFullScreen,
@@ -144,6 +145,7 @@ export function usePwaBackHandler() {
       if (!isHandlingPopRef.current && pushedModalsRef.current.includes('fullscreen')) {
         pushedModalsRef.current = pushedModalsRef.current.filter((m) => m !== 'fullscreen')
         if (window.history.state?.__boltModal === 'fullscreen') {
+          pendingModalPopsRef.current += 1
           window.history.back()
         }
       }
@@ -166,6 +168,7 @@ export function usePwaBackHandler() {
       if (!isHandlingPopRef.current && pushedModalsRef.current.includes('add-to-playlist')) {
         pushedModalsRef.current = pushedModalsRef.current.filter((m) => m !== 'add-to-playlist')
         if (window.history.state?.__boltModal === 'add-to-playlist') {
+          pendingModalPopsRef.current += 1
           window.history.back()
         }
       }
@@ -188,6 +191,7 @@ export function usePwaBackHandler() {
       if (!isHandlingPopRef.current && pushedModalsRef.current.includes('censor')) {
         pushedModalsRef.current = pushedModalsRef.current.filter((m) => m !== 'censor')
         if (window.history.state?.__boltModal === 'censor') {
+          pendingModalPopsRef.current += 1
           window.history.back()
         }
       }
@@ -200,6 +204,14 @@ export function usePwaBackHandler() {
     if (usesNativeBack()) return
 
     const handlePopState = () => {
+      // Кнопка или свайп уже закрыли окно; history.back() лишь убирает его
+      // запись. Этот popstate не должен закрывать нижнее окно или уводить
+      // со страницы. Ждём само событие: на мобильном оно может задержаться.
+      if (pendingModalPopsRef.current > 0) {
+        pendingModalPopsRef.current -= 1
+        return
+      }
+
       isHandlingPopRef.current = true
 
       try {

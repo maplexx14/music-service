@@ -172,6 +172,7 @@ html.power-save .liked-heart-beat {
 
 .playlist-tracks {
   margin-top: 32px;
+  container-type: inline-size;
 }
 
 .tracks-table {
@@ -219,7 +220,7 @@ html.power-save .liked-heart-beat {
 }
 
 .tracks-table th:first-child {
-  width: 40px;
+  width: 52px;
   text-align: center;
 }
 
@@ -251,7 +252,9 @@ html.power-save .liked-heart-beat {
 .track-number {
   text-align: center;
   color: var(--text-secondary);
-  width: 40px;
+  width: 52px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Ячейка остаётся частью таблицы; flex нужен только её содержимому. */
@@ -610,5 +613,23 @@ html.power-save .liked-heart-beat {
     background:
       radial-gradient(90% 90% at 30% 20%, var(--hero-c1), transparent 70%),
       linear-gradient(135deg, var(--hero-c2) 0%, var(--hero-c3) 100%);
+  }
+}
+
+/* Учитываем ширину списка, в том числе при развёрнутой боковой панели. */
+@media (min-width: 769px) {
+  @container (max-width: 680px) {
+    .tracks-table th:nth-child(3):nth-last-child(3),
+    .track-row .track-album {
+      display: none;
+    }
+
+    .tracks-table th:nth-child(2):nth-last-child(4) {
+      width: auto;
+    }
+
+    .tracks-table th:nth-last-child(2) {
+      width: 104px;
+    }
   }
 }

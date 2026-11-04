@@ -12,6 +12,19 @@
   letter-spacing: -0.01em;
 }
 
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .playlists-header {
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .playlists-header .playlists-header-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+
 .create-playlist-form {
   background-color: var(--surface-1);
   border-radius: 8px;

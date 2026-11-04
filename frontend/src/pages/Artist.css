@@ -279,10 +279,39 @@ html.no-gpu .cover-backdrop-tint {
    под плеер) и сама держит их внутри, иначе под ней полоса фона страницы. */
 .hero-page-sheet {
   flex: 1;
-  margin: 32px -32px calc(-32px - var(--main-pad-bottom, 0px));
-  padding: 16px 32px calc(32px + var(--main-pad-bottom, 0px));
+  margin: 32px calc(-1 * var(--page-padding, 32px)) calc(-1 * var(--page-padding, 32px) - var(--main-pad-bottom, 0px));
+  padding: 16px var(--page-padding, 32px) calc(var(--page-padding, 32px) + var(--main-pad-bottom, 0px));
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .artist-hero {
+    padding: 16px 0 24px;
+  }
+
+  .artist-hero-content {
+    gap: 24px;
+  }
+
+  .artist-avatar {
+    width: 160px;
+    height: 160px;
+  }
+
+  .artist-name {
+    font-size: clamp(32px, 4.5vw, 56px);
+    line-height: 1.1;
+  }
+
+  .artist-toolbar {
+    padding-top: 20px;
+  }
+
+  .playlist-actions {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
 }
 
 @media (max-width: 768px) {

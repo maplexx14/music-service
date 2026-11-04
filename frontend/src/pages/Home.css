@@ -996,3 +996,25 @@
   font-size: var(--text-sm);
   margin: 0 0 16px;
 }
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .hero-section {
+    min-height: clamp(440px, 40dvh, 620px);
+    padding: 32px 24px;
+    margin-bottom: 24px;
+    --disc-size: min(400px, 42vw, 26dvh);
+  }
+
+  .hero-section.has-vinyl {
+    --disc-size: min(360px, 38vw, 24dvh);
+  }
+
+  .wave-heading {
+    font-size: clamp(44px, 5vw, 68px);
+  }
+
+  .section-title {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
