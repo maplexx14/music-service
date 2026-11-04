@@ -2,9 +2,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { transform } from 'esbuild'
 
 const hookSource = await readFile(new URL('../src/hooks/usePwaBackHandler.js', import.meta.url), 'utf8')
 const bridgeSource = await readFile(new URL('../../android/app/src/main/assets/bridge.js', import.meta.url), 'utf8')
+
+// Use the stable Script API after this suite hit SIGSEGV on Node 20 CI with
+// experimental VM modules. Compile the real hook once; each case gets a fresh
+// context and its own mocked imports, stores, history and React effects.
+const { code: hookCode } = await transform(hookSource, {
+  format: 'cjs', target: 'es2020', sourcefile: 'usePwaBackHandler.js',
+})
+const hookScript = new vm.Script(hookCode, { filename: 'usePwaBackHandler.js' })
 
 async function mountBackHandler({ native = true, android = true, standalone = true, pathname = '/', idx = 0, fullscreen = false, karaoke = false, tab } = {}) {
   const effects = []
@@ -54,7 +63,6 @@ async function mountBackHandler({ native = true, android = true, standalone = tr
     removeEventListener(name, listener) { if (listeners.get(name) === listener) listeners.delete(name) },
   }
   const navigate = (...args) => navigation.push(args)
-  const context = vm.createContext({ window, setTimeout: (fn) => timers.push(fn), Date })
   const modules = {
     react: {
       useEffect(effect, deps) {
@@ -86,20 +94,23 @@ async function mountBackHandler({ native = true, android = true, standalone = tr
     '../store/toastStore': { toast: { info: (...args) => toasts.push(args) } },
     '../services/androidApp': { isAndroidApp: () => window.__boltAndroid },
   }
-  const hook = new vm.SourceTextModule(hookSource, { context })
-  await hook.link((name) => {
-    const exports = modules[name]
-    assert.ok(exports, `Unexpected import: ${name}`)
-    return new vm.SyntheticModule(Object.keys(exports), function () {
-      for (const [key, value] of Object.entries(exports)) this.setExport(key, value)
-    }, { context })
+  const hook = { exports: {} }
+  const context = vm.createContext({
+    window, setTimeout: (fn) => timers.push(fn), Date,
+    module: hook,
+    exports: hook.exports,
+    require(name) {
+      const exports = modules[name]
+      assert.ok(exports, `Unexpected import: ${name}`)
+      return exports
+    },
   })
-  await hook.evaluate()
+  hookScript.runInContext(context)
   const rerender = () => {
     effectIndex = 0
     refIndex = 0
     pendingEffects = []
-    hook.namespace.usePwaBackHandler()
+    hook.exports.usePwaBackHandler()
     pendingEffects.forEach((effect) => effect())
   }
   // Like browser history, back() schedules a popstate after the closing render.
