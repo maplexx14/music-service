@@ -101,10 +101,10 @@ function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
   return {
     screen, under, pans, navigation, commits, operations, timers, routeCommits, listeners,
     get holds() { return holds },
-    touch(name, x, y = 200, timeStamp = 0) {
+    touch(name, x, y = 200, timeStamp = 0, extra = {}) {
       const point = { clientX: x, clientY: y }
       listeners.get(`touch${name}`).callback({
-        target: screen, touches: name === 'end' ? [] : [point], changedTouches: [point], timeStamp,
+        target: screen, touches: name === 'end' ? [] : [point], changedTouches: [point], timeStamp, ...extra,
       })
     },
     commit() { const callbacks = [...routeCommits]; routeCommits.clear(); callbacks.forEach((callback) => callback()) },
@@ -418,4 +418,80 @@ test('The final spring frame removes less than a fraction of a pixel at rest', (
     assert.equal(last.offset, 1)
     assert.ok(motion.duration < 400)
   }
+})
+
+test('A short flick still commits when touchend arrives after its last movement', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 245, 200, 25)
+  app.touch('end', 245, 200, 90)
+  assert.equal(app.screen.animations.at(-1).frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+test('A tiny coordinate correction while lifting does not cancel a completed drag', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 150, 200, 40)
+  app.touch('move', 150, 200, 100)
+  app.touch('move', 151, 200, 101)
+  app.touch('end', 153, 200, 103)
+  assert.equal(app.screen.animations.at(-1).frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+test('Continuing a grabbed transition cannot drag its destination past the viewport', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  app.screen.presentationOffset = -330
+  app.touch('start', 250, 200, 100)
+  app.touch('move', 150, 200, 120)
+  assert.equal(app.screen.style.transform, 'translate3d(-390px, 0, 0)')
+  assert.equal(app.under.style.transform, 'translate3d(0px, 0, 0)')
+  app.cleanup()
+})
+
+test('Regrabbing a transition retains its compositor layers and heavy-animation hold', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  app.screen.presentationOffset = -180
+  app.touch('start', 250, 200, 100)
+  app.operations.length = 0
+  app.touch('move', 230, 200, 120)
+  assert.equal(app.operations.some((operation) => operation.endsWith(':willChange')), false)
+  assert.equal(app.pans.some(([x]) => x === null), false)
+  app.cleanup()
+})
+
+test('An unexpected compositor cancellation still completes a committed transition', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  app.screen.animations.at(-1).cancel()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
+  assert.equal(app.holds, 0)
+  app.cleanup()
+})
+
+test('Adding a second finger cannot leave the dragged screen frozen between tabs', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 160, 200, 40)
+  app.touch('start', 160, 200, 50, { touches: [{ clientX: 160, clientY: 200 }, { clientX: 180, clientY: 230 }] })
+  app.touch('end', 160, 200, 80)
+  assert.ok(app.screen.animations.length > 0, 'The partial drag had no completion animation')
+  assert.equal(app.screen.animations.at(-1).frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+  app.screen.animations.at(-1).finish()
+  app.under.animations.at(-1).finish()
+  await flushAnimations()
+  assert.equal(app.holds, 0)
+  assert.equal(app.screen.style.transform, '')
+  app.cleanup()
 })

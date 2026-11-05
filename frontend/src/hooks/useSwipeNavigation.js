@@ -40,6 +40,8 @@ const AXIS_RATIO = 1.2
 const COMMIT_FRACTION = 0.25
 const FLING_VELOCITY = 0.3 // px/мс
 const FLING_MIN_PX = 20
+// Небольшая поправка координаты при поднятии пальца не означает «передумал».
+const REVERSE_MIN_PX = 24
 // Скорость — по смещению за последние VELOCITY_WINDOW_MS, а не по одному
 // событию: перед отпусканием палец притормаживает, и последнее событие
 // занижало скорость броска.
@@ -228,7 +230,15 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       pan.animations = animations
       Promise.all(animations.map((animation) => animation.finished)).then(() => {
         if (pan === finished && pan.animations === animations) done()
-      }, () => {})
+      }, () => {
+        // Наш cancelAnimations сначала снимает ссылку. Если её сохранили,
+        // анимацию отменил композитор: выбранный переход всё равно завершаем.
+        if (pan === finished && pan.animations === animations) {
+          cancelAnimations()
+          setOffset(x)
+          done()
+        }
+      })
     }
 
     const settle = (motion, done) => {
@@ -283,8 +293,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
     const onStart = (e) => {
       if (e.touches.length !== 1) {
-        g = null
-        resumePaused()
+        onCancel()
         return
       }
       if (finishLive && pan) {
@@ -312,14 +321,13 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const t = e.touches[0]
       // Геометрия до записей стилей: первый кадр свайпа не должен ждать
       // синхронной раскладки после показа соседнего экрана.
-      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
+      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, minDx: 0, maxDx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
     }
 
     const onMove = (e) => {
       if (!g) return
       if (e.touches.length !== 1) {
-        g = null
-        reset()
+        onCancel()
         return
       }
       const t = e.touches[0]
@@ -345,28 +353,44 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           const rawOffset = offsetAction ? offset : offset / RESISTANCE
           g.x -= rawOffset
           dx += rawOffset
+          g.minDx = Math.min(g.minDx, offset)
+          g.maxDx = Math.max(g.maxDx, offset)
+          cancelAnimations()
+          finishLive = null
+          pan.resume = null
+        } else {
+          reset()
+          releaseHeavy = holdHeavyAnimations()
+          pan = {
+            screen,
+            under: null,
+            underDir: 0,
+            width: g.width,
+            offset: 0,
+            animations: null,
+            tabSwipe: !actionsRef.current.back,
+          }
+          screen.style.willChange = 'transform'
+          screen.style.zIndex = '2'
         }
-        reset()
-        releaseHeavy = holdHeavyAnimations()
-        pan = {
-          screen,
-          under: null,
-          underDir: 0,
-          width: g.width,
-          offset: 0,
-          animations: null,
-          tabSwipe: !actionsRef.current.back,
-        }
-        screen.style.willChange = 'transform'
-        screen.style.zIndex = '2'
         // touch-action: pan-y pinch-zoom уже разделяет оси. Менять overflow
         // здесь нельзя: WebKit пересоздаёт слой прокрутки в начале и конце
         // жеста, заново растеризуя содержимое экрана.
       }
       sampleVelocity(t.clientX, e.timeStamp)
-      const action = dx > 0 ? actionsRef.current.right : actionsRef.current.left
-      g.dx = action ? dx : dx * RESISTANCE
-      showUnder(action && dx !== 0 ? Math.sign(dx) : 0)
+      updateDrag(dx)
+    }
+
+    const updateDrag = (raw) => {
+      const action = raw > 0 ? actionsRef.current.right : actionsRef.current.left
+      // Продолжение доезда может пройти больше ширины: сосед уже на месте,
+      // двигать его дальше означало бы пустой край и обратный отскок пружины.
+      g.dx = action
+        ? Math.sign(raw) * (pan.tabSwipe ? Math.min(Math.abs(raw), pan.width) : Math.abs(raw))
+        : raw * RESISTANCE
+      g.minDx = Math.min(g.minDx, g.dx)
+      g.maxDx = Math.max(g.maxDx, g.dx)
+      showUnder(action && raw !== 0 ? Math.sign(raw) : 0)
       setOffset(g.dx)
     }
 
@@ -384,19 +408,18 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         return
       }
       const { axis } = g
+      // Скорость последнего движения определяет намерение. touchend может
+      // прийти позже с той же координатой и обнулить её — это не отмена флика.
+      const movementVelocity = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       if (axis === 'x' && pan && e.changedTouches?.[0]) {
         const x = e.changedTouches[0].clientX
         if (x !== g.samples[g.samples.length - 1].x) {
-          const raw = x - g.x
-          const action = raw > 0 ? actionsRef.current.right : actionsRef.current.left
-          g.dx = action ? raw : raw * RESISTANCE
-          showUnder(action && raw !== 0 ? Math.sign(raw) : 0)
-          setOffset(g.dx)
+          updateDrag(x - g.x)
         }
         // Даже без новой координаты пауза перед отпусканием гасит скорость.
         sampleVelocity(x, e.timeStamp)
       }
-      const { dx } = g
+      const { dx, minDx, maxDx } = g
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x' || !pan) {
@@ -406,9 +429,13 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const dir = dx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       const width = pan.width
+      const reversedDistance = dir > 0 ? maxDx - dx : dx - minDx
+      const reversing = reversedDistance >= REVERSE_MIN_PX &&
+        Math.min(v * dir, movementVelocity * dir) < -FLING_VELOCITY
       const commit =
-        action && v * dir >= -FLING_VELOCITY &&
-        (Math.abs(dx) > width * COMMIT_FRACTION || (v * dir > FLING_VELOCITY && Math.abs(dx) > FLING_MIN_PX))
+        action && !reversing &&
+        (Math.abs(dx) >= width * COMMIT_FRACTION ||
+          (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(dx) >= FLING_MIN_PX))
       if (!commit) {
         settle(settleMotion(0, v * (action ? 1 : RESISTANCE)))
         return
@@ -488,13 +515,14 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     // Касание отобрала система (входящий звонок, жест iOS) — возвращаем экран
     // на место, а не переходим.
     const onCancel = () => {
-      if (!g) return
-      const wasDragging = g.axis === 'x'
+      const wasDragging = g?.axis === 'x'
       g = null
-      if (!wasDragging || !pan) {
+      if (!pan || busy || committing) return
+      if (!wasDragging && pan.resume) {
         resumePaused()
         return
       }
+      if (!wasDragging && pan.animations) return
       settle(settleMotion(0))
     }
 
