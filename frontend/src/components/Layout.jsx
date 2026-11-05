@@ -242,6 +242,7 @@ function Layout({ renderRoutes }) {
         transform: `translateX(${Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - value / width)) * 100}%)`,
         offset,
       })), { duration: motion.duration, easing: 'linear', fill: 'both' })
+      motion.registerAnimation?.(navPillAnimationRef.current)
     }
   }
   useSwipeNavigation(mainRef, {

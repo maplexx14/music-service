@@ -10,7 +10,7 @@ const { code } = await transform(source, { format: 'cjs', target: 'es2020' })
 const script = new vm.Script(code, { filename: 'useSwipeNavigation.js' })
 const flushAnimations = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }
 
-function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder = true } = {}) {
+function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder = true, hasPill = false } = {}) {
   const listeners = new Map()
   const timers = new Map()
   const routeCommits = new Set()
@@ -18,6 +18,9 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   const navigation = []
   const commits = []
   const operations = []
+  const frames = new Map()
+  const timeline = { currentTime: 0 }
+  let frameId = 0
   let holds = 0
   let timerId = 0
   let cleanup
@@ -42,11 +45,18 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     animate(frames, options) {
       let resolve
       let reject
+      let startTime = null
+      let heldTime = 0
       const finished = new Promise((yes, no) => { resolve = yes; reject = no })
       const animation = {
-        frames, options, finished, cancelled: false,
-        finish() { resolve() },
-        cancel() { this.cancelled = true; reject(new Error('Animation cancelled')) },
+        frames, options, finished, cancelled: false, playState: 'running',
+        get startTime() { return startTime },
+        set startTime(value) { startTime = value; this.playState = 'running' },
+        get currentTime() { return this.playState === 'running' && startTime !== null ? timeline.currentTime - startTime : heldTime },
+        set currentTime(value) { heldTime = value },
+        pause() { this.playState = 'paused' },
+        finish() { this.playState = 'finished'; resolve() },
+        cancel() { this.cancelled = true; this.playState = 'idle'; reject(new Error('Animation cancelled')) },
       }
       this.animations.push(animation)
       return animation
@@ -54,6 +64,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   }
   const screen = new Element('home')
   const under = new Element('search')
+  const pill = new Element('pill')
   const container = {
     get clientWidth() { operations.push('layout:width'); return 390 },
     querySelector(selector) {
@@ -85,28 +96,43 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     DOMMatrixReadOnly: class { constructor() { this.m41 = screen.presentationOffset ?? 0 } },
     getComputedStyle: (element) => ({ transform: element.style.transform ?? 'none' }),
     window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }) },
-    document: { documentElement: { classList: { contains: () => false }, style: { setProperty() {} } } },
+    document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty() {} } } },
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
     clearTimeout: (id) => timers.delete(id),
-    // The input path should not run a frame-measuring loop.
-    requestAnimationFrame() { assert.fail('Unexpected animation-frame work during swipe') },
+    requestAnimationFrame(callback) { const id = ++frameId; frames.set(id, callback); return id },
+    cancelAnimationFrame(id) { frames.delete(id) },
   }))
   hook.exports.useSwipeNavigation({ current: container }, {
     enabled: true,
     onNext: hasNext ? () => navigation.push('/search') : null,
     onPrev: hasPrev ? () => navigation.push('/previous') : null,
-    onPan: (...args) => pans.push(args),
+    onPan: (...args) => {
+      pans.push(args)
+      const motion = args[3]
+      if (hasPill && motion?.duration) {
+        const animation = pill.animate(motion.samples, { duration: motion.duration })
+        motion.registerAnimation?.(animation)
+      }
+    },
     onCommit: (direction) => commits.push(direction),
     targets: { left: 'tab:/search', right: hasPrev ? 'tab:/search' : null },
   })
+  const paint = (time = timeline.currentTime + 16) => {
+    timeline.currentTime = time
+    const pending = [...frames.values()]
+    frames.clear()
+    pending.forEach((callback) => callback(time))
+  }
   return {
-    screen, under, pans, navigation, commits, operations, timers, routeCommits, listeners,
+    screen, under, pill, pans, navigation, commits, operations, timers, routeCommits, listeners, paint,
+    get pendingFrames() { return frames.size },
     get holds() { return holds },
     touch(name, x, y = 200, timeStamp = 0, extra = {}) {
       const point = { clientX: x, clientY: y }
       listeners.get(`touch${name}`).callback({
         target: screen, touches: name === 'end' ? [] : [point], changedTouches: [point], timeStamp, ...extra,
       })
+      if (extra.paint !== false) paint(timeStamp)
     },
     commit() { const callbacks = [...routeCommits]; routeCommits.clear(); callbacks.forEach((callback) => callback()) },
     cleanup: () => cleanup(),
@@ -354,6 +380,63 @@ test('Starting a settle keeps the live styles at the release position while comp
   app.under.animations[0].finish()
   await flushAnimations()
   assert.equal(app.screen.style.transform, 'translate3d(-390px, 0, 0)')
+  app.commit()
+  app.cleanup()
+})
+
+test('A delayed first frame starts the screens and indicator at time zero on the same fresh clock', () => {
+  const app = mountSwipe({ hasPill: true })
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41, { paint: false })
+  const animations = [app.screen.animations[0], app.under.animations[0], app.pill.animations[0]]
+  for (const animation of animations) {
+    assert.equal(animation.playState, 'paused')
+    assert.equal(animation.currentTime, 0)
+  }
+  assert.equal(app.pendingFrames, 1)
+  app.paint(140)
+  for (const animation of animations) {
+    assert.equal(animation.playState, 'running')
+    assert.equal(animation.startTime, 140)
+    assert.equal(animation.currentTime, 0)
+  }
+  assert.equal(app.pendingFrames, 0, 'Starting a swipe introduced a continuous frame loop')
+  app.paint(156)
+  assert.ok(animations.every((animation) => animation.currentTime === 16))
+  app.cleanup()
+})
+
+test('Unmount before the first animation frame cancels its scheduled start', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41, { paint: false })
+  assert.equal(app.pendingFrames, 1)
+  app.cleanup()
+  assert.equal(app.pendingFrames, 0)
+  app.paint(140)
+  assert.ok(app.screen.animations.every((animation) => animation.cancelled && animation.startTime === null))
+  assert.deepEqual(app.navigation, [])
+})
+
+test('Regrabbing before the first frame cancels the stale start and completes only the continued swipe', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41, { paint: false })
+  const original = app.screen.animations[0]
+  app.screen.presentationOffset = -100
+  app.touch('start', 250, 200, 50, { paint: false })
+  assert.equal(app.pendingFrames, 0)
+  assert.equal(original.cancelled, true)
+  app.touch('move', 230, 200, 70)
+  app.touch('end', 230, 200, 71)
+  assert.equal(original.startTime, null)
+  app.screen.animations.at(-1).finish()
+  app.under.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
   app.commit()
   app.cleanup()
 })

@@ -147,6 +147,8 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
 
     const cancelAnimations = () => {
       if (!pan) return
+      if (pan.startFrame) cancelAnimationFrame(pan.startFrame)
+      pan.startFrame = 0
       const animations = pan.animations
       pan.animations = null
       animations?.forEach((animation) => animation.cancel())
@@ -215,23 +217,39 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     const animateOffset = (x, motion, done) => {
       const finished = pan
       cancelAnimations()
+      const animations = []
+      const registerAnimation = (animation) => {
+        // WebKit может начать отсчёт до передачи анимации композитору.
+        // Удерживаем первый кадр до общего запуска экранов и капсулы.
+        animation.pause()
+        animation.currentTime = 0
+        animations.push(animation)
+      }
       // Пока WAAPI ждёт первый кадр, живые стили остаются под пальцем.
       // Конечные стили выставляем только после доезда, перед коммитом роутера.
-      setOffset(motion.duration ? motion.samples[0].value : x, motion)
+      setOffset(motion.duration ? motion.samples[0].value : x, { ...motion, registerAnimation })
       if (!motion.duration) {
         done()
         return
       }
       const options = { duration: motion.duration, easing: 'linear', fill: 'both' }
-      const animations = [pan.screen.animate(motion.samples.map(({ value, offset }) => ({
+      registerAnimation(pan.screen.animate(motion.samples.map(({ value, offset }) => ({
         transform: transformAt(value), offset,
-      })), options)]
+      })), options))
       if (pan.under) {
-        animations.push(pan.under.animate(motion.samples.map(({ value, offset }) => ({
+        registerAnimation(pan.under.animate(motion.samples.map(({ value, offset }) => ({
           transform: transformAt(underOffset(value)), offset,
         })), options))
       }
       pan.animations = animations
+      pan.startFrame = requestAnimationFrame((time) => {
+        finished.startFrame = 0
+        if (pan !== finished || pan.animations !== animations) return
+        // Свежие часы первого доступного кадра: задержка JS не превращается
+        // в пропущенные первые 50–100 мс доезда. Дальше работает композитор.
+        const start = document.timeline.currentTime ?? time
+        animations.forEach((animation) => { animation.startTime = start })
+      })
       Promise.all(animations.map((animation) => animation.finished)).then(() => {
         if (pan === finished && pan.animations === animations) {
           setOffset(x)
@@ -375,6 +393,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
             width: g.width,
             offset: 0,
             animations: null,
+            startFrame: 0,
             tabSwipe: !actionsRef.current.back,
           }
           screen.style.willChange = 'transform'
