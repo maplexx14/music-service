@@ -4,6 +4,7 @@
 import asyncio
 import time
 import base64
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -450,17 +451,29 @@ def test_disk_cache_missing_object_raises(disk_cache, monkeypatch):
 def test_disk_cache_resumes_after_dropped_connection(disk_cache, monkeypatch):
     data = bytes(range(250)) * 40  # 10000 байт, обрыв в хвосте один раз
     drops = {"left": 1}
+    calls = []
+    stream_consumed = asyncio.Event()
+    key = "external/ytmusic/dc8.m4a"
+
+    class _ResumedBody(_SlowBody):
+        async def iter_chunks(self, size):
+            async for chunk in super().iter_chunks(size):
+                yield chunk
+            # Все байты доступны читателю, но фоновая задача ещё не завершена.
+            await stream_consumed.wait()
 
     class _Client:
         async def get_object(self, **kw):
+            calls.append(kw["Range"])
             start, _, end = kw["Range"][len("bytes="):].partition("-")
             start, end = int(start), int(end)
             fail = None
             if start >= 3000 and drops["left"]:
                 drops["left"] -= 1
                 fail = 2000
+            body_type = _ResumedBody if start >= 3000 and fail is None else _SlowBody
             return {
-                "Body": _SlowBody(data[start:end + 1], chunk=1000, fail_after=fail),
+                "Body": body_type(data[start:end + 1], chunk=1000, fail_after=fail),
                 "ContentRange": f"bytes {start}-{end}/{len(data)}",
             }
 
@@ -468,12 +481,26 @@ def test_disk_cache_resumes_after_dropped_connection(disk_cache, monkeypatch):
 
     async def scenario():
         resp = await storage.minio_range_response_async(
-            "minio://music/external/ytmusic/dc8.m4a", _request({"range": "bytes=0-"})
+            f"minio://music/{key}", _request({"range": "bytes=0-"})
         )
-        return await _collect(resp)
+        download = storage._downloads[storage._disk_cache_path("music", key)]
+        body = await asyncio.wait_for(_collect(resp), timeout=5)
+        assert not download.done
+        assert storage.disk_cached_path("music", key) is None
+        stream_consumed.set()
+        # Получение последнего байта не означает, что .part уже переименован.
+        # Дожидаемся публикации кеша до закрытия цикла asyncio.run().
+        await asyncio.wait_for(download.task, timeout=5)
+        assert download.error is None
+        assert download.done
+        return body
 
     assert asyncio.run(scenario()) == data
-    assert storage.disk_cached_path("music", "external/ytmusic/dc8.m4a")
+    assert drops["left"] == 0
+    assert calls == ["bytes=0-2999", "bytes=3000-9999", "bytes=5000-9999"]
+    cached = storage.disk_cached_path("music", key)
+    assert cached is not None
+    assert Path(cached).read_bytes() == data
 
 
 def test_disk_cache_failed_download_leaves_no_file(disk_cache, monkeypatch):
