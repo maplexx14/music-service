@@ -352,7 +352,10 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
             const outgoing = finished.screen
             if (finished.trailing) clearScreen(finished.trailing.screen)
             finished.trailing = null
-            finished.handoffDirection = finished.underDir
+            // Передача принадлежит текущему касанию. Если хранить её на pan,
+            // следующий палец наследует старое направление и при развороте
+            // отправляет экран за центр, оставляя с той стороны пустоту.
+            if (g) g.handoffDirection = finished.underDir
             finished.screen = finished.under
             finished.under = outgoing
             finished.underDir *= -1
@@ -466,8 +469,8 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
           const rawOffset = offsetAction ? offset : offset / RESISTANCE
           g.x -= rawOffset
           dx += rawOffset
-          g.minDx = g.fromDestination && pan.handoffDirection ? offset : Math.min(g.minDx, offset)
-          g.maxDx = g.fromDestination && pan.handoffDirection ? offset : Math.max(g.maxDx, offset)
+          g.minDx = g.handoffDirection ? offset : Math.min(g.minDx, offset)
+          g.maxDx = g.handoffDirection ? offset : Math.max(g.maxDx, offset)
           cancelAnimations()
           if (pan.offset !== offset) setOffset(offset)
           finishLive = null
@@ -575,8 +578,8 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
           sampleVelocity(lastX, e.timeStamp)
         }
       }
-      const { dx, minDx, maxDx, fromDestination } = g
-      const intentDx = fromDestination && pan?.handoffDirection ? g.samples.at(-1).x - g.originX : dx
+      const { dx, minDx, maxDx, handoffDirection } = g
+      const intentDx = handoffDirection ? g.samples.at(-1).x - g.originX : dx
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x' || !pan) {
@@ -594,7 +597,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       const reversedDistance = dir > 0 ? maxDx - dx : dx - minDx
       const reversing = reversedDistance >= REVERSE_MIN_PX &&
         Math.min(v * dir, movementVelocity * dir) < -FLING_VELOCITY
-      const continueHandoff = fromDestination && pan.handoffDirection === dir
+      const continueHandoff = handoffDirection === dir
       // После передачи жеста входящий экран ещё может быть правее центра,
       // хотя второй флик уже направлен к следующей вкладке. Остаток старой
       // вкладки тоже доезжает: до пересечения центра нужны три экрана.

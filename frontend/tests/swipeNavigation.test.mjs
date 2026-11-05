@@ -452,6 +452,57 @@ test('A followup released during handoff keeps all three screens aligned across 
   }
 })
 
+test('Reversing a later swipe cannot inherit an earlier contact\'s handoff direction or expose an empty tab', async () => {
+  for (const dir of [-1, 1]) {
+    const app = mountSwipe({ pointer: true, hasPill: true })
+    const first = dir < 0 ? app.screen : app.next
+    const last = dir < 0 ? app.next : app.screen
+    if (dir > 0) {
+      app.activate(first)
+      app.rerender({
+        screenKey: 'liked', onPrev: () => app.navigation.push('/search'), onNext: null,
+        targets: { right: 'tab:/search', left: null },
+      })
+    }
+    const start = dir < 0 ? 300 : 80
+    app.pointer('pointerdown', start, 0, { target: first })
+    app.pointer('pointermove', start + dir * 130, 50, { target: first })
+    app.pointer('pointerup', start + dir * 130, 55, { target: first })
+    first.presentationOffset = dir * 330
+    app.pointer('pointerdown', start, 150, { pointerId: 2, target: app.container })
+    app.pointer('pointermove', start + dir * 20, 166, { pointerId: 2, target: app.container })
+    app.activate(app.under)
+    app.rerender({
+      screenKey: 'search', onPrev: () => app.navigation.push('/'), onNext: () => app.navigation.push('/liked'),
+      targets: { right: 'tab:/', left: 'tab:/liked' },
+    })
+    app.commit()
+    app.paint(180)
+    app.pointer('pointermove', start + dir * 140, 198, { pointerId: 2, target: app.container })
+    app.pointer('pointerup', start + dir * 140, 200, { pointerId: 2, target: app.container })
+
+    // A third contact grabs the incoming tab but moves back toward Search.
+    // It has not handed off to another route: the old handoff belongs to finger 2.
+    app.under.presentationOffset = dir * 330
+    const reverseStart = dir < 0 ? 80 : 300
+    app.pointer('pointerdown', reverseStart, 280, { pointerId: 3, target: app.container })
+    app.pointer('pointermove', reverseStart - dir * 60, 305, { pointerId: 3, target: app.container })
+    app.pointer('pointermove', reverseStart - dir * 130, 330, { pointerId: 3, target: app.container })
+    app.pointer('pointerup', reverseStart - dir * 130, 335, { pointerId: 3, target: app.container })
+
+    const returning = app.under.animations.at(-1)
+    assert.equal(returning.frames[0].transform, `translate3d(${dir * 200}px, 0, 0)`)
+    assert.equal(returning.frames.at(-1).transform, 'translate3d(0px, 0, 0)', 'A reversed contact navigated past Search with the wrong neighbor visible')
+    assert.equal(last.animations.at(-1).frames.at(-1).transform, `translate3d(${-dir * 390}px, 0, 0)`)
+    for (const element of [app.under, last, app.pill]) element.animations.at(-1).finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search'])
+    assert.equal(app.commits.at(-1), null)
+    assert.equal(app.holds, 0)
+    app.cleanup()
+  }
+})
+
 test('Cancelling a contact during handoff settles the incoming tab instead of leaving it frozen', async () => {
   const app = mountSwipe({ pointer: true })
   app.pointer('pointerdown', 300, 0)
