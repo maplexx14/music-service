@@ -19,6 +19,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   const commits = []
   const operations = []
   const frames = new Map()
+  const rootStyles = {}
   const timeline = { currentTime: 0 }
   let frameId = 0
   let holds = 0
@@ -96,7 +97,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     DOMMatrixReadOnly: class { constructor() { this.m41 = screen.presentationOffset ?? 0 } },
     getComputedStyle: (element) => ({ transform: element.style.transform ?? 'none' }),
     window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }) },
-    document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty() {} } } },
+    document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty(name, value) { rootStyles[name] = value } } } },
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
     clearTimeout: (id) => timers.delete(id),
     requestAnimationFrame(callback) { const id = ++frameId; frames.set(id, callback); return id },
@@ -124,7 +125,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     pending.forEach((callback) => callback(time))
   }
   return {
-    screen, under, pill, pans, navigation, commits, operations, timers, routeCommits, listeners, paint,
+    screen, under, pill, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles,
     get pendingFrames() { return frames.size },
     get holds() { return holds },
     touch(name, x, y = 200, timeStamp = 0, extra = {}) {
@@ -152,6 +153,84 @@ test('First swipe frame tracks the finger without rebuilding the scroll containe
   assert.equal(app.operations.slice(firstWrite).includes('layout:width'), false)
   for (const { options } of app.listeners.values()) assert.equal(options.passive, true)
   app.cleanup()
+})
+
+test('Touch movements between display frames update the screens and indicator together only once', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 280, 200, 16, { paint: false })
+  app.touch('move', 260, 200, 20, { paint: false })
+  app.touch('move', 240, 200, 24, { paint: false })
+  assert.equal(app.pendingFrames, 1)
+  assert.equal(app.screen.style.transform, undefined)
+  assert.deepEqual(app.pans, [])
+  app.paint(32)
+  assert.equal(app.screen.style.transform, 'translate3d(-60px, 0, 0)')
+  assert.equal(app.under.style.transform, 'translate3d(330px, 0, 0)')
+  assert.equal(app.pans.length, 1)
+  assert.equal(app.pans[0][0], -60)
+  assert.equal(app.pendingFrames, 0, 'Dragging started a continuous animation loop')
+  app.cleanup()
+})
+
+test('Release discards unpainted movements and hands the last visible velocity to all settle animations', async () => {
+  const app = mountSwipe({ hasPill: true })
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 280, 200, 16)
+  app.touch('move', 240, 200, 24, { paint: false })
+  app.touch('move', 180, 200, 30, { paint: false })
+  app.touch('end', 180, 200, 31, { paint: false })
+  assert.equal(app.screen.style.transform, 'translate3d(-20px, 0, 0)')
+  const exit = app.screen.animations[0]
+  const enter = app.under.animations[0]
+  assert.equal(exit.frames[0].transform, 'translate3d(-20px, 0, 0)')
+  assert.equal(enter.frames[0].transform, 'translate3d(370px, 0, 0)')
+  const motion = app.pans.at(-1)[3]
+  const expected = swipeSpring(-20, -390, -20 / 16)
+  assert.equal(motion.samples[1].value, expected.samples[1].value,
+    'Unpainted input accelerated the screen at release')
+  assert.equal(app.pendingFrames, 1, 'The queued drag frame survived release')
+  app.paint(100)
+  assert.equal(app.screen.style.transform, 'translate3d(-20px, 0, 0)')
+  exit.finish()
+  enter.finish()
+  app.pill.animations[0].finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
+  assert.equal(app.holds, 0)
+  app.cleanup()
+})
+
+test('A flick completed before its first display frame reveals the cached destination and animates from rest', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 250, 200, 20, { paint: false })
+  app.touch('end', 200, 200, 30, { paint: false })
+  assert.deepEqual(app.navigation, [], 'A queued swipe fell back to immediate route replacement')
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(0px, 0, 0)')
+  assert.equal(app.under.animations[0].frames[0].transform, 'translate3d(390px, 0, 0)')
+  assert.equal(app.under.style.visibility, 'visible')
+  app.paint(40)
+  app.screen.animations[0].finish()
+  app.under.animations[0].finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
+  app.cleanup()
+})
+
+test('Unmount before a queued drag frame removes its writes and releases the animation hold', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 20, { paint: false })
+  assert.equal(app.pendingFrames, 1)
+  app.cleanup()
+  assert.equal(app.pendingFrames, 0)
+  app.paint(40)
+  assert.equal(app.screen.style.transform, '')
+  assert.deepEqual(app.navigation, [])
+  assert.equal(app.holds, 0)
 })
 
 test('A fast swipe starts from its release position and navigates when both screens finish, without a settle timer', async () => {
@@ -221,6 +300,25 @@ test('Regrabbing a returning screen starts from its visible position and cancels
   assert.equal(app.screen.style.transform, 'translate3d(-38px, 0, 0)')
   assert.equal(app.holds, 1)
   assert.deepEqual(app.navigation, [])
+  app.cleanup()
+})
+
+test('Regrabbing a return holds its visible position until the continued drag frame is painted', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 270, 200, 200)
+  app.touch('end', 270, 200, 300)
+  app.screen.presentationOffset = -18
+  app.touch('start', 260, 200, 350)
+  app.touch('move', 240, 200, 370, { paint: false })
+  assert.equal(app.screen.style.transform, 'translate3d(-18px, 0, 0)',
+    'Cancelling the return exposed its old inline position')
+  app.paint(370)
+  assert.equal(app.screen.style.transform, 'translate3d(-38px, 0, 0)')
+  app.touch('end', 240, 200, 371)
+  const expected = swipeSpring(-38, -390, -20 / 20)
+  assert.equal(app.pans.at(-1)[3].samples[1].value, expected.samples[1].value,
+    'Continued motion was measured from the old return target')
   app.cleanup()
 })
 
@@ -340,6 +438,18 @@ test('An undelivered final movement selects the destination without jumping the 
   assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-70px, 0, 0)')
   assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
   app.cleanup()
+})
+
+test('A cold destination snapshot continues from the last displayed position instead of queued input', () => {
+  const app = mountSwipe({ hasUnder: false })
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 280, 200, 16)
+  app.touch('move', 240, 200, 24, { paint: false })
+  app.touch('end', 180, 200, 31, { paint: false })
+  assert.equal(app.rootStyles['--swipe-from'], '-20px')
+  assert.equal(app.pendingFrames, 1)
+  app.cleanup()
+  assert.equal(app.pendingFrames, 0)
 })
 
 test('A fast release with missing touchmove events continues from the last rendered position', () => {

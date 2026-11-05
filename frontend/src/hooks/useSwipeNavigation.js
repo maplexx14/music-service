@@ -145,8 +145,15 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       : -pan.underDir * ENTER_SHIFT * Math.max(0, pan.width - Math.abs(x))
     const exitOffset = (dir) => dir * (pan.width + (pan.tabSwipe ? 0 : SHADOW_REACH))
 
+    const cancelDragFrame = () => {
+      if (!pan?.dragFrame) return
+      cancelAnimationFrame(pan.dragFrame)
+      pan.dragFrame = 0
+    }
+
     const cancelAnimations = () => {
       if (!pan) return
+      cancelDragFrame()
       if (pan.startFrame) cancelAnimationFrame(pan.startFrame)
       pan.startFrame = 0
       const animations = pan.animations
@@ -346,7 +353,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const t = e.touches[0]
       // Геометрия до записей стилей: первый кадр свайпа не должен ждать
       // синхронной раскладки после показа соседнего экрана.
-      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, minDx: 0, maxDx: 0, axis: null, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
+      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, minDx: 0, maxDx: 0, axis: null, startT: e.timeStamp, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
     }
 
     const onMove = (e) => {
@@ -381,6 +388,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           g.minDx = Math.min(g.minDx, offset)
           g.maxDx = Math.max(g.maxDx, offset)
           cancelAnimations()
+          if (pan.offset !== offset) setOffset(offset)
           finishLive = null
           pan.resume = null
         } else {
@@ -393,12 +401,15 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
             width: g.width,
             offset: 0,
             animations: null,
+            dragFrame: 0,
             startFrame: 0,
             tabSwipe: !actionsRef.current.back,
           }
           screen.style.willChange = 'transform'
           screen.style.zIndex = '2'
         }
+        pan.dragSamples = [{ x: pan.offset, t: g.startT }]
+        pan.dragVelocity = 0
         // touch-action: pan-y pinch-zoom уже разделяет оси. Менять overflow
         // здесь нельзя: WebKit пересоздаёт слой прокрутки в начале и конце
         // жеста, заново растеризуя содержимое экрана.
@@ -417,16 +428,31 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       g.minDx = Math.min(g.minDx, g.dx)
       g.maxDx = Math.max(g.maxDx, g.dx)
       if (render) {
-        showUnder(action && raw !== 0 ? Math.sign(raw) : 0)
-        setOffset(g.dx)
+        if (pan.dragFrame) return
+        const dragging = pan
+        // Несколько touchmove между кадрами меняют только намерение. DOM и
+        // скорость видимого экрана обновляем один раз на такт дисплея.
+        pan.dragFrame = requestAnimationFrame((time) => {
+          dragging.dragFrame = 0
+          if (pan !== dragging || g?.axis !== 'x') return
+          const dir = Math.sign(g.dx)
+          const dragAction = dir > 0 ? actionsRef.current.right : actionsRef.current.left
+          showUnder(dragAction && dir ? dir : 0)
+          setOffset(g.dx)
+          pan.dragVelocity = sample(pan.dragSamples, g.dx, time)
+        })
       }
     }
 
+    const sample = (samples, x, time) => {
+      samples.push({ x, t: time })
+      while (samples.length > 2 && time - samples[0].t > VELOCITY_WINDOW_MS) samples.shift()
+      const first = samples[0]
+      return (x - first.x) / Math.max(1, time - first.t)
+    }
+
     const sampleVelocity = (x, time) => {
-      g.samples.push({ x, t: time })
-      while (g.samples.length > 2 && time - g.samples[0].t > VELOCITY_WINDOW_MS) g.samples.shift()
-      const first = g.samples[0]
-      g.v = (x - first.x) / Math.max(1, time - first.t)
+      g.v = sample(g.samples, x, time)
       g.lastT = time
     }
 
@@ -440,9 +466,13 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       // прийти позже с той же координатой и обнулить её — это не отмена флика.
       const movementAge = e.timeStamp - g.lastT
       const movementVelocity = movementAge > STALE_VELOCITY_MS ? 0 : g.v
-      // Доезд наследует скорость показанного движения. Остаток координаты,
-      // полученный только в touchend, ещё не двигал экран и не ускоряет его.
-      let animationVelocity = movementVelocity
+      // Записанный touchmove ещё мог не попасть в кадр. Доезд наследует
+      // положение и скорость последнего кадра, а не очередь событий.
+      const renderedAge = pan?.dragSamples ? e.timeStamp - pan.dragSamples.at(-1).t : Infinity
+      let animationVelocity = renderedAge > STALE_VELOCITY_MS ? 0 : pan?.dragVelocity || 0
+      if (renderedAge > RELEASE_GRACE_MS && pan?.dragSamples) {
+        animationVelocity = sample([...pan.dragSamples], pan.offset, e.timeStamp)
+      }
       if (axis === 'x' && pan && e.changedTouches?.[0]) {
         const x = e.changedTouches[0].clientX
         const lastX = g.samples[g.samples.length - 1].x
@@ -458,7 +488,6 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           // Пауза перед отпусканием гасит скорость; немедленное отпускание
           // сохраняет скорость последних движений, без торможения на стыке.
           sampleVelocity(lastX, e.timeStamp)
-          animationVelocity = g.v
         }
       }
       const { dx, minDx, maxDx } = g
@@ -468,8 +497,13 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         resumePaused()
         return
       }
+      cancelDragFrame()
       const dir = dx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
+      // Очень короткий флик может закончиться до первого кадра протяжки.
+      // Сосед уже смонтирован: начинаем живой доезд от нуля, без подмены
+      // маршрута и скачка к непоказанной координате пальца.
+      if (pan.offset === 0 && !pan.underDir) showUnder(action ? dir : 0)
       const width = pan.width
       const reversedDistance = dir > 0 ? maxDx - dx : dx - minDx
       const reversing = reversedDistance >= REVERSE_MIN_PX &&
@@ -480,7 +514,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         (Math.abs(dx) >= width * COMMIT_FRACTION ||
           (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(dx) >= FLING_MIN_PX))
       if (!commit) {
-        settle(settleMotion(0, animationVelocity * (action ? 1 : RESISTANCE)))
+        settle(settleMotion(0, animationVelocity))
         return
       }
       haptic(HAPTIC.selection)
@@ -501,7 +535,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       // (снапшот) уезжает от того места, где его отпустил палец, новый
       // одновременно въезжает из-под него.
       const root = document.documentElement.style
-      root.setProperty('--swipe-from', `${dx}px`)
+      root.setProperty('--swipe-from', `${pan.offset}px`)
       root.setProperty('--swipe-to', `${dir * (width + SHADOW_REACH)}px`)
       root.setProperty('--swipe-under', `${-dir * ENTER_SHIFT * width}px`)
       root.setProperty('--swipe-shadow', `${-dir * 12}px`)

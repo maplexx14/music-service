@@ -356,6 +356,11 @@ html.no-gpu .cover-backdrop-tint {
 }
 
 @keyframes hero-page-parallax {
+  /* WebKit при переводе экрана на слой свайпа заново берёт неявный from
+     из текущего transform. Явный ноль сохраняет положение шапки. */
+  from {
+    transform: translateY(0);
+  }
   to {
     transform: translateY(300px);
   }
