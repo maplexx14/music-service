@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+const AXIS_LOCK_PX = 10
+const AXIS_RATIO = 1.2
+
 // Pull-to-refresh как в нативных приложениях: тянешь список вниз от самого
 // верха — выезжает индикатор, отпускаешь — обновление. Работает ТОЛЬКО на
 // таче; мышью на десктопе не активируется (там F5).
@@ -70,7 +73,18 @@ export function usePullToRefresh({ onRefresh, reachTop, root, maxPull = 90, thre
     const onMove = (e) => {
       const g = gesture.current
       if (!g || e.touches.length !== 1) return
+      const dx = e.touches[0].clientX - g.x
       const dy = e.touches[0].clientY - g.y
+      if (!g.pulling) {
+        // Выбираем ось до показа индикатора, как useSwipeNavigation.
+        // Пара пикселей вниз в начале бокового свайпа раньше запускала
+        // pull-to-refresh и обновление индикатора на каждом движении пальца.
+        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
+        if (Math.abs(dy) < Math.abs(dx) * AXIS_RATIO) {
+          gesture.current = null
+          return
+        }
+      }
       if (dy <= 0) {
         if (g.pulling) {
           g.pulling = false
@@ -79,11 +93,6 @@ export function usePullToRefresh({ onRefresh, reachTop, root, maxPull = 90, thre
         return
       }
       if (!g.pulling) {
-        // Диагональный жест — это карусель/горизонтальный скролл, не наш.
-        if (Math.abs(e.touches[0].clientX - g.x) > 24) {
-          gesture.current = null
-          return
-        }
         g.pulling = true
       }
       // Прогрессия с затуханием, как системный rubber-band: 60px пальца

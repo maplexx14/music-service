@@ -73,7 +73,14 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
         set startTime(value) { startTime = value; this.playState = 'running'; this.pending = false; resolveReady() },
         get currentTime() { return this.playState === 'running' && startTime !== null ? timeline.currentTime - startTime : heldTime },
         set currentTime(value) { heldTime = value },
-        pause() { this.playState = 'paused' },
+        pause() { heldTime = this.currentTime; startTime = null; this.playState = 'paused'; this.pending = true },
+        play() { this.playState = 'running'; this.pending = true },
+        prepare(browserStartTime) {
+          if (!this.pending) return
+          if (this.playState === 'running') startTime = browserStartTime
+          this.pending = false
+          resolveReady()
+        },
         finish() { if (startTime === null) startTime = timeline.currentTime - options.duration; this.pending = false; this.playState = 'finished'; resolveReady(); resolve() },
         cancel() { this.cancelled = true; this.pending = false; this.playState = 'idle'; rejectReady(new Error('Animation cancelled')); reject(new Error('Animation cancelled')) },
       }
@@ -160,10 +167,10 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     flushEffects('passive')
   }
   rerender()
-  const paint = (time = timeline.currentTime + 16) => {
+  const paint = (time = timeline.currentTime + 16, { startTime = time, skip = [] } = {}) => {
     timeline.currentTime = time
     for (const animation of [screen, under, next, pill].flatMap((element) => element.animations)) {
-      if (animation.pending) animation.startTime = time
+      if (!skip.includes(animation)) animation.prepare(startTime)
     }
     const pending = [...frames.values()]
     frames.clear()
@@ -673,6 +680,52 @@ test('Regrabbing a returning screen starts from its visible position and cancels
   app.cleanup()
 })
 
+test('Touch-down holds a returning screen and its indicator before the next direction is known', async () => {
+  const app = mountSwipe({ hasPill: true })
+  app.touch('start', 300)
+  app.touch('move', 270, 200, 200)
+  app.touch('end', 270, 200, 300)
+  const returning = [app.screen, app.under, app.pill].map((element) => element.animations[0])
+  app.screen.presentationOffset = -18
+
+  app.touch('start', 260, 200, 350)
+  assert.ok(returning.every((animation) => animation.cancelled), 'All moving layers must stop on contact')
+  assert.equal(app.screen.style.transform, 'translate3d(-18px, 0, 0)')
+  assert.equal(app.under.style.transform, 'translate3d(372px, 0, 0)')
+  assert.equal(app.pans.at(-1)[0], -18)
+  await flushAnimations()
+  app.paint(400)
+  assert.equal(app.screen.style.transform, 'translate3d(-18px, 0, 0)')
+  assert.equal(app.holds, 1)
+  assert.deepEqual(app.navigation, [])
+  app.cleanup()
+})
+
+test('A tap, vertical gesture or cancellation resumes a grabbed return without changing tabs', async () => {
+  for (const end of ['end', 'cancel', 'vertical']) {
+    const app = mountSwipe()
+    app.touch('start', 300)
+    app.touch('move', 270, 200, 200)
+    app.touch('end', 270, 200, 300)
+    app.screen.presentationOffset = -18
+    app.touch('start', 260, 200, 350)
+    if (end === 'vertical') {
+      app.touch('move', 260, 230, 370)
+      app.touch('end', 260, 230, 400)
+      assert.equal(app.screen.animations.length, 2, 'Ending a vertical gesture must not restart its resumed return')
+    } else app.touch(end, 260, 200, 370)
+    assert.equal(app.screen.animations[1]?.frames[0].transform, 'translate3d(-18px, 0, 0)')
+    assert.equal(app.screen.animations[1].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+    app.screen.animations[1].finish()
+    app.under.animations[1].finish()
+    await flushAnimations()
+    assert.equal(app.screen.style.transform, '')
+    assert.equal(app.holds, 0)
+    assert.deepEqual(app.navigation, [])
+    app.cleanup()
+  }
+})
+
 test('Regrabbing a return holds its visible position until the continued drag frame is painted', () => {
   const app = mountSwipe()
   app.touch('start', 300, 200, 0)
@@ -906,19 +959,21 @@ test('Starting a settle keeps the live styles at the release position while comp
   app.cleanup()
 })
 
-test('The compositor starts screens and indicator at time zero without a JavaScript frame gate', () => {
+test('Screens and indicator start at time zero even when WebKit supplies an old playback start time', async () => {
   const app = mountSwipe({ hasPill: true })
   app.touch('start', 300, 200, 0)
   app.touch('move', 200, 200, 40)
   app.touch('end', 200, 200, 41, { paint: false })
   const animations = [app.screen.animations[0], app.under.animations[0], app.pill.animations[0]]
   for (const animation of animations) {
-    assert.equal(animation.playState, 'running')
     assert.equal(animation.pending, true)
     assert.equal(animation.currentTime, 0)
   }
   assert.equal(app.pendingFrames, 0)
-  app.paint(140)
+  // WebKit can deliver ready at 140 ms with a start time from release at 41 ms.
+  // That preparation delay must not become 99 ms of unseen spring movement.
+  app.paint(140, { startTime: 41 })
+  await flushAnimations()
   for (const animation of animations) {
     assert.equal(animation.playState, 'running')
     assert.equal(animation.startTime, 140)
@@ -930,7 +985,7 @@ test('The compositor starts screens and indicator at time zero without a JavaScr
   app.cleanup()
 })
 
-test('A late compositor layer supplies the common start time without fast-forwarding its first frame', async () => {
+test('A late compositor layer holds both screens and the indicator at release until all can start together', async () => {
   const app = mountSwipe({ hasPill: true })
   app.touch('start', 300, 200, 0)
   app.touch('move', 200, 200, 40)
@@ -938,15 +993,20 @@ test('A late compositor layer supplies the common start time without fast-forwar
   const exit = app.screen.animations[0]
   const enter = app.under.animations[0]
   const pill = app.pill.animations[0]
-  exit.startTime = 50
-  pill.startTime = 50
+  app.paint(50, { skip: [enter] })
   await flushAnimations()
   assert.equal(enter.startTime, null)
-  enter.startTime = 90
+  app.paint(75, { skip: [enter] })
+  assert.equal(exit.currentTime, 0, 'The outgoing screen moved before the incoming screen was ready')
+  assert.equal(pill.currentTime, 0, 'The indicator moved before both screens were ready')
+  app.paint(90, { startTime: 41 })
   await flushAnimations()
   assert.equal(exit.startTime, 90)
   assert.equal(pill.startTime, 90)
   assert.equal(enter.startTime, 90)
+  assert.equal(exit.currentTime, 0)
+  assert.equal(enter.currentTime, 0)
+  assert.equal(pill.currentTime, 0)
   app.cleanup()
 })
 
@@ -962,38 +1022,49 @@ test('A slow release accelerates gently across the first two display frames', ()
   }
 })
 
-test('Unmount before the first animation frame cancels pending compositor playback', () => {
-  const app = mountSwipe()
-  app.touch('start', 300, 200, 0)
-  app.touch('move', 200, 200, 40)
-  app.touch('end', 200, 200, 41, { paint: false })
-  assert.equal(app.screen.animations[0].pending, true)
-  app.cleanup()
-  assert.equal(app.pendingFrames, 0)
-  app.paint(140)
-  assert.ok(app.screen.animations.every((animation) => animation.cancelled && animation.startTime === null))
-  assert.deepEqual(app.navigation, [])
+test('Unmount before playback cancels preparation even when its ready callback is already queued', async () => {
+  for (const readyQueued of [false, true]) {
+    const app = mountSwipe({ hasPill: true })
+    app.touch('start', 300, 200, 0)
+    app.touch('move', 200, 200, 40)
+    app.touch('end', 200, 200, 41, { paint: false })
+    assert.equal(app.screen.animations[0].pending, true)
+    if (readyQueued) app.paint(48)
+    app.cleanup()
+    await flushAnimations()
+    assert.equal(app.pendingFrames, 0)
+    app.paint(140)
+    for (const element of [app.screen, app.under, app.pill]) {
+      assert.ok(element.animations.every((animation) => animation.cancelled && animation.playState === 'idle'))
+    }
+    assert.deepEqual(app.navigation, [])
+    assert.equal(app.holds, 0)
+  }
 })
 
-test('Regrabbing before the first frame cancels the stale start and completes only the continued swipe', async () => {
-  const app = mountSwipe()
-  app.touch('start', 300, 200, 0)
-  app.touch('move', 200, 200, 40)
-  app.touch('end', 200, 200, 41, { paint: false })
-  const original = app.screen.animations[0]
-  app.screen.presentationOffset = -100
-  app.touch('start', 250, 200, 50, { paint: false })
-  assert.equal(app.pendingFrames, 0)
-  assert.equal(original.cancelled, true)
-  app.touch('move', 230, 200, 70)
-  app.touch('end', 230, 200, 71)
-  assert.equal(original.startTime, null)
-  app.screen.animations.at(-1).finish()
-  app.under.animations.at(-1).finish()
-  await flushAnimations()
-  assert.deepEqual(app.navigation, ['/search'])
-  app.commit()
-  app.cleanup()
+test('Regrabbing during preparation cancels the stale start even when its ready callback is already queued', async () => {
+  for (const readyQueued of [false, true]) {
+    const app = mountSwipe({ hasPill: true })
+    app.touch('start', 300, 200, 0)
+    app.touch('move', 200, 200, 40)
+    app.touch('end', 200, 200, 41, { paint: false })
+    const original = [app.screen, app.under, app.pill].map((element) => element.animations[0])
+    if (readyQueued) app.paint(48)
+    app.screen.presentationOffset = -100
+    app.touch('start', 250, 200, 50, { paint: false })
+    await flushAnimations()
+    assert.equal(app.pendingFrames, 0)
+    assert.equal(app.screen.style.transform, 'translate3d(-100px, 0, 0)')
+    assert.ok(original.every((animation) => animation.cancelled && animation.playState === 'idle'))
+    app.touch('move', 230, 200, 70)
+    app.touch('end', 230, 200, 71)
+    await flushAnimations()
+    for (const element of [app.screen, app.under, app.pill]) element.animations.at(-1).finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search'])
+    app.commit()
+    app.cleanup()
+  }
 })
 
 test('An unchanged touchend coordinate preserves the velocity of the last moving frames', () => {

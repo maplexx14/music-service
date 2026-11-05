@@ -259,6 +259,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       cancelAnimations()
       const animations = []
       const registerAnimation = (animation) => {
+        animation.pause()
         animations.push(animation)
       }
       // Пока WAAPI ждёт первый кадр, живые стили остаются под пальцем.
@@ -283,16 +284,15 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         })), options))
       }
       pan.animations = animations
-      // Браузер запускает pending-анимации, когда кадр готов к показу.
-      // Ручной startTime в rAF запускал часы раньше передачи слоёв
-      // композитору WebKit: первый видимый кадр уже догонял доезд.
+      // В WebKit ready может прийти со startTime из момента отпускания:
+      // подготовка слоёв уже «съела» первые кадры пружины. Держим время на
+      // нуле до готовности всех анимаций, затем запускаем их общими часами.
       Promise.all(animations.map((animation) => animation.ready)).then(() => {
         if (pan !== finished || pan.animations !== animations) return
-        const start = Math.max(...animations.map((animation) => animation.startTime ?? 0))
-        // Обычно все получают один startTime. Если слой подготовился позже,
-        // синхронизируем остальных с ним, не проматывая его первые кадры.
+        const start = document.timeline.currentTime
         animations.forEach((animation) => {
-          if (animation.startTime !== start) animation.startTime = start
+          animation.play()
+          if (start !== null) animation.startTime = start
         })
       }, () => {})
       Promise.all(animations.map((animation) => animation.finished)).then(() => {
@@ -312,6 +312,11 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     }
 
     const settle = (motion, done) => {
+      finishLive = null
+      pan.advance = null
+      // Возврат тоже можно взять под палец. Если касание оказалось тапом
+      // или вертикальным скроллом, продолжим с удержанного положения.
+      pan.resume = () => settle(settleMotion(0), done)
       actionsRef.current.onCommit?.(null)
       animateOffset(0, motion, () => {
         reset()
@@ -384,7 +389,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     }
 
     const resumePaused = () => {
-      if (!finishLive && !committing) pan?.resume?.()
+      if (!finishLive && !committing && !pan?.animations) pan?.resume?.()
     }
 
     const onStart = (e) => {
@@ -393,9 +398,10 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         onCancel()
         return
       }
-      if (finishLive && pan) {
-        // Касание останавливает доезд в видимом положении. Следующий жест
-        // продолжает его или возвращает назад, без скачка к следующей вкладке.
+      if (pan?.animations && !busy && !committing) {
+        // И переход, и возврат останавливаются уже на касании. Иначе во
+        // время распознавания нового жеста экран продолжал уезжать из-под
+        // пальца, а при захвате менял позицию ещё на несколько пикселей.
         const offset = new DOMMatrixReadOnly(getComputedStyle(pan.screen).transform).m41
         cancelAnimations()
         finishLive = null
