@@ -9,6 +9,7 @@ import {
 } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { swipeSpring } from '../utils/swipeSpring'
+import { setSwipePhase } from '../utils/swipeActivity'
 
 // Навигация свайпами в PWA: вправо — «Назад» на вложенных экранах, влево/
 // вправо — соседняя вкладка на корнях вкладок. Жест начинается из любой
@@ -199,6 +200,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
 
     const reset = () => {
       finishLive = null
+      setSwipePhase(null)
       if (pan) {
         cancelAnimations()
         actionsRef.current.onPan?.(null)
@@ -269,6 +271,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         done()
         return
       }
+      setSwipePhase('prepare')
       const options = { duration: motion.duration, easing: 'linear', fill: 'both' }
       registerAnimation(pan.screen.animate(motion.samples.map(({ value, offset }) => ({
         transform: transformAt(value), offset,
@@ -289,6 +292,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       // нуле до готовности всех анимаций, затем запускаем их общими часами.
       Promise.all(animations.map((animation) => animation.ready)).then(() => {
         if (pan !== finished || pan.animations !== animations) return
+        setSwipePhase('settle')
         const start = document.timeline.currentTime
         animations.forEach((animation) => {
           animation.play()
@@ -336,6 +340,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         finishLive = null
         cancelAnimations()
         committing = true
+        setSwipePhase('commit')
         // Доезд завершён — под конечными кадрами остаются конечные стили.
         finished.screen.style.transition = 'none'
         finished.under.style.transition = 'none'
@@ -406,6 +411,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         cancelAnimations()
         finishLive = null
         setOffset(offset)
+        setSwipePhase('hold')
       }
       if (busy && interruptible) {
         finishActiveTransition()
@@ -500,6 +506,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         }
         pan.dragSamples = [{ x: pan.offset, t: g.startT }]
         pan.dragVelocity = 0
+        setSwipePhase('drag')
         // touch-action: pan-y pinch-zoom уже разделяет оси. Менять overflow
         // здесь нельзя: WebKit пересоздаёт слой прокрутки в начале и конце
         // жеста, заново растеризуя содержимое экрана.
@@ -593,6 +600,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         return
       }
       cancelDragFrame()
+      setSwipePhase('release')
       const dir = intentDx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       // Очень короткий флик может закончиться до первого кадра протяжки.
@@ -615,7 +623,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         settle(settleMotion(0, animationVelocity))
         return
       }
-      haptic(HAPTIC.selection)
+      haptic(HAPTIC.selection, { allowDomFallback: false })
       actionsRef.current.onCommit?.(dir)
       if (continueHandoff) showUnder(dir, pan.offset * dir < 0)
       // Небольшая поправка пальца не отменяет переход и не должна запускать

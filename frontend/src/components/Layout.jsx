@@ -360,7 +360,7 @@ function Layout({ renderRoutes }) {
     const index = navIndexAt(event.clientX, drag)
     if (index !== drag.index) {
       drag.index = index
-      haptic(HAPTIC.selection)
+      haptic(HAPTIC.selection, { allowDomFallback: false })
       setNavHoverIndex(index)
     }
   }

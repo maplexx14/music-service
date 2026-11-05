@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { swipeSpring } from '../src/utils/swipeSpring.js'
+import { getSwipePhase, setSwipePhase } from '../src/utils/swipeActivity.js'
 
 const source = await readFile(new URL('../src/hooks/useSwipeNavigation.js', import.meta.url), 'utf8')
 const { code } = await transform(source, { format: 'cjs', target: 'es2020' })
@@ -126,6 +127,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     },
     '../utils/haptics': { haptic() {}, HAPTIC: { selection: 1 } },
     '../utils/swipeSpring': { swipeSpring },
+    '../utils/swipeActivity': { setSwipePhase },
   }
   const hook = { exports: {} }
   script.runInContext(vm.createContext({
@@ -180,6 +182,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     screen, under, next, pill, container, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles, rerender,
     activate(element) { active = element },
     get pendingFrames() { return frames.size },
+    get phase() { return getSwipePhase() },
     get holds() { return holds },
     get capturedPointer() { return capturedPointer },
     pointer(name, x, timeStamp, extra = {}) {
@@ -220,18 +223,24 @@ test('Pointer release starts the settle without waiting for a compatible touchen
   app.pointer('pointermove', 250, 25)
   app.pointer('pointermove', 180, 50)
   assert.equal(app.capturedPointer, 1)
+  assert.equal(app.phase, 'drag')
   app.pointer('pointerup', 170, 55, { paint: false })
   assert.equal(app.capturedPointer, null)
   assert.equal(app.screen.animations.length, 1)
   assert.equal(app.screen.animations[0].pending, true)
   assert.equal(app.pendingFrames, 0)
+  assert.equal(app.phase, 'prepare')
   app.paint(64)
+  await flushAnimations()
+  assert.equal(app.phase, 'settle')
   app.screen.animations[0].finish()
   app.under.animations[0].finish()
   app.pill.animations[0].finish()
   await flushAnimations()
   assert.deepEqual(app.navigation, ['/search'])
+  assert.equal(app.phase, 'commit')
   app.commit()
+  assert.equal(app.phase, null)
   app.cleanup()
 })
 
@@ -995,6 +1004,7 @@ test('A late compositor layer holds both screens and the indicator at release un
   const pill = app.pill.animations[0]
   app.paint(50, { skip: [enter] })
   await flushAnimations()
+  assert.equal(app.phase, 'prepare')
   assert.equal(enter.startTime, null)
   app.paint(75, { skip: [enter] })
   assert.equal(exit.currentTime, 0, 'The outgoing screen moved before the incoming screen was ready')
@@ -1032,6 +1042,7 @@ test('Unmount before playback cancels preparation even when its ready callback i
     if (readyQueued) app.paint(48)
     app.cleanup()
     await flushAnimations()
+    assert.equal(app.phase, null)
     assert.equal(app.pendingFrames, 0)
     app.paint(140)
     for (const element of [app.screen, app.under, app.pill]) {
@@ -1053,6 +1064,7 @@ test('Regrabbing during preparation cancels the stale start even when its ready 
     app.screen.presentationOffset = -100
     app.touch('start', 250, 200, 50, { paint: false })
     await flushAnimations()
+    assert.equal(app.phase, 'hold')
     assert.equal(app.pendingFrames, 0)
     assert.equal(app.screen.style.transform, 'translate3d(-100px, 0, 0)')
     assert.ok(original.every((animation) => animation.cancelled && animation.playState === 'idle'))

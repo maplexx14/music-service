@@ -28,13 +28,15 @@ function iosTick() {
   iosSwitchLabel.click()
 }
 
-export function haptic(pattern = 10) {
+export function haptic(pattern = 10, { allowDomFallback = true } = {}) {
   try {
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       navigator.vibrate(pattern)
       return
     }
-    iosTick()
+    // Непрерывный жест уже даёт обратную связь движением. Служебный клик
+    // по нативному свитчу iOS не должен вмешиваться в его кадры.
+    if (allowDomFallback) iosTick()
   } catch {
     /* Некоторые браузеры бросают на vibrate — не критично */
   }

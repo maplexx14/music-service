@@ -12,6 +12,7 @@
 import { usePlayerStore } from '../store/playerStore'
 import { PRESSABLE, SCROLLABLE } from '../services/pressFeedback'
 import { fastTapReleasedAt, isFastTapClick } from '../services/fastTap'
+import { getSwipePhase, onSwipePhase } from './swipeActivity'
 
 // id фоновых анимаций воспроизведения (полосы прогресса, диск): они идут в
 // каждом кадре, пока играет музыка, и в разбор рывков не попадают.
@@ -19,6 +20,7 @@ export const PLAYBACK_ANIMATION_ID = 'playback'
 
 const ENABLED_KEY = 'bolt-frame-meter'
 const REPORT_KEY = 'bolt-frame-meter-report'
+const BUILD = import.meta.env.VITE_BUILD_TIME || 'dev'
 const FRAME_MS = 1000 / 60
 // Кадр длиннее полутора интервалов — хотя бы один кадр пропущен.
 const JANK_MS = FRAME_MS * 1.5
@@ -46,6 +48,14 @@ let lastSavedAt = 0
 let touching = false
 let lastMoveAt = 0
 let lastScrollAt = 0
+const SWIPE_PHASES = {
+  drag: 'свайп: движение пальца',
+  release: 'свайп: отпускание',
+  prepare: 'свайп: подготовка доезда',
+  settle: 'свайп: доезд',
+  hold: 'свайп: удержание',
+  commit: 'свайп: смена экрана',
+}
 
 // Недавние события (смена трека, события плеера из diag, тапы) — чтобы у
 // долгого кадра было видно, что его запустило. Хранится последняя секунда.
@@ -215,7 +225,9 @@ function readEnabled() {
 function loadReport() {
   try {
     const data = JSON.parse(localStorage.getItem(REPORT_KEY) || 'null')
-    if (data && typeof data === 'object') {
+    // Счётчик переживает перезапуск, но данные разных сборок не смешиваем:
+    // иначе улучшение анимации сравнивалось бы с частью старого замера.
+    if (data && typeof data === 'object' && data.build === BUILD) {
       stats = data.stats || {}
       worst = data.worst || []
       reactions = data.reactions || {}
@@ -238,7 +250,7 @@ function loadReport() {
 function saveReport() {
   const startedAt_ = performance.now()
   try {
-    localStorage.setItem(REPORT_KEY, JSON.stringify({ stats, worst, reactions, renders, jankAnims, startedAt }))
+    localStorage.setItem(REPORT_KEY, JSON.stringify({ build: BUILD, stats, worst, reactions, renders, jankAnims, startedAt }))
   } catch {
     /* хранилище недоступно — отчёт живёт до перезапуска */
   }
@@ -253,6 +265,8 @@ function screenName() {
 }
 
 function activity(now) {
+  const swipe = SWIPE_PHASES[getSwipePhase()]
+  if (swipe) return swipe
   if (now - lastScrollAt < SCROLL_HOLD_MS) return 'прокрутка'
   if (now - lastMoveAt < MOVE_HOLD_MS) return 'жест'
   if (touching) return 'касание'
@@ -398,6 +412,7 @@ const onTouchEnd = (e) => {
   }
 }
 let unsubscribeTrack = null
+let unsubscribeSwipe = null
 const onScroll = () => {
   lastScrollAt = performance.now()
 }
@@ -425,6 +440,9 @@ function start() {
   unsubscribeTrack = usePlayerStore.subscribe((state, prev) => {
     if (state.currentTrack?.id !== prev.currentTrack?.id) noteFrameEvent('трек')
   })
+  unsubscribeSwipe = onSwipePhase((phase) => {
+    if (phase) noteFrameEvent(SWIPE_PHASES[phase])
+  })
   lastBeatAt = 0
   longestBusyMs = 0
   beat()
@@ -446,6 +464,8 @@ function stop() {
   document.removeEventListener('visibilitychange', onHide)
   unsubscribeTrack?.()
   unsubscribeTrack = null
+  unsubscribeSwipe?.()
+  unsubscribeSwipe = null
   recentEvents = []
   probe = null
   pendingTap = null
@@ -522,7 +542,9 @@ const pct = (part, whole) => (whole ? `${((100 * part) / whole).toFixed(1)}%` : 
 export function formatFrameMeter() {
   if (running) saveReport()
   else loadReport()
-  const rows = Object.entries(stats).filter(([, s]) => s.frames >= 30)
+  // Короткий свайп часто содержит меньше 30 кадров, но именно на нём виден
+  // рывок. Такие строки входят и в таблицу, и в общее число кадров.
+  const rows = Object.entries(stats).filter(([, s]) => s.frames > 0)
   if (!rows.length) return [...formatReactions(), ...formatRenders(), ...formatJankAnims()].join('\n').trim()
   const total = rows.reduce(
     (acc, [, s]) => ({ frames: acc.frames + s.frames, janky: acc.janky + s.janky, missed: acc.missed + s.missed }),
@@ -540,6 +562,7 @@ export function formatFrameMeter() {
   // считаются иначе, без этой пометки отчёт не сравнить.
   const powerSave = document.documentElement.classList.contains('power-save') ? 'да' : 'нет'
   const lines = [
+    `Сборка: ${BUILD}${BUILD === 'dev' ? '' : ' UTC'}`,
     `Замер ${minutes} мин, ${screen.width}×${screen.height}@${window.devicePixelRatio}, лёгкий режим: ${lite}, энергосбережение: ${powerSave}, уровень фона: ${tier}`,
     `Всего: ${total.frames} кадров, рывков ${pct(total.janky, total.frames)}, пропущено кадров ${pct(total.missed, total.frames + total.missed)}`,
     '',
