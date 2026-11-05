@@ -1,4 +1,6 @@
-const FREQUENCY = 34
+// Более мягкий разгон: при коротком движении пальца оставшаяся ширина
+// экрана не должна пролетать за первые два кадра после отпускания.
+const FREQUENCY = 24
 const STEP_MS = 1000 / 120
 const REST_DISTANCE = 0.15
 const REST_SPEED = 8

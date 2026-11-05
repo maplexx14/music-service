@@ -16,7 +16,9 @@ import {
   entryAt,
   entryIndexOf,
   getShownTab,
+  heavyAnimationsHeld,
   isTabRoot,
+  onHeavyAnimationsHold,
   subscribeShownTab,
 } from '../services/navigation'
 
@@ -55,7 +57,7 @@ const isDetailId = (id) => id.startsWith('detail:')
 // возвращает туда, откуда ушёл, вперёд — сверху. Живым экранам это не
 // нужно — их контейнер помнит позицию сам; нужно экрану, созданному заново
 // (глубже двух вложенных или после перезагрузки).
-function useScrollRestoration(scrollerRef, location) {
+function useScrollRestoration(scrollerRef, location, ready) {
   const navigationType = useNavigationType()
   const locationRef = useRef(location)
   const pathRef = useRef(null)
@@ -64,17 +66,21 @@ function useScrollRestoration(scrollerRef, location) {
 
   useEffect(() => {
     const el = scrollerRef.current
-    if (!el) return undefined
+    if (!el || !ready) return undefined
     const onScroll = () => {
       if (!restoringRef.current) rememberScroll(locationRef.current, el.scrollTop)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [scrollerRef])
+  }, [scrollerRef, ready])
 
   // Layout-эффект: в том же коммите, что и новый экран, до снапшота view
   // transition — анимация сразу едет с правильной позиции.
   useLayoutEffect(() => {
+    // Оболочка холодной вкладки пока не прокручивается. Восстановление
+    // запускаем с её содержимым: иначе ожидание роста может закончиться
+    // во время свайпа, а повторный эффект с тем же путём его уже пропустит.
+    if (!ready) return
     const el = scrollerRef.current
     const path = scrollKey(location)
     const firstMount = pathRef.current === null
@@ -95,7 +101,7 @@ function useScrollRestoration(scrollerRef, location) {
     }
     restoringRef.current = true
     cancelRestoreRef.current = restoreScrollPosition(el, saved, () => { restoringRef.current = false })
-  }, [location.key])
+  }, [location.key, ready])
 
   useEffect(() => () => {
     cancelRestoreRef.current?.()
@@ -113,7 +119,7 @@ function useScrollRestoration(scrollerRef, location) {
 // Родитель — маршрут "/*" с базой "/", пустой список матчей даёт ту же базу.
 const ROOT_ROUTE_CONTEXT = { outlet: null, matches: [], isDataRoute: false }
 
-const Screen = memo(function Screen({ id, location, active, isMobile, renderRoutes, onBack }) {
+const Screen = memo(function Screen({ id, location, active, ready = true, isMobile, renderRoutes, onBack }) {
   const scrollerRef = useRef(null)
   const context = useMemo(() => ({ active, scrollerRef, pathname: location.pathname }), [active, location.pathname])
   const locationContext = useMemo(() => ({ location, navigationType: 'POP' }), [location])
@@ -125,7 +131,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
   // под часами нет: тёмная полоса резала шапки с обложкой во весь верх.
   // Главной отступ не нужен — её hero заходит под статус-бар.
   const safeTop = isMobile && path !== '/'
-  useScrollRestoration(scrollerRef, location)
+  useScrollRestoration(scrollerRef, location, ready)
 
   return (
     <div
@@ -150,7 +156,7 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
           <LocationContext.Provider value={locationContext}>
             <ScreenContext.Provider value={context}>
               <MeterProfiler id={`экран ${path.split('/')[1] || 'home'}${active ? '' : ' (скрыт)'}`}>
-                <Suspense fallback={<Spinner page />}>{renderRoutes(location)}</Suspense>
+                <Suspense fallback={<Spinner page />}>{ready ? renderRoutes(location) : <Spinner page />}</Suspense>
               </MeterProfiler>
             </ScreenContext.Provider>
           </LocationContext.Provider>
@@ -163,13 +169,13 @@ const Screen = memo(function Screen({ id, location, active, isMobile, renderRout
 const idle = (fn) =>
   typeof window.requestIdleCallback === 'function'
     ? window.requestIdleCallback(fn, { timeout: 3000 })
-    : window.setTimeout(fn, 1200)
+    : window.setTimeout(fn, 32)
 const cancelIdle = (handle) =>
   typeof window.cancelIdleCallback === 'function' ? window.cancelIdleCallback(handle) : window.clearTimeout(handle)
 
 // Пауза перед прогревом вкладок: первый экран успевает загрузиться без
 // конкуренции за сеть и главный поток.
-const WARM_DELAY_MS = 1500
+const WARM_DELAY_MS = 250
 
 function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
   const location = useLocation()
@@ -220,16 +226,29 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
     if (!warmTabs) return undefined
     let handle = null
     const warmNext = () => {
+      if (handle !== null || heavyAnimationsHeld()) return
       const next = TAB_ROOTS.find((path) => !mountedTabsRef.current.has(path))
       if (!next) return
       handle = idle(() => {
+        handle = null
+        if (heavyAnimationsHeld()) return
         mountedTabsRef.current.add(next)
         forceUpdate()
         warmNext()
       })
     }
+    // Монтаж списков между событиями движения отнимает кадры у пальца.
+    // Оболочка соседа уже есть; прогрев содержимого продолжится после жеста.
+    const offHold = onHeavyAnimationsHold((held) => {
+      if (held && handle !== null) {
+        cancelIdle(handle)
+        handle = null
+      }
+      if (!held) warmNext()
+    })
     const timer = window.setTimeout(warmNext, WARM_DELAY_MS)
     return () => {
+      offHold()
       window.clearTimeout(timer)
       if (handle !== null) cancelIdle(handle)
     }
@@ -269,12 +288,15 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
 
   return (
     <>
-      {TAB_ROOTS.filter((path) => mountedTabsRef.current.has(path)).map((path) => (
+      {/* Оболочки всех вкладок готовы сразу: даже до загрузки чанка сосед
+          едет под пальцем. Содержимое прогревается по одной странице. */}
+      {TAB_ROOTS.filter((path) => warmTabs || mountedTabsRef.current.has(path)).map((path) => (
         <Screen
           key={path}
           id={tabScreenId(path)}
           location={tabLocation(path)}
           active={activePath === path}
+          ready={mountedTabsRef.current.has(path)}
           isMobile={isMobile}
           renderRoutes={renderRoutes}
           onBack={onBack}

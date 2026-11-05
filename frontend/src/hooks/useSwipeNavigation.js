@@ -90,7 +90,7 @@ function insideHorizontalScroller(target, root) {
   return false
 }
 
-export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNext, onCommit, onPan, targets }) {
+export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, onPrev, onNext, onCommit, onPan, targets }) {
   const actionsRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
@@ -107,6 +107,8 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     targets: targets || {},
   }
 
+  // Смена маршрута отменяет незавершённый жест: его поздний action не
+  // должен заменять вкладку, которую пользователь уже выбрал вручную.
   useEffect(() => {
     const container = containerRef.current
     if (!container || !enabled) return undefined
@@ -154,8 +156,6 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     const cancelAnimations = () => {
       if (!pan) return
       cancelDragFrame()
-      if (pan.startFrame) cancelAnimationFrame(pan.startFrame)
-      pan.startFrame = 0
       const animations = pan.animations
       pan.animations = null
       animations?.forEach((animation) => animation.cancel())
@@ -226,10 +226,6 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       cancelAnimations()
       const animations = []
       const registerAnimation = (animation) => {
-        // WebKit может начать отсчёт до передачи анимации композитору.
-        // Удерживаем первый кадр до общего запуска экранов и капсулы.
-        animation.pause()
-        animation.currentTime = 0
         animations.push(animation)
       }
       // Пока WAAPI ждёт первый кадр, живые стили остаются под пальцем.
@@ -249,14 +245,18 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         })), options))
       }
       pan.animations = animations
-      pan.startFrame = requestAnimationFrame((time) => {
-        finished.startFrame = 0
+      // Браузер запускает pending-анимации, когда кадр готов к показу.
+      // Ручной startTime в rAF запускал часы раньше передачи слоёв
+      // композитору WebKit: первый видимый кадр уже догонял доезд.
+      Promise.all(animations.map((animation) => animation.ready)).then(() => {
         if (pan !== finished || pan.animations !== animations) return
-        // Свежие часы первого доступного кадра: задержка JS не превращается
-        // в пропущенные первые 50–100 мс доезда. Дальше работает композитор.
-        const start = document.timeline.currentTime ?? time
-        animations.forEach((animation) => { animation.startTime = start })
-      })
+        const start = Math.max(...animations.map((animation) => animation.startTime ?? 0))
+        // Обычно все получают один startTime. Если слой подготовился позже,
+        // синхронизируем остальных с ним, не проматывая его первые кадры.
+        animations.forEach((animation) => {
+          if (animation.startTime !== start) animation.startTime = start
+        })
+      }, () => {})
       Promise.all(animations.map((animation) => animation.finished)).then(() => {
         if (pan === finished && pan.animations === animations) {
           setOffset(x)
@@ -402,7 +402,6 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
             offset: 0,
             animations: null,
             dragFrame: 0,
-            startFrame: 0,
             tabSwipe: !actionsRef.current.back,
           }
           screen.style.willChange = 'transform'
@@ -643,20 +642,72 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       edgeGuard.addEventListener('touchend', onEdgeEnd, { passive: true })
     }
 
-    container.addEventListener('touchstart', onStart, { passive: true })
-    container.addEventListener('touchmove', onMove, { passive: true })
-    container.addEventListener('touchend', onEnd, { passive: true })
-    container.addEventListener('touchcancel', onCancel, { passive: true })
+    // На iOS pointerup приходит раньше совместимого touchend. Жест и
+    // доезд должны передавать друг другу управление при отпускании пальца,
+    // без ожидания второй очереди событий WebKit.
+    let pointerId = null
+    const pointerTouch = (e, ended = false) => ({
+      target: e.target,
+      timeStamp: e.timeStamp,
+      touches: ended ? [] : [e],
+      changedTouches: [e],
+    })
+    const releasePointer = () => {
+      const id = pointerId
+      pointerId = null
+      if (id !== null && container.hasPointerCapture?.(id)) container.releasePointerCapture(id)
+    }
+    const onPointerStart = (e) => {
+      if (e.pointerType === 'mouse') return
+      if (!e.isPrimary) {
+        onCancel()
+        releasePointer()
+        return
+      }
+      pointerId = e.pointerId
+      onStart(pointerTouch(e))
+    }
+    const onPointerMove = (e) => {
+      if (e.pointerId !== pointerId) return
+      onMove(pointerTouch(e))
+      if (g?.axis === 'x' && !container.hasPointerCapture?.(pointerId)) container.setPointerCapture?.(pointerId)
+    }
+    const onPointerEnd = (e) => {
+      if (e.pointerId !== pointerId) return
+      onEnd(pointerTouch(e, true))
+      releasePointer()
+    }
+    const onPointerCancel = (e) => {
+      if (e.pointerId !== pointerId) return
+      onCancel()
+      releasePointer()
+    }
+    const onLostPointerCapture = (e) => {
+      // При захвате контейнером дочерняя кнопка теряет implicit capture.
+      // Её всплывшее событие — передача жеста, а не его отмена.
+      if (e.target === container) onPointerCancel(e)
+    }
+    const listeners = window.PointerEvent ? {
+      pointerdown: onPointerStart,
+      pointermove: onPointerMove,
+      pointerup: onPointerEnd,
+      pointercancel: onPointerCancel,
+      lostpointercapture: onLostPointerCapture,
+    } : {
+      touchstart: onStart,
+      touchmove: onMove,
+      touchend: onEnd,
+      touchcancel: onCancel,
+    }
+    for (const [name, listener] of Object.entries(listeners)) container.addEventListener(name, listener, { passive: true })
     return () => {
       edgeGuard?.remove()
-      container.removeEventListener('touchstart', onStart)
-      container.removeEventListener('touchmove', onMove)
-      container.removeEventListener('touchend', onEnd)
-      container.removeEventListener('touchcancel', onCancel)
+      for (const [name, listener] of Object.entries(listeners)) container.removeEventListener(name, listener)
+      releasePointer()
       cancelRouteCommit?.()
       clearTimeout(routeCommitTimer)
       finishLive = null
       reset()
     }
-  }, [containerRef, enabled])
+  }, [containerRef, enabled, screenKey])
 }

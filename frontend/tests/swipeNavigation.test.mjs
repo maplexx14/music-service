@@ -10,7 +10,7 @@ const { code } = await transform(source, { format: 'cjs', target: 'es2020' })
 const script = new vm.Script(code, { filename: 'useSwipeNavigation.js' })
 const flushAnimations = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }
 
-function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder = true, hasPill = false } = {}) {
+function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder = true, hasPill = false, pointer = false } = {}) {
   const listeners = new Map()
   const timers = new Map()
   const routeCommits = new Set()
@@ -25,6 +25,15 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   let holds = 0
   let timerId = 0
   let cleanup
+  let capturedPointer = null
+  let hookRef
+  let effectDeps
+  const runEffect = (effect, deps) => {
+    if (effectDeps && deps.length === effectDeps.length && deps.every((value, i) => Object.is(value, effectDeps[i]))) return
+    cleanup?.()
+    effectDeps = deps
+    cleanup = effect()
+  }
 
   class Element {
     constructor(id) {
@@ -46,18 +55,21 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     animate(frames, options) {
       let resolve
       let reject
+      let resolveReady
+      let rejectReady
       let startTime = null
       let heldTime = 0
       const finished = new Promise((yes, no) => { resolve = yes; reject = no })
+      const ready = new Promise((yes, no) => { resolveReady = yes; rejectReady = no })
       const animation = {
-        frames, options, finished, cancelled: false, playState: 'running',
+        frames, options, finished, ready, pending: true, cancelled: false, playState: 'running',
         get startTime() { return startTime },
-        set startTime(value) { startTime = value; this.playState = 'running' },
+        set startTime(value) { startTime = value; this.playState = 'running'; this.pending = false; resolveReady() },
         get currentTime() { return this.playState === 'running' && startTime !== null ? timeline.currentTime - startTime : heldTime },
         set currentTime(value) { heldTime = value },
         pause() { this.playState = 'paused' },
-        finish() { this.playState = 'finished'; resolve() },
-        cancel() { this.cancelled = true; this.playState = 'idle'; reject(new Error('Animation cancelled')) },
+        finish() { if (startTime === null) startTime = timeline.currentTime - options.duration; this.pending = false; this.playState = 'finished'; resolveReady(); resolve() },
+        cancel() { this.cancelled = true; this.pending = false; this.playState = 'idle'; rejectReady(new Error('Animation cancelled')); reject(new Error('Animation cancelled')) },
       }
       this.animations.push(animation)
       return animation
@@ -74,10 +86,13 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     },
     addEventListener(name, callback, options) { listeners.set(name, { callback, options }) },
     removeEventListener(name) { listeners.delete(name) },
+    setPointerCapture(id) { capturedPointer = id },
+    hasPointerCapture(id) { return capturedPointer === id },
+    releasePointerCapture() { capturedPointer = null },
   }
   screen.parentElement = container
   const modules = {
-    react: { useRef: (current) => ({ current }), useEffect: (effect) => { cleanup = effect() } },
+    react: { useRef: (current) => hookRef ??= { current }, useEffect: runEffect },
     '../services/navigation': {
       isIOS: false,
       afterNextRouteCommit(callback) { routeCommits.add(callback); return () => routeCommits.delete(callback) },
@@ -96,15 +111,17 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     Element,
     DOMMatrixReadOnly: class { constructor() { this.m41 = screen.presentationOffset ?? 0 } },
     getComputedStyle: (element) => ({ transform: element.style.transform ?? 'none' }),
-    window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }) },
+    window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }), PointerEvent: pointer ? class {} : undefined },
     document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty(name, value) { rootStyles[name] = value } } } },
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
     clearTimeout: (id) => timers.delete(id),
     requestAnimationFrame(callback) { const id = ++frameId; frames.set(id, callback); return id },
     cancelAnimationFrame(id) { frames.delete(id) },
   }))
-  hook.exports.useSwipeNavigation({ current: container }, {
+  const containerRef = { current: container }
+  const options = {
     enabled: true,
+    screenKey: 'home',
     onNext: hasNext ? () => navigation.push('/search') : null,
     onPrev: hasPrev ? () => navigation.push('/previous') : null,
     onPan: (...args) => {
@@ -117,17 +134,30 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     },
     onCommit: (direction) => commits.push(direction),
     targets: { left: 'tab:/search', right: hasPrev ? 'tab:/search' : null },
-  })
+  }
+  const rerender = (changes = {}) => {
+    Object.assign(options, changes)
+    hook.exports.useSwipeNavigation(containerRef, options)
+  }
+  rerender()
   const paint = (time = timeline.currentTime + 16) => {
     timeline.currentTime = time
+    for (const animation of [screen, under, pill].flatMap((element) => element.animations)) {
+      if (animation.pending) animation.startTime = time
+    }
     const pending = [...frames.values()]
     frames.clear()
     pending.forEach((callback) => callback(time))
   }
   return {
-    screen, under, pill, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles,
+    screen, under, pill, container, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles, rerender,
     get pendingFrames() { return frames.size },
     get holds() { return holds },
+    get capturedPointer() { return capturedPointer },
+    pointer(name, x, timeStamp, extra = {}) {
+      listeners.get(name).callback({ target: screen, pointerId: 1, pointerType: 'touch', isPrimary: true, clientX: x, clientY: 200, timeStamp, ...extra })
+      if (extra.paint !== false) paint(timeStamp)
+    },
     touch(name, x, y = 200, timeStamp = 0, extra = {}) {
       const point = { clientX: x, clientY: y }
       listeners.get(`touch${name}`).callback({
@@ -152,6 +182,112 @@ test('First swipe frame tracks the finger without rebuilding the scroll containe
   assert.ok(firstWrite > 0)
   assert.equal(app.operations.slice(firstWrite).includes('layout:width'), false)
   for (const { options } of app.listeners.values()) assert.equal(options.passive, true)
+  app.cleanup()
+})
+
+test('Pointer release starts the settle without waiting for a compatible touchend event', async () => {
+  const app = mountSwipe({ pointer: true, hasPill: true })
+  assert.equal(app.listeners.has('touchend'), false)
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 250, 25)
+  app.pointer('pointermove', 180, 50)
+  assert.equal(app.capturedPointer, 1)
+  app.pointer('pointerup', 170, 55, { paint: false })
+  assert.equal(app.capturedPointer, null)
+  assert.equal(app.screen.animations.length, 1)
+  assert.equal(app.screen.animations[0].pending, true)
+  assert.equal(app.pendingFrames, 0)
+  app.paint(64)
+  app.screen.animations[0].finish()
+  app.under.animations[0].finish()
+  app.pill.animations[0].finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
+  app.cleanup()
+})
+
+test('Vertical and mouse pointer movement do not capture a horizontal swipe', () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0, { pointerType: 'mouse' })
+  app.pointer('pointermove', 100, 30, { pointerType: 'mouse' })
+  app.pointer('pointerup', 100, 40, { pointerType: 'mouse' })
+  app.pointer('pointerdown', 300, 100)
+  app.pointer('pointermove', 295, 130, { clientY: 270 })
+  app.pointer('pointercancel', 295, 140)
+  assert.equal(app.capturedPointer, null)
+  assert.deepEqual(app.pans, [])
+  assert.equal(app.holds, 0)
+  app.cleanup()
+})
+
+test('A second pointer or lost capture returns the dragged screen and releases the pointer', async () => {
+  for (const cancellation of ['pointerdown', 'lostpointercapture']) {
+    const app = mountSwipe({ pointer: true })
+    app.pointer('pointerdown', 300, 0)
+    app.pointer('pointermove', 170, 50)
+    app.pointer(cancellation, 180, 55, cancellation === 'pointerdown' ? { pointerId: 2, isPrimary: false } : { target: app.container })
+    assert.equal(app.capturedPointer, null)
+    assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+    app.screen.animations[0].finish()
+    app.under.animations[0].finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, [])
+    assert.equal(app.holds, 0)
+    app.cleanup()
+  }
+})
+
+test('Moving implicit pointer capture from a touched child to the swipe container keeps the drag alive', () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 285, 25)
+  app.pointer('lostpointercapture', 280, 30, { target: app.screen })
+  app.pointer('pointermove', 200, 55)
+  assert.equal(app.screen.style.transform, 'translate3d(-100px, 0, 0)')
+  assert.equal(app.screen.animations.length, 0)
+  assert.equal(app.capturedPointer, 1)
+  app.pointer('pointerup', 200, 56)
+  assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+test('Choosing another screen during a swipe cancels its stale navigation and releases the layers', async () => {
+  for (const released of [false, true]) {
+    const app = mountSwipe({ pointer: true, hasPill: true })
+    app.pointer('pointerdown', 300, 0)
+    app.pointer('pointermove', 170, 50)
+    if (released) app.pointer('pointerup', 170, 55)
+    app.rerender({ screenKey: 'playlists' })
+    assert.equal(app.capturedPointer, null)
+    assert.equal(app.holds, 0)
+    assert.equal(app.screen.style.transform, '')
+    assert.equal(app.under.style.visibility, '')
+    assert.equal(app.pendingFrames, 0)
+    for (const element of [app.screen, app.under, app.pill]) {
+      assert.ok(element.animations.every((animation) => animation.cancelled))
+    }
+    await flushAnimations()
+    assert.deepEqual(app.navigation, [])
+    assert.equal(app.routeCommits.size, 0)
+    app.cleanup()
+  }
+})
+
+test('Updating callbacks on the same screen preserves the in-flight swipe', async () => {
+  const app = mountSwipe({ pointer: true, hasPill: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  app.rerender({ onCommit() {} })
+  assert.equal(app.holds, 1)
+  for (const element of [app.screen, app.under, app.pill]) {
+    assert.equal(element.animations[0].cancelled, false)
+    element.animations[0].finish()
+  }
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
   app.cleanup()
 })
 
@@ -189,7 +325,7 @@ test('Release discards unpainted movements and hands the last visible velocity t
   const expected = swipeSpring(-20, -390, -20 / 16)
   assert.equal(motion.samples[1].value, expected.samples[1].value,
     'Unpainted input accelerated the screen at release')
-  assert.equal(app.pendingFrames, 1, 'The queued drag frame survived release')
+  assert.equal(app.pendingFrames, 0, 'The queued drag frame survived release')
   app.paint(100)
   assert.equal(app.screen.style.transform, 'translate3d(-20px, 0, 0)')
   exit.finish()
@@ -447,7 +583,7 @@ test('A cold destination snapshot continues from the last displayed position ins
   app.touch('move', 240, 200, 24, { paint: false })
   app.touch('end', 180, 200, 31, { paint: false })
   assert.equal(app.rootStyles['--swipe-from'], '-20px')
-  assert.equal(app.pendingFrames, 1)
+  assert.equal(app.pendingFrames, 0)
   app.cleanup()
   assert.equal(app.pendingFrames, 0)
 })
@@ -536,17 +672,18 @@ test('Starting a settle keeps the live styles at the release position while comp
   app.cleanup()
 })
 
-test('A delayed first frame starts the screens and indicator at time zero on the same fresh clock', () => {
+test('The compositor starts screens and indicator at time zero without a JavaScript frame gate', () => {
   const app = mountSwipe({ hasPill: true })
   app.touch('start', 300, 200, 0)
   app.touch('move', 200, 200, 40)
   app.touch('end', 200, 200, 41, { paint: false })
   const animations = [app.screen.animations[0], app.under.animations[0], app.pill.animations[0]]
   for (const animation of animations) {
-    assert.equal(animation.playState, 'paused')
+    assert.equal(animation.playState, 'running')
+    assert.equal(animation.pending, true)
     assert.equal(animation.currentTime, 0)
   }
-  assert.equal(app.pendingFrames, 1)
+  assert.equal(app.pendingFrames, 0)
   app.paint(140)
   for (const animation of animations) {
     assert.equal(animation.playState, 'running')
@@ -559,12 +696,44 @@ test('A delayed first frame starts the screens and indicator at time zero on the
   app.cleanup()
 })
 
-test('Unmount before the first animation frame cancels its scheduled start', () => {
+test('A late compositor layer supplies the common start time without fast-forwarding its first frame', async () => {
+  const app = mountSwipe({ hasPill: true })
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41, { paint: false })
+  const exit = app.screen.animations[0]
+  const enter = app.under.animations[0]
+  const pill = app.pill.animations[0]
+  exit.startTime = 50
+  pill.startTime = 50
+  await flushAnimations()
+  assert.equal(enter.startTime, null)
+  enter.startTime = 90
+  await flushAnimations()
+  assert.equal(exit.startTime, 90)
+  assert.equal(pill.startTime, 90)
+  assert.equal(enter.startTime, 90)
+  app.cleanup()
+})
+
+test('A slow release accelerates gently across the first two display frames', () => {
+  for (const direction of [-1, 1]) {
+    const from = direction * 100
+    const to = direction * 390
+    const motion = swipeSpring(from, to, direction * 0.1)
+    const atTwoFrames = motion.samples.find(({ offset }) => offset * motion.duration >= 1000 / 30 - 0.001)
+    assert.ok(Math.abs(atTwoFrames.value - from) < Math.abs(to - from) * 0.25,
+      'A nearly stationary finger launched the page across a quarter of the remaining distance in two frames')
+    assert.ok(motion.duration < 450)
+  }
+})
+
+test('Unmount before the first animation frame cancels pending compositor playback', () => {
   const app = mountSwipe()
   app.touch('start', 300, 200, 0)
   app.touch('move', 200, 200, 40)
   app.touch('end', 200, 200, 41, { paint: false })
-  assert.equal(app.pendingFrames, 1)
+  assert.equal(app.screen.animations[0].pending, true)
   app.cleanup()
   assert.equal(app.pendingFrames, 0)
   app.paint(140)

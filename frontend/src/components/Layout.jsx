@@ -247,6 +247,7 @@ function Layout({ renderRoutes }) {
   }
   useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
+    screenKey: location.key,
     onCommit: handleSwipeCommit,
     onPan: handleSwipePan,
     onBack: showMobileBack ? goBack : null,
