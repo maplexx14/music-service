@@ -226,7 +226,9 @@ function Layout({ renderRoutes }) {
     navPillAnimationRef.current?.cancel()
     navPillAnimationRef.current = null
     if (x === null || tabIndex < 0) {
-      pill.style.transition = ''
+      // Коммит уже держит капсулу на месте. Включение CSS-перехода здесь
+      // заставляет WebKit повторно доезжать от последнего кадра WAAPI.
+      pill.style.transition = 'none'
       pill.style.transform = ''
       return
     }
@@ -239,7 +241,7 @@ function Layout({ renderRoutes }) {
       navPillAnimationRef.current = pill.animate(motion.samples.map(({ value, offset }) => ({
         transform: `translateX(${Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - value / width)) * 100}%)`,
         offset,
-      })), { duration: motion.duration, easing: 'linear' })
+      })), { duration: motion.duration, easing: 'linear', fill: 'both' })
     }
   }
   useSwipeNavigation(mainRef, {
@@ -262,6 +264,8 @@ function Layout({ renderRoutes }) {
       event.preventDefault()
       return
     }
+    // После свайпа CSS-доезд отключён; обычный тап снова анимирует капсулу.
+    if (navPillRef.current) navPillRef.current.style.transition = ''
     if (isActive && location.pathname === to) {
       event.preventDefault()
       mainRef.current

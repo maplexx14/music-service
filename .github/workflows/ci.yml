@@ -106,6 +106,7 @@ jobs:
       - run: npm run lint
       - run: npm run test:android
       - run: npm run test:player
+      - run: npm run test:touch
       - run: npm run build
 
   images:

@@ -46,6 +46,8 @@ const REVERSE_MIN_PX = 24
 // событию: перед отпусканием палец притормаживает, и последнее событие
 // занижало скорость броска.
 const VELOCITY_WINDOW_MS = 60
+// touchend без смещения в пределах двух кадров — отпускание, а не остановка.
+const RELEASE_GRACE_MS = 32
 // Сопротивление, когда в эту сторону идти некуда (первая/последняя вкладка).
 const RESISTANCE = 0.2
 // Палец остановился перед отпусканием — броска нет.
@@ -213,12 +215,14 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
     const animateOffset = (x, motion, done) => {
       const finished = pan
       cancelAnimations()
-      setOffset(x, motion)
+      // Пока WAAPI ждёт первый кадр, живые стили остаются под пальцем.
+      // Конечные стили выставляем только после доезда, перед коммитом роутера.
+      setOffset(motion.duration ? motion.samples[0].value : x, motion)
       if (!motion.duration) {
         done()
         return
       }
-      const options = { duration: motion.duration, easing: 'linear' }
+      const options = { duration: motion.duration, easing: 'linear', fill: 'both' }
       const animations = [pan.screen.animate(motion.samples.map(({ value, offset }) => ({
         transform: transformAt(value), offset,
       })), options)]
@@ -229,7 +233,10 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       }
       pan.animations = animations
       Promise.all(animations.map((animation) => animation.finished)).then(() => {
-        if (pan === finished && pan.animations === animations) done()
+        if (pan === finished && pan.animations === animations) {
+          setOffset(x)
+          done()
+        }
       }, () => {
         // Наш cancelAnimations сначала снимает ссылку. Если её сохранили,
         // анимацию отменил композитор: выбранный переход всё равно завершаем.
@@ -410,14 +417,21 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const { axis } = g
       // Скорость последнего движения определяет намерение. touchend может
       // прийти позже с той же координатой и обнулить её — это не отмена флика.
-      const movementVelocity = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
+      const movementAge = e.timeStamp - g.lastT
+      const movementVelocity = movementAge > STALE_VELOCITY_MS ? 0 : g.v
       if (axis === 'x' && pan && e.changedTouches?.[0]) {
         const x = e.changedTouches[0].clientX
-        if (x !== g.samples[g.samples.length - 1].x) {
+        const lastX = g.samples[g.samples.length - 1].x
+        const correction = x - lastX
+        const liftingCorrection = correction * g.dx < 0 && Math.abs(correction) <= TAP_SLOP_PX
+        if (correction !== 0 && !liftingCorrection) {
           updateDrag(x - g.x)
+          sampleVelocity(x, e.timeStamp)
+        } else if (movementAge > RELEASE_GRACE_MS) {
+          // Пауза перед отпусканием гасит скорость; немедленное отпускание
+          // сохраняет скорость последних движений, без торможения на стыке.
+          sampleVelocity(lastX, e.timeStamp)
         }
-        // Даже без новой координаты пауза перед отпусканием гасит скорость.
-        sampleVelocity(x, e.timeStamp)
       }
       const { dx, minDx, maxDx } = g
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
@@ -442,7 +456,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       }
       haptic(HAPTIC.selection)
       actionsRef.current.onCommit?.(dir)
-      const motion = settleMotion(exitOffset(dir), v)
+      // Небольшая поправка пальца не отменяет переход и не должна запускать
+      // доезд в обратную сторону. Настоящий разворот обработан выше.
+      const motion = settleMotion(exitOffset(dir), dir * Math.max(0, v * dir))
       const ms = motion.duration
 
       if (pan.under) {

@@ -314,6 +314,61 @@ test('The release coordinate is included before a spring takes over', () => {
   app.cleanup()
 })
 
+test('Starting a settle keeps the live styles at the release position while compositor animations are pending', async () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('end', 200, 200, 41)
+  assert.equal(app.screen.style.transform, 'translate3d(-100px, 0, 0)')
+  assert.equal(app.under.style.transform, 'translate3d(290px, 0, 0)')
+  assert.equal(app.screen.animations[0].options.fill, 'both')
+  app.screen.animations[0].finish()
+  app.under.animations[0].finish()
+  await flushAnimations()
+  assert.equal(app.screen.style.transform, 'translate3d(-390px, 0, 0)')
+  app.commit()
+  app.cleanup()
+})
+
+test('An unchanged touchend coordinate preserves the velocity of the last moving frames', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 200, 200, 40)
+  app.touch('move', 180, 200, 56)
+  app.touch('move', 160, 200, 72)
+  app.touch('end', 160, 200, 88)
+  const expected = swipeSpring(-140, -390, -1.25)
+  assert.equal(app.pans.at(-1)[3].samples[1].value, expected.samples[1].value)
+  app.cleanup()
+})
+
+test('A small lifting correction near the destination cannot send a committed tab backwards', () => {
+  const app = mountSwipe()
+  app.touch('start', 370, 200, 0)
+  app.touch('move', 25, 200, 40)
+  app.touch('move', 25, 200, 100)
+  app.touch('move', 26, 200, 101)
+  app.touch('end', 28, 200, 103)
+  const samples = app.pans.at(-1)[3].samples
+  assert.equal(samples[0].value, -344, 'Lifting correction moved the tab away from its release position')
+  assert.equal(samples.at(-1).value, -390)
+  for (let index = 1; index < samples.length; index += 1) {
+    assert.ok(samples[index].value <= samples[index - 1].value, 'The tab reversed after finger release')
+  }
+  app.cleanup()
+})
+
+test('A deliberate reversal in touchend still cancels a tab change', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 150, 200, 40)
+  app.touch('move', 150, 200, 100)
+  app.touch('end', 185, 200, 120)
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-115px, 0, 0)')
+  assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+  app.cleanup()
+})
+
 test('Pausing before release does not reuse the earlier flick velocity', () => {
   const app = mountSwipe()
   app.touch('start', 300)
