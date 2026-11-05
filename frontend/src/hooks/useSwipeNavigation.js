@@ -440,6 +440,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       // прийти позже с той же координатой и обнулить её — это не отмена флика.
       const movementAge = e.timeStamp - g.lastT
       const movementVelocity = movementAge > STALE_VELOCITY_MS ? 0 : g.v
+      // Доезд наследует скорость показанного движения. Остаток координаты,
+      // полученный только в touchend, ещё не двигал экран и не ускоряет его.
+      let animationVelocity = movementVelocity
       if (axis === 'x' && pan && e.changedTouches?.[0]) {
         const x = e.changedTouches[0].clientX
         const lastX = g.samples[g.samples.length - 1].x
@@ -447,7 +450,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         const liftingCorrection = correction * g.dx < 0 && Math.abs(correction) <= TAP_SLOP_PX
         if (correction !== 0 && !liftingCorrection) {
           // Safari может отдать остаток быстрого движения только в touchend.
-          // Координата влияет на выбор и скорость, а доезд начинает с экрана,
+          // Координата влияет на намерение, а доезд начинает с экрана,
           // который уже был под пальцем: прямой сдвиг здесь давал скачок.
           updateDrag(x - g.x, false)
           sampleVelocity(x, e.timeStamp)
@@ -455,6 +458,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
           // Пауза перед отпусканием гасит скорость; немедленное отпускание
           // сохраняет скорость последних движений, без торможения на стыке.
           sampleVelocity(lastX, e.timeStamp)
+          animationVelocity = g.v
         }
       }
       const { dx, minDx, maxDx } = g
@@ -476,14 +480,14 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         (Math.abs(dx) >= width * COMMIT_FRACTION ||
           (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(dx) >= FLING_MIN_PX))
       if (!commit) {
-        settle(settleMotion(0, v * (action ? 1 : RESISTANCE)))
+        settle(settleMotion(0, animationVelocity * (action ? 1 : RESISTANCE)))
         return
       }
       haptic(HAPTIC.selection)
       actionsRef.current.onCommit?.(dir)
       // Небольшая поправка пальца не отменяет переход и не должна запускать
       // доезд в обратную сторону. Настоящий разворот обработан выше.
-      const motion = settleMotion(exitOffset(dir), dir * Math.max(0, v * dir))
+      const motion = settleMotion(exitOffset(dir), dir * Math.max(0, animationVelocity * dir))
       const ms = motion.duration
 
       if (pan.under) {

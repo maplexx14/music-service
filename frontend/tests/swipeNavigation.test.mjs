@@ -357,6 +357,48 @@ test('A fast release with missing touchmove events continues from the last rende
   app.cleanup()
 })
 
+test('An undelivered release cannot accelerate the animation beyond the last displayed movement', () => {
+  for (const direction of [-1, 1]) {
+    const app = mountSwipe({ hasPrev: true })
+    const start = direction < 0 ? 375 : 15
+    app.touch('start', start, 200, 0)
+    app.touch('move', start + direction * 47, 200, 33)
+    app.touch('move', start + direction * 114, 200, 66)
+    app.touch('move', start + direction * 166, 200, 99)
+    app.touch('end', start + direction * 261, 200, 130)
+    const motion = app.pans.at(-1)[3]
+    const expected = swipeSpring(direction * 166, direction * 390, direction * 52 / 33)
+    assert.equal(motion.samples[1].value, expected.samples[1].value,
+      'The release endpoint introduced a velocity jump in the first animation frame')
+    assert.equal(motion.samples.at(-1).value, direction * 390)
+    app.cleanup()
+  }
+})
+
+test('An undelivered short flick still commits using release intent without adding its unseen speed', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 275, 200, 500)
+  app.touch('end', 245, 200, 510)
+  const motion = app.pans.at(-1)[3]
+  const expected = swipeSpring(-25, -390, -25 / 500)
+  assert.equal(motion.samples.at(-1).value, -390, 'The release-only flick was lost')
+  assert.equal(motion.samples[1].value, expected.samples[1].value)
+  app.cleanup()
+})
+
+test('An undelivered movement after a pause commits without reusing stale screen velocity', () => {
+  const app = mountSwipe()
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 230, 200, 30)
+  app.touch('end', 195, 200, 130)
+  const motion = app.pans.at(-1)[3]
+  const expected = swipeSpring(-70, -390, 0)
+  assert.equal(motion.samples.at(-1).value, -390)
+  assert.equal(motion.samples[1].value, expected.samples[1].value)
+  app.cleanup()
+})
+
 test('An undelivered release crossing the origin returns instead of replacing the revealed destination', () => {
   const app = mountSwipe({ hasPrev: true })
   app.touch('start', 200, 200, 0)
