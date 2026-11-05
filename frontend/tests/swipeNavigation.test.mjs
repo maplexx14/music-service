@@ -24,16 +24,22 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   let frameId = 0
   let holds = 0
   let timerId = 0
-  let cleanup
   let capturedPointer = null
-  let hookRef
-  let effectDeps
-  const runEffect = (effect, deps) => {
-    if (effectDeps && deps.length === effectDeps.length && deps.every((value, i) => Object.is(value, effectDeps[i]))) return
-    cleanup?.()
-    effectDeps = deps
-    cleanup = effect()
+  const hookRefs = []
+  let refIndex = 0
+  const effects = {}
+  const pendingEffects = { layout: [], passive: [] }
+  const runEffect = (phase) => (effect, deps) => {
+    const previous = effects[phase]
+    if (previous && deps.length === previous.deps.length && deps.every((value, i) => Object.is(value, previous.deps[i]))) return
+    const next = { deps, cleanup: previous?.cleanup }
+    effects[phase] = next
+    pendingEffects[phase].push(() => {
+      next.cleanup?.()
+      next.cleanup = effect()
+    })
   }
+  const flushEffects = (phase) => pendingEffects[phase].splice(0).forEach((effect) => effect())
 
   class Element {
     constructor(id) {
@@ -77,22 +83,32 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   }
   const screen = new Element('home')
   const under = new Element('search')
+  const next = new Element('liked')
   const pill = new Element('pill')
-  const container = {
+  let active = screen
+  const container = Object.defineProperties(new Element('container'), Object.getOwnPropertyDescriptors({
     get clientWidth() { operations.push('layout:width'); return 390 },
     querySelector(selector) {
-      if (selector.includes('data-active')) return screen
-      return hasUnder && selector.includes('tab:/search') ? under : null
+      if (selector.includes('data-active')) return active
+      if (!hasUnder) return null
+      if (selector.includes('tab:/search')) return under
+      if (selector.includes('tab:/liked')) return next
+      return selector.includes('tab:/"') ? screen : null
     },
     addEventListener(name, callback, options) { listeners.set(name, { callback, options }) },
     removeEventListener(name) { listeners.delete(name) },
     setPointerCapture(id) { capturedPointer = id },
     hasPointerCapture(id) { return capturedPointer === id },
     releasePointerCapture() { capturedPointer = null },
-  }
+  }))
   screen.parentElement = container
+  under.parentElement = container
+  next.parentElement = container
   const modules = {
-    react: { useRef: (current) => hookRef ??= { current }, useEffect: runEffect },
+    react: {
+      useRef: (current) => hookRefs[refIndex++] ??= { current },
+      useEffect: runEffect('passive'), useLayoutEffect: runEffect('layout'),
+    },
     '../services/navigation': {
       isIOS: false,
       afterNextRouteCommit(callback) { routeCommits.add(callback); return () => routeCommits.delete(callback) },
@@ -109,8 +125,8 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     module: hook, exports: hook.exports,
     require(name) { assert.ok(modules[name], `Unexpected import: ${name}`); return modules[name] },
     Element,
-    DOMMatrixReadOnly: class { constructor() { this.m41 = screen.presentationOffset ?? 0 } },
-    getComputedStyle: (element) => ({ transform: element.style.transform ?? 'none' }),
+    DOMMatrixReadOnly: class { constructor(transform) { this.m41 = Number(/translate3d\(([-\d.]+)px/.exec(transform)?.[1] ?? 0) } },
+    getComputedStyle: (element) => ({ transform: element.presentationOffset === undefined ? element.style.transform ?? 'none' : `translate3d(${element.presentationOffset}px, 0, 0)` }),
     window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }), PointerEvent: pointer ? class {} : undefined },
     document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty(name, value) { rootStyles[name] = value } } } },
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
@@ -135,14 +151,18 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     onCommit: (direction) => commits.push(direction),
     targets: { left: 'tab:/search', right: hasPrev ? 'tab:/search' : null },
   }
-  const rerender = (changes = {}) => {
+  const rerender = (changes = {}, beforeEffects) => {
     Object.assign(options, changes)
+    refIndex = 0
     hook.exports.useSwipeNavigation(containerRef, options)
+    flushEffects('layout')
+    beforeEffects?.()
+    flushEffects('passive')
   }
   rerender()
   const paint = (time = timeline.currentTime + 16) => {
     timeline.currentTime = time
-    for (const animation of [screen, under, pill].flatMap((element) => element.animations)) {
+    for (const animation of [screen, under, next, pill].flatMap((element) => element.animations)) {
       if (animation.pending) animation.startTime = time
     }
     const pending = [...frames.values()]
@@ -150,7 +170,8 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     pending.forEach((callback) => callback(time))
   }
   return {
-    screen, under, pill, container, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles, rerender,
+    screen, under, next, pill, container, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles, rerender,
+    activate(element) { active = element },
     get pendingFrames() { return frames.size },
     get holds() { return holds },
     get capturedPointer() { return capturedPointer },
@@ -166,7 +187,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
       if (extra.paint !== false) paint(timeStamp)
     },
     commit() { const callbacks = [...routeCommits]; routeCommits.clear(); callbacks.forEach((callback) => callback()) },
-    cleanup: () => cleanup(),
+    cleanup: () => Object.values(effects).forEach((effect) => effect.cleanup?.()),
   }
 }
 
@@ -288,6 +309,168 @@ test('Updating callbacks on the same screen preserves the in-flight swipe', asyn
   await flushAnimations()
   assert.deepEqual(app.navigation, ['/search'])
   app.commit()
+  app.cleanup()
+})
+
+test('A second swipe survives the first route commit and uses the new destination', async () => {
+  for (const startAfterCommit of [false, true]) {
+    const app = mountSwipe({ pointer: true, hasPill: true })
+    app.pointer('pointerdown', 300, 0)
+    app.pointer('pointermove', 170, 50)
+    app.pointer('pointerup', 170, 55)
+    for (const element of [app.screen, app.under, app.pill]) element.animations[0].finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search'])
+    const startNext = () => {
+      app.pointer('pointerdown', 300, 400, { pointerId: 2 })
+      app.pointer('pointermove', 260, 416, { pointerId: 2 })
+    }
+    if (!startAfterCommit) startNext()
+    app.rerender({ screenKey: 'search', onNext: () => app.navigation.push('/liked') }, () => {
+      app.commit()
+      if (startAfterCommit) startNext()
+    })
+    app.pointer('pointermove', 170, 448, { pointerId: 2 })
+    assert.equal(app.screen.style.transform, 'translate3d(-130px, 0, 0)', 'Route commit lost the second contact')
+    app.pointer('pointerup', 170, 450, { pointerId: 2 })
+    for (const element of [app.screen, app.under, app.pill]) element.animations.at(-1).finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search', '/liked'])
+    app.commit()
+    app.cleanup()
+  }
+})
+
+test('A short second flick released before the route commit is replayed from the new screen', async () => {
+  const app = mountSwipe({ pointer: true, hasPill: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  for (const element of [app.screen, app.under, app.pill]) element.animations[0].finish()
+  await flushAnimations()
+  app.pointer('pointerdown', 300, 400, { pointerId: 2 })
+  app.pointer('pointermove', 240, 425, { pointerId: 2 })
+  app.pointer('pointerup', 220, 435, { pointerId: 2 })
+  app.rerender({ screenKey: 'search', onNext: () => app.navigation.push('/liked') })
+  app.commit()
+  assert.equal(app.screen.animations.length, 2, 'A completed flick was discarded while waiting for the router')
+  assert.equal(app.screen.animations[1].frames[0].transform, 'translate3d(0px, 0, 0)')
+  for (const element of [app.screen, app.under, app.pill]) element.animations[1].finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search', '/liked'])
+  app.commit()
+  app.cleanup()
+})
+
+test('Cancelling the next contact during a route commit does not replay its movement', async () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  app.screen.animations[0].finish()
+  app.under.animations[0].finish()
+  await flushAnimations()
+  app.pointer('pointerdown', 300, 400, { pointerId: 2 })
+  app.pointer('pointermove', 240, 425, { pointerId: 2 })
+  app.pointer('pointercancel', 240, 435, { pointerId: 2 })
+  app.rerender({ screenKey: 'search' })
+  app.commit()
+  assert.equal(app.screen.animations.length, 1)
+  assert.equal(app.holds, 0)
+  assert.deepEqual(app.navigation, ['/search'])
+  app.cleanup()
+})
+
+test('A matching flick on the revealed destination advances another tab without snapping either screen', async () => {
+  const app = mountSwipe({ pointer: true, hasPill: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  app.screen.presentationOffset = -330
+  app.pointer('pointerdown', 300, 150, { pointerId: 2, target: app.container })
+  app.pointer('pointermove', 280, 166, { pointerId: 2, target: app.container })
+  assert.deepEqual(app.navigation, ['/search'])
+  assert.equal(app.screen.style.transform, 'translate3d(-330px, 0, 0)')
+  assert.equal(app.under.style.transform, 'translate3d(60px, 0, 0)', 'Starting the next swipe snapped the entering screen to its target')
+  assert.equal(app.holds, 1)
+  app.activate(app.under)
+  app.rerender({
+    screenKey: 'search', onPrev: () => app.navigation.push('/'), onNext: () => app.navigation.push('/liked'),
+    targets: { right: 'tab:/', left: 'tab:/liked' },
+  })
+  app.commit()
+  app.paint(180)
+  assert.equal(app.under.style.transform, 'translate3d(40px, 0, 0)')
+  assert.equal(app.screen.style.transform, 'translate3d(-350px, 0, 0)')
+  assert.equal(app.holds, 1)
+  app.pointer('pointermove', 160, 198, { pointerId: 2, target: app.container })
+  assert.equal(app.under.style.transform, 'translate3d(-80px, 0, 0)')
+  assert.equal(app.next.style.transform, 'translate3d(310px, 0, 0)')
+  app.pointer('pointerup', 160, 200, { pointerId: 2, target: app.container })
+  for (const element of [app.under, app.next, app.pill]) element.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search', '/liked'])
+  app.commit()
+  app.cleanup()
+})
+
+test('A followup released during handoff keeps all three screens aligned across the origin', async () => {
+  for (const offset of [-330, -180]) {
+    const app = mountSwipe({ pointer: true, hasPill: true })
+    app.pointer('pointerdown', 300, 0)
+    app.pointer('pointermove', 170, 50)
+    app.pointer('pointerup', 170, 55)
+    app.screen.presentationOffset = offset
+    app.pointer('pointerdown', 300, 150, { pointerId: 2, target: app.container })
+    app.pointer('pointermove', 280, 166, { pointerId: 2, target: app.container })
+    app.pointer('pointermove', 150, 198, { pointerId: 2, target: app.container })
+    app.pointer('pointerup', 150, 200, { pointerId: 2, target: app.container })
+    app.activate(app.under)
+    app.rerender({
+      screenKey: 'search', onPrev: () => app.navigation.push('/'), onNext: () => app.navigation.push('/liked'),
+      targets: { right: 'tab:/', left: 'tab:/liked' },
+    })
+    app.commit()
+    const moving = app.under.animations.at(-1)
+    assert.equal(moving.frames[0].transform, `translate3d(${390 + offset}px, 0, 0)`)
+    assert.equal(moving.frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+    for (const [element, shift] of [[app.screen, -390], [app.next, 390]]) {
+      const frames = element.animations.at(-1).frames
+      assert.equal(frames.length, moving.frames.length)
+      for (let i = 0; i < frames.length; i++) {
+        const value = (frame) => Number(/translate3d\(([-\d.]+)px/.exec(frame.transform)[1])
+        assert.ok(Math.abs(value(frames[i]) - value(moving.frames[i]) - shift) < 0.001)
+      }
+    }
+    for (const element of [app.screen, app.under, app.next, app.pill]) element.animations.at(-1).finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, ['/search', '/liked'])
+    app.commit()
+    assert.equal(app.screen.style.visibility, '')
+    assert.equal(app.holds, 0)
+    app.cleanup()
+  }
+})
+
+test('Cancelling a contact during handoff settles the incoming tab instead of leaving it frozen', async () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  app.screen.presentationOffset = -330
+  app.pointer('pointerdown', 300, 150, { pointerId: 2, target: app.container })
+  app.pointer('pointermove', 280, 166, { pointerId: 2, target: app.container })
+  app.pointer('pointercancel', 280, 170, { pointerId: 2 })
+  app.activate(app.under)
+  app.rerender({ screenKey: 'search' })
+  app.commit()
+  assert.equal(app.under.animations.at(-1).frames[0].transform, 'translate3d(60px, 0, 0)')
+  assert.equal(app.under.animations.at(-1).frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+  app.under.animations.at(-1).finish()
+  app.screen.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  assert.equal(app.holds, 0)
   app.cleanup()
 })
 

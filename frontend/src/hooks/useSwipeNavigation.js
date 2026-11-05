@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import {
   afterNextRouteCommit,
   finishActiveTransition,
@@ -22,6 +22,8 @@ import { swipeSpring } from '../utils/swipeSpring'
 // Отпустили дальше четверти ширины или быстрым броском — экраны доезжают, и
 // только потом меняется маршрут: оба уже на своих местах, анимации перехода
 // не нужно. Иначе экран возвращается на место.
+// Повторный свайп по уже видимой входящей вкладке передаёт ей управление
+// раньше: следующий жест начинает новый переход с текущих позиций экранов.
 //
 // Если живого экрана под пальцем нет (вложенный под вложенным, холодный
 // старт), под экраном пусто, а после отпускания переход доигрывает View
@@ -92,6 +94,7 @@ function insideHorizontalScroller(target, root) {
 
 export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, onPrev, onNext, onCommit, onPan, targets }) {
   const actionsRef = useRef(null)
+  const screenChangeRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
   // сразу, не дожидаясь доезда экранов и коммита роутера; null отменяет выбор.
@@ -99,6 +102,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
   // motion передаёт капсуле меню те же кадры пружины; onPan(null) —
   // жест закончен, сдвиг снят.
   actionsRef.current = {
+    screenKey,
     right: onBack || onPrev || null,
     left: onNext || null,
     onCommit: onCommit || null,
@@ -107,8 +111,13 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     targets: targets || {},
   }
 
-  // Смена маршрута отменяет незавершённый жест: его поздний action не
-  // должен заменять вкладку, которую пользователь уже выбрал вручную.
+  // Внешняя навигация отменяет старый жест до показа нового экрана.
+  // Слушатели остаются на месте: переподключение после коммита стирало
+  // следующее касание, уже начавшееся между двумя быстрыми свайпами.
+  useLayoutEffect(() => {
+    screenChangeRef.current?.(screenKey)
+  }, [screenKey])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container || !enabled) return undefined
@@ -128,8 +137,25 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     let committing = false
     let cancelRouteCommit = null
     let routeCommitTimer = 0
+    let currentScreenKey = actionsRef.current.screenKey
+    let routeRequested = false
+    let queuedMove = null
+    let queuedEnd = null
     // Пауза WebGL-фона, пока экран под пальцем или доезжает (см. navigation.js).
     let releaseHeavy = null
+
+    const requestNavigation = (action) => {
+      routeRequested = true
+      action()
+    }
+
+    const resumeInput = () => {
+      const move = queuedMove
+      const end = queuedEnd
+      queuedMove = queuedEnd = null
+      if (move) onMove(move)
+      if (end) onEnd(end)
+    }
 
     const activeScreen = () => container.querySelector(':scope > .screen[data-active]')
     const screenById = (id) => (id ? container.querySelector(`:scope > .screen[data-screen="${id}"]`) : null)
@@ -178,6 +204,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         actionsRef.current.onPan?.(null)
         clearScreen(pan.screen)
         if (pan.under) clearScreen(pan.under)
+        if (pan.trailing) clearScreen(pan.trailing.screen)
         pan = null
       }
       releaseHeavy?.()
@@ -186,9 +213,11 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
 
     // Экран под пальцем со стороны dir (0 — никакого). Порядок слоёв — инлайн
     // на время жеста: без z-index в покое экраны не запирают модалки страниц.
-    const showUnder = (dir) => {
+    const showUnder = (dir, retain = false) => {
       if (pan.underDir === dir) return
-      if (pan.under) clearScreen(pan.under)
+      if (pan.trailing) clearScreen(pan.trailing.screen)
+      pan.trailing = retain && pan.under ? { screen: pan.under, shift: -pan.underDir * pan.width } : null
+      if (pan.under && !retain) clearScreen(pan.under)
       pan.underDir = dir
       const id = dir > 0 ? actionsRef.current.targets.right : dir < 0 ? actionsRef.current.targets.left : null
       const under = screenById(id)
@@ -216,6 +245,10 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         pan.under.style.transition = 'none'
         pan.under.style.transform = transformAt(underOffset(x))
       }
+      if (pan.trailing) {
+        pan.trailing.screen.style.transition = 'none'
+        pan.trailing.screen.style.transform = transformAt(x + pan.trailing.shift)
+      }
     }
 
     // Явные начальные кадры не дают браузеру склеить последнее движение
@@ -242,6 +275,11 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       if (pan.under) {
         registerAnimation(pan.under.animate(motion.samples.map(({ value, offset }) => ({
           transform: transformAt(underOffset(value)), offset,
+        })), options))
+      }
+      if (pan.trailing) {
+        registerAnimation(pan.trailing.screen.animate(motion.samples.map(({ value, offset }) => ({
+          transform: transformAt(value + pan.trailing.shift), offset,
         })), options))
       }
       pan.animations = animations
@@ -287,7 +325,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     const commitLive = (dir, motion, action) => {
       const finished = pan
       let navigated = false
-      const navigateNow = () => {
+      const navigateNow = (handoff = false) => {
         if (navigated || pan !== finished) return
         navigated = true
         finishLive = null
@@ -296,26 +334,49 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         // Доезд завершён — под конечными кадрами остаются конечные стили.
         finished.screen.style.transition = 'none'
         finished.under.style.transition = 'none'
-        finished.under.style.transform = ''
+        if (!handoff) finished.under.style.transform = ''
         const done = () => {
           clearTimeout(routeCommitTimer)
           cancelRouteCommit = null
           committing = false
-          if (pan === finished) reset()
+          routeRequested = false
+          currentScreenKey = actionsRef.current.screenKey
+          if (pan === finished && handoff) {
+            if (activeScreen() !== finished.under) {
+              cancelGesture()
+              return
+            }
+            // Палец уже на входящей вкладке. Меняем владельца жеста,
+            // сохраняя обе видимые позиции и прогресс индикатора.
+            const offset = underOffset(finished.offset)
+            const outgoing = finished.screen
+            if (finished.trailing) clearScreen(finished.trailing.screen)
+            finished.trailing = null
+            finished.handoffDirection = finished.underDir
+            finished.screen = finished.under
+            finished.under = outgoing
+            finished.underDir *= -1
+            finished.screen.style.zIndex = '2'
+            finished.under.style.zIndex = '1'
+            finished.under.style.visibility = 'visible'
+            finished.advance = null
+            finished.resume = () => settle(settleMotion(0))
+            setOffset(offset)
+          } else if (pan === finished) reset()
+          resumeInput()
+          if (handoff && !g) resumePaused()
         }
         cancelRouteCommit = afterNextRouteCommit(done)
-        routeCommitTimer = setTimeout(() => {
-          cancelRouteCommit?.()
-          done()
-        }, 1000)
+        routeCommitTimer = setTimeout(cancelGesture, 1000)
         skipNextTransitionAnimation()
-        action()
+        requestNavigation(action)
       }
       const resume = (nextMotion) => {
         finishLive = navigateNow
         animateOffset(exitOffset(dir), nextMotion, navigateNow)
       }
       pan.resume = () => resume(settleMotion(exitOffset(dir)))
+      pan.advance = () => navigateNow(true)
       resume(motion)
     }
 
@@ -324,6 +385,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     }
 
     const onStart = (e) => {
+      queuedMove = queuedEnd = null
       if (e.touches.length !== 1) {
         onCancel()
         return
@@ -351,9 +413,11 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         return
       }
       const t = e.touches[0]
+      const hit = target === edgeGuard ? elementBelow(t.clientX, t.clientY) : target
+      const fromDestination = Boolean(pan?.tabSwipe && pan.advance && hit && hit !== pan.screen && hit.closest('.screen') !== pan.screen)
       // Геометрия до записей стилей: первый кадр свайпа не должен ждать
       // синхронной раскладки после показа соседнего экрана.
-      g = { x: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, minDx: 0, maxDx: 0, axis: null, startT: e.timeStamp, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
+      g = { x: t.clientX, originX: t.clientX, y: t.clientY, width: container.clientWidth || window.innerWidth, dx: 0, minDx: 0, maxDx: 0, axis: null, fromDestination, startT: e.timeStamp, lastT: e.timeStamp, v: 0, samples: [{ x: t.clientX, t: e.timeStamp }] }
     }
 
     const onMove = (e) => {
@@ -367,16 +431,33 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       const dy = t.clientY - g.y
       if (!g.axis) {
         if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
-        // Прошлый свайп ещё коммитится (активный экран вот-вот сменится) —
-        // жест не теряем, а ждём следующего движения пальца.
-        if (committing) return
+        if (!g.waitingForCommit && Math.abs(dx) < Math.abs(dy) * AXIS_RATIO) {
+          g = null
+          resumePaused()
+          return
+        }
+        // Первый экран уже доехал, но роутер ещё не сменил его. Сохраняем
+        // движение и отпускание: второй короткий флик может закончиться
+        // целиком до коммита, без ещё одного pointermove после него.
+        if (committing) {
+          g.waitingForCommit = true
+          queuedMove = e
+          return
+        }
+        if (g.fromDestination && pan?.advance && Math.sign(dx) === pan.underDir) {
+          g.waitingForCommit = true
+          queuedMove = e
+          pan.advance()
+          return
+        }
         const screen = activeScreen()
-        if (!screen || Math.abs(dx) < Math.abs(dy) * AXIS_RATIO) {
+        if (!screen) {
           g = null
           resumePaused()
           return
         }
         g.axis = 'x'
+        g.waitingForCommit = false
         // Новый жест во время возврата подхватывает экран там, где он сейчас
         // виден, вместо скачка к логическому нулю.
         if (pan?.screen === screen) {
@@ -385,12 +466,13 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
           const rawOffset = offsetAction ? offset : offset / RESISTANCE
           g.x -= rawOffset
           dx += rawOffset
-          g.minDx = Math.min(g.minDx, offset)
-          g.maxDx = Math.max(g.maxDx, offset)
+          g.minDx = g.fromDestination && pan.handoffDirection ? offset : Math.min(g.minDx, offset)
+          g.maxDx = g.fromDestination && pan.handoffDirection ? offset : Math.max(g.maxDx, offset)
           cancelAnimations()
           if (pan.offset !== offset) setOffset(offset)
           finishLive = null
           pan.resume = null
+          pan.advance = null
         } else {
           reset()
           releaseHeavy = holdHeavyAnimations()
@@ -460,6 +542,10 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         resumePaused()
         return
       }
+      if (committing) {
+        queuedEnd = e
+        return
+      }
       const { axis } = g
       // Скорость последнего движения определяет намерение. touchend может
       // прийти позже с той же координатой и обнулить её — это не отмена флика.
@@ -489,7 +575,8 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
           sampleVelocity(lastX, e.timeStamp)
         }
       }
-      const { dx, minDx, maxDx } = g
+      const { dx, minDx, maxDx, fromDestination } = g
+      const intentDx = fromDestination && pan?.handoffDirection ? g.samples.at(-1).x - g.originX : dx
       const v = e.timeStamp - g.lastT > STALE_VELOCITY_MS ? 0 : g.v
       g = null
       if (axis !== 'x' || !pan) {
@@ -497,7 +584,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         return
       }
       cancelDragFrame()
-      const dir = dx > 0 ? 1 : -1
+      const dir = intentDx > 0 ? 1 : -1
       const action = dir > 0 ? actionsRef.current.right : actionsRef.current.left
       // Очень короткий флик может закончиться до первого кадра протяжки.
       // Сосед уже смонтирован: начинаем живой доезд от нуля, без подмены
@@ -507,17 +594,21 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       const reversedDistance = dir > 0 ? maxDx - dx : dx - minDx
       const reversing = reversedDistance >= REVERSE_MIN_PX &&
         Math.min(v * dir, movementVelocity * dir) < -FLING_VELOCITY
-      // Если только touchend поменял сторону, возвращаем показанный экран.
+      const continueHandoff = fromDestination && pan.handoffDirection === dir
+      // После передачи жеста входящий экран ещё может быть правее центра,
+      // хотя второй флик уже направлен к следующей вкладке. Остаток старой
+      // вкладки тоже доезжает: до пересечения центра нужны три экрана.
       const commit =
-        action && dx * pan.offset >= 0 && !reversing &&
-        (Math.abs(dx) >= width * COMMIT_FRACTION ||
-          (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(dx) >= FLING_MIN_PX))
+        action && (dx * pan.offset >= 0 || continueHandoff) && !reversing &&
+        (Math.abs(intentDx) >= width * COMMIT_FRACTION ||
+          (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(intentDx) >= FLING_MIN_PX))
       if (!commit) {
         settle(settleMotion(0, animationVelocity))
         return
       }
       haptic(HAPTIC.selection)
       actionsRef.current.onCommit?.(dir)
+      if (continueHandoff) showUnder(dir, pan.offset * dir < 0)
       // Небольшая поправка пальца не отменяет переход и не должна запускать
       // доезд в обратную сторону. Настоящий разворот обработан выше.
       const motion = settleMotion(exitOffset(dir), dir * Math.max(0, animationVelocity * dir))
@@ -556,13 +647,14 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         cancelRouteCommit = cancelSwipe
         // Навигации не случилось — вернуть экран на место.
         routeCommitTimer = setTimeout(() => {
+          routeRequested = false
           cancelSwipe()
           cancelRouteCommit = null
           settle(settleMotion(0), () => {
             busy = false
           })
         }, 1000)
-        action()
+        requestNavigation(action)
         return
       }
 
@@ -573,6 +665,8 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       cancelRouteCommit = afterNextRouteCommit(() => {
         clearTimeout(routeCommitTimer)
         cancelRouteCommit = null
+        routeRequested = false
+        currentScreenKey = actionsRef.current.screenKey
         reset()
         busy = false
         if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
@@ -582,17 +676,19 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         )
       })
       routeCommitTimer = setTimeout(() => {
+        routeRequested = false
         cancelRouteCommit?.()
         cancelRouteCommit = null
         reset()
         busy = false
       }, 1500)
-      action()
+      requestNavigation(action)
     }
 
     // Касание отобрала система (входящий звонок, жест iOS) — возвращаем экран
     // на место, а не переходим.
     const onCancel = () => {
+      queuedMove = queuedEnd = null
       const wasDragging = g?.axis === 'x'
       g = null
       if (!pan || busy || committing) return
@@ -670,7 +766,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     const onPointerMove = (e) => {
       if (e.pointerId !== pointerId) return
       onMove(pointerTouch(e))
-      if (g?.axis === 'x' && !container.hasPointerCapture?.(pointerId)) container.setPointerCapture?.(pointerId)
+      if ((g?.axis === 'x' || g?.waitingForCommit) && !container.hasPointerCapture?.(pointerId)) container.setPointerCapture?.(pointerId)
     }
     const onPointerEnd = (e) => {
       if (e.pointerId !== pointerId) return
@@ -687,6 +783,28 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       // Её всплывшее событие — передача жеста, а не его отмена.
       if (e.target === container) onPointerCancel(e)
     }
+    const cancelGesture = () => {
+      g = null
+      queuedMove = queuedEnd = null
+      edgeTap = null
+      releasePointer()
+      cancelRouteCommit?.()
+      cancelRouteCommit = null
+      clearTimeout(routeCommitTimer)
+      busy = interruptible = committing = routeRequested = false
+      reset()
+    }
+    screenChangeRef.current = (key) => {
+      if (key === currentScreenKey) return
+      currentScreenKey = key
+      // Свой коммит передаёт следующее касание новому экрану. Выбор
+      // вкладки другим способом по-прежнему отменяет старый свайп.
+      if (routeRequested) {
+        routeRequested = false
+        return
+      }
+      cancelGesture()
+    }
     const listeners = window.PointerEvent ? {
       pointerdown: onPointerStart,
       pointermove: onPointerMove,
@@ -701,13 +819,10 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     }
     for (const [name, listener] of Object.entries(listeners)) container.addEventListener(name, listener, { passive: true })
     return () => {
+      screenChangeRef.current = null
       edgeGuard?.remove()
       for (const [name, listener] of Object.entries(listeners)) container.removeEventListener(name, listener)
-      releasePointer()
-      cancelRouteCommit?.()
-      clearTimeout(routeCommitTimer)
-      finishLive = null
-      reset()
+      cancelGesture()
     }
-  }, [containerRef, enabled, screenKey])
+  }, [containerRef, enabled])
 }
