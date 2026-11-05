@@ -48,6 +48,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
       this.scrollWidth = 390
       this.clientWidth = 390
       this.animations = []
+      this.attributes = new Map()
       this.scroller = { style: {}, scrollTop: 240 }
       this.style = new Proxy({}, {
         set: (style, key, value) => {
@@ -58,6 +59,9 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
       })
     }
     closest() { return null }
+    setAttribute(name, value) { this.attributes.set(name, value) }
+    removeAttribute(name) { this.attributes.delete(name) }
+    hasAttribute(name) { return this.attributes.has(name) }
     querySelector() { return this.scroller }
     animate(frames, options) {
       let resolve
@@ -209,6 +213,7 @@ test('First swipe frame tracks the finger without rebuilding the scroll containe
   assert.equal(app.under.style.visibility, 'visible')
   assert.deepEqual(app.screen.scroller.style, {})
   assert.equal(app.screen.scroller.scrollTop, 240)
+  assert.equal(app.container.hasAttribute('data-swiping'), true)
   const firstWrite = app.operations.findIndex((operation) => operation.startsWith('style:'))
   assert.ok(firstWrite > 0)
   assert.equal(app.operations.slice(firstWrite).includes('layout:width'), false)
@@ -239,8 +244,10 @@ test('Pointer release starts the settle without waiting for a compatible touchen
   await flushAnimations()
   assert.deepEqual(app.navigation, ['/search'])
   assert.equal(app.phase, 'commit')
+  assert.equal(app.container.hasAttribute('data-swiping'), true, 'Decoration resumed before the screen commit')
   app.commit()
   assert.equal(app.phase, null)
+  assert.equal(app.container.hasAttribute('data-swiping'), false)
   app.cleanup()
 })
 
@@ -255,6 +262,7 @@ test('Vertical and mouse pointer movement do not capture a horizontal swipe', ()
   assert.equal(app.capturedPointer, null)
   assert.deepEqual(app.pans, [])
   assert.equal(app.holds, 0)
+  assert.equal(app.container.hasAttribute('data-swiping'), false)
   app.cleanup()
 })
 

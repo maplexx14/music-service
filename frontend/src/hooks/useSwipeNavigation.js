@@ -201,6 +201,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     const reset = () => {
       finishLive = null
       setSwipePhase(null)
+      container.removeAttribute('data-swiping')
       if (pan) {
         cancelAnimations()
         actionsRef.current.onPan?.(null)
@@ -491,6 +492,7 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
         } else {
           reset()
           releaseHeavy = holdHeavyAnimations()
+          container.setAttribute('data-swiping', '')
           pan = {
             screen,
             under: null,

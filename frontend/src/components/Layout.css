@@ -44,6 +44,26 @@
   visibility: hidden;
 }
 
+/* Пока экраны едут, декор сохраняет текущий кадр. Пауза не сбрасывает
+   transform и не перезапускает анимации после отпускания: ресурсы нужны
+   самому жесту, в том числе во время доезда и повторного захвата. */
+.main-content[data-swiping] :is(
+  .taste-avatar-orbit,
+  .taste-avatar-blob,
+  .liked-heart-beat,
+  .liked-hero-bolt,
+  .bolt-loader-bolt,
+  .bolt-loader-heart
+) {
+  animation-play-state: paused;
+}
+
+/* Скрытые вкладки остаются смонтированными. Их лоадеры и аватарки не
+   должны продолжать декоративные циклы за видимым экраном. */
+.screen:not([data-active]) :is(.taste-avatar-orbit, .taste-avatar-blob, .bolt-loader-bolt, .bolt-loader-heart) {
+  animation-play-state: paused;
+}
+
 /* Полоса у левой кромки в установленной PWA (useSwipeNavigation): касание в
    ней забирается у системного жеста «назад». Ширину ставит хук. Выше шапки
    экрана (1003), ниже плеера во весь экран и диалогов; на нижнее меню не
@@ -266,13 +286,12 @@
        подсветки, а не под ней. */
     position: relative;
     z-index: 1;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--text-primary);
     display: flex;
     align-items: center;
     justify-content: center;
     text-decoration: none;
     border-radius: 12px;
-    transition: color 0.2s ease;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -281,12 +300,18 @@
     place-items: center;
     width: 52px;
     height: 44px;
+    /* Цвет SVG постоянный: transition color заново растеризовал фильтр
+       «кисти» на каждом кадре одновременно с доездом вкладки. Прозрачность
+       меняет композитор над уже нарисованной иконкой. */
+    opacity: 0.55;
+    will-change: opacity;
+    transition: opacity 0.2s ease;
   }
 
   /* Активный пункт: белая иконка поверх плавающей подсветки, как текст
      активной вкладки в .home-tabs. */
-  .mobile-nav-global-item.active {
-    color: var(--text-primary);
+  .mobile-nav-global-item.active .mobile-nav-global-icon {
+    opacity: 1;
   }
 
 }
