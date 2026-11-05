@@ -388,7 +388,7 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       updateDrag(dx)
     }
 
-    const updateDrag = (raw) => {
+    const updateDrag = (raw, render = true) => {
       const action = raw > 0 ? actionsRef.current.right : actionsRef.current.left
       // Продолжение доезда может пройти больше ширины: сосед уже на месте,
       // двигать его дальше означало бы пустой край и обратный отскок пружины.
@@ -397,8 +397,10 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         : raw * RESISTANCE
       g.minDx = Math.min(g.minDx, g.dx)
       g.maxDx = Math.max(g.maxDx, g.dx)
-      showUnder(action && raw !== 0 ? Math.sign(raw) : 0)
-      setOffset(g.dx)
+      if (render) {
+        showUnder(action && raw !== 0 ? Math.sign(raw) : 0)
+        setOffset(g.dx)
+      }
     }
 
     const sampleVelocity = (x, time) => {
@@ -425,7 +427,10 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
         const correction = x - lastX
         const liftingCorrection = correction * g.dx < 0 && Math.abs(correction) <= TAP_SLOP_PX
         if (correction !== 0 && !liftingCorrection) {
-          updateDrag(x - g.x)
+          // Safari может отдать остаток быстрого движения только в touchend.
+          // Координата влияет на выбор и скорость, а доезд начинает с экрана,
+          // который уже был под пальцем: прямой сдвиг здесь давал скачок.
+          updateDrag(x - g.x, false)
           sampleVelocity(x, e.timeStamp)
         } else if (movementAge > RELEASE_GRACE_MS) {
           // Пауза перед отпусканием гасит скорость; немедленное отпускание
@@ -446,8 +451,9 @@ export function useSwipeNavigation(containerRef, { enabled, onBack, onPrev, onNe
       const reversedDistance = dir > 0 ? maxDx - dx : dx - minDx
       const reversing = reversedDistance >= REVERSE_MIN_PX &&
         Math.min(v * dir, movementVelocity * dir) < -FLING_VELOCITY
+      // Если только touchend поменял сторону, возвращаем показанный экран.
       const commit =
-        action && !reversing &&
+        action && dx * pan.offset >= 0 && !reversing &&
         (Math.abs(dx) >= width * COMMIT_FRACTION ||
           (Math.max(v * dir, movementVelocity * dir) > FLING_VELOCITY && Math.abs(dx) >= FLING_MIN_PX))
       if (!commit) {

@@ -10,7 +10,7 @@ const { code } = await transform(source, { format: 'cjs', target: 'es2020' })
 const script = new vm.Script(code, { filename: 'useSwipeNavigation.js' })
 const flushAnimations = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }
 
-function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
+function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder = true } = {}) {
   const listeners = new Map()
   const timers = new Map()
   const routeCommits = new Set()
@@ -94,9 +94,10 @@ function mountSwipe({ reduced = false, hasNext = true, hasUnder = true } = {}) {
   hook.exports.useSwipeNavigation({ current: container }, {
     enabled: true,
     onNext: hasNext ? () => navigation.push('/search') : null,
+    onPrev: hasPrev ? () => navigation.push('/previous') : null,
     onPan: (...args) => pans.push(args),
     onCommit: (direction) => commits.push(direction),
-    targets: { left: 'tab:/search' },
+    targets: { left: 'tab:/search', right: hasPrev ? 'tab:/search' : null },
   })
   return {
     screen, under, pans, navigation, commits, operations, timers, routeCommits, listeners,
@@ -305,12 +306,39 @@ test('A cold destination fallback is cleaned up when the swipe hook unmounts', a
   assert.equal(app.holds, 0)
 })
 
-test('The release coordinate is included before a spring takes over', () => {
+test('An undelivered final movement selects the destination without jumping the rendered screen', () => {
   const app = mountSwipe()
-  app.touch('start', 300)
-  app.touch('move', 200, 200, 40)
-  app.touch('end', 180, 200, 50)
-  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-120px, 0, 0)')
+  app.touch('start', 300, 200, 0)
+  app.touch('move', 230, 200, 500)
+  app.touch('end', 195, 200, 1000)
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-70px, 0, 0)')
+  assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+test('A fast release with missing touchmove events continues from the last rendered position', () => {
+  const app = mountSwipe()
+  app.touch('start', 375, 200, 0)
+  app.touch('move', 328, 200, 33)
+  app.touch('move', 261, 200, 66)
+  app.touch('move', 209, 200, 99)
+  app.touch('end', 114, 200, 130)
+  const frames = app.screen.animations[0].frames
+  assert.equal(app.screen.style.transform, 'translate3d(-166px, 0, 0)')
+  assert.equal(frames[0].transform, 'translate3d(-166px, 0, 0)')
+  assert.equal(app.under.animations[0].frames[0].transform, 'translate3d(224px, 0, 0)')
+  assert.equal(frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+test('An undelivered release crossing the origin returns instead of replacing the revealed destination', () => {
+  const app = mountSwipe({ hasPrev: true })
+  app.touch('start', 200, 200, 0)
+  app.touch('move', 130, 200, 500)
+  app.touch('end', 310, 200, 1500)
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-70px, 0, 0)')
+  assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
+  assert.deepEqual(app.commits, [null])
   app.cleanup()
 })
 
@@ -364,7 +392,7 @@ test('A deliberate reversal in touchend still cancels a tab change', () => {
   app.touch('move', 150, 200, 40)
   app.touch('move', 150, 200, 100)
   app.touch('end', 185, 200, 120)
-  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-115px, 0, 0)')
+  assert.equal(app.screen.animations[0].frames[0].transform, 'translate3d(-150px, 0, 0)')
   assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(0px, 0, 0)')
   app.cleanup()
 })
