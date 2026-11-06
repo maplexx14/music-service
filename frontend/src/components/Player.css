@@ -5,7 +5,7 @@
   right: 16px;
   height: var(--player-height, 76px);
   transition: left 0.3s var(--ease-morph);
-  background: color-mix(in srgb, var(--player-tint, #252933) 35%, #101014);
+  background: var(--surface-2);
   border: none;
   /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */
   border-radius: 999px;
@@ -170,7 +170,7 @@
   gap: 10px;
   padding: 0 16px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--player-tint, #252933) 35%, #101014);
+  background: rgba(10, 10, 14, 0.92);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 }
@@ -425,6 +425,16 @@
   transform: scale(0.97);
 }
 
+.player-actions-panel .lyrics-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.player-actions-panel .lyrics-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 .player-controls {
   display: flex;
   align-items: center;
@@ -547,7 +557,8 @@
     gap: 8px;
   }
 
-  .player-actions-panel .control-btn {
+  .player-actions-panel .control-btn,
+  .player-actions-panel .lyrics-btn {
     width: 32px;
   }
 
@@ -620,8 +631,8 @@
     gap: 10px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;
-    background: color-mix(in srgb, var(--player-tint, #252933) 35%, rgba(10, 10, 14, 0.8));
-    /* На плотном цветном фоне хватает небольшого размытия: плеер лежит
+    background: rgba(10, 10, 14, 0.65);
+    /* На затемнённом фоне хватает небольшого размытия: плеер лежит
        поверх анимированного hero, и блюр пересчитывается на каждом кадре. */
     backdrop-filter: blur(12px) saturate(160%);
     -webkit-backdrop-filter: blur(12px) saturate(160%);
@@ -751,7 +762,7 @@
 .player-progress-surface-fill {
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--player-tint, #252933) 82%, white);
+  background: rgba(255, 255, 255, 0.13);
   transform: translateX(-100%);
 }
 

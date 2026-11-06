@@ -30,7 +30,7 @@ import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
-import { useCoverTint } from '../hooks/useThemeColor'
+import { warmThemeColor } from '../hooks/useThemeColor'
 import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
@@ -350,9 +350,8 @@ function useIsMobile() {
 // Соседний трек в карусели мини-плеера: капсула-двойник, видна только во
 // время свайпа. Миниатюра та же, что у текущей обложки, — она уже в кэше.
 function MiniGhost({ track, slot }) {
-  const coverTint = useCoverTint(resolveCoverUrl(track.cover_url, 'thumb'))
   return (
-    <div className="player-ghost" style={{ '--slot': slot, '--player-tint': coverTint || '#252933' }} aria-hidden="true">
+    <div className="player-ghost" style={{ '--slot': slot }} aria-hidden="true">
       <img
         src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
         alt=""
@@ -381,7 +380,6 @@ function PlayerInner() {
   // воспроизведения. currentTime здесь сознательно НЕ выбирается — он нужен
   // только PlayerProgress (см. выше); экшены в zustand стабильны по ссылке.
   const currentTrack = usePlayerStore((s) => s.currentTrack)
-  const coverTint = useCoverTint(resolveCoverUrl(currentTrack?.cover_url, 'thumb'))
   // Замер плавности: сколько синхронно идут эффекты плеера на смене трека.
   // Эффекты компонента выполняются в порядке объявления, поэтому метка в
   // первом и итог в последнем (перед ранним return ниже) охватывают все.
@@ -722,6 +720,16 @@ function PlayerInner() {
       cancel(handle)
     }
   }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed, coverWarmAllowed])
+
+  // Цвет заранее нужен только полноэкранному плееру; мини-плеер нейтральный.
+  useEffect(() => {
+    const thumb = resolveCoverUrl(currentTrack?.cover_url, 'thumb')
+    if (!thumb || isFullScreen) return undefined
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const handle = idle(() => warmThemeColor(thumb))
+    return () => cancel(handle)
+  }, [currentTrack?.cover_url, isFullScreen])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -2612,7 +2620,7 @@ function PlayerInner() {
       ref={stripRef}
       onClick={handlePlayerTap}
       {...swipeHandlers}
-      style={{ '--strip-gap': `${MINI_STRIP_GAP}px`, '--player-tint': coverTint || '#252933' }}
+      style={{ '--strip-gap': `${MINI_STRIP_GAP}px` }}
     >
       {/* Соседние треки — такие же капсулы слева и справа на шаг «ширина +
           зазор»: свайп листает капсулу целиком (useTrackCarousel). Только
@@ -2765,18 +2773,7 @@ function PlayerInner() {
       </div>
 
       <div className="player-right">
-        <button
-          className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
-          }}
-          disabled={!hasLyrics && !lyricsError && !lyricsLoading}
-          title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
-        >
-          <AlignLeft size={18} />
-        </button>
-        <div className="player-actions-panel" role="group" aria-label="Порядок воспроизведения и громкость">
+        <div className="player-actions-panel" role="group" aria-label="Дополнительное управление плеером">
           <button
             type="button"
             className={`control-btn ${isShuffle ? 'active' : ''}`}
@@ -2792,6 +2789,18 @@ function PlayerInner() {
             title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
           >
             <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            type="button"
+            className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
+            }}
+            disabled={!hasLyrics && !lyricsError && !lyricsLoading}
+            title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
+          >
+            <AlignLeft size={18} />
           </button>
           <div className="volume-control">
             <Volume2 size={20} />

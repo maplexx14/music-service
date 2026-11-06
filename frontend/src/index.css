@@ -754,7 +754,7 @@ html.power-save *::after {
 @media (max-width: 768px) {
   html.no-gpu .player,
   html.power-save .player {
-    background: color-mix(in srgb, var(--player-tint, #252933) 35%, #121216);
+    background: rgba(18, 18, 22, 0.96);
   }
   html.no-gpu .mobile-player,
   html.power-save .mobile-player {
