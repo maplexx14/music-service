@@ -20,6 +20,22 @@
   overflow: hidden;
 }
 
+/* Первый экран включает поток и вкладки; снизу оставляем место под
+   фиксированные плеер/навигацию. Полки начинаются уже за первым экраном. */
+.page-container.home-page {
+  padding-top: var(--page-padding, 32px);
+}
+
+.home-intro {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 20px;
+  height: calc(100vh - var(--page-padding, 32px) - var(--main-pad-top, 0px));
+  height: calc(100dvh - var(--page-padding, 32px) - var(--main-pad-top, 0px));
+  padding-bottom: max(16px, var(--bottom-controls-clearance, 0px));
+  margin-bottom: 28px;
+}
+
 /* Переключатель Главная ⇄ История в стиле нижней навигации (Layout.css):
    тёмная капсула с градиентным кольцом, фиолетовая подсветка едет
    под активной вкладкой (::before). Позиция подсветки — от data-active. */
@@ -27,7 +43,7 @@
   position: relative;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: -12px 0 28px;
+  margin: 0;
   padding: 6px;
   background: #0a0a0e;
   border-radius: var(--radius-pill);
@@ -123,17 +139,16 @@
 .hero-section {
   border-radius: 12px;
   padding: 40px 32px;
-  margin-bottom: 32px;
-  /* Контейнер потока занимает большую часть экрана и центрирован. */
-  min-height: 70vh;
+  min-height: 0;
+  container-type: size;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
   overflow: hidden;
   gap: 32px;
-  /* Диаметр диска (HeroDisc.css): ~77% высоты hero, 520px — потолок на
-     очень широких окнах. */
+  /* Запасной размер диска для браузеров без единиц контейнера;
+     ниже он ограничен фактической высотой потока. */
   --disc-size: min(520px, 34vw, 54vh);
 }
 
@@ -697,8 +712,20 @@
 }
 
 @media (max-width: 768px) {
+  .page-container.home-page {
+    padding-top: 0;
+  }
+
+  .home-intro {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 0;
+    height: calc(100vh - var(--main-pad-top, 0px));
+    height: calc(100dvh - var(--main-pad-top, 0px));
+    margin-bottom: 20px;
+  }
+
   .home-tabs {
-    margin: -8px 0 20px;
+    margin-top: 16px;
   }
 
   .home-tab {
@@ -750,23 +777,11 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    /* Снизу — место под нижнюю навигацию (72px, Layout.css): волна
-       центрируется в видимой над ней части экрана. */
-    /* Фон заходит под шапку (safe-area + 68): в её скруглённых нижних
-       углах виден он, а не чёрный фон страницы. Высота шапки возвращена
-       отступом сверху. */
-    padding: calc(32px + var(--safe-top) + 68px) 16px
-      calc(32px + 72px + var(--safe-bottom));
-    margin: calc(-1 * (var(--safe-top) + 68px)) -16px 24px;
+    /* Градиент виден в скруглённых углах шапки. Навигацию и плеер
+       учитывает общий контейнер, поэтому внутри потока второго отступа нет. */
+    padding: 40px 16px;
+    margin: -24px -16px 0;
     width: calc(100% + 32px);
-    /* Поток — на весь первый экран, до самого низа (шапка лежит
-       поверх него). Иначе при запуске прямо над нижней
-       навигацией торчал переключатель Главная ⇄ История — две одинаковые
-       капсулы подряд. Теперь он ниже края экрана и виден после прокрутки.
-       svh — видимая высота при показанных панелях Safari. */
-    min-height: 100vh;
-    min-height: 100svh;
-    max-height: none;
     border-radius: 0;
     align-items: center;
     justify-content: center;
@@ -786,10 +801,10 @@
     --disc-size: min(350px, 80vw, 60vh);
   }
 
-  /* Замер с макета: пластинка — 75% ширины экрана, заголовок на ~43px выше. */
+  /* Пластинка занимает до 75% ширины; заголовок отделён от неё зазором. */
   .hero-section.has-vinyl {
     --disc-size: min(360px, 75vw, 50svh);
-    --heading-gap: 42px;
+    --heading-gap: 24px;
   }
 
   /* svh нет в Android WebView до 108: внутри переменной он не откатывается,
@@ -805,9 +820,8 @@
     bottom: calc(100% + 16px);
   }
 
-  /* Над нижней навигацией (72px, Layout.css). */
   .wave-settings-link {
-    bottom: calc(16px + 72px + var(--safe-bottom));
+    bottom: 16px;
   }
 
   .content-section {
@@ -999,9 +1013,7 @@
 
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
   .hero-section {
-    min-height: clamp(440px, 40dvh, 620px);
     padding: 32px 24px;
-    margin-bottom: 24px;
     --disc-size: min(400px, 42vw, 26dvh);
   }
 
@@ -1016,5 +1028,27 @@
   .section-title {
     flex-wrap: wrap;
     gap: 12px;
+  }
+}
+
+/* Размер диска зависит от фактического места под поток, в том числе
+   после появления мини-плеера или изменения высоты панелей браузера. */
+@supports (height: 1cqh) {
+  .hero-section {
+    --disc-size: min(520px, 34vw, 64cqh);
+  }
+
+  .hero-section.has-vinyl {
+    --disc-size: min(440px, 30vw, 52cqh);
+  }
+
+  @media (max-width: 768px) {
+    .hero-section {
+      --disc-size: min(350px, 80vw, 64cqh);
+    }
+
+    .hero-section.has-vinyl {
+      --disc-size: min(360px, 75vw, 48cqh);
+    }
   }
 }

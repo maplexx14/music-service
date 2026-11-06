@@ -485,162 +485,164 @@ function Home() {
   // вообще. Теперь оболочка рисуется сразу (FCP не ждёт сеть), а ожидание
   // локализовано в той единственной полке, которой нужны данные.
   return (
-    <div className="page-container">
+    <div className="page-container home-page">
       <PullToRefreshIndicator
         onRefresh={() => fetchData(true)}
         reachTop={() => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0}
         root={() => scrollerRef?.current ?? null}
       />
-      <div className="mobile-header">
-        {/* Тап по логотипу — то же, что pull-to-refresh: шапка не липкая, и
-            логотип виден, только когда главная уже прокручена наверх. */}
-        <button type="button" className="mobile-logo-btn" onClick={() => fetchData(true)} aria-label="Обновить главную">
-          <img src="/logoBolt1.webp" alt="" className="mobile-logo-img" />
-        </button>
-        <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
-          <TasteAvatar user={user} className="mobile-avatar-img" />
-        </Link>
-      </div>
-      <div
-        // has-vinyl — то же условие, при котором HeroDisc рисует пластинку
-        // (есть трек и включён винил). Классом, а не :has(): в Android
-        // WebView до 105 его нет, и заголовок оставался на диске.
-        className={`hero-section${vinylDisc && currentTrackId != null ? ' has-vinyl' : ''}`}
-        // Палитра под обложку текущего трека: WebGL-градиент получает её
-        // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
-        style={{
-          '--hero-c1': heroColors[0],
-          '--hero-c2': heroColors[1],
-          '--hero-c3': heroColors[2],
-        }}
-      >
-        <div className="hero-grainient">
-          {liteMode || noGpu ? (
-            <HeroHearts />
-          ) : (
-            <Suspense fallback={<div className="hero-grainient-static" />}>
-              <Grainient
-                color1={heroColors[0]}
-                color2={heroColors[1]}
-                color3={heroColors[2]}
-                timeSpeed={5}
-                colorBalance={-0.32}
-                warpStrength={1.4}
-                warpFrequency={5}
-                warpSpeed={2}
-                warpAmplitude={50}
-                blendAngle={-49}
-                blendSoftness={0.05}
-                rotationAmount={500}
-                noiseScale={1.95}
-                grainAmount={0}
-                grainScale={0.2}
-                grainAnimated={false}
-                contrast={1.5}
-                gamma={1}
-                saturation={1}
-                centerX={0}
-                centerY={0}
-                zoom={0.9}
-                // Диск, а без него (ничего не играет) — кнопка потока:
-                // querySelector берёт первый по документу, диск идёт раньше.
-                rippleFrom=".hero-disc, .wave-title, .wave-gif-button"
-                rippleStrength={1}
-                rippleKey={currentTrackId != null ? 1 : 0}
-                active={isWavePlaying}
-              />
-            </Suspense>
-          )}
+      <div className="home-intro">
+        <div className="mobile-header">
+          {/* Тап по логотипу — то же, что pull-to-refresh: шапка не липкая, и
+              логотип виден, только когда главная уже прокручена наверх. */}
+          <button type="button" className="mobile-logo-btn" onClick={() => fetchData(true)} aria-label="Обновить главную">
+            <img src="/logoBolt1.webp" alt="" className="mobile-logo-img" />
+          </button>
+          <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
+            <TasteAvatar user={user} className="mobile-avatar-img" />
+          </Link>
         </div>
-        {/* Диск с обложкой текущего трека — слой между градиентом и кнопкой
-            потока: кнопка остаётся в центре диска, как на макете. Сам диск
-            подписан на currentTrack, главная от его тиков не перерисовывается. */}
-        <HeroDisc />
-        <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
-          <div className="wave-center">
-            {/* Крупный заголовок над кнопкой. Висит абсолютно, чтобы сама
-                кнопка оставалась ровно в центре диска. Для скринридеров
-                название несёт aria-label кнопки. */}
-            <div className="wave-heading" aria-hidden="true">поток</div>
-            {waveGif ? (
-              <button
-                type="button"
-                onClick={handleWaveClick}
-                className="wave-gif-button"
-                aria-label="поток рекомендаций"
-                {...waveIntentHandlers}
-              >
-                <img
-                  src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
-                  alt="поток рекомендаций"
-                />
-                <span className="wave-gif-icon">
-                  {flowStarting ? (
-                    <Loader2 size={20} className="wave-loading-icon" />
-                  ) : isWavePlaying ? (
-                    <Pause size={20} />
-                  ) : (
-                    <Play size={20} />
-                  )}
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleWaveClick}
-                className="wave-title"
-                aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
-                aria-busy={flowStarting || undefined}
-                {...waveIntentHandlers}
-              >
-                {flowStarting ? (
-                  <Loader2 size={40} strokeWidth={2.5} className="wave-loading-icon" />
-                ) : isWavePlaying ? (
-                  <Pause size={38} fill="currentColor" strokeWidth={0} />
-                ) : (
-                  // Треугольник визуально тяжелее слева — сдвиг вправо
-                  // ставит его в оптический центр круга.
-                  <Play size={44} fill="currentColor" strokeWidth={0} className="wave-title-play" />
-                )}
-              </button>
-            )}
-          </div>
-        </div>
-        {/* Настройка потока — внизу hero, вне потока вёрстки: центр диска не сдвигается. */}
-        {/* Одна иконка не объясняла, куда ведёт: подпись + та же иконка,
-            что у раздела «Рекомендации» в настройках. */}
-        <Link to="/settings/wave" className="wave-settings-link">
-          <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
-          Настроить поток
-        </Link>
-      </div>
-
-      <div className="home-tabs" role="tablist" data-active={activeTab}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'home'}
-          className={`home-tab ${activeTab === 'home' ? 'active' : ''}`}
-          onClick={() => setActiveTab('home')}
-        >
-          <HomeIcon size={18} strokeWidth={2.25} />
-          Главная
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'history'}
-          className={`home-tab ${activeTab === 'history' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('history')
-            if ((!historyRequestedRef.current || history.length === 0) && !historyLoading) {
-              fetchHistory()
-            }
+        <div
+          // has-vinyl — то же условие, при котором HeroDisc рисует пластинку
+          // (есть трек и включён винил). Классом, а не :has(): в Android
+          // WebView до 105 его нет, и заголовок оставался на диске.
+          className={`hero-section${vinylDisc && currentTrackId != null ? ' has-vinyl' : ''}`}
+          // Палитра под обложку текущего трека: WebGL-градиент получает её
+          // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
+          style={{
+            '--hero-c1': heroColors[0],
+            '--hero-c2': heroColors[1],
+            '--hero-c3': heroColors[2],
           }}
         >
-          <History size={18} strokeWidth={2.25} />
-          История
-        </button>
+          <div className="hero-grainient">
+            {liteMode || noGpu ? (
+              <HeroHearts />
+            ) : (
+              <Suspense fallback={<div className="hero-grainient-static" />}>
+                <Grainient
+                  color1={heroColors[0]}
+                  color2={heroColors[1]}
+                  color3={heroColors[2]}
+                  timeSpeed={5}
+                  colorBalance={-0.32}
+                  warpStrength={1.4}
+                  warpFrequency={5}
+                  warpSpeed={2}
+                  warpAmplitude={50}
+                  blendAngle={-49}
+                  blendSoftness={0.05}
+                  rotationAmount={500}
+                  noiseScale={1.95}
+                  grainAmount={0}
+                  grainScale={0.2}
+                  grainAnimated={false}
+                  contrast={1.5}
+                  gamma={1}
+                  saturation={1}
+                  centerX={0}
+                  centerY={0}
+                  zoom={0.9}
+                  // Диск, а без него (ничего не играет) — кнопка потока:
+                  // querySelector берёт первый по документу, диск идёт раньше.
+                  rippleFrom=".hero-disc, .wave-title, .wave-gif-button"
+                  rippleStrength={1}
+                  rippleKey={currentTrackId != null ? 1 : 0}
+                  active={isWavePlaying}
+                />
+              </Suspense>
+            )}
+          </div>
+          {/* Диск с обложкой текущего трека — слой между градиентом и кнопкой
+              потока: кнопка остаётся в центре диска, как на макете. Сам диск
+              подписан на currentTrack, главная от его тиков не перерисовывается. */}
+          <HeroDisc />
+          <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
+            <div className="wave-center">
+              {/* Крупный заголовок над кнопкой. Висит абсолютно, чтобы сама
+                  кнопка оставалась ровно в центре диска. Для скринридеров
+                  название несёт aria-label кнопки. */}
+              <div className="wave-heading" aria-hidden="true">поток</div>
+              {waveGif ? (
+                <button
+                  type="button"
+                  onClick={handleWaveClick}
+                  className="wave-gif-button"
+                  aria-label="поток рекомендаций"
+                  {...waveIntentHandlers}
+                >
+                  <img
+                    src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
+                    alt="поток рекомендаций"
+                  />
+                  <span className="wave-gif-icon">
+                    {flowStarting ? (
+                      <Loader2 size={20} className="wave-loading-icon" />
+                    ) : isWavePlaying ? (
+                      <Pause size={20} />
+                    ) : (
+                      <Play size={20} />
+                    )}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleWaveClick}
+                  className="wave-title"
+                  aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
+                  aria-busy={flowStarting || undefined}
+                  {...waveIntentHandlers}
+                >
+                  {flowStarting ? (
+                    <Loader2 size={40} strokeWidth={2.5} className="wave-loading-icon" />
+                  ) : isWavePlaying ? (
+                    <Pause size={38} fill="currentColor" strokeWidth={0} />
+                  ) : (
+                    // Треугольник визуально тяжелее слева — сдвиг вправо
+                    // ставит его в оптический центр круга.
+                    <Play size={44} fill="currentColor" strokeWidth={0} className="wave-title-play" />
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+          {/* Настройка потока — внизу hero, вне потока вёрстки: центр диска не сдвигается. */}
+          {/* Одна иконка не объясняла, куда ведёт: подпись + та же иконка,
+              что у раздела «Рекомендации» в настройках. */}
+          <Link to="/settings/wave" className="wave-settings-link">
+            <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
+            Настроить поток
+          </Link>
+        </div>
+
+        <div className="home-tabs" role="tablist" data-active={activeTab}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'home'}
+            className={`home-tab ${activeTab === 'home' ? 'active' : ''}`}
+            onClick={() => setActiveTab('home')}
+          >
+            <HomeIcon size={18} strokeWidth={2.25} />
+            Главная
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'history'}
+            className={`home-tab ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('history')
+              if ((!historyRequestedRef.current || history.length === 0) && !historyLoading) {
+                fetchHistory()
+              }
+            }}
+          >
+            <History size={18} strokeWidth={2.25} />
+            История
+          </button>
+        </div>
       </div>
 
       {/* Обе вкладки остаются в DOM, неактивная скрыта. Условный рендер
