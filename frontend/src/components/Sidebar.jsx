@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, ChevronLeft, ChevronRight, Shield, Settings2, MessageCircle } from 'lucide-react'
+import { Home, Search, Library, Heart, ChevronLeft, Shield, Settings2, MessageCircle } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import TasteAvatar from './TasteAvatar'
@@ -16,6 +16,7 @@ import {
 import { useImportStore } from '../store/importStore'
 import { isTabRoot, tabForLocation } from '../services/navigation'
 import defaultCover from '../assets/default-cover.webp'
+import logoHeart from '../assets/loader-heart.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { plural } from '../utils/format'
 import './Sidebar.css'
@@ -58,7 +59,7 @@ function Sidebar({ isCollapsed, onToggleCollapse }) {
           aria-label={isCollapsed ? 'Развернуть боковую панель' : 'Свернуть боковую панель'}
           aria-expanded={!isCollapsed}
         >
-          {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+          {isCollapsed ? <img src={logoHeart} className="sidebar-logo-heart" alt="" draggable={false} /> : <ChevronLeft size={20} />}
         </button>
       </div>
       

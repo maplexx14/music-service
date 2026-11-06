@@ -100,14 +100,14 @@ export function useCoverTint(coverUrl) {
     extractDominantColor(coverUrl).then((next) => {
       if (cancelled || !next) return
       rememberColor(coverUrl, next)
-      setColor(next)
+      setColor({ src: coverUrl, value: next })
     })
     return () => {
       cancelled = true
     }
   }, [coverUrl])
 
-  return known ?? color
+  return known ?? (color && color.src === coverUrl ? color.value : null)
 }
 
 // Пока полноэкранный плеер открыт, статус-бар Android (и заголовок окна

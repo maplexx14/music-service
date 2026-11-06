@@ -30,7 +30,7 @@ import { toast } from '../store/toastStore'
 import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
-import { warmThemeColor } from '../hooks/useThemeColor'
+import { useCoverTint } from '../hooks/useThemeColor'
 import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
@@ -350,8 +350,9 @@ function useIsMobile() {
 // Соседний трек в карусели мини-плеера: капсула-двойник, видна только во
 // время свайпа. Миниатюра та же, что у текущей обложки, — она уже в кэше.
 function MiniGhost({ track, slot }) {
+  const coverTint = useCoverTint(resolveCoverUrl(track.cover_url, 'thumb'))
   return (
-    <div className="player-ghost" style={{ '--slot': slot }} aria-hidden="true">
+    <div className="player-ghost" style={{ '--slot': slot, '--player-tint': coverTint || '#252933' }} aria-hidden="true">
       <img
         src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
         alt=""
@@ -380,6 +381,7 @@ function PlayerInner() {
   // воспроизведения. currentTime здесь сознательно НЕ выбирается — он нужен
   // только PlayerProgress (см. выше); экшены в zustand стабильны по ссылке.
   const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const coverTint = useCoverTint(resolveCoverUrl(currentTrack?.cover_url, 'thumb'))
   // Замер плавности: сколько синхронно идут эффекты плеера на смене трека.
   // Эффекты компонента выполняются в порядке объявления, поэтому метка в
   // первом и итог в последнем (перед ранним return ниже) охватывают все.
@@ -720,18 +722,6 @@ function PlayerInner() {
       cancel(handle)
     }
   }, [currentTrack?.cover_url, currentTrack?.id, isFullScreen, heavyCoverAllowed, coverWarmAllowed])
-
-  // Фон фуллскрина красится в цвет обложки (useThemeColor) по той же
-  // миниатюре, что уже показана в мини-плеере. Считаем его в простое, а не
-  // при открытии: иначе цвет приезжал посреди анимации выезда.
-  useEffect(() => {
-    const thumb = resolveCoverUrl(currentTrack?.cover_url, 'thumb')
-    if (!thumb || isFullScreen) return undefined
-    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1200))
-    const cancel = window.cancelIdleCallback ?? clearTimeout
-    const handle = idle(() => warmThemeColor(thumb))
-    return () => cancel(handle)
-  }, [currentTrack?.cover_url, isFullScreen])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -2622,7 +2612,7 @@ function PlayerInner() {
       ref={stripRef}
       onClick={handlePlayerTap}
       {...swipeHandlers}
-      style={{ '--strip-gap': `${MINI_STRIP_GAP}px` }}
+      style={{ '--strip-gap': `${MINI_STRIP_GAP}px`, '--player-tint': coverTint || '#252933' }}
     >
       {/* Соседние треки — такие же капсулы слева и справа на шаг «ширина +
           зазор»: свайп листает капсулу целиком (useTrackCarousel). Только
@@ -2670,156 +2660,157 @@ function PlayerInner() {
             )}
           </div>
         </div>
-        {(canInteract || (isExternalTrack && currentTrack.download_allowed && currentTrack.download_url)) && (
+        {canInteract && (
           <div className="player-track-actions">
-            {canInteract && (
-              <>
-                <button
-                  className={`like-btn ${isLiked ? 'liked' : ''}`}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleLike()
-                  }}
-                  disabled={loadingLike}
-                  title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-                >
-                  <LikeHeart size={18} liked={!!isLiked} />
-                </button>
-                <button
-                  className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleDislike()
-                  }}
-                  disabled={loadingDislike}
-                  title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
-                  aria-pressed={isDisliked}
-                >
-                  <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
-                </button>
-                <button
-                  className="add-btn"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleOpenAddToPlaylist()
-                  }}
-                  title="Добавить в плейлист"
-                >
-                  <ListPlus size={18} />
-                </button>
-                {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
-                  // Трек зацензурен по закону РФ — привязать оригинал (только
-                  // админ, см. CensorOverrideDialog).
-                  <button
-                    className="add-btn"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      openCensorDialog(currentTrack)
-                    }}
-                    title="Оригинал без цензуры"
-                  >
-                    <ShieldCheck size={18} />
-                  </button>
-                )}
-              </>
-            )}
-            {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-              <a
-                className="add-btn"
-                href={currentTrack.download_url}
-                target="_blank"
-                rel="noreferrer"
-                title="Скачать"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <Download size={18} />
-              </a>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="player-center">
-        <div className="player-controls">
-          <button
-            type="button"
-            className={`control-btn ${isShuffle ? 'active' : ''}`}
-            onClick={toggleShuffle}
-            title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
-          >
-            <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
-          </button>
-          <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
-            <SkipBack size={20} />
-          </button>
-          {canInteract && (
-            // Мобильный дубль лайка: блок .player-track-actions на узком
-            // экране скрыт, а лайк — самое частое действие, без полноэкранного
-            // плеера до него не дотянуться. На десктопе скрыт CSS.
             <button
-              type="button"
-              className={`like-btn player-mobile-like ${isLiked ? 'liked' : ''}`}
+              className={`like-btn ${isLiked ? 'liked' : ''}`}
               onClick={(event) => {
                 event.stopPropagation()
                 handleLike()
               }}
               disabled={loadingLike}
-              aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-              aria-pressed={isLiked}
+              title={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
             >
               <LikeHeart size={18} liked={!!isLiked} />
             </button>
-          )}
-          <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
-            {isPlaying ? (
-              <Pause size={24} fill="currentColor" />
-            ) : (
-              <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
-            )}
-          </button>
-          <button
-            type="button"
-            className="control-btn"
-            onClick={() => handleSkipForward('button')}
-            aria-label="Следующий"
-            title="Следующий"
-          >
-            <SkipForward size={20} />
-          </button>
-          <button
-            type="button"
-            className={`control-btn ${isRepeatOne ? 'active' : ''}`}
-            onClick={toggleRepeatOne}
-            title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
-          >
-            <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
-          </button>
-        </div>
+            <button
+              className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleDislike()
+              }}
+              disabled={loadingDislike}
+              title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
+              aria-pressed={isDisliked}
+            >
+              <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="player-right">
+      {canInteract && (
         <button
-          className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
+          type="button"
+          className={`like-btn player-mobile-like ${isLiked ? 'liked' : ''}`}
           onClick={(event) => {
             event.stopPropagation()
-            if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
+            handleLike()
           }}
-          disabled={!hasLyrics && !lyricsError && !lyricsLoading}
-          title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
+          disabled={loadingLike}
+          aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+          aria-pressed={isLiked}
         >
-          <AlignLeft size={18} />
+          <LikeHeart size={18} liked={!!isLiked} />
         </button>
-        <div className="volume-control">
-          <Volume2 size={20} />
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(e) => setVolume(parseFloat(e.target.value))}
-            className="volume-slider"
-          />
+      )}
+
+      <div className="player-actions-panel" role="group" aria-label="Управление плеером">
+        <div className="player-center">
+          <div className="player-controls">
+            <button
+              type="button"
+              className={`control-btn ${isShuffle ? 'active' : ''}`}
+              onClick={toggleShuffle}
+              title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+            >
+              <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
+            </button>
+            <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
+              <SkipBack size={20} />
+            </button>
+            <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+              {isPlaying ? (
+                <Pause size={24} fill="currentColor" />
+              ) : (
+                <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
+              )}
+            </button>
+            <button
+              type="button"
+              className="control-btn"
+              onClick={() => handleSkipForward('button')}
+              aria-label="Следующий"
+              title="Следующий"
+            >
+              <SkipForward size={20} />
+            </button>
+            <button
+              type="button"
+              className={`control-btn ${isRepeatOne ? 'active' : ''}`}
+              onClick={toggleRepeatOne}
+              title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
+            >
+              <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
+            </button>
+          </div>
+        </div>
+
+        <div className="player-right">
+          {canInteract && (
+            <>
+              <button
+                type="button"
+                className="add-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleOpenAddToPlaylist()
+                }}
+                title="Добавить в плейлист"
+              >
+                <ListPlus size={18} />
+              </button>
+              {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
+                <button
+                  type="button"
+                  className="add-btn"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openCensorDialog(currentTrack)
+                  }}
+                  title="Оригинал без цензуры"
+                >
+                  <ShieldCheck size={18} />
+                </button>
+              )}
+            </>
+          )}
+          {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+            <a
+              className="add-btn"
+              href={currentTrack.download_url}
+              target="_blank"
+              rel="noreferrer"
+              title="Скачать"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Download size={18} />
+            </a>
+          )}
+          <button
+            className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
+            }}
+            disabled={!hasLyrics && !lyricsError && !lyricsLoading}
+            title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
+          >
+            <AlignLeft size={18} />
+          </button>
+          <div className="volume-control">
+            <Volume2 size={20} />
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => setVolume(parseFloat(e.target.value))}
+              className="volume-slider"
+              aria-label="Громкость"
+            />
+          </div>
         </div>
       </div>
     </div>
