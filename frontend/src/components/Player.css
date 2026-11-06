@@ -591,14 +591,21 @@
 
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
   .player {
+    transition: none;
+  }
+}
+
+/* Книжный монитор шириной от 1001px вмещает обычный ряд. Второй ряд
+   нужен только узким окнам; обе группы управления стоят рядом по центру. */
+@media (min-width: 769px) and (max-width: 1000px) and (orientation: portrait) {
+  .player {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
     grid-template-rows: 48px 44px;
-    gap: 4px 16px;
+    gap: 4px 12px;
     height: var(--player-height, 116px);
     padding: 10px 18px;
     border-radius: 24px;
-    transition: none;
   }
 
   .player-left {
@@ -608,13 +615,13 @@
   }
 
   .player-center {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 2;
     justify-self: start;
   }
 
   .player-right {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 2;
     justify-self: end;
   }
