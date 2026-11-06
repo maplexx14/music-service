@@ -1,21 +1,29 @@
-// Более мягкий разгон: при коротком движении пальца оставшаяся ширина
-// экрана не должна пролетать за первые два кадра после отпускания.
-const FREQUENCY = 24
+const FREQUENCY = 26
+const SHORT_DISTANCE = 96
+const MAX_FREQUENCY = 80
 const STEP_MS = 1000 / 120
 const REST_DISTANCE = 0.15
 const REST_SPEED = 8
 
-// Критически затухающая пружина: сохраняет скорость отпускания (px/мс),
-// не имеет минимальной длительности и заканчивается, когда движение уже
-// незаметно. Кадры заранее получает WAAPI, главный поток на доезде свободен.
+// Критически затухающая пружина с устойчивым откликом на скорость (px/мс).
+// Кадры заранее получает WAAPI, главный поток на доезде свободен.
 export function swipeSpring(from, to, velocity = 0) {
   const distance = to - from
   if (Math.abs(distance) < REST_DISTANCE) return { duration: 0, samples: [{ value: to, offset: 1 }] }
 
-  const initialVelocity = velocity * 1000
-  // При коротком остатке пути быстрый флик не должен пролетать за вкладку.
-  // Увеличиваем затухание, сохраняя именно начальную скорость, а не обрезая её.
-  const frequency = Math.max(FREQUENCY, (Math.sign(distance) * initialVelocity) / Math.abs(distance))
+  // Характер доезда задаёт оставшийся путь, а не резкость флика. Раньше
+  // скорость повышала частоту без предела: тот же экран мог доехать за
+  // 400 мс или проскочить почти целиком за один кадр. Короткие доводки
+  // ускоряем по расстоянию, чтобы несколько пикселей не тянулись долго.
+  const frequency = Math.min(MAX_FREQUENCY, FREQUENCY * Math.sqrt(Math.max(1, SHORT_DISTANCE / Math.abs(distance))))
+  const speed = Math.abs(velocity) * 1000
+  const speedLimit = frequency * Math.abs(distance) * 0.5
+  const softStart = speedLimit * 0.5
+  // Обычная скорость передаётся без изменений. Чрезмерный импульс плавно
+  // ограничиваем: без резкого порога и скачка к сверхжёсткой пружине.
+  const initialVelocity = Math.sign(velocity) * (speed <= softStart
+    ? speed
+    : softStart + (speedLimit - softStart) * Math.tanh((speed - softStart) / (speedLimit - softStart)))
   const initialDelta = from - to
   const coefficient = initialVelocity + frequency * initialDelta
   const points = [{ value: from, time: 0 }]

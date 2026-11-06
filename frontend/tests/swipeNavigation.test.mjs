@@ -1421,6 +1421,39 @@ test('A fast flick close to the destination settles promptly with no overshoot o
   }
 })
 
+test('Release motion keeps a consistent response across swipe speeds at 60 and 120 Hz', () => {
+  const valueAt = (motion, time) => {
+    if (time >= motion.duration) return motion.samples.at(-1).value
+    const index = motion.samples.findIndex(point => point.offset * motion.duration >= time)
+    if (index === 0) return motion.samples[0].value
+    const before = motion.samples[index - 1]
+    const after = motion.samples[index]
+    const progress = (time / motion.duration - before.offset) / (after.offset - before.offset)
+    return before.value + (after.value - before.value) * progress
+  }
+  for (const distance of [100, 200, 300, 390]) {
+    const atRest = swipeSpring(0, distance)
+    for (const velocity of [0.1, 0.5, 1, 2, 4, 8, 16, 40, 100]) {
+      for (const direction of [-1, 1]) {
+        const motion = swipeSpring(0, direction * distance, direction * velocity)
+        assert.ok(motion.duration >= atRest.duration * 0.75,
+          `${distance}px at ${velocity}px/ms collapsed from ${atRest.duration}ms to ${motion.duration}ms`)
+        assert.ok(motion.duration <= 450)
+        for (const hz of [60, 120]) {
+          let previous = 0
+          for (let time = 1000 / hz; time < motion.duration + 1000 / hz; time += 1000 / hz) {
+            const value = valueAt(motion, time) * direction
+            assert.ok(value >= previous && value <= distance, 'A committed tab overshot or reversed')
+            assert.ok(value - previous <= distance * (hz === 60 ? 0.23 : 0.12),
+              `${distance}px at ${velocity}px/ms crossed ${value - previous}px in one ${hz}Hz frame`)
+            previous = value
+          }
+        }
+      }
+    }
+  }
+})
+
 test('The final spring frame removes less than a fraction of a pixel at rest', () => {
   for (const [from, to, velocity] of [[-100, -390, -2.5], [-30, 0, 0], [-120, 0, 1], [-300, -390, 0]]) {
     const motion = swipeSpring(from, to, velocity)
