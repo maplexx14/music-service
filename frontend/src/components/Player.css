@@ -3,7 +3,7 @@
   bottom: var(--player-bottom, 12px);
   left: calc(var(--sidebar-width, 240px) + 16px);
   right: 16px;
-  height: var(--player-height, 76px);
+  height: var(--player-height, 88px);
   transition: left 0.3s var(--ease-morph);
   background: var(--surface-2);
   border: none;
@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px;
+  padding: 14px 18px;
   z-index: 1000;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   overflow: visible;
@@ -528,6 +528,56 @@
   z-index: 1;
 }
 
+@media (min-width: 769px) {
+  .player-cover {
+    width: 58px;
+    height: 58px;
+  }
+
+  .player-track-title {
+    font-size: 15px;
+  }
+
+  .player-track-artist {
+    font-size: 13px;
+  }
+
+  .play-pause-btn {
+    width: 52px;
+    height: 52px;
+  }
+
+  .play-pause-btn svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .control-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .control-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .player-actions-panel {
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+
+  .player-actions-panel .lyrics-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-actions-panel .lyrics-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
 /* Равные боковые колонки держат воспроизведение точно по центру,
    независимо от длины названия и количества действий с треком. */
 @media (min-width: 1001px) {
@@ -570,12 +620,12 @@
   .player-track-actions .dislike-btn,
   .player-track-actions .add-btn {
     width: 32px;
-    height: 36px;
+    height: 40px;
   }
 
   .player-track-actions svg {
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
   }
 
   .player-controls {
@@ -589,7 +639,7 @@
 
   .player-actions-panel .control-btn,
   .player-actions-panel .lyrics-btn {
-    width: 32px;
+    width: 36px;
   }
 
   .player-right {
@@ -631,11 +681,11 @@
   .player {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
-    grid-template-rows: 48px 44px;
-    gap: 4px 12px;
-    height: var(--player-height, 116px);
+    grid-template-rows: 60px 52px;
+    gap: 8px 12px;
+    height: var(--player-height, 140px);
     padding: 10px 18px;
-    border-radius: 24px;
+    border-radius: 28px;
   }
 
   .player-left {

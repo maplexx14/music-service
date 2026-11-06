@@ -48,5 +48,5 @@ export function useSidebarLayout() {
     window.dispatchEvent(new Event('sidebarToggle'))
   }, [mode, isCollapsed])
 
-  return { isCollapsed, sidebarWidth: isCollapsed ? 72 : 240, toggleCollapse }
+  return { isCollapsed, sidebarWidth: isCollapsed ? 88 : 240, toggleCollapse }
 }

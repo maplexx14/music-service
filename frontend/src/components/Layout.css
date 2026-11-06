@@ -1,6 +1,6 @@
 .layout {
   --page-padding: 32px;
-  --player-height: 76px;
+  --player-height: 88px;
   --player-bottom: 12px;
   --bottom-controls-clearance: 0px;
   display: flex;
@@ -16,7 +16,7 @@
 
 @media (min-width: 769px) and (max-width: 1000px) {
   .layout {
-    --player-height: 128px;
+    --player-height: 144px;
   }
 }
 
@@ -121,7 +121,7 @@
 
 @media (min-width: 769px) and (max-width: 1000px) and (orientation: portrait) {
   .layout {
-    --player-height: 116px;
+    --player-height: 140px;
   }
 }
 

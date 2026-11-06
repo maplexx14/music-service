@@ -13,8 +13,8 @@
 }
 
 .sidebar.collapsed {
-  width: 72px;
-  padding: 24px 12px;
+  width: 88px;
+  padding: 24px 16px;
 }
 
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
@@ -24,12 +24,14 @@
 }
 
 .sidebar.collapsed .nav-item {
-  padding: 12px;
+  padding: 14px;
   justify-content: center;
 }
 
 .sidebar.collapsed .nav-item svg {
-  min-width: 24px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
 }
 
 .sidebar-header {
@@ -44,7 +46,8 @@
 .sidebar.collapsed .sidebar-header {
   flex-direction: row;
   justify-content: center;
-  height: 40px;
+  height: 48px;
+  flex-shrink: 0;
   gap: 0;
 }
 
@@ -100,16 +103,16 @@
 
 .sidebar.collapsed .collapse-btn {
   margin: 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   align-items: center;
   justify-content: center;
   border-radius: 10px;
 }
 
 .sidebar-logo-heart {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
 }
 
@@ -282,6 +285,11 @@
   padding: 4px;
 }
 
+.sidebar.collapsed .sidebar-playlist-cover {
+  width: 48px;
+  height: 48px;
+}
+
 .nav-item-contact {
   margin-bottom: 12px;
 }
@@ -398,8 +406,8 @@
 }
 
 .user-avatar-collapsed {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   object-fit: cover;
   background-color: var(--surface-4);
