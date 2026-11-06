@@ -148,7 +148,6 @@
 
 .player-left {
   display: grid;
-  /* Текст занимает свободное место, кнопки закреплены у края колонки. */
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
@@ -156,6 +155,15 @@
   min-width: 0;
   position: relative;
   z-index: 1;
+}
+
+/* Постоянная ширина области текста держит кнопки рядом с названием
+   и не даёт им смещаться при смене трека. В тесном ряду текст сжимается. */
+@media (min-width: 769px) {
+  .player-left {
+    grid-template-columns: auto minmax(0, 160px) auto;
+    justify-content: start;
+  }
 }
 
 /* Соседний трек в карусели мини-плеера (см. useTrackCarousel): капсула-
