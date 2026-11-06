@@ -6,7 +6,7 @@ import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
 import { useSidebarLayout } from '../hooks/useSidebarLayout'
 import MeterProfiler from './MeterProfiler'
-import { isTabRoot, tabForLocation, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow } from '../services/navigation'
+import { isTabRoot, tabForLocation, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow, getShownTab } from '../services/navigation'
 import { haptic, HAPTIC } from '../utils/haptics'
 import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
 import SidebarView from './Sidebar'
@@ -17,6 +17,7 @@ import RatePrompt from './RatePrompt'
 import { syncPushSubscription, trackPushOpen } from '../services/push'
 import { isAndroidApp, runAppAction } from '../services/androidApp'
 import { preloadInIdle } from '../services/preloadQueue'
+import { cancelScrollRestoration } from '../services/scrollRestoration'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
@@ -229,7 +230,7 @@ function Layout({ renderRoutes }) {
       })))
     }
   }
-  useSwipeNavigation(mainRef, {
+  const cancelSwipeRef = useSwipeNavigation(mainRef, {
     enabled: swipeEnabled && !isFullScreen,
     screenKey: location.key,
     onCommit: handleSwipeCommit,
@@ -244,19 +245,24 @@ function Layout({ renderRoutes }) {
   })
 
   // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
-  const handleNavClick = (event, to, isActive) => {
+  const handleNavClick = (event, to) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     // Клик, завершивший протяжку пальцем по панели: переход уже сделан там.
     if (performance.now() < navSuppressClickUntil.current) {
       event.preventDefault()
       return
     }
+    // Новый выбор сразу отменяет старый доезд, не дожидаясь коммита роутера.
+    cancelSwipeRef.current?.()
     // После свайпа CSS-доезд отключён; обычный тап снова анимирует капсулу.
     if (navPillRef.current) navPillRef.current.style.transition = ''
-    if (isActive && location.pathname === to) {
+    const requestedTab = getShownTab()
+    if (location.pathname === to && (!requestedTab || requestedTab === to)) {
       event.preventDefault()
-      mainRef.current
-        ?.querySelector(':scope > .screen[data-active] > .screen-scroll')
-        ?.scrollTo({ top: 0, behavior: 'smooth' })
+      setPendingNavIndex(null)
+      const scroller = mainRef.current?.querySelector(':scope > .screen[data-active] > .screen-scroll')
+      cancelScrollRestoration(scroller)
+      scroller?.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     } else {
       setPendingNavIndex(navIndexOf(to))
       // Экран вкладки — в этом же кадре, не дожидаясь коммита роутера.
@@ -272,7 +278,9 @@ function Layout({ renderRoutes }) {
 
   // Роутер закоммитил экран — подсветку дальше ведёт маршрут.
   useEffect(() => {
-    setPendingNavIndex(null)
+    // Старый коммит не сбрасывает подсветку более свежего тапа.
+    const requestedTab = getShownTab()
+    setPendingNavIndex((pending) => requestedTab && requestedTab !== location.pathname && navIndexOf(requestedTab) === pending ? pending : null)
   }, [location.key])
 
   // Перехода так и не случилось (свайп отменён) — капсула возвращается к
@@ -330,6 +338,8 @@ function Layout({ renderRoutes }) {
     if (!drag || drag.id !== event.pointerId) return
     if (!drag.dragging) {
       if (Math.abs(event.clientX - drag.x) < 8) return
+      cancelSwipeRef.current?.()
+      setPendingNavIndex(null)
       drag.dragging = true
       navRef.current.setPointerCapture?.(event.pointerId)
       setNavHoverIndex(drag.index)
@@ -358,11 +368,44 @@ function Layout({ renderRoutes }) {
     releaseNavPill()
     if (event.type === 'pointercancel') return
     const { to } = MOBILE_NAV[drag.index]
-    if (drag.index !== activeNavIndex || location.pathname !== to) {
+    if (location.pathname !== to || (getShownTab() && getShownTab() !== to)) {
       setPendingNavIndex(drag.index)
+      if (isTabRoot(location.pathname)) showTabNow(to)
       navigate(to)
     }
   }
+
+  useEffect(() => {
+    if (!isMobile) return undefined
+    const cancelNavDrag = () => {
+      const drag = navDragRef.current
+      if (!drag) return
+      navDragRef.current = null
+      setNavHoverIndex(null)
+      if (navRef.current?.hasPointerCapture?.(drag.id)) navRef.current.releasePointerCapture(drag.id)
+      if (navPillRef.current) {
+        navPillRef.current.style.transition = ''
+        navPillRef.current.style.transform = ''
+      }
+    }
+    const onVisibility = () => { if (document.hidden) cancelNavDrag() }
+    let width = window.innerWidth
+    const onResize = () => {
+      if (width === window.innerWidth) return
+      width = window.innerWidth
+      cancelNavDrag()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', cancelNavDrag)
+    window.addEventListener('blur', cancelNavDrag)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', cancelNavDrag)
+      window.removeEventListener('blur', cancelNavDrag)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [isMobile])
 
   return (
     <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
@@ -396,6 +439,9 @@ function Layout({ renderRoutes }) {
           onPointerMove={handleNavPointerMove}
           onPointerUp={handleNavPointerEnd}
           onPointerCancel={handleNavPointerEnd}
+          onLostPointerCapture={(event) => {
+            if (event.target === navRef.current) handleNavPointerEnd({ pointerId: event.pointerId, type: 'pointercancel' })
+          }}
         >
           <span
             ref={navPillRef}
@@ -419,7 +465,7 @@ function Layout({ renderRoutes }) {
                 aria-label={label}
                 onPointerEnter={() => prefetchRouteChunk(to)}
                 onPointerDown={() => prefetchRouteChunk(to)}
-                onClick={(event) => handleNavClick(event, to, isActive)}
+                onClick={(event) => handleNavClick(event, to)}
               >
                 <span className="mobile-nav-global-icon">
                   <Icon size={22} strokeWidth={2.25} />

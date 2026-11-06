@@ -1,5 +1,13 @@
 import { readUiSession, writeUiSession } from './uiSession'
 
+const restorations = new WeakMap()
+
+// Явное «наверх» в таб-баре тоже отменяет ожидание данных: касание панели
+// находится вне контейнера и не попадает в его pointerdown-слушатель.
+export function cancelScrollRestoration(el) {
+  restorations.get(el)?.()
+}
+
 export function scrollKey(location) {
   return location.pathname + (location.search || '') + (location.hash || '')
 }
@@ -27,6 +35,7 @@ export function savedScroll(location) {
 // через ResizeObserver, без работы на каждом кадре. Любой ручной жест отменяет
 // восстановление, чтобы поздний ответ сети не перебил прокрутку пользователя.
 export function restoreScrollPosition(el, target, onComplete = () => {}, { timeoutMs = 10000 } = {}) {
+  cancelScrollRestoration(el)
   let stopped = false
   let observer
   let mutations
@@ -37,6 +46,8 @@ export function restoreScrollPosition(el, target, onComplete = () => {}, { timeo
     observer?.disconnect()
     mutations?.disconnect()
     clearTimeout(timer)
+    document.removeEventListener('visibilitychange', onVisibility)
+    if (restorations.get(el) === stop) restorations.delete(el)
     for (const name of ['touchstart', 'pointerdown', 'wheel', 'keydown']) el.removeEventListener(name, stop)
     onComplete()
   }
@@ -45,6 +56,16 @@ export function restoreScrollPosition(el, target, onComplete = () => {}, { timeo
     el.scrollTop = target
     if (Math.abs(el.scrollTop - target) <= 1) stop()
   }
+  const startTimer = () => {
+    clearTimeout(timer)
+    if (timeoutMs > 0 && !document.hidden) timer = setTimeout(stop, timeoutMs)
+  }
+  const onVisibility = () => {
+    startTimer()
+    if (!document.hidden) apply()
+  }
+  restorations.set(el, stop)
+  document.addEventListener('visibilitychange', onVisibility)
   for (const name of ['touchstart', 'pointerdown', 'wheel', 'keydown']) el.addEventListener(name, stop, { passive: true })
   if (typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(apply)
@@ -65,7 +86,7 @@ export function restoreScrollPosition(el, target, onComplete = () => {}, { timeo
   // У прогретой скрытой вкладки данные ещё могут заменить спиннер, но
   // пагинация включится только при открытии. Наблюдаем рост без дедлайна;
   // активный экран запускает обычное ограниченное ожидание.
-  if (timeoutMs > 0) timer = setTimeout(stop, timeoutMs)
+  startTimer()
   apply()
   return stop
 }

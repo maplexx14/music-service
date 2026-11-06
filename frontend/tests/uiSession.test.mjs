@@ -13,13 +13,29 @@ const scrollSource = await source('services/scrollRestoration.js')
 const navigationSource = await source('services/navigation.js')
 const settingsSource = await source('store/uiSettingsStore.js')
 
-async function environment(storage = new Map(), { path = '/', android = false } = {}) {
+async function environment(storage = new Map(), { path = '/', android = false, transitions = false } = {}) {
   const timers = new Map()
   let timerId = 0
   const window = new EventTarget()
   const document = new EventTarget()
   document.hidden = false
-  document.documentElement = { classList: { contains: () => true, toggle() {} } }
+  document.documentElement = { dataset: {}, classList: { contains: () => true, toggle() {} } }
+  const viewTransitions = []
+  if (transitions) {
+    document.documentElement.classList.contains = () => false
+    document.startViewTransition = (update) => {
+      let finish, reject
+      const finished = new Promise((resolve, fail) => { finish = resolve; reject = fail })
+      let rejectReady
+      const ready = new Promise((_, fail) => { rejectReady = fail })
+      const transition = { update, ready, finished, finish, reject, skipped: false, skipTransition() {
+        this.skipped = true
+        rejectReady(new Error('Transition skipped before ready'))
+      } }
+      viewTransitions.push(transition)
+      return transition
+    }
+  }
   window.location = new URL(`https://bolt.test${path}`)
   window.__boltAndroid = android
   window.matchMedia = () => ({ matches: false })
@@ -85,7 +101,7 @@ async function environment(storage = new Map(), { path = '/', android = false } 
     '@remix-run/router': { createBrowserHistory: (options) => createBrowserHistory({ ...options, window }) },
   })
   const settings = async () => (await module(settingsSource, { zustand: { create } })).useUiSettingsStore
-  return { session, search, cache, scroll, navigation, settings, localStorage, storage, window, document, timers, observers, mutations }
+  return { session, search, cache, scroll, navigation, settings, localStorage, storage, window, document, timers, observers, mutations, viewTransitions }
 }
 
 const authStorage = () => new Map([['auth-storage', JSON.stringify({ token: 'test', user: { id: 7 } })]])
@@ -219,6 +235,48 @@ test('a hidden tab can await delayed content without expiring its saved scroll t
   cancel()
 })
 
+test('scroll restoration pauses its deadline while the app is in the background', async () => {
+  const app = await environment(authStorage())
+  const scroll = await app.scroll()
+  const element = new EventTarget()
+  element.children = [{}]
+  let top = 0, maxTop = 0
+  Object.defineProperty(element, 'scrollTop', { get: () => top, set: (value) => { top = Math.min(maxTop, value) } })
+  scroll.restoreScrollPosition(element, 8000)
+  assert.equal(app.timers.size, 1)
+  app.document.hidden = true
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(app.timers.size, 0)
+  app.document.hidden = false
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(app.timers.size, 1)
+  maxTop = 9000
+  app.mutations[0].callback()
+  assert.equal(top, 8000)
+  assert.equal(app.timers.size, 0)
+})
+
+test('an explicit return to the top cancels delayed restoration instead of fighting the user', async () => {
+  const app = await environment(authStorage())
+  const scroll = await app.scroll()
+  const element = new EventTarget()
+  element.children = [{}]
+  let top = 0, maxTop = 100
+  let completed = 0
+  Object.defineProperty(element, 'scrollTop', { get: () => top, set: (value) => { top = Math.min(maxTop, value) } })
+  scroll.restoreScrollPosition(element, 8000, () => completed++)
+  scroll.cancelScrollRestoration(element)
+  element.scrollTop = 0
+  maxTop = 9000
+  app.mutations[0].callback()
+  app.observers[0].callback()
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(top, 0)
+  assert.equal(completed, 1)
+  assert.equal(app.timers.size, 0)
+  assert.equal(app.observers[0].disconnected, true)
+})
+
 test('a late prefetch from the previous account cannot repopulate the new cache', async () => {
   const app = await environment(authStorage())
   let resolve
@@ -255,6 +313,63 @@ test('tab switches replace history; nested routes retain their originating tab',
   history.push('/search')
   history.push('/artists/Muse')
   assert.equal(nav.tabForLocation(history.location), '/search')
+})
+
+test('an instant tab selection cannot be overwritten by a skipped transition callback', async () => {
+  const app = await environment(authStorage(), { transitions: true })
+  const nav = await app.navigation()
+  const history = nav.createAppHistory()
+  const screens = []
+  history.listen(({ location }) => { screens.push(location.pathname); nav.notifyRouteCommitted(location.key) })
+  history.push('/artists/Old')
+  const old = app.viewTransitions[0]
+  history.push('/search')
+  assert.equal(old.skipped, true)
+  await old.update()
+  old.finish()
+  await Promise.resolve()
+  assert.deepEqual(screens, ['/search'])
+  assert.equal(history.location.pathname, '/search')
+  assert.equal(nav.heavyAnimationsHeld(), false)
+  assert.equal(app.document.documentElement.dataset.nav, undefined)
+})
+
+test('only the latest animated navigation commits; cancelled transitions release their holds', async () => {
+  const app = await environment(authStorage(), { transitions: true })
+  const nav = await app.navigation()
+  const history = nav.createAppHistory()
+  const screens = []
+  history.listen(({ location }) => { screens.push(location.pathname); nav.notifyRouteCommitted(location.key) })
+  history.push('/artists/Old')
+  history.push('/artists/New')
+  const [old, next] = app.viewTransitions
+  await next.update()
+  await old.update()
+  old.reject(new Error('Transition superseded'))
+  await Promise.resolve()
+  assert.deepEqual(screens, ['/artists/New'])
+  assert.equal(nav.heavyAnimationsHeld(), true)
+  assert.equal(app.document.documentElement.dataset.nav, 'forward')
+  next.finish()
+  await Promise.resolve()
+  assert.equal(nav.heavyAnimationsHeld(), false)
+  assert.equal(app.document.documentElement.dataset.nav, undefined)
+  assert.equal(app.timers.size, 1, 'Only the session persistence timer should remain')
+})
+
+test('stale tab cleanup cannot dismiss a newer selection and external navigation clears the preview', async () => {
+  const app = await environment(authStorage())
+  const nav = await app.navigation()
+  const history = nav.createAppHistory()
+  history.listen(() => {})
+  nav.showTabNow('/search')
+  nav.showTabNow('/liked')
+  nav.clearShownTab('/search')
+  assert.equal(nav.getShownTab(), '/liked')
+  history.push('/liked')
+  assert.equal(nav.getShownTab(), '/liked')
+  history.push('/artists/Muse')
+  assert.equal(nav.getShownTab(), null)
 })
 
 test('Android reopens the last route but explicit links and shortcuts take priority', async () => {

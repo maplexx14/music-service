@@ -85,9 +85,11 @@ export function morphTransition(name, update) {
   const root = document.documentElement
   root.dataset.morph = name
   const transition = document.startViewTransition(update)
-  transition.finished.finally(() => {
+  transition.ready?.catch(() => {})
+  const finish = () => {
     if (root.dataset.morph === name) delete root.dataset.morph
-  })
+  }
+  transition.finished.then(finish, finish)
 }
 
 // Пока экран едет (свайп пальцем или анимация перехода), тяжёлый декор —
@@ -184,8 +186,8 @@ export function showTabNow(path) {
   notifyShownTab()
 }
 
-export function clearShownTab() {
-  if (shownTab === null) return
+export function clearShownTab(expected = shownTab) {
+  if (shownTab === null || shownTab !== expected) return
   shownTab = null
   notifyShownTab()
 }
@@ -356,26 +358,34 @@ export function createAppHistory() {
   }
   let current = history.location
   let active = null
+  let generation = 0
   recordEntry(history.location, 'REPLACE')
 
   const listen = (fn) =>
     history.listen((update) => {
+      const request = ++generation
       const from = current
       current = update.location
       recordEntry(update.location, update.action)
       const kind = transitionKind(from, update.location, update.action)
+      // Даже мгновенный переход прерывает предыдущий снимок. skipTransition
+      // не отменяет его отложенный callback: ниже проверяем, что он всё ещё
+      // принадлежит последнему запросу навигации.
+      const previous = active
+      previous?.skipTransition()
       if (!kind) {
+        active = null
+        if (activeTransition === previous) activeTransition = null
+        delete document.documentElement.dataset.nav
         fn(update)
         return
       }
-      // Новый переход поверх идущего: старый обрываем, иначе снапшоты
-      // двух переходов накладываются.
-      active?.skipTransition()
       const root = document.documentElement
       root.dataset.nav = kind
       const capture = kind === 'swipe' ? onSwipeCapture : null
       onSwipeCapture = null
       const transition = document.startViewTransition(() => {
+        if (request !== generation) return undefined
         // transition уже присвоен: колбэк обновления вызывается асинхронно.
         capture?.(transition.finished)
         const committed = waitForCommit(update.location.key, kind !== 'swipe')
@@ -384,15 +394,19 @@ export function createAppHistory() {
       })
       active = transition
       activeTransition = transition
+      transition.ready?.catch(() => {})
       const release = holdHeavyAnimations()
-      transition.finished.finally(() => {
+      const finish = () => {
         release()
         if (activeTransition === transition) activeTransition = null
         if (active === transition) {
           active = null
           delete root.dataset.nav
         }
-      })
+      }
+      // Отмена перехода — штатный результат следующего действия, а не
+      // необработанная ошибка Promise, способная сорвать уборку слоёв.
+      transition.finished.then(finish, finish)
     })
 
   return new Proxy(history, {
@@ -400,6 +414,7 @@ export function createAppHistory() {
       if (prop === 'listen') return listen
       if (prop === 'push' || prop === 'replace') return (to, state) => {
         const path = typeof to === 'string' ? to.split(/[?#]/)[0] || target.location.pathname : to.pathname || target.location.pathname
+        if (shownTab && shownTab !== path) clearShownTab()
         const nextState = { ...state, __boltTab: isTabRoot(path) ? path : tabForLocation(target.location) }
         // Вкладки — точки входа, а не дополнительные ступени стека.
         const method = prop === 'push' && isTabRoot(path) && resumablePath(target.location.pathname) ? 'replace' : prop

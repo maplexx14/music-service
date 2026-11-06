@@ -96,6 +96,7 @@ function insideHorizontalScroller(target, root) {
 export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, onPrev, onNext, onCommit, onPan, targets }) {
   const actionsRef = useRef(null)
   const screenChangeRef = useRef(null)
+  const cancelRef = useRef(null)
   // Свайп вправо: «Назад» на вложенном экране, предыдущая вкладка на корне.
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
   // сразу, не дожидаясь доезда экранов и коммита роутера; null отменяет выбор.
@@ -864,6 +865,26 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       busy = interruptible = committing = routeRequested = false
       reset()
     }
+    const cancelInteraction = () => {
+      const interrupted = Boolean(g || pan || busy || committing)
+      cancelGesture()
+      if (interrupted) actionsRef.current.onCommit?.(null)
+      finishActiveTransition()
+    }
+    cancelRef.current = cancelInteraction
+    const onVisibility = () => { if (document.hidden) cancelInteraction() }
+    let viewportWidth = window.innerWidth
+    const onResize = () => {
+      // Адресная строка и клавиатура меняют высоту при обычном скролле.
+      // Смена ширины меняет геометрию свайпа — старые координаты отбрасываем.
+      if (window.innerWidth === viewportWidth) return
+      viewportWidth = window.innerWidth
+      cancelInteraction()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', cancelInteraction)
+    window.addEventListener('blur', cancelInteraction)
+    window.addEventListener('resize', onResize)
     screenChangeRef.current = (key) => {
       if (key === currentScreenKey) return
       currentScreenKey = key
@@ -889,10 +910,16 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     }
     for (const [name, listener] of Object.entries(listeners)) container.addEventListener(name, listener, { passive: true })
     return () => {
+      cancelRef.current = null
       screenChangeRef.current = null
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', cancelInteraction)
+      window.removeEventListener('blur', cancelInteraction)
+      window.removeEventListener('resize', onResize)
       edgeGuard?.remove()
       for (const [name, listener] of Object.entries(listeners)) container.removeEventListener(name, listener)
       cancelGesture()
     }
   }, [containerRef, enabled])
+  return cancelRef
 }

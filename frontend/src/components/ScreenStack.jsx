@@ -69,7 +69,7 @@ function useScrollRestoration(scrollerRef, location, ready, active) {
     const el = scrollerRef.current
     if (!el || !ready) return undefined
     const onScroll = () => {
-      if (!restoringRef.current) rememberScroll(locationRef.current, el.scrollTop)
+      if (!restoringRef.current && locationRef.current.pathname !== '/') rememberScroll(locationRef.current, el.scrollTop)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -91,6 +91,15 @@ function useScrollRestoration(scrollerRef, location, ready, active) {
     if (!el) return
     cancelRestoreRef.current?.()
     cancelRestoreRef.current = null
+    // Главная — точка входа с волной наверху. Сбрасываем и при уходе,
+    // чтобы следующий свайп показывал уже готовый верх без скачка на коммите.
+    // Остальные вкладки и вложенные страницы сохраняют своё место.
+    if (location.pathname === '/') {
+      pendingTopRef.current = null
+      restoringRef.current = false
+      el.scrollTop = 0
+      return
+    }
     if (!samePath) {
       const saved = firstMount || navigationType === 'POP' ? savedScroll(location) : 0
       // Новый вложенный экран открывается сверху. Возврат и новый запуск
@@ -284,11 +293,11 @@ function ScreenStack({ renderRoutes, isMobile, warmTabs, onBack }) {
   // Роутер догнал — дальше ведёт он. Не догнал за 2 с (переход отменён) —
   // возвращаемся к его экрану, а не висим на чужой вкладке.
   useEffect(() => {
-    if (shownTab && shownTab === location.pathname) clearShownTab()
+    if (shownTab && shownTab === location.pathname) clearShownTab(shownTab)
   }, [shownTab, location.pathname])
   useEffect(() => {
     if (!shownTab) return undefined
-    const timer = window.setTimeout(clearShownTab, 2000)
+    const timer = window.setTimeout(() => clearShownTab(shownTab), 2000)
     return () => window.clearTimeout(timer)
   }, [shownTab])
 

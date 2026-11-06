@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
 import { Play, Share, Shuffle } from 'lucide-react'
 import api from '../services/api'
 import { peekCache, writeCache, PLAYLIST_PAGE_SIZE, LIKED_CACHE_KEY } from '../services/pageCache'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
@@ -40,12 +40,8 @@ const LIKED_BOLTS = [
 // «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
 // интерфейс страницы полностью повторяет PlaylistDetail.
 function LikedSongs() {
-  const navigate = useNavigate()
-  // На мобиле вкладка монтируется скрытой в фоне (ScreenStack warmTabs) —
-  // упавший запрос не должен уводить юзера с экрана, на котором он стоит.
+  // Неудавшуюся фоновую загрузку повторяем при открытии вкладки.
   const { active } = useScreen()
-  const activeRef = useRef(active)
-  activeRef.current = active
   // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
   const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
   const coverBackdrop = useCoverBackdrop(playlist?.cover_url)
@@ -162,7 +158,6 @@ function LikedSongs() {
       setTotalTracks(Number(response.headers['x-total-count']) || fresh.tracks.length)
     } catch (error) {
       console.error('Error fetching liked playlist:', error)
-      if (!peekCache(LIKED_CACHE_KEY) && activeRef.current) navigate('/playlists')
     } finally {
       setLoading(false)
     }
@@ -248,7 +243,10 @@ function LikedSongs() {
   }
 
   if (!playlist) {
-    return null
+    return <PageLoadError title="Не удалось загрузить понравившиеся треки" onRetry={() => {
+      setLoading(true)
+      fetchPlaylist()
+    }} />
   }
 
   // «Понравившиеся» создаются приватными — по ссылке их открывает только

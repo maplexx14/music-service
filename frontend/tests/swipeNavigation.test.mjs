@@ -151,6 +151,10 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     '../utils/swipeSpring': { swipeSpring },
     '../utils/swipeActivity': { setSwipePhase },
   }
+  const window = new EventTarget()
+  Object.assign(window, { innerWidth: 390, matchMedia: () => ({ matches: reduced }), PointerEvent: pointer ? class {} : undefined })
+  const document = new EventTarget()
+  Object.assign(document, { hidden: false, timeline, documentElement: { classList: { contains: () => false }, style: { setProperty(name, value) { rootStyles[name] = value } } } })
   const hook = { exports: {} }
   script.runInContext(vm.createContext({
     module: hook, exports: hook.exports,
@@ -158,8 +162,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     Element,
     DOMMatrixReadOnly: class { constructor(transform) { this.m41 = Number(/translate3d\(([-\d.]+)px/.exec(transform)?.[1] ?? 0) } },
     getComputedStyle: (element) => ({ transform: element.presentationOffset === undefined ? element.style.transform ?? 'none' : `translate3d(${element.presentationOffset}px, 0, 0)` }),
-    window: { innerWidth: 390, matchMedia: () => ({ matches: reduced }), PointerEvent: pointer ? class {} : undefined },
-    document: { timeline, documentElement: { classList: { contains: () => false }, style: { setProperty(name, value) { rootStyles[name] = value } } } },
+    window, document,
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
     clearTimeout: (id) => timers.delete(id),
     requestAnimationFrame(callback) { const id = ++frameId; frames.set(id, callback); return id },
@@ -190,10 +193,11 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     onCommit: (direction) => commits.push(direction),
     targets: { left: 'tab:/search', right: hasPrev ? 'tab:/search' : null },
   }
+  let cancelRef
   const rerender = (changes = {}, beforeEffects) => {
     Object.assign(options, changes)
     refIndex = 0
-    hook.exports.useSwipeNavigation(containerRef, options)
+    cancelRef = hook.exports.useSwipeNavigation(containerRef, options)
     flushEffects('layout')
     beforeEffects?.()
     flushEffects('passive')
@@ -209,6 +213,8 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     pending.forEach((callback) => callback(time))
   }
   return {
+    window, document,
+    cancel: () => cancelRef.current?.(),
     screen, under, next, pill, container, pans, navigation, commits, operations, timers, routeCommits, listeners, paint, rootStyles, rerender,
     activate(element) { active = element },
     get pendingFrames() { return frames.size },
@@ -320,6 +326,85 @@ test('Moving implicit pointer capture from a touched child to the swipe containe
   assert.equal(app.capturedPointer, 1)
   app.pointer('pointerup', 200, 56)
   assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
+  app.cleanup()
+})
+
+for (const interruption of ['visibility', 'pagehide', 'blur', 'resize', 'selection']) {
+  test(`${interruption} cancels a drag or settle without stale movement or navigation`, async () => {
+    for (const released of [false, true]) {
+      const app = mountSwipe({ pointer: true, hasPill: true })
+      app.pointer('pointerdown', 300, 0)
+      app.pointer('pointermove', 170, 50)
+      if (released) app.pointer('pointerup', 170, 55)
+      if (interruption === 'visibility') {
+        app.document.hidden = true
+        app.document.dispatchEvent(new Event('visibilitychange'))
+      } else if (interruption === 'selection') app.cancel()
+      else {
+        if (interruption === 'resize') app.window.innerWidth = 430
+        app.window.dispatchEvent(new Event(interruption))
+      }
+      await flushAnimations()
+      assert.equal(app.capturedPointer, null)
+      assert.equal(app.pendingFrames, 0)
+      assert.equal(app.screen.style.transform, '')
+      assert.equal(app.under.style.visibility, '')
+      assert.equal(app.pill.style.transform, '')
+      assert.equal(app.holds, 0)
+      assert.equal(app.container.hasAttribute('data-swiping'), false)
+      assert.equal(app.commits.at(-1), null)
+      app.paint(100)
+      app.commit()
+      await flushAnimations()
+      assert.deepEqual(app.navigation, [])
+      app.cleanup()
+    }
+  })
+}
+
+test('viewport height changes preserve the gesture and returning from background allows a new swipe', async () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.window.dispatchEvent(new Event('resize'))
+  assert.equal(app.holds, 1)
+  assert.equal(app.screen.style.transform, 'translate3d(-130px, 0, 0)')
+  app.document.hidden = true
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  app.document.hidden = false
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  app.pointer('pointerdown', 300, 100)
+  app.pointer('pointermove', 150, 150)
+  app.pointer('pointerup', 150, 160)
+  app.screen.animations.at(-1).finish()
+  app.under.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.commit()
+  assert.equal(app.holds, 0)
+  app.cleanup()
+})
+
+test('backgrounding during a pending router commit releases the old gesture without discarding the selected route', async () => {
+  const app = mountSwipe({ pointer: true })
+  app.pointer('pointerdown', 300, 0)
+  app.pointer('pointermove', 170, 50)
+  app.pointer('pointerup', 170, 55)
+  app.screen.animations.at(-1).finish()
+  app.under.animations.at(-1).finish()
+  await flushAnimations()
+  assert.deepEqual(app.navigation, ['/search'])
+  app.document.hidden = true
+  app.document.dispatchEvent(new Event('visibilitychange'))
+  app.activate(app.under)
+  app.rerender({ screenKey: 'search' })
+  app.commit()
+  assert.equal(app.routeCommits.size, 0)
+  assert.equal(app.timers.size, 0)
+  assert.equal(app.holds, 0)
+  assert.equal(app.screen.style.transform, '')
+  assert.equal(app.under.style.transform, '')
+  assert.deepEqual(app.navigation, ['/search'])
   app.cleanup()
 })
 

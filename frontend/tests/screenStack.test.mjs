@@ -208,6 +208,28 @@ test('A warmed tab restores its preview without starting a deadline while hidden
   app.cleanup()
 })
 
+test('Home ignores saved scrolling and prepares its top before returning; other tabs retain their place', () => {
+  const app = mountStack({ savedTop: 800 })
+  const home = app.renderTab('/')
+  assert.equal(home.scrollTop, 0)
+  assert.deepEqual(app.restored, [])
+  home.scrollTop = 600
+  app.navigate('/liked')
+  app.renderTab('/')
+  assert.equal(home.scrollTop, 0, 'The next swipe would preview the old position before jumping to the top')
+  const liked = app.renderTab('/liked')
+  assert.equal(liked.scrollTop, 800)
+  liked.scrollTop = 480
+  app.navigate('/')
+  app.renderTab('/liked')
+  app.renderTab('/')
+  assert.equal(home.scrollTop, 0)
+  app.navigate('/liked')
+  app.renderTab('/liked')
+  assert.equal(liked.scrollTop, 480)
+  app.cleanup()
+})
+
 test('A deep restoration pauses when hidden and resumes its original target on return', () => {
   const app = mountStack({ savedTop: 8000, restorePending: true })
   app.navigate('/liked')
