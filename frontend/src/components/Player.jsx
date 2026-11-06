@@ -2685,118 +2685,113 @@ function PlayerInner() {
             >
               <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
             </button>
-          </div>
-        )}
-      </div>
-
-      {canInteract && (
-        <button
-          type="button"
-          className={`like-btn player-mobile-like ${isLiked ? 'liked' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation()
-            handleLike()
-          }}
-          disabled={loadingLike}
-          aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
-          aria-pressed={isLiked}
-        >
-          <LikeHeart size={18} liked={!!isLiked} />
-        </button>
-      )}
-
-      <div className="player-actions-panel" role="group" aria-label="Управление плеером">
-        <div className="player-center">
-          <div className="player-controls">
             <button
               type="button"
-              className={`control-btn ${isShuffle ? 'active' : ''}`}
-              onClick={toggleShuffle}
-              title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+              className="add-btn"
+              onClick={(event) => {
+                event.stopPropagation()
+                handleOpenAddToPlaylist()
+              }}
+              title="Добавить в плейлист"
             >
-              <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
+              <ListPlus size={18} />
             </button>
-            <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
-              <SkipBack size={20} />
-            </button>
-            <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
-              {isPlaying ? (
-                <Pause size={24} fill="currentColor" />
-              ) : (
-                <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
-              )}
-            </button>
-            <button
-              type="button"
-              className="control-btn"
-              onClick={() => handleSkipForward('button')}
-              aria-label="Следующий"
-              title="Следующий"
-            >
-              <SkipForward size={20} />
-            </button>
-            <button
-              type="button"
-              className={`control-btn ${isRepeatOne ? 'active' : ''}`}
-              onClick={toggleRepeatOne}
-              title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
-            >
-              <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
-            </button>
-          </div>
-        </div>
-
-        <div className="player-right">
-          {canInteract && (
-            <>
+            {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
               <button
                 type="button"
                 className="add-btn"
                 onClick={(event) => {
                   event.stopPropagation()
-                  handleOpenAddToPlaylist()
+                  openCensorDialog(currentTrack)
                 }}
-                title="Добавить в плейлист"
+                title="Оригинал без цензуры"
               >
-                <ListPlus size={18} />
+                <ShieldCheck size={18} />
               </button>
-              {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
-                <button
-                  type="button"
-                  className="add-btn"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    openCensorDialog(currentTrack)
-                  }}
-                  title="Оригинал без цензуры"
-                >
-                  <ShieldCheck size={18} />
-                </button>
-              )}
-            </>
-          )}
-          {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-            <a
-              className="add-btn"
-              href={currentTrack.download_url}
-              target="_blank"
-              rel="noreferrer"
-              title="Скачать"
-              onClick={(event) => event.stopPropagation()}
+            )}
+            {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+              <a
+                className="add-btn"
+                href={currentTrack.download_url}
+                target="_blank"
+                rel="noreferrer"
+                title="Скачать"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Download size={18} />
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="player-center">
+        <div className="player-controls">
+          {canInteract && (
+            <button
+              type="button"
+              className={`like-btn player-mobile-like ${isLiked ? 'liked' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                handleLike()
+              }}
+              disabled={loadingLike}
+              aria-label={isLiked ? 'Убрать из понравившихся' : 'Добавить в понравившиеся'}
+              aria-pressed={isLiked}
             >
-              <Download size={18} />
-            </a>
+              <LikeHeart size={18} liked={!!isLiked} />
+            </button>
           )}
+          <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
+            <SkipBack size={20} />
+          </button>
+          <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+            {isPlaying ? (
+              <Pause size={24} fill="currentColor" />
+            ) : (
+              <Play size={24} fill="currentColor" style={{ marginLeft: 2 }} />
+            )}
+          </button>
           <button
-            className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
-            }}
-            disabled={!hasLyrics && !lyricsError && !lyricsLoading}
-            title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
+            type="button"
+            className="control-btn"
+            onClick={() => handleSkipForward('button')}
+            aria-label="Следующий"
+            title="Следующий"
           >
-            <AlignLeft size={18} />
+            <SkipForward size={20} />
+          </button>
+        </div>
+      </div>
+
+      <div className="player-right">
+        <button
+          className={`lyrics-btn${hasLyrics || lyricsError || lyricsLoading ? '' : ' disabled'}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            if (hasLyrics || lyricsError || lyricsLoading) openFullScreenWithTransition(true)
+          }}
+          disabled={!hasLyrics && !lyricsError && !lyricsLoading}
+          title={lyricsError ? 'Повторить загрузку текста' : hasLyrics || lyricsLoading ? 'Текст песни' : 'Текст не найден'}
+        >
+          <AlignLeft size={18} />
+        </button>
+        <div className="player-actions-panel" role="group" aria-label="Порядок воспроизведения и громкость">
+          <button
+            type="button"
+            className={`control-btn ${isShuffle ? 'active' : ''}`}
+            onClick={toggleShuffle}
+            title={isShuffle ? 'Выключить случайный порядок' : 'Случайный порядок'}
+          >
+            <Shuffle size={20} fill={isShuffle ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            type="button"
+            className={`control-btn ${isRepeatOne ? 'active' : ''}`}
+            onClick={toggleRepeatOne}
+            title={isRepeatOne ? 'Выключить повтор трека' : 'Повторять трек'}
+          >
+            <Repeat1 size={20} fill={isRepeatOne ? 'currentColor' : 'none'} />
           </button>
           <div className="volume-control">
             <Volume2 size={20} />

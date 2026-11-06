@@ -112,7 +112,7 @@
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
   .layout {
     --page-padding: 24px;
-    --player-height: 128px;
+    --player-height: 116px;
   }
 
   .main-content {
