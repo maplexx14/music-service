@@ -519,17 +519,31 @@
   z-index: 1;
 }
 
-/* Основное управление — по центру, дополнительные настройки — справа. */
-@media (min-width: 1280px) {
+/* Равные боковые колонки держат воспроизведение точно по центру,
+   независимо от длины названия и количества действий с треком. */
+@media (min-width: 1001px) {
   .player {
-    gap: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
-  .player-center,
+  .player-left {
+    grid-template-columns: auto minmax(0, max-content) auto;
+    justify-content: start;
+  }
+
+  .player-center {
+    justify-self: center;
+  }
+
   .player-right {
-    flex: 1;
+    min-width: 0;
+    justify-self: end;
   }
+}
 
+@media (min-width: 1280px) {
   .player-track-title {
     display: block;
     white-space: nowrap;
@@ -546,6 +560,18 @@
 
   .player-left {
     gap: 10px;
+  }
+
+  .player-track-actions .like-btn,
+  .player-track-actions .dislike-btn,
+  .player-track-actions .add-btn {
+    width: 32px;
+    height: 36px;
+  }
+
+  .player-track-actions svg {
+    width: 20px;
+    height: 20px;
   }
 
   .player-controls {
