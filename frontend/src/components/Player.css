@@ -148,6 +148,7 @@
 
 .player-left {
   display: grid;
+  /* Текст занимает свободное место, кнопки закреплены у края колонки. */
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
@@ -526,11 +527,6 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-  }
-
-  .player-left {
-    grid-template-columns: auto minmax(0, max-content) auto;
-    justify-content: start;
   }
 
   .player-center {
