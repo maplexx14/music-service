@@ -22,6 +22,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   const frames = new Map()
   const rootStyles = {}
   const timeline = { currentTime: 0 }
+  let now = 0
   let frameId = 0
   let holds = 0
   let timerId = 0
@@ -162,7 +163,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     Element,
     DOMMatrixReadOnly: class { constructor(transform) { this.m41 = Number(/translate3d\(([-\d.]+)px/.exec(transform)?.[1] ?? 0) } },
     getComputedStyle: (element) => ({ transform: element.presentationOffset === undefined ? element.style.transform ?? 'none' : `translate3d(${element.presentationOffset}px, 0, 0)` }),
-    window, document,
+    window, document, performance: { now: () => now },
     setTimeout(callback, ms) { const id = ++timerId; timers.set(id, { callback, ms }); return id },
     clearTimeout: (id) => timers.delete(id),
     requestAnimationFrame(callback) { const id = ++frameId; frames.set(id, callback); return id },
@@ -204,6 +205,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   }
   rerender()
   const paint = (time = timeline.currentTime + 16, { startTime = time, skip = [] } = {}) => {
+    now = time
     timeline.currentTime = time
     for (const animation of [screen, under, next, pill].flatMap((element) => element.animations)) {
       if (!skip.includes(animation)) animation.prepare(startTime)
@@ -221,11 +223,14 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     get phase() { return getSwipePhase() },
     get holds() { return holds },
     get capturedPointer() { return capturedPointer },
+    advanceClock(time) { now = time },
     pointer(name, x, timeStamp, extra = {}) {
+      now = timeStamp
       listeners.get(name).callback({ target: screen, pointerId: 1, pointerType: 'touch', isPrimary: true, clientX: x, clientY: 200, timeStamp, ...extra })
       if (extra.paint !== false) paint(timeStamp)
     },
     touch(name, x, y = 200, timeStamp = 0, extra = {}) {
+      now = timeStamp
       const point = { clientX: x, clientY: y }
       listeners.get(`touch${name}`).callback({
         target: screen, touches: name === 'end' ? [] : [point], changedTouches: [point], timeStamp, ...extra,
@@ -1133,6 +1138,40 @@ test('Starting a settle keeps the live styles at the release position while comp
   await flushAnimations()
   assert.equal(app.screen.style.transform, 'translate3d(-390px, 0, 0)')
   app.commit()
+  app.cleanup()
+})
+
+test('A fast release between display frames starts at the handoff time instead of skipping unseen motion', async () => {
+  for (const releaseDelay of [4, 16, 32]) {
+    const app = mountSwipe({ hasPill: true, pointer: true })
+    app.pointer('pointerdown', 310, 0)
+    app.pointer('pointermove', 270, 16)
+    app.pointer('pointermove', 190, 32)
+    app.pointer('pointerup', 190, 32 + releaseDelay, { paint: false })
+    await flushAnimations()
+    const animations = [app.screen, app.under, app.pill].map(element => element.animations[0])
+    assert.ok(animations.every(animation => animation.startTime === 32 + releaseDelay),
+      'The settle was backdated to the drag frame before the finger was released')
+    app.paint(32 + releaseDelay + 8)
+    assert.ok(animations.every(animation => animation.currentTime === 8),
+      'The first visible settle frame skipped the time between the last drag frame and release')
+    app.cleanup()
+  }
+})
+
+test('A delayed ready callback cannot backdate playback to a stale document timeline', async () => {
+  const app = mountSwipe({ hasPill: true })
+  app.touch('start', 310, 200, 0)
+  app.touch('move', 190, 200, 32)
+  app.touch('end', 190, 200, 40, { paint: false })
+  // The prepared effects are ready, but other work delays the microtask.
+  // No display frame has advanced the document timeline during that work.
+  app.advanceClock(80)
+  await flushAnimations()
+  const animations = [app.screen, app.under, app.pill].map(element => element.animations[0])
+  assert.ok(animations.every(animation => animation.startTime === 80))
+  app.paint(88)
+  assert.ok(animations.every(animation => animation.currentTime === 8))
   app.cleanup()
 })
 

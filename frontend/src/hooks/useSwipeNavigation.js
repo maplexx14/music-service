@@ -343,7 +343,12 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       Promise.all(animations.map((animation) => animation.ready)).then(() => {
         if (pan !== finished || pan.animations !== animations) return
         setSwipePhase('settle')
-        const start = document.timeline.currentTime
+        // Между кадрами currentTime таймлайна остаётся временем прошлого
+        // кадра. Быстрое отпускание тогда запускало пружину задним числом:
+        // первый показанный кадр перескакивал сразу через 20–30 мс движения.
+        // У стандартного DocumentTimeline тот же ноль, что у performance;
+        // запускаем все эффекты от фактического момента передачи управления.
+        const start = document.timeline.currentTime === null ? null : performance.now()
         animations.forEach((animation) => {
           animation.play()
           if (start !== null) animation.startTime = start
