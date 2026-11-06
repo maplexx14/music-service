@@ -16,6 +16,7 @@ import PushPrompt from './PushPrompt'
 import RatePrompt from './RatePrompt'
 import { syncPushSubscription, trackPushOpen } from '../services/push'
 import { isAndroidApp, runAppAction } from '../services/androidApp'
+import { preloadInIdle } from '../services/preloadQueue'
 import AddToPlaylistDialogView from './AddToPlaylistDialog'
 import CensorOverrideDialogView from './CensorOverrideDialog'
 import './Layout.css'
@@ -149,29 +150,9 @@ function Layout({ renderRoutes }) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // Прогреваем чанк полноэкранного плеера в простое, после первой отрисовки.
-  // Открывается он жестом, и ждать загрузки в этот момент — заметная задержка;
-  // requestIdleCallback же не отбирает полосу у критических ресурсов.
-  useEffect(() => {
-    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 2000))
-    const cancel = window.cancelIdleCallback ?? clearTimeout
-    // Чанки по одному за простой: пачка параллельных загрузок на медленной
-    // сети отняла бы полосу у обложек и аудио текущей страницы.
-    const queue = [importFullScreenPlayer, ...IDLE_CHUNKS]
-    let handle = null
-    const next = () => {
-      const loader = queue.shift()
-      if (!loader) return
-      handle = idle(() => {
-        loader().catch(() => {}).finally(next)
-      })
-    }
-    next()
-    return () => {
-      queue.length = 0
-      if (handle !== null) cancel(handle)
-    }
-  }, [])
+  // Одна очередь на приложение: параллельный прогрев из App раньше
+  // запускал все эти страницы разом, обходя ограничения этой очереди.
+  useEffect(() => preloadInIdle([importFullScreenPlayer, ...IDLE_CHUNKS]), [])
 
   // «Назад» — только у вложенных экранов, как в нативном стеке: у корней
   // вкладок его нет. Сама панель рисуется в экране (ScreenStack).

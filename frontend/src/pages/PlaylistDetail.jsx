@@ -134,6 +134,7 @@ function PlaylistDetail() {
   // списка. Кнопка остаётся только как способ повторить упавший запрос.
   const loadMoreRef = useInfiniteScroll(handleLoadMore, {
     enabled: hasMoreTracks && !loadingMore && !loadError,
+    itemCount: playlist?.tracks.length ?? 0,
   })
 
   // Очередь плеера — это то, что успела загрузить страница, а грузит она

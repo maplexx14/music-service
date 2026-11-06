@@ -279,6 +279,8 @@ html.no-gpu .cover-backdrop-tint {
    под плеер) и сама держит их внутри, иначе под ней полоса фона страницы. */
 .hero-page-sheet {
   flex: 1;
+  position: relative;
+  z-index: 1;
   margin: 32px calc(-1 * var(--page-padding, 32px)) calc(-1 * var(--page-padding, 32px) - var(--main-pad-bottom, 0px));
   padding: 16px var(--page-padding, 32px) calc(var(--page-padding, 32px) + var(--main-pad-bottom, 0px));
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
@@ -334,23 +336,17 @@ html.no-gpu .cover-backdrop-tint {
   margin-top: 0;
 }
 
-/* Параллакс: шапка и кнопки на первых 600px прокрутки едут
-   вниз на половину пути — то есть отстают от прокрутки вдвое, — а карточка
-   идёт с обычной скоростью и наезжает на них сверху. Анимация по прокрутке
-   (scroll-timeline) считается на композиторе, без JS и слушателей скролла.
-   Где её нет или движение просили убрать — обычная прокрутка. */
+/* Параллакс — только на широком экране с мышью. На телефоне заголовок,
+   кнопки и список прокручиваются вместе: при возврате к сохранённой
+   позиции карточка больше не перекрывает половину названия. Обложка
+   остаётся отдельным sticky-фоном, без scroll-timeline у текста. */
 @supports (animation-timeline: scroll()) {
-  @media (prefers-reduced-motion: no-preference) {
+  @media (min-width: 769px) and (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
     .hero-page .artist-hero,
     .hero-page .artist-toolbar {
       animation: hero-page-parallax linear both;
       animation-timeline: scroll(nearest block);
       animation-range: 0px 600px;
-    }
-
-    .hero-page-sheet {
-      position: relative;
-      z-index: 1;
     }
   }
 }
@@ -371,6 +367,7 @@ html.no-gpu .cover-backdrop-tint {
   /* Шапка на всю ширину экрана, как карусели ниже (Carousel.css): карточка
      с полями по 16px на телефоне выглядела вставкой, а не экраном артиста. */
   .artist-hero {
+    flex-shrink: 0;
     margin-inline: -16px;
     /* Градиент заходит под плавающую «Назад» до верха экрана: отступ под неё
        (--main-pad-top, Layout.css) иначе оставался чёрной полосой. */
@@ -540,6 +537,7 @@ html.no-gpu .cover-backdrop-tint {
   }
 
   .artist-toolbar {
+    flex-shrink: 0;
     padding-top: 16px;
   }
 

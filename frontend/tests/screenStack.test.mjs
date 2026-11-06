@@ -8,12 +8,14 @@ const source = await readFile(new URL('../src/components/ScreenStack.jsx', impor
 const { code } = await transform(source, { format: 'cjs', loader: 'jsx', jsx: 'automatic', target: 'es2020' })
 const script = new vm.Script(code, { filename: 'ScreenStack.jsx' })
 
-function mountStack({ warmTabs = true, nativeIdle = true, savedTop = 0 } = {}) {
+function mountStack({ warmTabs = true, nativeIdle = true, savedTop = 0, restorePending = false } = {}) {
   const timers = new Map()
   const idleTasks = new Map()
   const holdListeners = new Set()
   const instances = new Map()
   const restored = []
+  const restoreCompletions = []
+  const restoreOptions = []
   let taskId = 0
   let held = false
   let current
@@ -64,11 +66,13 @@ function mountStack({ warmTabs = true, nativeIdle = true, savedTop = 0 } = {}) {
       scrollKey: (entry) => entry.pathname + entry.search + entry.hash,
       savedScroll: () => savedTop,
       rememberScroll() {},
-      restoreScrollPosition(element, top, done) {
+      restoreScrollPosition(element, top, done, options) {
         restored.push(top)
         element.scrollTop = top
-        done()
-        return () => {}
+        restoreCompletions.push(done)
+        restoreOptions.push(options)
+        if (!restorePending) done()
+        return done
       },
     },
     '../services/navigation': {
@@ -129,7 +133,8 @@ function mountStack({ warmTabs = true, nativeIdle = true, savedTop = 0 } = {}) {
   }
   update()
   return {
-    timers, idleTasks, restored,
+    timers, idleTasks, restored, restoreOptions,
+    finishRestore: () => restoreCompletions.at(-1)(),
     tabs: () => tree.props.children[0],
     delay: () => runTask(timers, ({ ms }) => ms === 250),
     idle: () => runTask(nativeIdle ? idleTasks : timers, ({ ms }) => nativeIdle || ms === 32),
@@ -187,7 +192,7 @@ test('A swipe started before the warmup delay keeps cold tabs unmounted until re
   app.cleanup()
 })
 
-test('A cold tab restores saved scrolling only once its contents are mounted', () => {
+test('A warmed tab restores its preview without starting a deadline while hidden', () => {
   const app = mountStack({ savedTop: 800 })
   const scroller = app.renderTab('/search')
   assert.deepEqual(app.restored, [], 'An empty shell started scroll restoration before it could show the saved position')
@@ -195,7 +200,37 @@ test('A cold tab restores saved scrolling only once its contents are mounted', (
   app.idle()
   assert.equal(app.renderTab('/search'), scroller)
   assert.deepEqual(app.restored, [800])
+  assert.equal(app.restoreOptions[0].timeoutMs, 0, 'A hidden tab started a restore timeout before pagination could run')
   assert.equal(scroller.scrollTop, 800)
+  app.navigate('/search')
+  app.renderTab('/search')
+  assert.deepEqual(app.restored, [800])
+  app.cleanup()
+})
+
+test('A deep restoration pauses when hidden and resumes its original target on return', () => {
+  const app = mountStack({ savedTop: 8000, restorePending: true })
+  app.navigate('/liked')
+  const scroller = app.renderTab('/liked')
+  assert.deepEqual(app.restored, [8000])
+  // Пока пришла только первая страница, фактическая прокрутка короче цели.
+  scroller.scrollTop = 1500
+  app.navigate('/search')
+  app.renderTab('/liked')
+  assert.deepEqual(app.restored, [8000, 8000])
+  assert.equal(app.restoreOptions.at(-1).timeoutMs, 0)
+  app.navigate('/liked')
+  app.renderTab('/liked')
+  assert.deepEqual(app.restored, [8000, 8000, 8000])
+  assert.equal(app.restoreOptions.at(-1).timeoutMs, 10000)
+  app.finishRestore()
+  scroller.scrollTop = 7600
+  app.navigate('/search')
+  app.renderTab('/liked')
+  app.navigate('/liked')
+  app.renderTab('/liked')
+  assert.equal(scroller.scrollTop, 7600)
+  assert.deepEqual(app.restored, [8000, 8000, 8000], 'A completed restoration ran again and overwrote manual scrolling')
   app.cleanup()
 })
 

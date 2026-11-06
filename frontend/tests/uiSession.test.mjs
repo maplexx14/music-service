@@ -109,6 +109,22 @@ test('backgrounding flushes the latest search; reopening restores query, filter 
   assert.equal(restored.cachedQuery, 'Muse')
 })
 
+test('continuous scrolling keeps persistence off the interaction and saves the final position', async () => {
+  const app = await environment(authStorage())
+  const scroll = await app.scroll()
+  const location = { pathname: '/liked', key: 'liked' }
+  scroll.rememberScroll(location, 100)
+  const firstTimer = app.timers.keys().next().value
+  for (let top = 110; top <= 900; top += 10) scroll.rememberScroll(location, top)
+  assert.equal(app.timers.has(firstTimer), false, 'An earlier write would serialize the session during scrolling')
+  assert.equal(app.timers.size, 1)
+  assert.equal(app.storage.has('bolt-ui-session-v1'), false)
+  assert.equal(scroll.savedScroll(location), 900)
+  app.timers.values().next().value()
+  const reopened = await environment(app.storage)
+  assert.equal((await reopened.scroll()).savedScroll(location), 900)
+})
+
 test('switching accounts and logout clear private context and pending writes', async () => {
   const app = await environment(authStorage())
   const search = await app.search()
@@ -181,6 +197,26 @@ test('scroll restores after delayed content and stops when the user takes over',
   app.observers[1].callback()
   app.mutations[1].callback()
   assert.equal(top, 40)
+})
+
+test('a hidden tab can await delayed content without expiring its saved scroll target', async () => {
+  const app = await environment(authStorage())
+  const scroll = await app.scroll()
+  const element = new EventTarget()
+  element.children = [{}]
+  let top = 0
+  let maxTop = 0
+  Object.defineProperty(element, 'scrollTop', { get: () => top, set: (value) => { top = Math.min(maxTop, value) } })
+  const cancel = scroll.restoreScrollPosition(element, 8000, () => {}, { timeoutMs: 0 })
+  assert.equal(app.timers.size, 0)
+  maxTop = 1000
+  app.mutations[0].callback()
+  assert.equal(top, 1000)
+  maxTop = 9000
+  app.mutations[0].callback()
+  assert.equal(top, 8000)
+  assert.equal(app.observers[0].disconnected, true)
+  cancel()
 })
 
 test('a late prefetch from the previous account cannot repopulate the new cache', async () => {

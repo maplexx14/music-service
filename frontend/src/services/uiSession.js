@@ -40,7 +40,11 @@ export function readUiSession(key) {
 export function writeUiSession(key, value) {
   if (userId === null) return
   values[key] = value
-  if (timer === null) timer = setTimeout(flushUiSession, 800)
+  // Скролл обновляет память каждый кадр. Сериализация всей сессии и
+  // синхронная запись в localStorage — только после паузы, иначе длинный
+  // свайп прерывался такой записью каждые 800 мс. Уход в фон сохраняет сразу.
+  clearTimeout(timer)
+  timer = setTimeout(flushUiSession, 800)
 }
 
 export function setUiSessionUser(nextUserId) {

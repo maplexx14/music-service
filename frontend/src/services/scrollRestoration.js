@@ -26,7 +26,7 @@ export function savedScroll(location) {
 // Данные и обложки могут увеличить экран после первого кадра. Ждём роста
 // через ResizeObserver, без работы на каждом кадре. Любой ручной жест отменяет
 // восстановление, чтобы поздний ответ сети не перебил прокрутку пользователя.
-export function restoreScrollPosition(el, target, onComplete = () => {}) {
+export function restoreScrollPosition(el, target, onComplete = () => {}, { timeoutMs = 10000 } = {}) {
   let stopped = false
   let observer
   let mutations
@@ -62,7 +62,10 @@ export function restoreScrollPosition(el, target, onComplete = () => {}) {
     })
     mutations.observe(el, { childList: true, subtree: true })
   }
-  timer = setTimeout(stop, 10000)
+  // У прогретой скрытой вкладки данные ещё могут заменить спиннер, но
+  // пагинация включится только при открытии. Наблюдаем рост без дедлайна;
+  // активный экран запускает обычное ограниченное ожидание.
+  if (timeoutMs > 0) timer = setTimeout(stop, timeoutMs)
   apply()
   return stop
 }

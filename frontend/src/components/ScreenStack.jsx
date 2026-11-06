@@ -57,12 +57,13 @@ const isDetailId = (id) => id.startsWith('detail:')
 // возвращает туда, откуда ушёл, вперёд — сверху. Живым экранам это не
 // нужно — их контейнер помнит позицию сам; нужно экрану, созданному заново
 // (глубже двух вложенных или после перезагрузки).
-function useScrollRestoration(scrollerRef, location, ready) {
+function useScrollRestoration(scrollerRef, location, ready, active) {
   const navigationType = useNavigationType()
   const locationRef = useRef(location)
   const pathRef = useRef(null)
   const cancelRestoreRef = useRef(null)
   const restoringRef = useRef(false)
+  const pendingTopRef = useRef(null)
 
   useEffect(() => {
     const el = scrollerRef.current
@@ -87,21 +88,37 @@ function useScrollRestoration(scrollerRef, location, ready) {
     const samePath = pathRef.current === path
     locationRef.current = location
     pathRef.current = path
-    // Смена query/hash на том же экране (фильтры, разделы) скролл не трогает.
-    if (!el || samePath) return
+    if (!el) return
     cancelRestoreRef.current?.()
     cancelRestoreRef.current = null
-    const saved = firstMount || navigationType === 'POP' ? savedScroll(location) : 0
-    // Новый вложенный экран открывается сверху. Возврат и новый запуск
-    // восстанавливают позицию; вкладки остаются смонтированными.
-    const restore = navigationType === 'POP' || isTabRoot(location.pathname) || (firstMount && location.state?.__boltResume)
-    if (!saved || !restore) {
-      el.scrollTop = 0
-      return
+    if (!samePath) {
+      const saved = firstMount || navigationType === 'POP' ? savedScroll(location) : 0
+      // Новый вложенный экран открывается сверху. Возврат и новый запуск
+      // восстанавливают позицию; вкладки остаются смонтированными.
+      const restore = navigationType === 'POP' || isTabRoot(location.pathname) || (firstMount && location.state?.__boltResume)
+      pendingTopRef.current = saved && restore ? saved : null
+      if (pendingTopRef.current === null) {
+        restoringRef.current = false
+        el.scrollTop = 0
+        return
+      }
     }
+    const target = pendingTopRef.current
+    if (target === null) return
     restoringRef.current = true
-    cancelRestoreRef.current = restoreScrollPosition(el, saved, () => { restoringRef.current = false })
-  }, [location.key, ready])
+    // Сосед под пальцем встаёт на доступную позицию, даже если данные
+    // заменили спиннер уже после прогрева. Дедлайн запускаем при открытии:
+    // скрытая вкладка не догружает страницы до далёкой сохранённой строки.
+    let cancelled = false
+    const stop = restoreScrollPosition(el, target, () => {
+      restoringRef.current = false
+      if (!cancelled) pendingTopRef.current = null
+    }, { timeoutMs: active ? 10000 : 0 })
+    cancelRestoreRef.current = () => {
+      cancelled = true
+      stop()
+    }
+  }, [location.key, ready, active])
 
   useEffect(() => () => {
     cancelRestoreRef.current?.()
@@ -131,7 +148,7 @@ const Screen = memo(function Screen({ id, location, active, ready = true, isMobi
   // под часами нет: тёмная полоса резала шапки с обложкой во весь верх.
   // Главной отступ не нужен — её hero заходит под статус-бар.
   const safeTop = isMobile && path !== '/'
-  useScrollRestoration(scrollerRef, location, ready)
+  useScrollRestoration(scrollerRef, location, ready, active)
 
   return (
     <div

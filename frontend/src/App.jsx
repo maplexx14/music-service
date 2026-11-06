@@ -48,20 +48,6 @@ const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
 const Settings = lazyWithReload(() => import('./pages/Settings'))
 const Admin = lazyWithReload(() => import('./pages/Admin'))
 
-// Экраны основной навигации качаем в простое после входа: переход на экран,
-// чей чанк ещё в сети, стоял бы до таймаута и въезжал спиннером.
-const PRELOADED_SCREENS = [Home, Search, Playlists, PlaylistDetail, ExternalPlaylist, Album, Artist, LikedSongs, Settings]
-
-function preloadScreensWhenIdle() {
-  const run = () => PRELOADED_SCREENS.forEach((screen) => screen.preload())
-  if (typeof window.requestIdleCallback === 'function') {
-    const id = window.requestIdleCallback(run, { timeout: 4000 })
-    return () => window.cancelIdleCallback(id)
-  }
-  const timer = window.setTimeout(run, 1500)
-  return () => window.clearTimeout(timer)
-}
-
 // Залогиненного со страницы входа — туда, откуда его на неё отправили.
 function AfterLoginRedirect() {
   const [searchParams] = useSearchParams()
@@ -202,8 +188,6 @@ function App() {
     ),
     [isAdmin],
   )
-  useEffect(() => (isAuthenticated ? preloadScreensWhenIdle() : undefined), [isAuthenticated])
-
   return (
     // v7_startTransition: переход на вкладку, чей чанк ещё грузится, держит
     // прежнюю страницу на экране вместо вспышки спиннера на месте контента.

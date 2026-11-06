@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import { useIntersectionLoad } from './useIntersectionLoad'
 
 // Сколько карточек рисуем сразу и сколько добавляем за шаг догрузки.
 const DEFAULT_BATCH = 12
@@ -51,19 +52,9 @@ export function useLazyBatch(
     setVisibleCount(batchSize)
   }
 
-  useEffect(() => {
-    if (!sentinel || visibleCount >= items.length) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((count) => Math.min(count + batchSize, items.length))
-        }
-      },
-      { root: rootRef?.current ?? null, rootMargin },
-    )
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [sentinel, items, visibleCount, batchSize, rootRef, rootMargin])
+  useIntersectionLoad(sentinel, () => {
+    setVisibleCount((count) => Math.min(count + batchSize, items.length))
+  }, { enabled: visibleCount < items.length, rootRef, rootMargin, revision: visibleCount })
 
   return {
     visibleItems: items.slice(0, visibleCount),
