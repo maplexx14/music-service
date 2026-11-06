@@ -26,6 +26,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
   let holds = 0
   let timerId = 0
   let capturedPointer = null
+  let pillAnimation = null
   const hookRefs = []
   let refIndex = 0
   const effects = {}
@@ -74,11 +75,28 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
       const ready = new Promise((yes, no) => { resolveReady = yes; rejectReady = no })
       const animation = {
         frames, options, finished, ready, pending: true, cancelled: false, playState: 'running',
+        effect: {
+          setKeyframes(next) { animation.frames = next },
+          updateTiming(next) { animation.options = { ...animation.options, ...next } },
+        },
         get startTime() { return startTime },
         set startTime(value) { startTime = value; this.playState = 'running'; this.pending = false; resolveReady() },
         get currentTime() { return this.playState === 'running' && startTime !== null ? timeline.currentTime - startTime : heldTime },
-        set currentTime(value) { heldTime = value },
-        pause() { heldTime = this.currentTime; startTime = null; this.playState = 'paused'; this.pending = true },
+        set currentTime(value) {
+          heldTime = value
+          // Seeking completes a pending pause synchronously in WAAPI.
+          if (this.playState === 'paused' && this.pending) {
+            this.pending = false
+            resolveReady()
+          }
+        },
+        pause() {
+          if (this.playState === 'paused') return
+          heldTime = this.currentTime
+          startTime = null
+          this.playState = 'paused'
+          this.pending = true
+        },
         play() { this.playState = 'running'; this.pending = true },
         prepare(browserStartTime) {
           if (!this.pending) return
@@ -86,7 +104,7 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
           this.pending = false
           resolveReady()
         },
-        finish() { if (startTime === null) startTime = timeline.currentTime - options.duration; this.pending = false; this.playState = 'finished'; resolveReady(); resolve() },
+        finish() { if (startTime === null) startTime = timeline.currentTime - this.options.duration; this.pending = false; this.playState = 'finished'; resolveReady(); resolve() },
         cancel() { this.cancelled = true; this.pending = false; this.playState = 'idle'; rejectReady(new Error('Animation cancelled')); reject(new Error('Animation cancelled')) },
       }
       this.animations.push(animation)
@@ -155,10 +173,18 @@ function mountSwipe({ reduced = false, hasNext = true, hasPrev = false, hasUnder
     onPrev: hasPrev ? () => navigation.push('/previous') : null,
     onPan: (...args) => {
       pans.push(args)
-      const motion = args[3]
-      if (hasPill && motion?.duration) {
-        const animation = pill.animate(motion.samples, { duration: motion.duration })
-        motion.registerAnimation?.(animation)
+      if (!hasPill) return
+      const [x, width, , motion] = args
+      const transform = value => `translateX(${value * 100}%)`
+      if (!motion?.drag && !motion?.duration) {
+        pillAnimation?.cancel()
+        pillAnimation = null
+      }
+      pill.style.transform = x === null ? '' : transform(-x / width)
+      if (motion?.drag) {
+        pillAnimation = motion.drag(pill, -x / width, 4, transform)
+      } else if (motion?.duration) {
+        pillAnimation = motion.animate(pill, motion.samples.map(({ value, offset }) => ({ transform: transform(-value / width), offset })))
       }
     },
     onCommit: (direction) => commits.push(direction),
@@ -232,7 +258,7 @@ test('Pointer release starts the settle without waiting for a compatible touchen
   app.pointer('pointerup', 170, 55, { paint: false })
   assert.equal(app.capturedPointer, null)
   assert.equal(app.screen.animations.length, 1)
-  assert.equal(app.screen.animations[0].pending, true)
+  assert.equal(app.screen.animations[0].pending, false, 'The prepared effect became pending again on release')
   assert.equal(app.pendingFrames, 0)
   assert.equal(app.phase, 'prepare')
   app.paint(64)
@@ -290,7 +316,7 @@ test('Moving implicit pointer capture from a touched child to the swipe containe
   app.pointer('lostpointercapture', 280, 30, { target: app.screen })
   app.pointer('pointermove', 200, 55)
   assert.equal(app.screen.style.transform, 'translate3d(-100px, 0, 0)')
-  assert.equal(app.screen.animations.length, 0)
+  assert.equal(app.screen.animations.at(-1).playState, 'paused')
   assert.equal(app.capturedPointer, 1)
   app.pointer('pointerup', 200, 56)
   assert.equal(app.screen.animations[0].frames.at(-1).transform, 'translate3d(-390px, 0, 0)')
@@ -596,6 +622,53 @@ test('Release discards unpainted movements and hands the last visible velocity t
   app.cleanup()
 })
 
+test('A tab commit or return reuses the prepared screen and indicator effects from their last displayed positions', async () => {
+  for (const [distance, releasedAt, committed] of [[100, 42, true], [30, 200, false]]) {
+    const app = mountSwipe({ hasPill: true })
+    app.touch('start', 300, 200, 0)
+    app.touch('move', 300 - distance, 200, 40)
+    app.paint(41)
+    const exit = app.screen.animations[0]
+    const enter = app.under.animations[0]
+    const pill = app.pill.animations[0]
+    assert.equal(exit.playState, 'paused')
+    assert.equal(enter.playState, 'paused')
+    assert.equal(pill.playState, 'paused')
+    const outgoing = app.screen.style.transform
+    const incoming = app.under.style.transform
+    const indicator = app.pill.style.transform
+    app.touch('end', 300 - distance, 200, releasedAt, { paint: false })
+    assert.equal(app.screen.animations.length, 1, 'Release allocated another outgoing screen animation')
+    assert.equal(app.under.animations.length, 1, 'Release allocated another incoming screen animation')
+    assert.equal(app.pill.animations.length, 1, 'Release allocated another indicator animation')
+    assert.equal(exit.cancelled, false)
+    assert.equal(enter.cancelled, false)
+    assert.equal(pill.cancelled, false)
+    assert.equal(exit.currentTime, 0)
+    assert.equal(enter.currentTime, 0)
+    assert.equal(pill.currentTime, 0)
+    assert.equal(exit.frames[0].transform, outgoing)
+    assert.equal(enter.frames[0].transform, incoming)
+    assert.equal(pill.frames[0].transform, indicator)
+    assert.ok(exit.options.duration < 450)
+    await flushAnimations()
+    assert.equal(exit.playState, 'running')
+    assert.equal(pill.playState, 'running', 'The prepared indicator delayed playback until another display frame')
+    assert.deepEqual(app.navigation, [])
+    exit.finish()
+    enter.finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, [], 'Route changed before the indicator finished')
+    pill.finish()
+    await flushAnimations()
+    assert.deepEqual(app.navigation, committed ? ['/search'] : [])
+    if (committed) app.commit()
+    assert.equal(app.holds, 0)
+    assert.ok([exit, enter, pill].every(animation => animation.cancelled), 'A prepared effect survived gesture cleanup')
+    app.cleanup()
+  }
+})
+
 test('A flick completed before its first display frame reveals the cached destination and animates from rest', async () => {
   const app = mountSwipe()
   app.touch('start', 300, 200, 0)
@@ -763,12 +836,14 @@ test('Regrabbing a return holds its visible position until the continued drag fr
 })
 
 test('Reduced motion commits immediately without waiting for an invisible animation', () => {
-  const app = mountSwipe({ reduced: true })
+  const app = mountSwipe({ reduced: true, hasPill: true })
   app.touch('start', 300)
   app.touch('move', 170, 200, 50)
   app.touch('end', 170, 200, 51)
   assert.deepEqual(app.navigation, ['/search'])
   assert.equal(app.screen.animations.length, 0)
+  assert.equal(app.under.animations.length, 0)
+  assert.equal(app.pill.animations.length, 0)
   app.commit()
   assert.equal(app.timers.size, 0)
   assert.equal(app.holds, 0)
@@ -979,7 +1054,8 @@ test('Starting a settle keeps the live styles at the release position while comp
 test('Screens and indicator start at time zero even when WebKit supplies an old playback start time', async () => {
   const app = mountSwipe({ hasPill: true })
   app.touch('start', 300, 200, 0)
-  app.touch('move', 200, 200, 40)
+  // A flick released before its first frame has no prepared drag effects.
+  app.touch('move', 200, 200, 40, { paint: false })
   app.touch('end', 200, 200, 41, { paint: false })
   const animations = [app.screen.animations[0], app.under.animations[0], app.pill.animations[0]]
   for (const animation of animations) {
@@ -1005,7 +1081,7 @@ test('Screens and indicator start at time zero even when WebKit supplies an old 
 test('A late compositor layer holds both screens and the indicator at release until all can start together', async () => {
   const app = mountSwipe({ hasPill: true })
   app.touch('start', 300, 200, 0)
-  app.touch('move', 200, 200, 40)
+  app.touch('move', 200, 200, 40, { paint: false })
   app.touch('end', 200, 200, 41, { paint: false })
   const exit = app.screen.animations[0]
   const enter = app.under.animations[0]
@@ -1044,7 +1120,7 @@ test('Unmount before playback cancels preparation even when its ready callback i
   for (const readyQueued of [false, true]) {
     const app = mountSwipe({ hasPill: true })
     app.touch('start', 300, 200, 0)
-    app.touch('move', 200, 200, 40)
+    app.touch('move', 200, 200, 40, { paint: false })
     app.touch('end', 200, 200, 41, { paint: false })
     assert.equal(app.screen.animations[0].pending, true)
     if (readyQueued) app.paint(48)

@@ -223,8 +223,10 @@ function Layout({ renderRoutes }) {
   const handleSwipePan = (x, width, transition, motion) => {
     const pill = navPillRef.current
     if (!pill) return
-    navPillAnimationRef.current?.cancel()
-    navPillAnimationRef.current = null
+    if (x === null || tabIndex < 0 || (!motion?.drag && !motion?.duration)) {
+      navPillAnimationRef.current?.cancel()
+      navPillAnimationRef.current = null
+    }
     if (x === null || tabIndex < 0) {
       // Коммит уже держит капсулу на месте. Включение CSS-перехода здесь
       // заставляет WebKit повторно доезжать от последнего кадра WAAPI.
@@ -235,14 +237,15 @@ function Layout({ renderRoutes }) {
     const pos = Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - x / width))
     pill.style.transition = transition
     pill.style.transform = `translateX(${pos * 100}%)`
-    if (motion?.duration) {
+    if (motion?.drag) {
+      navPillAnimationRef.current = motion.drag(pill, pos, MOBILE_NAV.length, value => `translateX(${value * 100}%)`)
+    } else if (motion?.duration) {
       // Те же кадры пружины, что у экранов: отдельный CSS-переход расходился
       // с ними по скорости при отпускании и по моменту остановки.
-      navPillAnimationRef.current = pill.animate(motion.samples.map(({ value, offset }) => ({
+      navPillAnimationRef.current = motion.animate(pill, motion.samples.map(({ value, offset }) => ({
         transform: `translateX(${Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - value / width)) * 100}%)`,
         offset,
-      })), { duration: motion.duration, easing: 'linear', fill: 'both' })
-      motion.registerAnimation?.(navPillAnimationRef.current)
+      })))
     }
   }
   useSwipeNavigation(mainRef, {

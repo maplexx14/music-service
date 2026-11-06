@@ -100,7 +100,8 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
   // onCommit(dir) — палец отпущен и переход решён: нижнее меню переключается
   // сразу, не дожидаясь доезда экранов и коммита роутера; null отменяет выбор.
   // onPan(x, width, transition, motion) — экран под пальцем сдвинут на x px;
-  // motion передаёт капсуле меню те же кадры пружины; onPan(null) —
+  // motion готовит капсулу меню при протяжке и передаёт ей те же кадры
+  // пружины при отпускании; onPan(null) —
   // жест закончен, сдвиг снят.
   actionsRef.current = {
     screenKey,
@@ -186,9 +187,13 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       const animations = pan.animations
       pan.animations = null
       animations?.forEach((animation) => animation.cancel())
+      pan.dragAnimations?.forEach((animation) => animation.cancel())
+      pan.dragAnimations = null
     }
 
     const clearScreen = (el) => {
+      pan?.dragAnimations?.get(el)?.cancel()
+      pan?.dragAnimations?.delete(el)
       const st = el.style
       st.transition = ''
       st.transform = ''
@@ -235,22 +240,48 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
       pan.screen.style.boxShadow = shadow ? `${-dir * 12}px 0 32px rgba(0, 0, 0, 0.55)` : ''
     }
 
-    const setOffset = (x, motion = null) => {
-      const st = pan.screen.style
+    // Вкладка остаётся на одной WAAPI-анимации от протяжки до доезда.
+    // Пока палец движется, её время — координата, а не часы: каждый кадр
+    // выставляется напрямую. Отпускание заменяет траекторию у уже готовой
+    // анимации, без создания нового эффекта поверх живого transform.
+    const setDragOffset = (el, value, range, transform = transformAt) => {
+      if (!pan.dragAnimations) return
+      let animation = pan.dragAnimations.get(el)
+      if (!animation) {
+        animation = el.animate([
+          { transform: transform(-range) },
+          { transform: transform(range) },
+        ], { duration: range * 2, easing: 'linear', fill: 'both' })
+        animation.pause()
+        // Жест может закончиться отменой ещё до появления доезда.
+        animation.ready.catch(() => {})
+        animation.finished.catch(() => {})
+        pan.dragAnimations.set(el, animation)
+      }
+      animation.currentTime = value + range
+      return animation
+    }
+    const dragMotion = { drag: setDragOffset }
+
+    const setScreenOffset = (el, x) => {
+      const st = el.style
       st.transition = 'none'
       st.transform = transformAt(x)
+      setDragOffset(el, x, pan.width * 3)
+    }
+
+    const setOffset = (x, motion = null) => {
+      setScreenOffset(pan.screen, x)
       pan.offset = x
       // Довод за край ради тени (SHADOW_REACH) — не сдвиг вкладки: индикатор
       // таб-бара проскочил бы свою ячейку.
-      actionsRef.current.onPan?.(Math.sign(x) * Math.min(Math.abs(x), pan.width), pan.width, 'none', motion)
+      actionsRef.current.onPan?.(Math.sign(x) * Math.min(Math.abs(x), pan.width), pan.width, 'none', motion ?? (pan.dragAnimations ? dragMotion : null))
       if (pan.under) {
         // Вкладки едут рядом, вложенный нижний экран — с параллаксом.
-        pan.under.style.transition = 'none'
-        pan.under.style.transform = transformAt(underOffset(x))
+        setScreenOffset(pan.under, underOffset(x))
       }
       if (pan.trailing) {
-        pan.trailing.screen.style.transition = 'none'
-        pan.trailing.screen.style.transform = transformAt(x + pan.trailing.shift)
+        setScreenOffset(pan.trailing.screen, x + pan.trailing.shift)
       }
     }
 
@@ -259,34 +290,51 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
     // анимация, без паузы таймера после визуальной остановки.
     const animateOffset = (x, motion, done) => {
       const finished = pan
+      const prepared = pan.dragAnimations
+      pan.dragAnimations = null
       cancelAnimations()
       const animations = []
-      const registerAnimation = (animation) => {
+      const options = { duration: motion.duration, easing: 'linear', fill: 'both' }
+      const animateTransform = (el, keyframes) => {
+        let animation = prepared?.get(el)
+        prepared?.delete(el)
+        if (animation && animation.playState !== 'idle') {
+          // Сначала сбрасываем часы: прежняя координата может быть больше
+          // новой длительности и преждевременно завершить finished.
+          animation.currentTime = 0
+          animation.effect.setKeyframes(keyframes)
+          animation.effect.updateTiming(options)
+        } else {
+          animation = el.animate(keyframes, options)
+        }
         animation.pause()
         animations.push(animation)
+        return animation
       }
-      // Пока WAAPI ждёт первый кадр, живые стили остаются под пальцем.
+      // Капсула тоже использует подготовленный эффект: новая анимация при
+      // отпускании задерживала общий запуск, хотя оба экрана уже были готовы.
       // Конечные стили выставляем только после доезда, перед коммитом роутера.
-      setOffset(motion.duration ? motion.samples[0].value : x, { ...motion, registerAnimation })
+      setOffset(motion.duration ? motion.samples[0].value : x, { ...motion, animate: animateTransform })
       if (!motion.duration) {
+        prepared?.forEach((animation) => animation.cancel())
         done()
         return
       }
       setSwipePhase('prepare')
-      const options = { duration: motion.duration, easing: 'linear', fill: 'both' }
-      registerAnimation(pan.screen.animate(motion.samples.map(({ value, offset }) => ({
+      animateTransform(pan.screen, motion.samples.map(({ value, offset }) => ({
         transform: transformAt(value), offset,
-      })), options))
+      })))
       if (pan.under) {
-        registerAnimation(pan.under.animate(motion.samples.map(({ value, offset }) => ({
+        animateTransform(pan.under, motion.samples.map(({ value, offset }) => ({
           transform: transformAt(underOffset(value)), offset,
-        })), options))
+        })))
       }
       if (pan.trailing) {
-        registerAnimation(pan.trailing.screen.animate(motion.samples.map(({ value, offset }) => ({
+        animateTransform(pan.trailing.screen, motion.samples.map(({ value, offset }) => ({
           transform: transformAt(value + pan.trailing.shift), offset,
-        })), options))
+        })))
       }
+      prepared?.forEach((animation) => animation.cancel())
       pan.animations = animations
       // В WebKit ready может прийти со startTime из момента отпускания:
       // подготовка слоёв уже «съела» первые кадры пружины. Держим время на
@@ -505,6 +553,9 @@ export function useSwipeNavigation(containerRef, { enabled, screenKey, onBack, o
           }
           screen.style.willChange = 'transform'
           screen.style.zIndex = '2'
+        }
+        if (pan.tabSwipe && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+          pan.dragAnimations = new Map()
         }
         pan.dragSamples = [{ x: pan.offset, t: g.startT }]
         pan.dragVelocity = 0
