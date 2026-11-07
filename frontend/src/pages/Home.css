@@ -20,8 +20,8 @@
   overflow: hidden;
 }
 
-/* Поток и вкладки заполняют первый экран. Мини-плеер перекрывает вкладки,
-   не меняя высоту потока; полки начинаются после прокрутки. */
+/* На десктопе поток и вкладки заполняют первый экран. На мобильных
+   компактный блок оставляет место для полок ниже переключателя. */
 .page-container.home-page {
   padding-top: var(--page-padding, 32px);
 }
@@ -801,10 +801,9 @@
   .home-intro {
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0;
-    height: calc(100vh - var(--main-pad-top, 0px));
-    height: calc(100dvh - var(--main-pad-top, 0px));
-    /* Оставляем место только для навигации: мини-плеер лежит над вкладками. */
-    padding-bottom: calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px);
+    height: 75vh;
+    height: 75svh;
+    padding-bottom: 0;
     margin-bottom: 20px;
   }
 
@@ -861,8 +860,8 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    /* Градиент виден в скруглённых углах шапки. Нижнюю навигацию
-       учитывает общий контейнер, поэтому внутри потока второго отступа нет. */
+    /* Градиент виден в скруглённых углах шапки. Высоту потока
+       задаёт общий контейнер вместе с шапкой и переключателем. */
     padding: 0;
     margin: -24px -16px 0;
     width: calc(100% + 32px);
@@ -1128,7 +1127,8 @@
     }
 
     .hero-section.has-vinyl {
-      --disc-size: min(420px, 86vw, 62cqh);
+      /* На коротких экранах оставляем место заголовку и кнопке настроек. */
+      --disc-size: min(420px, 86vw, 62cqh, max(84px, calc(100cqh - 176px)));
     }
 
   }
