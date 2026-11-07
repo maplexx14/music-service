@@ -20,7 +20,7 @@ import Spinner from '../components/Spinner'
 import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
-import HeroDisc from '../components/HeroDisc'
+import FlowDiscArc from '../components/FlowDiscArc'
 import HeroHearts from '../components/HeroHearts'
 import TasteAvatar from '../components/TasteAvatar'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
@@ -503,10 +503,7 @@ function Home() {
           </Link>
         </div>
         <div
-          // has-vinyl — то же условие, при котором HeroDisc рисует пластинку
-          // (есть трек и включён винил). Классом, а не :has(): в Android
-          // WebView до 105 его нет, и заголовок оставался на диске.
-          className={`hero-section${vinylDisc && currentTrackId != null ? ' has-vinyl' : ''}`}
+          className={`hero-section${vinylDisc ? ' has-vinyl' : ''}`}
           // Палитра под обложку текущего трека: WebGL-градиент получает её
           // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
           style={{
@@ -543,9 +540,7 @@ function Home() {
                   centerX={0}
                   centerY={0}
                   zoom={0.9}
-                  // Диск, а без него (ничего не играет) — кнопка потока:
-                  // querySelector берёт первый по документу, диск идёт раньше.
-                  rippleFrom=".hero-disc, .wave-title, .wave-gif-button"
+                  rippleFrom=".flow-disc-slot.is-current .hero-disc"
                   rippleStrength={1}
                   rippleKey={currentTrackId != null ? 1 : 0}
                   active={isWavePlaying}
@@ -553,22 +548,17 @@ function Home() {
               </Suspense>
             )}
           </div>
-          {/* Диск с обложкой текущего трека — слой между градиентом и кнопкой
-              потока: кнопка остаётся в центре диска, как на макете. Сам диск
-              подписан на currentTrack, главная от его тиков не перерисовывается. */}
-          <HeroDisc />
+          <FlowDiscArc tracks={recommendations.tracks} playing={isWavePlaying} />
           <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
             <div className="wave-center">
-              {/* Крупный заголовок над кнопкой. Висит абсолютно, чтобы сама
-                  кнопка оставалась ровно в центре диска. Для скринридеров
-                  название несёт aria-label кнопки. */}
               <div className="wave-heading" aria-hidden="true">поток</div>
               {waveGif ? (
                 <button
                   type="button"
                   onClick={handleWaveClick}
                   className="wave-gif-button"
-                  aria-label="поток рекомендаций"
+                  aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
+                  aria-busy={flowStarting || undefined}
                   {...waveIntentHandlers}
                 >
                   <img
@@ -607,9 +597,6 @@ function Home() {
               )}
             </div>
           </div>
-          {/* Настройка потока — внизу hero, вне потока вёрстки: центр диска не сдвигается. */}
-          {/* Одна иконка не объясняла, куда ведёт: подпись + та же иконка,
-              что у раздела «Рекомендации» в настройках. */}
           <Link to="/settings/wave" className="wave-settings-link">
             <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
             Настроить поток

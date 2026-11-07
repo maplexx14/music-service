@@ -1,0 +1,103 @@
+.flow-disc-arc {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.flow-disc-slot {
+  position: absolute;
+  inset: 0;
+  transform: translate(var(--slot-x), var(--slot-y));
+  opacity: var(--slot-opacity);
+  transition: transform 280ms cubic-bezier(0.65, 0, 0.35, 1), opacity 200ms ease;
+}
+
+.flow-disc-position {
+  position: absolute;
+  left: 50%;
+  /* Side slots move down by 47%, leaving the current record in its original position. */
+  top: 53%;
+  width: var(--disc-size);
+  height: var(--disc-size);
+  transform: translate(-50%, -50%) scale(var(--slot-scale));
+  transition: transform 280ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.flow-disc-position .hero-disc {
+  inset: 0;
+  margin: 0;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+.flow-disc-position .hero-disc.is-preview {
+  cursor: default;
+  touch-action: auto;
+}
+
+.flow-disc-position .is-preview .hero-disc-spin {
+  will-change: auto;
+}
+
+.flow-disc-slot.is-current .hero-disc:not(.is-preview) {
+  pointer-events: auto;
+}
+
+.flow-disc-indicator {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: min(38px, calc(var(--disc-size) * 0.2));
+  height: min(38px, calc(var(--disc-size) * 0.2));
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.46);
+  color: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.flow-disc-indicator i {
+  width: 3px;
+  height: 14px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: scaleY(0.35);
+}
+
+.flow-disc-indicator i:nth-child(2) { transform: scaleY(1); }
+.flow-disc-indicator i:nth-child(3) { transform: scaleY(0.65); }
+
+.flow-disc-arc.is-playing .flow-disc-indicator i {
+  animation: flow-disc-level 850ms ease-in-out infinite alternate;
+}
+
+.flow-disc-arc.is-playing .flow-disc-indicator i:nth-child(2) { animation-delay: -300ms; }
+.flow-disc-arc.is-playing .flow-disc-indicator i:nth-child(3) { animation-delay: -550ms; }
+
+.screen:not([data-active]) .flow-disc-indicator i {
+  animation-play-state: paused;
+}
+
+@keyframes flow-disc-level {
+  from { transform: scaleY(0.3); }
+  to { transform: scaleY(1); }
+}
+
+@media (max-width: 768px) {
+  .flow-disc-slot { transform: translate(var(--slot-mobile-x), var(--slot-y)); }
+}
+
+@media (min-width: 769px) {
+  .flow-disc-slot:not(.is-current) .hero-disc { filter: blur(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-disc-slot,
+  .flow-disc-position { transition: opacity 150ms ease; }
+  .flow-disc-arc.is-playing .flow-disc-indicator i { animation: none; }
+}

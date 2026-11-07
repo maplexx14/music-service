@@ -48,14 +48,15 @@ function clamp(value, min, max) {
 //
 // Живёт отдельным компонентом, потому что подписан на currentTrack: главная
 // (со всеми полками карточек) на смену трека не перерисовывается.
-function HeroDisc() {
-  const currentTrack = usePlayerStore((s) => s.currentTrack)
+function HeroDisc({ track, preview = false }) {
+  const playingTrack = usePlayerStore((s) => preview ? null : s.currentTrack)
+  const currentTrack = preview ? track : playingTrack
   const heavyCover = usePlayerStore(
-    (s) => s.currentTrack?.id != null && s.heavyCoverTrackId === s.currentTrack.id
+    (s) => !preview && s.currentTrack?.id != null && s.heavyCoverTrackId === s.currentTrack.id
   )
   // duration — только для первичной отрисовки aria-атрибутов; в кадре
   // актуальное значение читается из getState(), чтобы не тащить подписку.
-  const duration = usePlayerStore((s) => s.duration)
+  const duration = usePlayerStore((s) => preview ? 0 : s.duration)
   const vinyl = useUiSettingsStore((s) => s.vinylDisc)
   const powerSave = usePowerSave()
   const rootRef = useRef(null)
@@ -73,7 +74,7 @@ function HeroDisc() {
   // Вращение перезапускается только на смене трека: стор заменяет объект
   // трека и посреди игры (уточнённые данные), а перезапуск берёт позицию из
   // стора, отстающую до секунды, — диск дёргался бы назад.
-  const trackKey = currentTrack?.id ?? currentTrack
+  const trackKey = preview ? null : currentTrack?.id ?? currentTrack
 
   // Вращение — Web Animation от текущего угла до полного оборота за остаток
   // трека. Её крутит композитор, а не главный поток: раньше угол писал
@@ -311,20 +312,21 @@ function HeroDisc() {
   return (
     <div
       ref={rootRef}
-      className={`hero-disc${vinyl ? ' is-vinyl' : ''}${isDragging ? ' is-dragging' : ''}`}
+      className={`hero-disc${vinyl ? ' is-vinyl' : ''}${preview ? ' is-preview' : ''}${isDragging ? ' is-dragging' : ''}`}
       // Поворот диска — не pull-to-refresh: жест не должен тянуть обновление
       // главной, когда страница проскроллена в самый верх.
       data-no-pull=""
-      role="slider"
-      tabIndex={0}
-      aria-label="Перемотка трека"
-      aria-valuemin={0}
-      aria-valuemax={Math.floor(total)}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={finishDrag}
-      onPointerCancel={finishDrag}
-      onKeyDown={handleKeyDown}
+      role={preview ? undefined : 'slider'}
+      tabIndex={preview ? undefined : 0}
+      aria-hidden={preview || undefined}
+      aria-label={preview ? undefined : 'Перемотка трека'}
+      aria-valuemin={preview ? undefined : 0}
+      aria-valuemax={preview ? undefined : Math.floor(total)}
+      onPointerDown={preview ? undefined : handlePointerDown}
+      onPointerMove={preview ? undefined : handlePointerMove}
+      onPointerUp={preview ? undefined : finishDrag}
+      onPointerCancel={preview ? undefined : finishDrag}
+      onKeyDown={preview ? undefined : handleKeyDown}
     >
       {/* Вращается винил вместе с обложкой-наклейкой: пылинки на виниле
           показывают, что пластинка крутится. Свет лампы — отдельный
