@@ -149,12 +149,12 @@
   gap: 32px;
   /* Запасной размер диска для браузеров без единиц контейнера;
      ниже он ограничен фактической высотой потока. */
-  --disc-size: min(520px, 34vw, 54vh);
+  --disc-size: min(640px, 48vw, 64vh);
 }
 
 /* Пластинка меньше: над ней стоит заголовок «поток», он должен влезть в hero. */
 .hero-section.has-vinyl {
-  --disc-size: min(440px, 30vw, 42vh);
+  --disc-size: min(600px, 44vw, 54vh);
 }
 
 .hero-grainient {
@@ -800,12 +800,12 @@
   }
 
   .hero-section {
-    --disc-size: min(350px, 80vw, 60vh);
+    --disc-size: min(400px, 88vw, 70vh);
   }
 
-  /* Пластинка занимает до 75% ширины; заголовок отделён от неё зазором. */
+  /* Пластинка занимает до 86% ширины; заголовок отделён от неё зазором. */
   .hero-section.has-vinyl {
-    --disc-size: min(360px, 75vw, 50svh);
+    --disc-size: min(420px, 86vw, 62svh);
     --heading-gap: 24px;
   }
 
@@ -813,7 +813,7 @@
      и диск терял размер целиком. */
   @supports not (height: 1svh) {
     .hero-section.has-vinyl {
-      --disc-size: min(360px, 75vw, 50vh);
+      --disc-size: min(420px, 86vw, 62vh);
     }
   }
 
@@ -1016,11 +1016,11 @@
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
   .hero-section {
     padding: 32px 24px;
-    --disc-size: min(400px, 42vw, 26dvh);
+    --disc-size: min(640px, 52vw, 34dvh);
   }
 
   .hero-section.has-vinyl {
-    --disc-size: min(360px, 38vw, 24dvh);
+    --disc-size: min(600px, 48vw, 32dvh);
   }
 
   .wave-heading {
@@ -1037,20 +1037,20 @@
    после поворота экрана или изменения высоты панелей браузера. */
 @supports (height: 1cqh) {
   .hero-section {
-    --disc-size: min(520px, 34vw, 64cqh);
+    --disc-size: min(640px, 48vw, 72cqh);
   }
 
   .hero-section.has-vinyl {
-    --disc-size: min(440px, 30vw, 52cqh);
+    --disc-size: min(600px, 44vw, 60cqh);
   }
 
   @media (max-width: 768px) {
     .hero-section {
-      --disc-size: min(350px, 80vw, 64cqh);
+      --disc-size: min(400px, 88vw, 72cqh);
     }
 
     .hero-section.has-vinyl {
-      --disc-size: min(360px, 75vw, 48cqh);
+      --disc-size: min(420px, 86vw, 62cqh);
     }
   }
 }

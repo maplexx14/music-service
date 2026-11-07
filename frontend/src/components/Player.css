@@ -5,7 +5,7 @@
   right: 16px;
   height: var(--player-height, 88px);
   transition: left 0.3s var(--ease-morph);
-  background: var(--surface-2);
+  background: var(--player-background, var(--surface-2));
   border: none;
   /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */
   border-radius: 999px;
@@ -178,7 +178,7 @@
   gap: 10px;
   padding: 0 16px;
   border-radius: 999px;
-  background: #0a0a0e;
+  background: var(--player-background, #0a0a0e);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 }
@@ -721,7 +721,7 @@
     gap: 10px;
     /* Полностью круглые края на мобильных под увеличенную высоту. */
     border-radius: 999px;
-    background: #0a0a0e;
+    background: var(--player-background, #0a0a0e);
   }
 
   /* Горизонталь — карусель треков, вертикаль за фиксированным плеером
@@ -848,7 +848,7 @@
 .player-progress-surface-fill {
   position: absolute;
   inset: 0;
-  background: rgba(255, 255, 255, 0.13);
+  background: var(--player-fill, rgba(255, 255, 255, 0.13));
   transform: translateX(-100%);
 }
 

@@ -31,6 +31,7 @@ import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { warmThemeColor } from '../hooks/useThemeColor'
+import { useCoverColors } from '../hooks/useCoverColors'
 import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
@@ -347,11 +348,25 @@ function useIsMobile() {
   return mobile
 }
 
+function lightenPlayerColor(color, white) {
+  if (!color) return undefined
+  // Немного белого смягчает тёмный оттенок, сохраняя полностью непрозрачный фон.
+  const channels = color.slice(1).match(/../g)
+  return `#${channels.map((channel) =>
+    Math.round(parseInt(channel, 16) * (1 - white) + 255 * white).toString(16).padStart(2, '0'),
+  ).join('')}`
+}
+
 // Соседний трек в карусели мини-плеера: капсула-двойник, видна только во
 // время свайпа. Миниатюра та же, что у текущей обложки, — она уже в кэше.
 function MiniGhost({ track, slot }) {
+  const coverColors = useCoverColors(track.cover_url)
   return (
-    <div className="player-ghost" style={{ '--slot': slot }} aria-hidden="true">
+    <div
+      className="player-ghost"
+      style={{ '--slot': slot, '--player-background': lightenPlayerColor(coverColors?.[2], 0.08) || '#0a0a0e' }}
+      aria-hidden="true"
+    >
       <img
         src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
         alt=""
@@ -380,6 +395,7 @@ function PlayerInner() {
   // воспроизведения. currentTime здесь сознательно НЕ выбирается — он нужен
   // только PlayerProgress (см. выше); экшены в zustand стабильны по ссылке.
   const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const coverColors = useCoverColors(currentTrack?.cover_url)
   // Замер плавности: сколько синхронно идут эффекты плеера на смене трека.
   // Эффекты компонента выполняются в порядке объявления, поэтому метка в
   // первом и итог в последнем (перед ранним return ниже) охватывают все.
@@ -2620,7 +2636,11 @@ function PlayerInner() {
       ref={stripRef}
       onClick={handlePlayerTap}
       {...swipeHandlers}
-      style={{ '--strip-gap': `${MINI_STRIP_GAP}px` }}
+      style={{
+        '--strip-gap': `${MINI_STRIP_GAP}px`,
+        '--player-background': lightenPlayerColor(coverColors?.[2], 0.08),
+        '--player-fill': coverColors ? `${lightenPlayerColor(coverColors[1], 0.28)}66` : undefined,
+      }}
     >
       {/* Соседние треки — такие же капсулы слева и справа на шаг «ширина +
           зазор»: свайп листает капсулу целиком (useTrackCarousel). Только
