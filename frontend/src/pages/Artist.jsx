@@ -225,7 +225,7 @@ function Artist() {
 
   const handlePlayToggle = () => {
     haptic(HAPTIC.selection)
-    if (isArtistCurrent) togglePlayPause()
+    if (isArtistCurrent) togglePlayPause('artist')
     else handlePlay()
   }
 

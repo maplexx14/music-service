@@ -450,13 +450,13 @@ function Home() {
 
   const handleWaveClick = async () => {
     if (isWavePlaying) {
-      togglePlayPause()
+      togglePlayPause('flow')
       return
     }
     // Пауза потока — возобновляем, не пересоздавая очередь.
     const st = usePlayerStore.getState()
     if (st.flowActive && st.currentTrack) {
-      togglePlayPause()
+      togglePlayPause('flow')
       return
     }
     // Персональный поток.

@@ -77,7 +77,7 @@ function Track() {
   const isLiked = likedTrackIds.includes(track.id) || pendingLikeKeys.includes(trackLikeKey(track))
 
   const handlePlay = () => {
-    if (isCurrent) togglePlayPause()
+    if (isCurrent) togglePlayPause('track')
     else playTrack(track, [track])
   }
 

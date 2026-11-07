@@ -63,6 +63,19 @@ user_play_events = Table(
     Column('client_hour', Integer, nullable=True),
 )
 
+# Диагностика действий плеера, отдельно от прослушиваний и сигналов вкуса.
+# play_click пишется ДО загрузки аудио, в том числе при неудачном запуске.
+playback_events = Table(
+    'playback_events',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+    Column('event_type', String(32), nullable=False),
+    Column('occurred_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column('metadata', JSON, nullable=False),
+    Index('ix_playback_events_user_time', 'user_id', 'occurred_at'),
+)
+
 # Показы трека в рекомендациях. Трек, показанный несколько раз и ни разу не
 # сыгранный, — негативный сигнал: выдача не должна «залипать» на нём до
 # бесконечности. Строка удаляется при реальном прослушивании (см. /play).

@@ -30,10 +30,10 @@ export function runAppAction(action) {
   const st = usePlayerStore.getState()
   // Поток уже идёт — только снять с паузы, не пересоздавая очередь.
   if (st.flowActive && st.currentTrack) {
-    if (!st.isPlaying) st.togglePlayPause()
+    if (!st.isPlaying) st.togglePlayPause('android_shortcut')
     return
   }
-  st.startFlow().catch((error) => console.error('Flow start error:', error))
+  st.startFlow('android_shortcut').catch((error) => console.error('Flow start error:', error))
 }
 
 // Лайк и дизлайк на системном плеере (уведомление, экран блокировки):

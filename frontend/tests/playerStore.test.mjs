@@ -13,18 +13,21 @@ const track = (id, artist = 'Favorite', protectedArtist = true) => ({
   recommendation_track_key: `${artist.toLowerCase()}|${id}`,
 })
 
-async function mountStore(apiOverrides = {}) {
+async function mountStore(apiOverrides = {}, globals = {}) {
   const api = {
     get: async () => ({ data: [] }), post: async () => ({ data: {} }), delete: async () => ({}),
     ...apiOverrides,
   }
-  const context = vm.createContext({ console, performance, Date, setTimeout, clearTimeout })
+  const context = vm.createContext({ console, performance, Date, setTimeout, clearTimeout, ...globals })
   const imports = {
     zustand: { create }, '../services/api': { default: api },
     '../services/pageCache': { invalidateCache: noop, patchCache: noop, peekCache: noop, LIKED_CACHE_KEY: 'liked' },
     '../utils/playerQueue': queueUtils,
   }
-  const module = new vm.SourceTextModule(source, { context })
+  const module = new vm.SourceTextModule(source, {
+    context,
+    initializeImportMeta: (meta) => { meta.env = { VITE_BUILD_TIME: 'test-build' } },
+  })
   await module.link(async (name) => {
     const exports = imports[name]
     return new vm.SyntheticModule(Object.keys(exports), function () {
@@ -116,3 +119,118 @@ test('loading dislikes preserves a concurrent immediate dislike', async () => {
   assert.ok(store.getState().dislikedTrackKeys.includes('ytmusic:during-fetch'))
   assert.ok(store.getState().dislikedTrackKeys.includes('ytmusic:old'))
 })
+
+const clickUrl = '/users/me/play-click'
+const localTracks = () => [{ id: 1, title: 'First' }, { id: 2, title: 'Second' }]
+
+test('a track click without recommendation attribution is recorded before playback changes', async () => {
+  const clicks = []
+  const store = await mountStore({ get: async () => ({ data: { ready: true } }), post: async (url, body, config) => {
+    if (url === clickUrl) clicks.push({ body, config, currentTrack: store.getState().currentTrack })
+    return { data: { ready: true } }
+  } }, { window: { location: { pathname: '/search', search: '?token=never-log-this' } } })
+  const selected = track('external')
+  store.getState().playTrack(selected, [selected], 'external')
+  assert.equal(clicks.length, 1)
+  assert.equal(clicks[0].currentTrack, null)
+  assert.equal(clicks[0].body.action, 'track')
+  assert.equal(clicks[0].body.track_id, 'ytmusic:external')
+  assert.equal(clicks[0].body.external_id, 'external')
+  assert.equal(clicks[0].body.path, '/search')
+  assert.equal(JSON.stringify(clicks[0].body).includes('never-log-this'), false)
+  assert.equal(clicks[0].body.build, 'test-build')
+  assert.equal(clicks[0].config.skipErrorToast, true)
+  assert.equal(clicks[0].config.skipAuthRedirect, true)
+  assert.equal(store.getState().isPlaying, true)
+})
+
+test('a flow click is recorded while recommendations are pending and survives their failure', async () => {
+  const calls = []
+  let rejectFlow
+  const store = await mountStore({
+    post: async (url, body) => { if (url === clickUrl) calls.push(body); return { data: {} } },
+    get: () => new Promise((_resolve, reject) => { rejectFlow = reject }),
+  })
+  const starting = store.getState().startFlow()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].action, 'flow')
+  assert.equal(calls[0].track_id, undefined)
+  assert.equal(store.getState().currentTrack, null)
+  const failed = assert.rejects(starting, /provider unavailable/)
+  rejectFlow(new Error('provider unavailable'))
+  await failed
+  assert.equal(calls.length, 1)
+  assert.equal(store.getState().flowLoading, false)
+})
+
+for (const preload of [false, true]) {
+  test(`flow ${preload ? 'with preload' : 'without preload'} records one click and autoplay records none`, async () => {
+    const clicks = []
+    const store = await mountStore({
+      get: async () => ({ data: localTracks() }),
+      post: async (url, body) => { if (url === clickUrl) clicks.push(body); return { data: {} } },
+    })
+    if (preload) {
+      store.getState().preloadFlow()
+      await new Promise(resolve => setImmediate(resolve))
+      assert.equal(clicks.length, 0)
+    }
+    assert.equal(await store.getState().startFlow(), true)
+    assert.equal(clicks.length, 1)
+    assert.equal(clicks[0].action, 'flow')
+    store.getState().nextTrack('ended')
+    assert.equal(store.getState().currentTrack.id, 2)
+    assert.equal(clicks.length, 1)
+  })
+}
+
+test('shuffle records the click before fetching a playlist and does not double count its start', async () => {
+  const clicks = []
+  let finishFetch
+  const store = await mountStore({
+    post: async (url, body) => { if (url === clickUrl) clicks.push(body); return { data: {} } },
+    get: () => new Promise(resolve => { finishFetch = resolve }),
+  })
+  const starting = store.getState().shufflePlaylist(localTracks(), 'album', { url: '/albums/test', total: 3 })
+  assert.equal(clicks.length, 1)
+  assert.equal(clicks[0].action, 'shuffle')
+  assert.equal(store.getState().currentTrack, null)
+  finishFetch({ data: { tracks: [...localTracks(), { id: 3, title: 'Third' }] } })
+  await starting
+  assert.equal(clicks.length, 1)
+  assert.equal(store.getState().isPlaying, true)
+})
+
+test('playlist selection and an explicit resume are clicks; pause and internal sync are not', async () => {
+  const clicks = []
+  const store = await mountStore({ post: async (url, body) => {
+    if (url === clickUrl) clicks.push(body)
+    return { data: {} }
+  } })
+  store.getState().playPlaylist(localTracks(), 1, 'album')
+  store.getState().togglePlayPause('mini_player') // Pause.
+  store.getState().setCurrentTime(12.5)
+  store.getState().togglePlayPause('mini_player') // Explicit resume.
+  store.getState().togglePlayPause() // Internal state sync.
+  store.getState().togglePlayPause()
+  assert.deepEqual(clicks.map(click => click.action), ['playlist', 'resume'])
+  assert.equal(clicks[0].track_id, '2')
+  assert.equal(clicks[1].position, 12.5)
+  assert.equal(clicks[1].via, 'mini_player')
+})
+
+for (const synchronous of [false, true]) {
+  test(`a ${synchronous ? 'synchronous' : 'rejected'} telemetry failure never prevents playback`, async () => {
+    const store = await mountStore({ post: (url) => {
+      if (url === clickUrl) {
+        if (synchronous) throw new Error('offline')
+        return Promise.reject(new Error('offline'))
+      }
+      return Promise.resolve({ data: {} })
+    } })
+    store.getState().playTrack(localTracks()[0])
+    await Promise.resolve()
+    assert.equal(store.getState().isPlaying, true)
+    assert.equal(store.getState().currentTrack.id, 1)
+  })
+}

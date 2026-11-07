@@ -129,7 +129,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   }
   const queue = [1, 2, 3, 4].map((id) => ({ id, title: `Track ${id}`, duration: 180 }))
   const state = {
-    currentTrack: queue[0], isPlaying: true, volume: 1, duration: 180, currentTime: 0,
+    currentTrack: queue[0], queue, isPlaying: true, volume: 1, duration: 180, currentTime: 0,
     likedTrackIds: [], dislikedTrackIds: [], pendingLikeKeys: [],
     getNextTrack: (offset = 1) => queue[queue.indexOf(state.currentTrack) + offset],
     getPrevTrack: () => queue[queue.indexOf(state.currentTrack) - 1],
@@ -139,6 +139,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
     prefetchNext: async () => {}, prefetchTracks: noop, extendFlowIfNeeded: noop, extendQueueIfNeeded: async () => false,
     nextTrack: () => update(state.getNextTrack() ? { currentTrack: state.getNextTrack() } : { isPlaying: false }),
     togglePlayPause: () => update({ isPlaying: !state.isPlaying }),
+    recordPlayClick: noop,
   }
   function update(value) {
     if (!Object.keys(value).some((key) => !Object.is(state[key], value[key]))) return
@@ -369,6 +370,27 @@ test('an explicit pause reaches the native bridge before another React render', 
   app.flush()
   assert.equal(app.engine.getActive().paused, true)
   app.cleanup()
+})
+
+test('system Play records one intent before touching audio, including a failed start', async () => {
+  const app = await mountPlayer()
+  const clicks = []
+  const audio = app.engine.getActive()
+  app.state.isPlaying = false
+  app.state.recordPlayClick = (action, metadata) => clicks.push({ action, metadata, playCalls: audio.playCalls })
+  const before = audio.playCalls
+  audio.play = () => { throw new Error('unavailable audio') }
+  try {
+    assert.equal(app.window.__boltMediaAction('play'), true)
+    await Promise.resolve()
+    assert.equal(clicks.length, 1)
+    assert.equal(clicks[0].action, 'resume')
+    assert.equal(clicks[0].metadata.via, 'media_session')
+    assert.equal(clicks[0].metadata.track.id, app.state.currentTrack.id)
+    assert.equal(clicks[0].playCalls, before)
+  } finally {
+    app.cleanup()
+  }
 })
 
 for (const ios of [false, true]) {

@@ -916,7 +916,7 @@ function FullScreenPlayer() {
           </div>
           <button
             className="fullscreen-play fullscreen-lyrics-bar-play"
-            onClick={togglePlayPause}
+            onClick={() => togglePlayPause('lyrics_player')}
             aria-label={isPlaying ? 'Пауза' : 'Играть'}
           >
             {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
@@ -942,7 +942,7 @@ function FullScreenPlayer() {
           <button className="fullscreen-icon" onClick={handleSkipBack} aria-label="Назад">
             <SkipBack size={26} fill="currentColor" />
           </button>
-          <button className="fullscreen-play" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+          <button className="fullscreen-play" onClick={() => togglePlayPause('fullscreen_player')} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
             {isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" />}
           </button>
           <button className="fullscreen-icon" onClick={() => handleSkipForward()} aria-label="Вперёд" title="Вперёд">

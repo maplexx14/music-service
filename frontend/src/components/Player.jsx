@@ -2152,6 +2152,8 @@ function PlayerInner() {
     }
     const handlers = {
       play: async () => {
+        const state = usePlayerStore.getState()
+        state.recordPlayClick('resume', { track: state.currentTrack, source: state.source, via: 'media_session', queueLength: state.queue.length })
         const audio = audioRef.current
         if (!audio) return
         if (softPausedElRef.current) {
@@ -2773,7 +2775,7 @@ function PlayerInner() {
           <button type="button" className="control-btn" onClick={previousTrack} aria-label="Предыдущий">
             <SkipBack size={20} />
           </button>
-          <button className="play-pause-btn" onClick={togglePlayPause} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
+          <button className="play-pause-btn" onClick={() => togglePlayPause('mini_player')} aria-label={isPlaying ? 'Пауза' : 'Играть'}>
             {isPlaying ? (
               <Pause size={24} fill="currentColor" />
             ) : (

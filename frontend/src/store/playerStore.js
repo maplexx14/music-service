@@ -307,6 +307,8 @@ function capturePlayContext(source, track) {
   }
 }
 
+const telemetryText = (value, limit) => value == null ? undefined : String(value).slice(0, limit)
+
 const usePlayerStore = create((set, get) => ({
   currentTrack: null,
   queue: [],
@@ -355,6 +357,36 @@ const usePlayerStore = create((set, get) => ({
 
   setCurrentTrack: (track) => {
     set({ currentTrack: track, currentTime: 0, seekRequest: null })
+  },
+
+  // Намерение пользователя — до await, смены очереди и первого звука.
+  // Этот журнал не участвует в счётчиках прослушиваний и рекомендациях.
+  recordPlayClick: (action, { track = null, source = null, via = action, queueLength = null } = {}) => {
+    try {
+      const state = get()
+      const rawId = typeof track?.id === 'string' ? track.id : ''
+      const externalId = track?.external_id ?? (rawId.includes(':') ? rawId.split(':').slice(1).join(':') : null)
+      const position = action === 'resume' && Number.isFinite(state.currentTime) ? Math.max(0, state.currentTime) : 0
+      api.post('/users/me/play-click', {
+        action,
+        via: telemetryText(via, 40),
+        path: typeof window !== 'undefined' ? telemetryText(window.location.pathname, 300) : undefined,
+        source: telemetryText(source, 40),
+        track_id: telemetryText(track?.id ?? track?.db_id, 200),
+        track_source: telemetryText(track?.source, 40),
+        external_id: telemetryText(externalId, 512),
+        title: telemetryText(track?.title, 512),
+        artist: telemetryText(track?.artist, 512),
+        position,
+        queue_length: queueLength,
+        was_playing: state.isPlaying,
+        flow_loading: state.flowLoading,
+        client_time: new Date().toISOString(),
+        build: import.meta.env.VITE_BUILD_TIME,
+      }, { skipErrorToast: true, skipAuthRedirect: true, timeout: 5000 }).catch(() => {})
+    } catch {
+      // Диагностика не должна мешать Play, даже если запрос не удалось создать.
+    }
   },
 
   // Материализует произвольный внешний трек в БД (для лайков/плейлистов).
@@ -720,6 +752,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   playTrack: (track, queue = [], source = null) => {
+    get().recordPlayClick('track', { track, source, queueLength: queue.length || 1 })
     const list = queue.length > 0 ? queue : [track]
     const trackIndex = list.findIndex(t => t.id === track.id)
     const { isShuffle } = get()
@@ -794,7 +827,8 @@ const usePlayerStore = create((set, get) => ({
       })
   },
 
-  startFlow: async () => {
+  startFlow: async (via = 'flow') => {
+    get().recordPlayClick('flow', { source: 'flow', via })
     if (get().flowLoading) return false
     set({ flowLoading: true })
     try {
@@ -821,7 +855,7 @@ const usePlayerStore = create((set, get) => ({
         // ожидания нескольких секунд; порядок потока при этом не важен, он
         // и так перемешан на бэке. Ничего не готово — стартуем с нулевого.
         const startIndex = Math.max(preload.tracks.findIndex(isTrackResolved), 0)
-        get().playPlaylist(preload.tracks, startIndex, 'flow')
+        get().playPlaylist(preload.tracks, startIndex, 'flow', null, { recordClick: false })
         get().prefetchTracks(preload.tracks.slice(0, 3), 3)
         set({ flowActive: true })
         return true
@@ -831,7 +865,7 @@ const usePlayerStore = create((set, get) => ({
         params: { limit: FLOW_START_LIMIT, hour: new Date().getHours(), sess: get()._flowSessionParam() },
       })
       if (!data || data.length === 0) return false
-      get().playPlaylist(data, 0, 'flow')
+      get().playPlaylist(data, 0, 'flow', null, { recordClick: false })
       // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
       // ожидания резолва на каждом переключении — это основной сценарий,
       // где скорость важнее всего.
@@ -978,7 +1012,9 @@ const usePlayerStore = create((set, get) => ({
     return queueExtendPromise
   },
 
-  playPlaylist: (tracks, startIndex = 0, source = null, pager = null) => {
+  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, { recordClick = true } = {}) => {
+    // startFlow/shufflePlaylist уже записали нажатие до своего запроса.
+    if (recordClick) get().recordPlayClick('playlist', { track: tracks[startIndex], source, queueLength: tracks.length })
     if (tracks.length === 0) return
     const { isShuffle } = get()
     const order = isShuffle ? shuffleArray(tracks.map((_, i) => i)) : tracks.map((_, i) => i)
@@ -1018,6 +1054,7 @@ const usePlayerStore = create((set, get) => ({
   // заигранных треков, а не плейлиста. Хвост дальше окна доберёт по пейджеру
   // extendQueueIfNeeded (он тоже подмешивает новые индексы в конец порядка).
   shufflePlaylist: async (tracks, source = null, pager = null) => {
+    get().recordPlayClick('shuffle', { source, queueLength: tracks.length })
     if (tracks.length === 0) return
     let list = tracks
     if (pager?.url && pager.total > tracks.length && tracks.length < SHUFFLE_WINDOW) {
@@ -1036,7 +1073,7 @@ const usePlayerStore = create((set, get) => ({
     // set до playPlaylist: он читает isShuffle через get() и сам раскладывает
     // перемешанный порядок обхода очереди.
     set({ isShuffle: true })
-    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager)
+    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager, { recordClick: false })
     // playPlaylist ставит стартовый трек туда, куда он попал в перемешанном
     // порядке, — то есть в середину, и всё, что оказалось до него, за проход
     // вперёд уже не сыграет. Прокручиваем порядок так, чтобы старт стал первым:
@@ -1072,7 +1109,12 @@ const usePlayerStore = create((set, get) => ({
     }
   },
   
-  togglePlayPause: () => {
+  togglePlayPause: (via = null) => {
+    // via передают кнопки. Системная синхронизация и демо вызывают без него.
+    const state = get()
+    if (typeof via === 'string' && via && !state.isPlaying) {
+      get().recordPlayClick('resume', { track: state.currentTrack, source: state.source, via, queueLength: state.queue.length })
+    }
     set((state) => ({ isPlaying: !state.isPlaying }))
   },
 

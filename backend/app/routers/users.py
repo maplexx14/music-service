@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 import json
 import logging
 import re
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
-from app.models import Playlist, User, Track, UserPlayerState, user_track_plays
+from app.models import Playlist, User, Track, UserPlayerState, playback_events, user_track_plays
 from app.schemas import UserResponse, UserPreferencesUpdate, GenreOption, ArtistCard
 from app import artist_cards
 from app import lastfm_genres
@@ -590,6 +590,42 @@ def _play_context(db: Session, user_id: int, context: Optional[PlayContextPayloa
             result["title"] = playlist.name
             result["liked"] = bool(playlist.is_liked)
     return result
+
+
+class PlayClickPayload(BaseModel):
+    action: Literal["track", "playlist", "shuffle", "flow", "resume"]
+    via: str = Field(..., min_length=1, max_length=40)
+    path: Optional[str] = Field(None, max_length=300)
+    source: Optional[str] = Field(None, max_length=40)
+    track_id: Optional[str] = Field(None, max_length=200)
+    track_source: Optional[str] = Field(None, max_length=40)
+    external_id: Optional[str] = Field(None, max_length=512)
+    title: Optional[str] = Field(None, max_length=512)
+    artist: Optional[str] = Field(None, max_length=512)
+    position: float = Field(0, ge=0, allow_inf_nan=False)
+    queue_length: Optional[int] = Field(None, ge=0)
+    was_playing: bool = False
+    flow_loading: bool = False
+    client_time: datetime
+    build: Optional[str] = Field(None, max_length=64)
+
+
+@router.post("/me/play-click", status_code=204)
+def record_play_click(
+    payload: PlayClickPayload,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Keep Play intent even when no track was selected or audio never started."""
+    metadata = payload.model_dump(mode="json", exclude_none=True)
+    metadata["user_agent"] = request.headers.get("user-agent", "")[:512]
+    db.execute(playback_events.insert().values(
+        user_id=current_user.id,
+        event_type="play_click",
+        metadata=metadata,
+    ))
+    db.commit()
 
 
 class NowPlayingPayload(BaseModel):
