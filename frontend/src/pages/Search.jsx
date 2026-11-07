@@ -129,6 +129,7 @@ function Search() {
   const setQuery = useSearchStore((state) => state.setQuery)
   const results = useSearchStore((state) => state.results)
   const resultsQuery = useSearchStore((state) => state.resultsQuery)
+  const cachedQuery = useSearchStore((state) => state.cachedQuery)
   // Внешние источники держим раздельно: выдача показывает их отдельными
   // секциями в фиксированном порядке (см. рендер ниже).
   const externalTracks = useSearchStore((state) => state.externalTracks)
@@ -138,13 +139,11 @@ function Search() {
   const filter = useSearchStore((state) => state.filter)
   const setFilter = useSearchStore((state) => state.setFilter)
   const providerTracks = useSearchStore((state) => state.providerTracks)
-  const [providerLoading, setProviderLoading] = useState(false)
+  const [providerSearch, setProviderSearch] = useState(null)
   const [spotifyEnabled, setSpotifyEnabled] = useState(false)
-  const [loading, setLoading] = useState(false)
-  // Внешний каталог отвечает за 2–5 с — дольше локальной выдачи, после
-  // которой гаснет основной спиннер. Без своего индикатора страница успевала
-  // показать «Ничего не найдено», а треки появлялись через секунды.
-  const [externalLoading, setExternalLoading] = useState(false)
+  // Готовность секций привязана к запросу: пока собирается верх выдачи,
+  // показываем один спиннер вместо вставки блоков над уже видимыми треками.
+  const [searchLoading, setSearchLoading] = useState(null)
   // Long-press / правый клик на треке — контекстное меню (лайк и др.).
   const trackMenu = useTrackContextMenu()
 
@@ -182,20 +181,21 @@ function Search() {
   // Выдача Deezer/Spotify — под своим фильтром и только для текущего запроса.
   const providerQuery = query.trim()
   const providerResult = PROVIDER_FILTERS.has(filter) ? providerTracks[filter] : null
+  const providerReady = providerResult?.q === providerQuery
   const currentProviderTracks =
-    providerResult && providerResult.q === providerQuery ? providerResult.tracks : []
+    providerReady ? providerResult.tracks : []
 
   useEffect(() => {
     if (!PROVIDER_FILTERS.has(filter) || !providerQuery || parseMusicLink(providerQuery)) {
-      setProviderLoading(false)
+      setProviderSearch(null)
       return
     }
     if (useSearchStore.getState().providerTracks[filter]?.q === providerQuery) {
-      setProviderLoading(false)
+      setProviderSearch(null)
       return
     }
     const controller = new AbortController()
-    setProviderLoading(true)
+    setProviderSearch({ filter, query: providerQuery, pending: true })
     const timeoutId = window.setTimeout(() => {
       api
         .get(`/import/search/${filter}`, {
@@ -206,6 +206,7 @@ function Search() {
           signal: controller.signal,
         })
         .then(({ data }) => {
+          if (controller.signal.aborted) return
           useSearchStore.getState().setProviderTracks(filter, providerQuery, data || [])
           usePlayerStore.getState().prefetchTracks(data || [], 1)
         })
@@ -215,14 +216,14 @@ function Search() {
           useSearchStore.getState().setSearchError(`Не удалось выполнить поиск в ${PROVIDER_LABELS[filter]}.`)
         })
         .finally(() => {
-          if (!controller.signal.aborted) setProviderLoading(false)
+          if (!controller.signal.aborted) {
+            setProviderSearch({ filter, query: providerQuery, pending: false })
+          }
         })
     }, SEARCH_DEBOUNCE_MS)
     return () => {
       window.clearTimeout(timeoutId)
       controller.abort()
-      // Оборванный запрос свой finally пропускает — снимаем спиннер здесь.
-      setProviderLoading(false)
     }
   }, [filter, providerQuery])
 
@@ -244,8 +245,7 @@ function Search() {
     }
 
     useSearchStore.getState().clearSearch()
-    setLoading(false)
-    setExternalLoading(false)
+    setSearchLoading(null)
   }, [query])
 
   const performSearch = async (searchQuery, signal) => {
@@ -259,13 +259,18 @@ function Search() {
       finishSearch,
     } = useSearchStore.getState()
 
-    setLoading(true)
-    // Старые внешние результаты чистим сразу: они дорисуются позже и не
-    // должны миксоваться с новым запросом.
+    setSearchLoading({ query: searchQuery, local: true, upper: true, external: true })
+    const finishSection = (section) => {
+      if (signal.aborted) return
+      setSearchLoading((state) =>
+        state?.query === searchQuery ? { ...state, [section]: false } : state,
+      )
+    }
+    // Старые внешние результаты не должны смешиваться с новым запросом.
     beginSearch()
 
-    // Исполнители — отдельным лёгким запросом: секция только ведёт на
-    // страницу артиста и не должна ждать медленную выдачу треков.
+    // Все запросы запускаем параллельно, но выдачу открываем только после
+    // готовности секций, которые видны в выбранном фильтре.
     const artistsRequest = api
       .get('/artists/search', {
         params: { q: searchQuery, limit: 12 },
@@ -279,9 +284,7 @@ function Search() {
         if (!signal.aborted) console.error('Artist search error:', error)
       })
 
-    // Внешний каталог медленный (секунды) — не блокируем им локальную выдачу,
-    // его секции дорисовываются по мере прихода ответов.
-    setExternalLoading(true)
+    // Внешний каталог дополняет «Лучшие совпадения» в верхней части выдачи.
     const externalRequest = api
       .get('/search/external/grouped', {
         // Слоты делятся между источниками (каталог артиста / YouTube Music /
@@ -318,7 +321,7 @@ function Search() {
         if (!signal.aborted) console.error('External search error:', error)
       })
       .finally(() => {
-        if (!signal.aborted) setExternalLoading(false)
+        finishSection('external')
       })
     // Плейлисты всех сервисов одной лентой (бэк чередует источники); Spotify —
     // только когда на бэке есть ключи.
@@ -340,6 +343,8 @@ function Search() {
       .catch((error) => {
         if (!signal.aborted) console.error('External playlist search error:', error)
       })
+    const upperRequest = Promise.allSettled([artistsRequest, externalPlaylistsRequest])
+      .then(() => finishSection('upper'))
 
     let localSucceeded = false
     try {
@@ -359,16 +364,16 @@ function Search() {
     } catch (error) {
       if (signal.aborted) return
       console.error('Local search error:', error)
-      setResults({ tracks: [], playlists: [] })
+      setResults({ tracks: [], playlists: [] }, searchQuery)
       setSearchError('Не удалось выполнить поиск. Попробуйте ещё раз.')
     } finally {
-      if (!signal.aborted) setLoading(false)
+      finishSection('local')
     }
 
     // Закешированным запрос считается только когда дособраны все секции.
     // Выдачу, оборванную уходом на другую вкладку, возврат должен догрузить,
     // а не принять за готовую — иначе внешние секции пропадут насовсем.
-    await Promise.allSettled([artistsRequest, externalRequest, externalPlaylistsRequest])
+    await Promise.allSettled([upperRequest, externalRequest])
     if (!signal.aborted && localSucceeded) finishSearch(searchQuery)
   }
 
@@ -408,8 +413,30 @@ function Search() {
 
   const showAll = filter === 'all'
   const shows = (id) => (showAll && !PROVIDER_FILTERS.has(id)) || filter === id
-  // Спиннер внешнего поиска нужен, только если его секции вообще видны.
-  const waitingExternal = externalLoading && filter !== 'library' && !PROVIDER_FILTERS.has(filter)
+  // До запуска запроса (включая debounce и возврат к неполной выдаче)
+  // секции тоже считаются загружающимися — старые результаты не мелькают.
+  const pending = searchLoading?.query === providerQuery
+    ? searchLoading
+    : {
+        local: cachedQuery !== providerQuery,
+        upper: cachedQuery !== providerQuery,
+        external: cachedQuery !== providerQuery,
+      }
+  const providerLoading = !providerReady && (
+    providerSearch?.filter !== filter ||
+    providerSearch?.query !== providerQuery ||
+    providerSearch.pending
+  )
+  const loadingByFilter = {
+    all: pending.local || pending.upper || pending.external,
+    top: pending.local || pending.external,
+    library: pending.local,
+    ytmusic: pending.external,
+    soundcloud: pending.external,
+    deezer: providerLoading,
+    spotify: providerLoading,
+  }
+  const loading = !!providerQuery && !musicLink && loadingByFilter[filter]
 
   const hasResults = showAll
     ? results.tracks.length > 0 ||
@@ -542,7 +569,7 @@ function Search() {
       </div>
 
       {loading && (
-        <Spinner label="Поиск..." />
+        <Spinner label={PROVIDER_FILTERS.has(filter) ? `Ищем в ${PROVIDER_LABELS[filter]}...` : 'Поиск...'} />
       )}
 
       {musicLink && (
@@ -560,10 +587,9 @@ function Search() {
       {/* Порядок секций фиксирован: исполнители → плейлисты → лучшие
           совпадения → треки из медиатеки → YouTube Music → SoundCloud.
           Исполнители и плейлисты сверху — это не результат, а переход: одно
-          нажатие вместо выискивания артиста или подборки среди треков. Спиннер внешнего поиска
-          стоит под «Лучшими совпадениями»: совпадения из медиатеки видны
-          сразу, внешние дорисовываются к ним позже. С фильтром видна одна
-          секция. */}
+          нажатие вместо выискивания артиста или подборки среди треков.
+          Показываем выдачу, когда верхние секции собраны, чтобы они больше
+          не сдвигали треки. С фильтром ждём только его секцию. */}
       {!loading && query && !musicLink && (
         <div className="search-results">
           {showAll && artists.length > 0 && (
@@ -669,13 +695,6 @@ function Search() {
           )}
 
           {shows('top') && renderExternalSection('Лучшие совпадения', topTracks)}
-          {waitingExternal && (
-            <Spinner label="Ищем в YouTube Music и SoundCloud..." />
-          )}
-
-          {PROVIDER_FILTERS.has(filter) && providerLoading && (
-            <Spinner label={`Ищем в ${PROVIDER_LABELS[filter]}...`} />
-          )}
           {PROVIDER_FILTERS.has(filter) &&
             renderExternalSection(PROVIDER_LABELS[filter], currentProviderTracks)}
 
@@ -721,7 +740,7 @@ function Search() {
           {shows('ytmusic') && renderExternalSection('YouTube Music', externalTracks.ytmusic)}
           {shows('soundcloud') && renderExternalSection('SoundCloud', externalTracks.soundcloud)}
 
-          {!loading && !waitingExternal && !providerLoading && query && !hasResults && (
+          {!hasResults && (
             <div className="no-results">
               <p>Ничего не найдено</p>
             </div>
