@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Pause, Loader2, Home as HomeIcon, History, Sparkles } from 'lucide-react'
+import { Play, Pause, Loader2, Home as HomeIcon, History, Settings } from 'lucide-react'
 import {
   recordRecommendationImpression,
   usePlayerStore,
@@ -21,6 +21,7 @@ import BoltLoader from '../components/BoltLoader'
 import ArtistLink from '../components/ArtistLink'
 import Carousel from '../components/Carousel'
 import FlowDiscArc from '../components/FlowDiscArc'
+import FlowHeading from '../components/FlowHeading'
 import HeroHearts from '../components/HeroHearts'
 import TasteAvatar from '../components/TasteAvatar'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
@@ -217,6 +218,7 @@ function Home() {
   // тогда, когда трек тот же, а объект новый (материализация трека и т.п.).
   const currentCoverUrl = usePlayerStore((s) => s.currentTrack?.cover_url)
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
+  const hasCurrentTrack = usePlayerStore((s) => !!s.currentTrack)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
   const vinylDisc = useUiSettingsStore((s) => s.vinylDisc)
   // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
@@ -362,15 +364,19 @@ function Home() {
     }
   }
 
-  // Кнопка потока управляет ТОЛЬКО потоком. Раньше сюда входил и source
-  // 'wave' (клик по карточке трека/плейлиста) — из-за этого после любого
-  // проигрывания карточки кнопка вместо запуска потока просто ставила ту
-  // очередь на паузу, и пользователь бесконечно слушал одну цепочку.
-  const isWavePlaying = isPlaying && source === 'flow'
+  // Пока очередь пуста, центральная кнопка запускает поток. Затем она
+  // управляет текущей очередью, а отдельная кнопка включает рекомендации.
+  const isFlowSelected = hasCurrentTrack && source === 'flow'
+  const isWavePlaying = isPlaying && isFlowSelected
   // Поток запускается (список ещё не пришёл) — кнопка сразу показывает, что
   // нажатие принято. Подгрузка следующей порции идёт при flowActive — её не
   // показываем.
-  const flowStarting = usePlayerStore((s) => s.flowLoading && !s.flowActive)
+  const flowStarting = usePlayerStore((s) => s.flowLoading && (!s.currentTrack || s.source !== 'flow'))
+  const initialFlowStarting = !hasCurrentTrack && flowStarting
+  const isInitialPlayback = !hasCurrentTrack && !flowStarting
+  const playbackLabel = !hasCurrentTrack ? (flowStarting ? 'Запускаем поток рекомендаций…' : 'Включить поток рекомендаций')
+    : isPlaying ? 'Приостановить воспроизведение' : 'Продолжить воспроизведение'
+  const flowLabel = flowStarting ? 'Запускаем поток…' : 'Включить поток'
   // Pull-to-refresh: шапка/hero не зависят от рекомендаций, поэтому тянем
   // обновление вручную по жесту — как в нативных приложениях. Индикатор
   // рисуется отдельным fixed-элементом, список не дёргается.
@@ -449,16 +455,13 @@ function Home() {
   }
 
   const handleWaveClick = async () => {
-    if (isWavePlaying) {
-      togglePlayPause('flow')
-      return
-    }
     // Пауза потока — возобновляем, не пересоздавая очередь.
     const st = usePlayerStore.getState()
-    if (st.flowActive && st.currentTrack) {
-      togglePlayPause('flow')
+    if (st.source === 'flow' && st.currentTrack) {
+      if (!st.isPlaying) togglePlayPause('flow')
       return
     }
+    if (st.flowLoading) return
     // Персональный поток.
     try {
       const started = await st.startFlow()
@@ -477,6 +480,11 @@ function Home() {
     if (!stAfter.flowActive && !stAfter.flowLoading) {
       toast.error('Поток пока недоступен, попробуйте ещё раз')
     }
+  }
+
+  const handleCurrentPlayback = () => {
+    if (usePlayerStore.getState().currentTrack) togglePlayPause('home_player')
+    else handleWaveClick()
   }
 
   // Раньше здесь был ранний `return <Spinner/>` на всю страницу: пока шли
@@ -543,32 +551,33 @@ function Home() {
                   rippleFrom=".flow-disc-slot.is-current .hero-disc"
                   rippleStrength={1}
                   rippleKey={currentTrackId != null ? 1 : 0}
-                  active={isWavePlaying}
+                  active={isPlaying}
                 />
               </Suspense>
             )}
           </div>
-          <FlowDiscArc tracks={recommendations.tracks} playing={isWavePlaying} />
-          <div className={`wave-widget ${isWavePlaying ? 'is-playing' : ''}`}>
+          <FlowDiscArc tracks={recommendations.tracks} playing={isPlaying} />
+          <div className={`wave-widget ${isPlaying ? 'is-playing' : ''}`}>
             <div className="wave-center">
-              <div className="wave-heading" aria-hidden="true">поток</div>
+              <FlowHeading />
               {waveGif ? (
                 <button
                   type="button"
-                  onClick={handleWaveClick}
-                  className="wave-gif-button"
-                  aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
-                  aria-busy={flowStarting || undefined}
-                  {...waveIntentHandlers}
+                  onClick={handleCurrentPlayback}
+                  className={`wave-gif-button${isInitialPlayback ? ' wave-gif-button--initial' : ''}`}
+                  aria-label={playbackLabel}
+                  disabled={initialFlowStarting}
+                  aria-busy={initialFlowStarting || undefined}
+                  {...(!hasCurrentTrack ? waveIntentHandlers : {})}
                 >
                   <img
-                    src={isWavePlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
-                    alt="поток рекомендаций"
+                    src={isPlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
+                    alt=""
                   />
                   <span className="wave-gif-icon">
-                    {flowStarting ? (
-                      <Loader2 size={20} className="wave-loading-icon" />
-                    ) : isWavePlaying ? (
+                    {initialFlowStarting ? (
+                      <Loader2 size={20} className="wave-loading-icon" aria-hidden="true" />
+                    ) : isPlaying ? (
                       <Pause size={20} />
                     ) : (
                       <Play size={20} />
@@ -578,15 +587,16 @@ function Home() {
               ) : (
                 <button
                   type="button"
-                  onClick={handleWaveClick}
-                  className="wave-title"
-                  aria-label={isWavePlaying ? 'пауза потока' : 'включить поток'}
-                  aria-busy={flowStarting || undefined}
-                  {...waveIntentHandlers}
+                  onClick={handleCurrentPlayback}
+                  className={`wave-title${isInitialPlayback ? ' wave-title--initial' : ''}`}
+                  aria-label={playbackLabel}
+                  disabled={initialFlowStarting}
+                  aria-busy={initialFlowStarting || undefined}
+                  {...(!hasCurrentTrack ? waveIntentHandlers : {})}
                 >
-                  {flowStarting ? (
-                    <Loader2 size={40} strokeWidth={2.5} className="wave-loading-icon" />
-                  ) : isWavePlaying ? (
+                  {initialFlowStarting ? (
+                    <Loader2 size={38} className="wave-loading-icon" aria-hidden="true" />
+                  ) : isPlaying ? (
                     <Pause size={38} fill="currentColor" strokeWidth={0} />
                   ) : (
                     // Треугольник визуально тяжелее слева — сдвиг вправо
@@ -597,10 +607,27 @@ function Home() {
               )}
             </div>
           </div>
-          <Link to="/settings/wave" className="wave-settings-link">
-            <Sparkles size={18} strokeWidth={2.25} aria-hidden="true" />
-            Настроить поток
-          </Link>
+          <div className="flow-controls">
+            {!hasCurrentTrack || isFlowSelected ? (
+              <Link to="/settings/wave" className="wave-settings-link">
+                <Settings size={18} strokeWidth={2.25} aria-hidden="true" />
+                <span>Настроить поток</span>
+              </Link>
+            ) : (
+              <button
+                type="button"
+                className="flow-start-button"
+                onClick={handleWaveClick}
+                disabled={flowStarting}
+                aria-busy={flowStarting || undefined}
+                aria-label={flowLabel.replace('поток', 'поток рекомендаций')}
+                {...waveIntentHandlers}
+              >
+                {flowStarting && <Loader2 size={14} className="wave-loading-icon" aria-hidden="true" />}
+                <span>{flowLabel}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="home-tabs" role="tablist" data-active={activeTab}>

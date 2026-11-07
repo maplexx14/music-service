@@ -187,6 +187,7 @@ function install() {
     const changed =
       state.currentTrack !== prev.currentTrack ||
       state.queue !== prev.queue ||
+      state.playContext !== prev.playContext ||
       state.isShuffle !== prev.isShuffle ||
       state.isRepeatOne !== prev.isRepeatOne
     if (changed && state.currentTrack?.id !== prev.currentTrack?.id) position = 0

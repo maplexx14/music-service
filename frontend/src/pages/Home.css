@@ -261,6 +261,8 @@
   transform: translateX(-50%) scale(1.3, 0.85);
   transform-origin: 50% 100%;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--font-display);
   font-weight: 800;
   font-size: clamp(44px, 6vw, 84px);
@@ -276,38 +278,85 @@
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
-/* Ссылка на настройки рекомендаций внизу hero, по центру под диском. */
-.wave-settings-link {
+/* Запуск рекомендаций и настройки — отдельным рядом под текущей очередью. */
+.flow-controls {
   position: absolute;
   left: 50%;
   bottom: 20px;
   z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  transform: translateX(-50%);
+}
+
+.flow-start-button,
+.wave-settings-link {
   height: 44px;
-  padding: 0 18px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   white-space: nowrap;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.flow-start-button {
+  min-width: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 400;
+  cursor: pointer;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.flow-start-button svg {
+  flex-shrink: 0;
+}
+
+.flow-start-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-start-button:disabled {
+  cursor: default;
+}
+
+.wave-settings-link {
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  text-decoration: none;
-  transform: translateX(-50%);
-  transition: background 0.2s ease, transform 0.2s ease;
 }
 
-.wave-settings-link:hover {
-  background: rgba(0, 0, 0, 0.5);
+@media (hover: hover) and (pointer: fine) {
+  .flow-start-button:hover:not(:disabled) {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .wave-settings-link:hover {
+    background: rgba(0, 0, 0, 0.5);
+  }
 }
 
+.flow-start-button:active:not(:disabled),
 .wave-settings-link:active {
-  transform: translateX(-50%) scale(0.94);
+  transform: scale(0.97);
 }
 
+.flow-start-button:focus-visible,
 .wave-settings-link:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 4px;
@@ -347,6 +396,16 @@
   .wave-loading-icon {
     animation-duration: 2s;
   }
+
+  .flow-start-button,
+  .wave-settings-link {
+    transition: none;
+  }
+}
+
+.wave-title:disabled,
+.wave-gif-button:disabled {
+  cursor: default;
 }
 
 .wave-title:hover {
@@ -354,7 +413,7 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .wave-title:hover {
+  .wave-title:hover:not(:disabled) {
     transform: scale(1.04);
   }
 }
@@ -388,12 +447,12 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .wave-gif-button:hover {
+  .wave-gif-button:hover:not(:disabled) {
     transform: translateY(-1px);
   }
 }
 
-/* Отклик нажатия: кнопка потока с GIF подтверждает нажатие сразу,
+/* Отклик нажатия: кнопка воспроизведения с GIF подтверждает нажатие сразу,
    без ожидания hover (на таче hover нет). */
 .wave-gif-button:active {
   transition-duration: 100ms;
@@ -415,6 +474,26 @@
   color: var(--text-primary);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   pointer-events: none;
+}
+
+.wave-title--initial,
+.wave-gif-button--initial,
+.wave-gif-button--initial .wave-gif-icon {
+  background: #55308a;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .wave-title--initial:hover,
+  .wave-gif-button--initial:hover,
+  .wave-gif-button--initial:hover .wave-gif-icon {
+    background: #683ba8;
+  }
+}
+
+.wave-title--initial:active,
+.wave-gif-button--initial:active,
+.wave-gif-button--initial:active .wave-gif-icon {
+  background: #492675;
 }
 
 .wave-play {
@@ -822,7 +901,7 @@
     bottom: calc(100% + 16px);
   }
 
-  .wave-settings-link {
+  .flow-controls {
     bottom: 16px;
   }
 

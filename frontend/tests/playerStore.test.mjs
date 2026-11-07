@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { create } from 'zustand'
 import * as queueUtils from '../src/utils/playerQueue.js'
+import { playbackLabel } from '../src/utils/playbackLabel.js'
 
 const source = await readFile(new URL('../src/store/playerStore.js', import.meta.url), 'utf8')
 const noop = () => {}
@@ -234,3 +235,54 @@ for (const synchronous of [false, true]) {
     assert.equal(store.getState().currentTrack.id, 1)
   })
 }
+
+for (const scenario of [
+  { source: 'flow', path: '/', label: 'поток' },
+  { source: null, path: '/liked', context: { kind: 'liked', title: 'Понравившиеся' }, label: 'Понравившиеся' },
+  { source: null, path: '/playlists/42', context: { kind: 'playlist', title: 'Вечерний плейлист' }, label: 'Вечерний плейлист' },
+  { source: 'artist', path: '/artists/Muse', context: { title: 'Muse' }, label: 'Muse' },
+  { source: 'album', path: '/albums/deezer/42', context: { title: 'Название альбома' }, label: 'Название альбома' },
+  { source: 'external', path: '/external/soundcloud/playlists/42', context: { kind: 'playlist', title: 'SoundCloud mix' }, label: 'SoundCloud mix' },
+  { source: 'external', path: '/link', context: { kind: 'playlist', title: 'Spotify mix' }, label: 'Spotify mix' },
+]) {
+  test(`playback label stays ${scenario.label} through track changes, navigation and pause`, async () => {
+    const location = { pathname: scenario.path }
+    const store = await mountStore({}, { window: { location } })
+    const tracks = [{ id: 1, artist: 'First Artist' }, { id: 2, artist: 'Other Artist' }]
+    store.getState().playPlaylist(tracks, 0, scenario.source, null, { context: scenario.context })
+    assert.equal(playbackLabel(store.getState()), scenario.label)
+    location.pathname = '/search'
+    store.getState().nextTrack('ended')
+    assert.equal(store.getState().currentTrack.artist, 'Other Artist')
+    assert.equal(playbackLabel(store.getState()), scenario.label)
+    store.getState().togglePlayPause()
+    assert.equal(store.getState().isPlaying, false)
+    assert.equal(playbackLabel(store.getState()), scenario.label)
+    const saved = JSON.parse(JSON.stringify({ currentTrack: store.getState().currentTrack, playContext: store.getState().playContext, source: store.getState().source }))
+    assert.equal(playbackLabel(saved), scenario.label)
+  })
+}
+
+test('shuffle captures the playlist name and originating page before awaiting more tracks', async () => {
+  let finishFetch
+  const location = { pathname: '/playlists/42' }
+  const store = await mountStore({ get: () => new Promise(resolve => { finishFetch = resolve }) }, { window: { location } })
+  const starting = store.getState().shufflePlaylist(localTracks(), null, { url: '/playlists/42', total: 3 }, {
+    context: { kind: 'playlist', title: 'Original Playlist' },
+  })
+  location.pathname = '/artists/Another'
+  finishFetch({ data: { tracks: [...localTracks(), { id: 3, artist: 'Other Artist' }] } })
+  await starting
+  assert.equal(store.getState().playContext.path, '/playlists/42')
+  assert.equal(playbackLabel(store.getState()), 'Original Playlist')
+})
+
+test('legacy contexts identify flow, liked and encoded artist pages without using the song artist', () => {
+  const currentTrack = { artist: 'Different Artist' }
+  assert.equal(playbackLabel({ currentTrack, source: 'flow' }), 'поток')
+  assert.equal(playbackLabel({ currentTrack, playContext: { path: '/liked' } }), 'Понравившиеся')
+  assert.equal(playbackLabel({ currentTrack, playContext: { path: `/artists/${encodeURIComponent('Король и Шут')}` } }), 'Король и Шут')
+  assert.equal(playbackLabel({ currentTrack, playContext: { path: '/artists/%E0' } }), '%E0')
+  assert.equal(playbackLabel({ currentTrack, playContext: { path: '/search' } }), 'Поиск')
+  assert.equal(playbackLabel({ currentTrack: null, playContext: { title: 'Previous Playlist' } }), 'поток')
+})

@@ -94,14 +94,15 @@ function ExternalPlaylist() {
     }
   }
 
+  const playOptions = { context: { kind: 'playlist', title: playlist?.title } }
   const handlePlay = () => {
     if (tracks.length > 0) {
-      playPlaylist(tracks, 0, 'external')
+      playPlaylist(tracks, 0, 'external', null, playOptions)
     }
   }
 
   const handlePlayTrack = (track, index) => {
-    playPlaylist(tracks, index, 'external')
+    playPlaylist(tracks, index, 'external', null, playOptions)
   }
 
   const handleImport = async () => {

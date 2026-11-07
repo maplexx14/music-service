@@ -142,10 +142,11 @@ function PlaylistDetail() {
   // загруженном треке: для плеера это выглядело как конец плейлиста. Пейджер
   // говорит плееру, откуда дотянуть хвост самому, не дожидаясь прокрутки.
   const queuePager = () => ({ url: `/playlists/${id}`, total: totalTracks })
+  const playOptions = { context: { kind: 'playlist', title: playlist?.name } }
 
   const handlePlay = () => {
     if (playlist.tracks && playlist.tracks.length > 0) {
-      playPlaylist(playlist.tracks, 0, null, queuePager())
+      playPlaylist(playlist.tracks, 0, null, queuePager(), playOptions)
     }
   }
 
@@ -153,14 +154,14 @@ function PlaylistDetail() {
     if (shuffling || !playlist.tracks || playlist.tracks.length === 0) return
     setShuffling(true)
     try {
-      await shufflePlaylist(playlist.tracks, null, queuePager())
+      await shufflePlaylist(playlist.tracks, null, queuePager(), playOptions)
     } finally {
       setShuffling(false)
     }
   }
 
   const handlePlayTrack = (track, index) => {
-    playPlaylist(playlist.tracks, index, null, queuePager())
+    playPlaylist(playlist.tracks, index, null, queuePager(), playOptions)
   }
 
   const handleToggleLike = async (track, e) => {

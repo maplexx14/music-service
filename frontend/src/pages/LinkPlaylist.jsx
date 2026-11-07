@@ -155,12 +155,13 @@ function LinkPlaylist() {
       ? { url: LISTEN_URL, params: { url }, total: info?.total || 0, cursor: nextOffset }
       : null
 
+  const playOptions = { context: { kind: info?.kind || 'playlist', title: info?.title } }
   const handlePlay = () => {
-    if (tracks.length > 0) playPlaylist(tracks, 0, 'external', queuePager())
+    if (tracks.length > 0) playPlaylist(tracks, 0, 'external', queuePager(), playOptions)
   }
 
   const handlePlayTrack = (track, index) => {
-    playPlaylist(tracks, index, 'external', queuePager())
+    playPlaylist(tracks, index, 'external', queuePager(), playOptions)
   }
 
   const handleImport = async () => {

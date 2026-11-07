@@ -105,22 +105,23 @@ function Album() {
     }
   }
 
+  const playOptions = { context: { title: album?.title } }
   const handlePlay = () => {
-    if (tracks.length > 0) playPlaylist(tracks, 0, 'album')
+    if (tracks.length > 0) playPlaylist(tracks, 0, 'album', null, playOptions)
   }
 
   const handleShuffle = async () => {
     if (shuffling || tracks.length === 0) return
     setShuffling(true)
     try {
-      await shufflePlaylist(tracks, 'album')
+      await shufflePlaylist(tracks, 'album', null, playOptions)
     } finally {
       setShuffling(false)
     }
   }
 
   const handlePlayTrack = (index) => {
-    playPlaylist(tracks, index, 'album')
+    playPlaylist(tracks, index, 'album', null, playOptions)
   }
 
   // Альбом в медиатеку: треки материализуются в БД на бэке, поэтому одним

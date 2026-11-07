@@ -202,8 +202,9 @@ function Artist() {
     }
   }
 
+  const playOptions = { context: { title: artist?.name } }
   const handlePlay = () => {
-    if (tracks.length > 0) playPlaylist(tracks, 0, 'artist')
+    if (tracks.length > 0) playPlaylist(tracks, 0, 'artist', null, playOptions)
   }
 
   const handleShuffle = async () => {
@@ -211,7 +212,7 @@ function Artist() {
     haptic(HAPTIC.selection)
     setShuffling(true)
     try {
-      await shufflePlaylist(tracks, 'artist')
+      await shufflePlaylist(tracks, 'artist', null, playOptions)
     } finally {
       setShuffling(false)
     }
@@ -282,7 +283,7 @@ function Artist() {
   }
 
   const handlePlayTrack = (index) => {
-    playPlaylist(tracks, index, 'artist')
+    playPlaylist(tracks, index, 'artist', null, playOptions)
   }
 
   // Внешний трек нужно сначала материализовать в БД — только у записи с

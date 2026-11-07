@@ -299,11 +299,11 @@ const loadVolume = () => {
 
 // Экран, с которого запустили очередь: play* зовут только страницы, и в момент
 // нажатия адрес — это экран под пальцем.
-function capturePlayContext(source, track) {
+function capturePlayContext(source, track, context = {}) {
   return {
-    kind: source || null,
-    path: typeof window !== 'undefined' ? window.location.pathname : null,
-    title: source === 'album' ? track?.album || null : null,
+    kind: context.kind || source || null,
+    path: context.path ?? (typeof window !== 'undefined' ? window.location.pathname : null),
+    title: context.title ?? (source === 'album' ? track?.album || null : null),
   }
 }
 
@@ -318,9 +318,10 @@ const usePlayerStore = create((set, get) => ({
   isPlaying: false,
   source: null,
   // Откуда запущена очередь — для статуса в админке («в волне», «из плейлиста»).
-  // kind — тот же source, path — экран, где нажали play (ставится в playTrack/
+  // kind — тип подборки, path — экран, где нажали play (ставится в playTrack/
   // playPlaylist; переходы по очереди его не трогают), title — имя, если оно
-  // есть под рукой (альбом).
+  // есть под рукой (плейлист, артист, альбом). Контекст сохраняется со снимком
+  // плеера и служит подписью очереди на главной.
   playContext: null,
   volume: loadVolume(),
   currentTime: 0,
@@ -1012,7 +1013,7 @@ const usePlayerStore = create((set, get) => ({
     return queueExtendPromise
   },
 
-  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, { recordClick = true } = {}) => {
+  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, { recordClick = true, context } = {}) => {
     // startFlow/shufflePlaylist уже записали нажатие до своего запроса.
     if (recordClick) get().recordPlayClick('playlist', { track: tracks[startIndex], source, queueLength: tracks.length })
     if (tracks.length === 0) return
@@ -1028,7 +1029,7 @@ const usePlayerStore = create((set, get) => ({
       currentShuffleIndex: isShuffle ? idx : -1,
       isPlaying: true,
       source,
-      playContext: capturePlayContext(source, tracks[actualIndex]),
+      playContext: capturePlayContext(source, tracks[actualIndex], context),
       flowActive: source === 'flow',
       seekRequest: null,
       // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
@@ -1053,9 +1054,11 @@ const usePlayerStore = create((set, get) => ({
   // «перемешать» на большом плейлисте — это случайный порядок двадцати самых
   // заигранных треков, а не плейлиста. Хвост дальше окна доберёт по пейджеру
   // extendQueueIfNeeded (он тоже подмешивает новые индексы в конец порядка).
-  shufflePlaylist: async (tracks, source = null, pager = null) => {
+  shufflePlaylist: async (tracks, source = null, pager = null, { context } = {}) => {
     get().recordPlayClick('shuffle', { source, queueLength: tracks.length })
     if (tracks.length === 0) return
+    // Пока догружается окно, слушатель может уйти с исходной страницы.
+    const playContext = capturePlayContext(source, tracks[0], context)
     let list = tracks
     if (pager?.url && pager.total > tracks.length && tracks.length < SHUFFLE_WINDOW) {
       try {
@@ -1073,7 +1076,7 @@ const usePlayerStore = create((set, get) => ({
     // set до playPlaylist: он читает isShuffle через get() и сам раскладывает
     // перемешанный порядок обхода очереди.
     set({ isShuffle: true })
-    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager, { recordClick: false })
+    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager, { recordClick: false, context: playContext })
     // playPlaylist ставит стартовый трек туда, куда он попал в перемешанном
     // порядке, — то есть в середину, и всё, что оказалось до него, за проход
     // вперёд уже не сыграет. Прокручиваем порядок так, чтобы старт стал первым:
