@@ -1,9 +1,107 @@
-import { useRef, useEffect, useState } from 'react'
+import { createRef, PureComponent } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useLyrics, useActiveLyricIndex } from '../hooks/useLyrics'
 import { AlignLeft } from 'lucide-react'
 import BoltLoader from './BoltLoader'
 import './LyricsPanel.css'
+
+const LINE_TRANSITION = {
+  duration: 360,
+  easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+}
+
+class SyncedLyrics extends PureComponent {
+  containerRef = createRef()
+  animations = []
+
+  // Снимок до изменения DOM сохраняет и промежуточные позиции при перемотке.
+  getSnapshotBeforeUpdate(previous) {
+    const { lines, activeIndex } = this.props
+    const container = this.containerRef.current
+    if (previous.lines !== lines || previous.activeIndex === activeIndex || !container.getClientRects().length) return null
+    return new Map(Array.from(container.children, (element) => {
+      const style = getComputedStyle(element)
+      return [element.dataset.lineIndex, {
+        rect: element.getBoundingClientRect(),
+        opacity: style.opacity,
+        visible: style.visibility === 'visible',
+      }]
+    }))
+  }
+
+  cancelAnimations = () => {
+    this.animations.forEach((animation) => animation.cancel())
+    this.animations = []
+  }
+
+  componentDidUpdate(previous, _state, snapshot) {
+    const { lines, activeIndex } = this.props
+    if (previous.lines === lines && previous.activeIndex === activeIndex) return
+    this.cancelAnimations()
+    const container = this.containerRef.current
+    if (
+      !snapshot ||
+      !container.animate ||
+      document.documentElement.classList.contains('lite-mode') ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) return
+
+    const direction = activeIndex > previous.activeIndex ? 1 : -1
+    const gap = parseFloat(getComputedStyle(container).rowGap) || 0
+    // Сначала измеряем все строки, затем запускаем только transform/opacity.
+    const positions = Array.from(container.children, (element) => {
+      const style = getComputedStyle(element)
+      return {
+        element,
+        rect: element.getBoundingClientRect(),
+        before: snapshot.get(element.dataset.lineIndex),
+        transform: style.transform,
+        visible: style.visibility === 'visible',
+      }
+    }).filter(({ visible }) => visible)
+    this.animations = positions.map(({ element, rect, before: snapshotLine, transform }) => {
+      const before = snapshotLine?.visible ? snapshotLine : null
+      const x = before ? before.rect.left + before.rect.width / 2 - rect.left - rect.width / 2 : 0
+      const y = before
+        ? before.rect.top + before.rect.height / 2 - rect.top - rect.height / 2
+        : direction * (snapshotLine ? 12 : rect.height + gap)
+      const scale = before && rect.width ? before.rect.width / rect.width : 1
+      return element.animate([
+        { transform: `translate(${x}px, ${y}px) scale(${scale}) ${transform}`, opacity: before?.opacity ?? 0 },
+        { transform, opacity: 1 },
+      ], LINE_TRANSITION)
+    })
+  }
+
+  componentWillUnmount() {
+    this.cancelAnimations()
+  }
+
+  render() {
+    const { lines, activeIndex, seekTo } = this.props
+    const firstVisibleIndex = Math.max(0, activeIndex - 1)
+    return (
+      <div className="lyrics-synced" ref={this.containerRef}>
+        {lines.slice(firstVisibleIndex, activeIndex + 2).map((line, offset) => {
+          const index = firstVisibleIndex + offset
+          return (
+            <div
+              key={`${index}-${line.time}`}
+              data-line-index={index}
+              className={`lyrics-line ${index === activeIndex ? 'active' : ''} ${index < activeIndex ? 'sung' : ''}`}
+              style={{ gridRow: index - activeIndex + 2 }}
+              onClick={() => seekTo(line.time, 'lyrics')}
+              role="button"
+              tabIndex={0}
+            >
+              {line.text}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+}
 
 function LyricsPanel({ isolateTouches = false }) {
   const currentTrack = usePlayerStore((s) => s.currentTrack)
@@ -11,58 +109,10 @@ function LyricsPanel({ isolateTouches = false }) {
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
   const { syncedLines, plainText, loading, error, retry } = useLyrics(currentTrack)
-  const containerRef = useRef(null)
-  const activeRef = useRef(null)
-  const [isUserScrolling, setIsUserScrolling] = useState(false)
-  const userScrollTimeoutRef = useRef(null)
-
   const activeIndex = useActiveLyricIndex(syncedLines, currentTime, isPlaying)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const isSynced = syncedLines.length > 0
-
-  // scroll приходит и от нашего же scrollTo: плавная доводка шлёт события
-  // ~полсекунды, и раньше каждая смена строки сама выключала автопрокрутку
-  // на 4 с. На частых строках подсвеченная уезжала вниз, к краю и за край, и
-  // текст «отставал» от музыки. Ручной считаем только прокрутку после
-  // касания, колеса, нажатия или клавиши; автопрокрутка этот флаг сбрасывает.
-  const userInputRef = useRef(false)
-  const markUserInput = () => {
-    userInputRef.current = true
-  }
   const stopSwipe = isolateTouches ? (event) => event.stopPropagation() : undefined
-
-  // Auto-scroll to active line
-  useEffect(() => {
-    if (isUserScrolling) return
-    if (activeRef.current && containerRef.current) {
-      const container = containerRef.current
-      const el = activeRef.current
-      const containerRect = container.getBoundingClientRect()
-      const elRect = el.getBoundingClientRect()
-      const offset = elRect.top - containerRect.top - containerRect.height / 2 + elRect.height / 2
-      userInputRef.current = false
-      container.scrollTo({
-        top: container.scrollTop + offset,
-        behavior: 'smooth',
-      })
-    }
-  }, [activeIndex, isUserScrolling])
-
-  // Detect user scroll to disable auto-scroll temporarily
-  const handleScroll = () => {
-    if (!userInputRef.current) return
-    setIsUserScrolling(true)
-    if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current)
-    userScrollTimeoutRef.current = setTimeout(() => {
-      setIsUserScrolling(false)
-    }, 4000)
-  }
-
-  // Тап по строке — перемотка на неё, и на телефоне тоже. Прокрутка пальцем
-  // клик не рождает: браузер гасит его, если касание сдвинулось.
-  const handleLineClick = (time) => {
-    seekTo(time, 'lyrics')
-  }
 
   if (!currentTrack) return null
 
@@ -91,37 +141,13 @@ function LyricsPanel({ isolateTouches = false }) {
 
   return (
     <div
-      className="lyrics-panel"
-      ref={containerRef}
-      onScroll={handleScroll}
-      onWheel={markUserInput}
-      onPointerDown={markUserInput}
-      onKeyDown={markUserInput}
-      onTouchStart={(event) => {
-        markUserInput()
-        stopSwipe?.(event)
-      }}
-      onTouchMove={(event) => {
-        markUserInput()
-        stopSwipe?.(event)
-      }}
+      className={`lyrics-panel${isSynced ? ' is-synced' : ''}`}
+      onTouchStart={stopSwipe}
+      onTouchMove={stopSwipe}
       onTouchEnd={stopSwipe}
     >
       {isSynced ? (
-        <div className="lyrics-synced">
-          {syncedLines.map((line, i) => (
-            <div
-              key={`${i}-${line.time}`}
-              className={`lyrics-line ${i === activeIndex ? 'active' : ''} ${i < activeIndex ? 'sung' : ''}`}
-              ref={i === activeIndex ? activeRef : undefined}
-              onClick={() => handleLineClick(line.time)}
-              role="button"
-              tabIndex={0}
-            >
-              {line.text}
-            </div>
-          ))}
-        </div>
+        <SyncedLyrics lines={syncedLines} activeIndex={activeIndex} seekTo={seekTo} />
       ) : (
         <div className="lyrics-plain">
           {plainText.split('\n').map((line, i) => (

@@ -157,6 +157,14 @@
   --disc-size: min(600px, 44vw, 54vh);
 }
 
+/* Нижний край потока — на 16px выше плеера, включая его вариант в два ряда. */
+@media (min-width: 769px) {
+  .layout[data-has-player] .home-intro .hero-section {
+    max-height: calc(100vh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
+    max-height: calc(100dvh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
+  }
+}
+
 .hero-grainient {
   position: absolute;
   inset: 0;

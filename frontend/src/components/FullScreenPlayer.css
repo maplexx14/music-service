@@ -1296,57 +1296,15 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile {
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
     mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 32px), transparent 100%);
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced {
-    min-height: 100%;
-    justify-content: center;
-    gap: clamp(28px, 6vh, 52px);
-    padding: 0 16px;
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line {
-    display: none;
-    max-width: 100%;
-    font-size: clamp(24px, 7vw, 34px);
-    font-weight: 700;
-    line-height: 1.18;
-    letter-spacing: -0.02em;
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line.active,
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line.active + .lyrics-line {
-    display: block;
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line.active + .lyrics-line {
-    color: rgba(255, 255, 255, 0.38);
-    transform: none;
-  }
-}
-
-
-/* Manual mobile lyrics scrolling: show the full text while retaining the active-line emphasis. */
-@media (max-width: 768px) {
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile {
     overscroll-behavior: contain;
     touch-action: pan-y;
   }
+}
 
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced {
-    min-height: auto;
-    justify-content: flex-start;
-    gap: 14px;
-    padding: 32px 16px 56px;
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line {
-    display: block;
-    font-size: clamp(21px, 6vw, 28px);
-  }
-
-  .fullscreen-player.has-lyrics .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line.active + .lyrics-line {
-    color: rgba(255, 255, 255, 0.5);
+/* На низком экране соседние строки не должны обрезаться у заголовка и кнопок. */
+@media (max-width: 768px) and (max-height: 640px) {
+  .fullscreen-player.has-lyrics:not(.lyrics-expanded) .fullscreen-lyrics-mobile .lyrics-synced .lyrics-line:not(.active) {
+    visibility: hidden;
   }
 }
 

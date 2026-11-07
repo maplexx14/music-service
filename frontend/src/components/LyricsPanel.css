@@ -7,6 +7,10 @@
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
+.lyrics-panel.is-synced {
+  overflow: hidden;
+}
+
 .lyrics-panel::-webkit-scrollbar {
   width: 4px;
 }
@@ -50,7 +54,6 @@
   outline-offset: 3px;
 }
 
-.lyrics-synced,
 .lyrics-plain {
   padding: 40px 0 60px;
   display: flex;
@@ -59,16 +62,38 @@
   gap: 6px;
 }
 
+.lyrics-synced {
+  --lyrics-context-scale: 0.72;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  justify-items: center;
+  gap: clamp(18px, 3vh, 32px);
+  height: 100%;
+  padding: 24px 16px;
+}
+
 .lyrics-line {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.4;
+  max-width: 100%;
+  font-size: clamp(36px, 4vw, 54px);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
   color: rgba(255, 255, 255, 0.3);
-  transition: color 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
+  transition: color 280ms cubic-bezier(0.4, 0, 0.2, 1);
   padding: 4px 0;
   cursor: default;
   user-select: none;
   text-align: center;
+}
+
+.lyrics-synced .lyrics-line {
+  align-self: start;
+  /* Один кегль сохраняет переносы, размер соседних строк меняется масштабом. */
+  transform: scale(var(--lyrics-context-scale));
+  transform-origin: center;
 }
 
 .lyrics-synced .lyrics-line[role='button'] {
@@ -76,13 +101,14 @@
 }
 
 .lyrics-line.sung {
+  align-self: end;
   color: rgba(255, 255, 255, 0.5);
 }
 
 .lyrics-line.active {
+  align-self: center;
+  transform: scale(1);
   color: var(--text-primary);
-  transform: scale(1.02);
-  transform-origin: center center;
 }
 
 .lyrics-plain .lyrics-line {
@@ -90,19 +116,23 @@
   font-weight: 500;
   color: rgba(255, 255, 255, 0.55);
   line-height: 1.6;
+  letter-spacing: normal;
 }
 
 /* Mobile: smaller font */
 @media (max-width: 768px) {
+  .lyrics-synced {
+    --lyrics-context-scale: 0.78;
+  }
+
   .lyrics-line {
-    font-size: 20px;
+    font-size: clamp(30px, 8vw, 40px);
   }
 
   .lyrics-plain .lyrics-line {
     font-size: 16px;
   }
 
-  .lyrics-synced,
   .lyrics-plain {
     padding: 24px 0 40px;
   }
