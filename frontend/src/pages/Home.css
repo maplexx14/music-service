@@ -21,7 +21,7 @@
 }
 
 /* На десктопе поток и вкладки заполняют первый экран. На мобильных
-   компактный блок оставляет место для полок ниже переключателя. */
+   высоту потока задаём отдельно, переключатель идёт сразу за ним. */
 .page-container.home-page {
   padding-top: var(--page-padding, 32px);
 }
@@ -799,10 +799,9 @@
   }
 
   .home-intro {
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto;
     gap: 0;
-    height: 75vh;
-    height: 75svh;
+    height: auto;
     padding-bottom: 0;
     margin-bottom: 20px;
   }
@@ -860,14 +859,21 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    /* Градиент виден в скруглённых углах шапки. Высоту потока
-       задаёт общий контейнер вместе с шапкой и переключателем. */
+    /* Шапка занимает safe-top + 68px, перекрывая поток на 24px.
+       Поток заканчивается на 38px выше нижнего края навигации. */
+    height: calc(100vh - var(--safe-top) - var(--mobile-nav-bottom, 0px) - 82px);
+    height: calc(100svh - var(--safe-top) - var(--mobile-nav-bottom, 0px) - 82px);
     padding: 0;
     margin: -24px -16px 0;
     width: calc(100% + 32px);
     border-radius: 0;
     align-items: center;
     justify-content: center;
+  }
+
+  .hero-section .wave-widget,
+  .hero-section .flow-disc-position {
+    top: calc(53% - (var(--mobile-nav-height, 72px) + var(--safe-bottom)) / 2);
   }
 
   .wave-gif-button img {
@@ -901,7 +907,7 @@
   }
 
   .flow-controls {
-    bottom: 16px;
+    bottom: calc(16px + var(--mobile-nav-height, 72px) + var(--safe-bottom));
   }
 
   .content-section {
@@ -1128,7 +1134,7 @@
 
     .hero-section.has-vinyl {
       /* На коротких экранах оставляем место заголовку и кнопке настроек. */
-      --disc-size: min(420px, 86vw, 62cqh, max(84px, calc(100cqh - 176px)));
+      --disc-size: min(420px, 86vw, 62cqh, max(84px, calc(100cqh - var(--mobile-nav-height, 72px) - var(--safe-bottom) - 176px)));
     }
 
   }
