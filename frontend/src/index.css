@@ -752,10 +752,6 @@ html.power-save *::after {
 }
 
 @media (max-width: 768px) {
-  html.no-gpu .player,
-  html.power-save .player {
-    background: rgba(18, 18, 22, 0.96);
-  }
   html.no-gpu .mobile-player,
   html.power-save .mobile-player {
     background: rgba(10, 10, 12, 0.94);
