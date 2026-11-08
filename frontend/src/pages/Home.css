@@ -859,10 +859,11 @@
   .hero-section {
     z-index: 1;
     flex-direction: column;
-    /* Шапка занимает safe-top + 68px, перекрывая поток на 24px.
-       Нижний край блока оставляет 16px до навигации или мини-плеера. */
-    height: calc(100vh - var(--safe-top) - var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px)) - 44px);
-    height: calc(100svh - var(--safe-top) - var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px)) - 44px);
+    /* Fill the first screen behind the floating player and navigation.
+       The header overlaps by 24px; the home/history tabs follow below. */
+    height: calc(100vh - var(--safe-top) - 44px);
+    height: calc(100svh - var(--safe-top) - 44px);
+    height: calc(100dvh - var(--safe-top) - 44px);
     padding: 0;
     margin: -24px -16px 0;
     width: calc(100% + 32px);
@@ -875,6 +876,11 @@
   .hero-section .flow-disc-position {
     /* Anchor the main record and playback control to the visible screen. */
     top: var(--flow-center-y, calc(50vh - var(--safe-top) - 44px));
+  }
+
+  .flow-controls {
+    /* Keep settings accessible above the floating controls. */
+    bottom: var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px));
   }
 
   .wave-gif-button img {
