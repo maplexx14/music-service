@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScreen } from '../hooks/useScreen'
 import { usePowerSave } from '../hooks/usePowerSave'
@@ -76,6 +76,13 @@ function HeroDisc({ track, preview = false }) {
   // стора, отстающую до секунды, — диск дёргался бы назад.
   const trackKey = preview ? null : currentTrack?.id ?? currentTrack
 
+  // Freeze the visible angle before React detaches the record, so a departure
+  // snapshot keeps its rotation after the playback animation is cancelled.
+  useLayoutEffect(() => () => {
+    const platter = platterRef.current
+    if (platter) platter.style.transform = getComputedStyle(platter).transform
+  }, [])
+
   // Вращение — Web Animation от текущего угла до полного оборота за остаток
   // трека. Её крутит композитор, а не главный поток: раньше угол писал
   // rAF-цикл в style.transform, и диск шёл ступеньками (шаг квантования,
@@ -122,6 +129,8 @@ function HeroDisc({ track, preview = false }) {
 
     const sync = (state, force = false) => {
       if (dragRef.current) return
+      // A new track's time reset must not rewind the departing record.
+      if ((state.currentTrack?.id ?? state.currentTrack) !== trackKey) return
       const dur = readDuration(state, state.currentTrack)
       if (!(dur > 0)) return
       const now = performance.now()
