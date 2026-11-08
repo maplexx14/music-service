@@ -29,6 +29,10 @@
   isolation: isolate;
 }
 
+.hero-disc:not([data-cover-ready]) {
+  visibility: hidden;
+}
+
 .hero-disc::after {
   content: '';
   position: absolute;

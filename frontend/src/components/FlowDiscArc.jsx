@@ -3,21 +3,25 @@ import { shallow } from 'zustand/shallow'
 import { usePlayerStore } from '../store/playerStore'
 import { isDislikedTrack, queueStep } from '../utils/playerQueue'
 import { discNavigationDirection } from '../utils/discTransition'
-import { DISC_MOTION, animateDiscStack, clearDiscStack, cloneDiscRecord, readDiscSlots } from '../utils/discMotion'
+import { animateDiscNavigation, animateDiscStack, clearDiscStack, readDiscSlots } from '../utils/discMotion'
 import { useScreen } from '../hooks/useScreen'
+import { useWarmNextDiscCover } from '../hooks/useWarmNextDiscCover'
+import { resolveCoverUrl } from '../utils/media'
 import HeroDisc from './HeroDisc'
 import './FlowDiscArc.css'
 
 const DESKTOP_OFFSETS = [0, 1, -1]
 const MOBILE_OFFSETS = [0, 1, 2]
 const MOBILE_QUERY = '(max-width: 768px)'
-const DESKTOP_X = [0, 36]
-const DESKTOP_SCALE = [1, 0.68]
-const MOBILE_Y = [0, 0.4, 0.78]
-const MOBILE_SCALE = [1, 0.84, 0.7]
+const DESKTOP_X = [0, 32]
+const DESKTOP_SCALE = [1, 0.78]
+const MOBILE_Y = [0, 0.34, 0.66]
+const MOBILE_SCALE = [1, 0.9, 0.8]
 const EMPTY_TRACKS = []
 
 function trackKey(track) {
+  if (track?.source && track.external_id) return `${track.source}:${track.external_id}`
+  if (track?.source && typeof track.id === 'string' && track.id.startsWith(`${track.source}:`)) return track.id
   return track?.id != null ? `${track.source || 'local'}:${track.id}` : track?.cover_url
 }
 
@@ -28,9 +32,71 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   const previousRef = useRef(null)
   const transitionRef = useRef(null)
   const stackMotionsRef = useRef(new Map())
+  const previewSnapshotRef = useRef(null)
+  const finishEntranceRef = useRef(null)
+  const [previewTracks, setPreviewTracks] = useState(null)
+  const [upgradeCovers, setUpgradeCovers] = useState(false)
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
   const { active, scrollerRef } = useScreen()
   const offsets = mobile ? MOBILE_OFFSETS : DESKTOP_OFFSETS
+
+  useLayoutEffect(() => {
+    const arc = arcRef.current
+    setUpgradeCovers(false)
+    arc.removeAttribute('data-covers-ready')
+    if (!active) return undefined
+
+    let disposed = false
+    let entranceNodes = []
+    const finishEntrance = () => {
+      arc.removeAttribute('data-entrance-running')
+      for (const disc of entranceNodes) {
+        disc.removeAttribute('data-disc-enter')
+        disc.style.removeProperty('--disc-enter-x')
+        disc.style.removeProperty('--disc-enter-rotation')
+        disc.style.removeProperty('--slot-depth')
+      }
+      if (!disposed) setUpgradeCovers(true)
+    }
+    finishEntranceRef.current = finishEntrance
+
+    // Pin the decoded previews: background flow preloads must not replace a
+    // record halfway through the first entrance. Playback uses the live queue.
+    const reveal = () => {
+      const discs = [...arc.querySelectorAll('.flow-disc-slot .hero-disc')]
+      if (!discs.length || discs.some((disc) => !disc.hasAttribute('data-cover-settled'))) return
+      if (previewSnapshotRef.current) setPreviewTracks(previewSnapshotRef.current)
+      entranceNodes = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
+      for (const disc of entranceNodes) {
+        const style = getComputedStyle(disc)
+        for (const property of ['--disc-enter-x', '--disc-enter-rotation', '--slot-depth']) {
+          disc.style.setProperty(property, style.getPropertyValue(property))
+        }
+        disc.setAttribute('data-disc-enter', '')
+      }
+      arc.setAttribute('data-entrance-running', '')
+      arc.setAttribute('data-covers-ready', '')
+      observer.disconnect()
+      const animations = entranceNodes.flatMap((disc) => disc.getAnimations()
+        .filter((animation) => animation.animationName === 'flow-disc-enter'))
+      Promise.all(animations.map((animation) => animation.finished.catch(() => {})))
+        .then(() => { if (!disposed) finishEntrance() })
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(arc, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-cover-settled'],
+    })
+    reveal()
+    return () => {
+      disposed = true
+      observer.disconnect()
+      finishEntrance()
+      finishEntranceRef.current = null
+    }
+  }, [active])
 
   useEffect(() => {
     const query = window.matchMedia(MOBILE_QUERY)
@@ -50,6 +116,10 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     dislikedTrackKeys: s.dislikedTrackKeys,
     flowPreload: s.flowPreload,
   }), shallow)
+
+  useEffect(() => {
+    if (!active || state.currentTrack) setPreviewTracks(null)
+  }, [active, state.currentTrack])
 
   useLayoutEffect(() => {
     const hero = arcRef.current?.parentElement
@@ -83,7 +153,9 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       record: arc?.querySelector('.flow-disc-slot.is-current .flow-disc-position'),
       slots: currentSlots,
     }
-    const animate = active && !document.hidden && mobile &&
+    const direction = discNavigationDirection(previous?.state, state)
+    if (direction && arc.hasAttribute('data-entrance-running')) finishEntranceRef.current?.()
+    const animate = active && !document.hidden && !arc.hasAttribute('data-entrance-running') &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
       typeof arc.animate === 'function'
     if (!animate) {
@@ -91,10 +163,9 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       clearDiscStack(stackMotionsRef.current)
       return
     }
-    const direction = discNavigationDirection(previous?.state, state)
     const returning = direction < 0
     const key = direction ? trackKey(returning ? state.currentTrack : previous.state.currentTrack) : null
-    if (previous?.slots && previous.state.currentTrack) {
+    if (mobile && previous?.slots && previous.state.currentTrack) {
       animateDiscStack(arc, previous.slots, currentSlots, stackMotionsRef.current, key)
     }
     if (!direction || !previous?.record) return
@@ -103,47 +174,24 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     // back from that same side. An interrupted move continues from its position.
     const liveRecord = returning ? previousRef.current.record : previous.record
     if (!liveRecord) return
-    const interrupted = transitionRef.current
-    const continuing = interrupted?.key === key
-    const source = continuing ? interrupted.ghost.querySelector('.flow-disc-position') : liveRecord
-    const from = continuing ? getComputedStyle(interrupted.ghost).transform : null
-    const record = cloneDiscRecord(source)
-    interrupted?.cleanup()
-    const ghost = document.createElement('div')
-    ghost.className = 'flow-disc-transition'
-    ghost.setAttribute('aria-hidden', 'true')
-    ghost.inert = true
-    ghost.append(record)
-    arc.append(ghost)
-
-    // Hide the live copy until the moving copy reaches its final position.
-    const sourceSlot = liveRecord.closest('.flow-disc-slot')
-    const visibility = sourceSlot?.style.visibility
-    if (sourceSlot) sourceSlot.style.visibility = 'hidden'
-    const distance = (arc.clientWidth + record.offsetWidth) / 2 + 16
-    const outside = `translateX(${distance}px)`
-    const animation = ghost.animate([
-      { transform: from || (returning ? outside : 'translateX(0)') },
-      { transform: returning ? 'translateX(0)' : outside },
-    ], DISC_MOTION)
-    let cleaned = false
-    const cleanup = () => {
-      if (cleaned) return
-      cleaned = true
-      ghost.remove()
-      animation.cancel()
-      if (sourceSlot) sourceSlot.style.visibility = visibility
-      if (transitionRef.current?.cleanup === cleanup) transitionRef.current = null
-    }
-    transitionRef.current = { cleanup, ghost, key }
-    animation.finished.then(cleanup, cleanup)
+    transitionRef.current = animateDiscNavigation(arc, liveRecord, {
+      returning,
+      key,
+      interrupted: transitionRef.current,
+      onFinish: (motion) => {
+        if (transitionRef.current === motion) transitionRef.current = null
+      },
+    })
   }, [state, active, mobile])
 
   useEffect(() => () => {
     transitionRef.current?.cleanup()
     clearDiscStack(stackMotionsRef.current)
   }, [])
-  const candidates = [...(state.flowPreload?.tracks || EMPTY_TRACKS), ...tracks, ...state.queue]
+  const candidates = [
+    ...(!state.currentTrack && previewTracks ? previewTracks : EMPTY_TRACKS),
+    ...(state.flowPreload?.tracks || EMPTY_TRACKS), ...tracks, ...state.queue,
+  ]
     .filter((track) => !isDislikedTrack(state, track))
   const center = state.currentTrack || candidates[0]
   const used = new Set([trackKey(center)])
@@ -159,7 +207,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     used.add(key)
   }
 
-  // Keep the stack populated before playback and at the ends of a short queue.
+  // Fill available previews without inventing records before tracks arrive.
   for (const offset of offsets) {
     if (slots.get(offset)) continue
     const track = candidates.find((candidate) => {
@@ -167,14 +215,25 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       return key && !used.has(key)
     })
     if (track) used.add(trackKey(track))
-    slots.set(offset, track || { id: `placeholder:${offset}` })
+    slots.set(offset, track)
   }
 
+  previewSnapshotRef.current = state.currentTrack ? null : [...slots.values()].filter(Boolean)
+
+  const nextStep = state.currentTrack ? queueStep(state, 1) : null
+  const nextTrack = state.currentTrack ? (nextStep ? state.queue[nextStep.index] : null) : slots.get(1)
+  useWarmNextDiscCover(arcRef,
+    resolveCoverUrl(center?.cover_url, 'full'),
+    resolveCoverUrl(nextTrack?.cover_url, 'full'),
+    active && upgradeCovers,
+  )
+
   return (
-    <div ref={arcRef} className={`flow-disc-arc${playing ? ' is-playing' : ''}`}>
+    <div ref={arcRef} className={`flow-disc-arc${playing ? ' is-playing' : ''}`} data-active={active || undefined}>
       {offsets.map((offset, depth) => {
         const distance = offset === 0 ? 0 : 1
         const track = slots.get(offset)
+        if (!track) return null
         return (
           <div
             key={trackKey(track)}
@@ -182,16 +241,18 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
             className={`flow-disc-slot${offset === 0 ? ' is-current' : ''}`}
             style={{
               '--slot-x': `${Math.sign(offset) * DESKTOP_X[distance]}%`,
-              '--slot-y': offset === 0 ? '0%' : '47%',
+              '--slot-y': offset === 0 ? '0%' : '43%',
               '--slot-scale': DESKTOP_SCALE[distance],
               '--slot-distance': distance,
               '--slot-depth': depth,
+              '--disc-enter-x': depth % 2 === 0 ? '100vw' : '-100vw',
+              '--disc-enter-rotation': depth % 2 === 0 ? '18deg' : '-18deg',
               '--slot-mobile-y': MOBILE_Y[depth],
               '--slot-mobile-scale': MOBILE_SCALE[depth],
             }}
           >
             <div className="flow-disc-position">
-              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} />
+              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} />
             </div>
           </div>
         )

@@ -14,6 +14,7 @@ import { toast } from '../store/toastStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady } from '../utils/media'
+import { rememberCoverImage } from '../utils/coverCache'
 import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
@@ -132,6 +133,7 @@ function HeroBackdrop({ cover, className = 'fullscreen-hero' }) {
           data-no-fade=""
           decoding="async"
           draggable={false}
+          onLoad={(event) => rememberCoverImage(event.currentTarget)}
           onAnimationEnd={layer.entering ? () => settle(layer.key) : undefined}
         />
       ))}
@@ -861,6 +863,7 @@ function FullScreenPlayer() {
                     decoding="async"
                     draggable={false}
                     onError={handleCoverError}
+                    onLoad={(event) => rememberCoverImage(event.currentTarget)}
                   />
                 )
               })}

@@ -1,3 +1,5 @@
+import { markCoverReady } from './coverCache'
+
 // Обложка во весь верх полноэкранного плеера (hero): подходит ли картинка и
 // сколько срезать вшитых чёрных полей. Ответ по URL запоминается — плеер
 // открывают снова и снова на тех же треках, и с готовым ответом он сразу
@@ -112,9 +114,13 @@ export function analyzeHeroCover(url) {
       const w = img.naturalWidth
       const h = img.naturalHeight
       const ok = Math.min(w, h) >= HERO_MIN_SIDE && Math.abs(w / h - 1) < 0.05
-      const done = () => finish(ok ? { url, ...findLetterbox(img) } : null)
-      if (typeof img.decode === 'function') img.decode().then(done, done)
-      else done()
+      const done = () => {
+        if (w > 0 && h > 0) markCoverReady(url)
+        finish(ok ? { url, ...findLetterbox(img) } : null)
+      }
+      if (typeof img.decode === 'function') {
+        img.decode().then(done, () => finish(null, false))
+      } else done()
     }
     // Сеть моргнула — не запоминаем, в следующий раз проверим снова.
     img.onerror = () => finish(null, false)

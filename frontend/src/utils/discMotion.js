@@ -18,6 +18,71 @@ export function cloneDiscRecord(source) {
   return record
 }
 
+// A returning record can be newly mounted: wait for decoded artwork before
+// taking its snapshot, and keep the live copy hidden until the flight ends.
+export function animateDiscNavigation(arc, liveRecord, { returning, key, interrupted, onFinish }) {
+  const continuing = interrupted?.key === key && interrupted.ghost
+  const from = continuing ? getComputedStyle(interrupted.ghost).transform : null
+  const snapshot = continuing ? cloneDiscRecord(interrupted.ghost.querySelector('.flow-disc-position')) : null
+  interrupted?.cleanup()
+
+  const slot = liveRecord.closest('.flow-disc-slot')
+  const visibility = slot?.style.visibility
+  if (slot) slot.style.visibility = 'hidden'
+  let animation = null
+  let observer = null
+  let cleaned = false
+  const motion = { key, ghost: null, cleanup }
+
+  function cleanup() {
+    if (cleaned) return
+    cleaned = true
+    observer?.disconnect()
+    motion.ghost?.remove()
+    animation?.cancel()
+    if (slot) slot.style.visibility = visibility
+    onFinish?.(motion)
+  }
+
+  const start = () => {
+    if (cleaned) return
+    observer?.disconnect()
+    const record = snapshot || cloneDiscRecord(liveRecord)
+    // The returned record arrives at the full-size current position, even
+    // when the live slot is still scaling up from a queue preview.
+    if (returning) record.style.transform = 'translate(-50%, -50%) scale(1)'
+    const ghost = document.createElement('div')
+    ghost.className = 'flow-disc-transition'
+    ghost.setAttribute('aria-hidden', 'true')
+    ghost.inert = true
+    ghost.append(record)
+    arc.append(ghost)
+    motion.ghost = ghost
+    const distance = (arc.clientWidth + record.offsetWidth) / 2 + 16
+    const outside = `translateX(${distance}px)`
+    animation = ghost.animate([
+      { transform: from || (returning ? outside : 'translateX(0)') },
+      { transform: returning ? 'translateX(0)' : outside },
+    ], DISC_MOTION)
+    animation.finished.then(cleanup, cleanup)
+  }
+
+  const artwork = liveRecord.querySelector('.hero-disc')
+  if (snapshot || artwork?.hasAttribute('data-cover-ready')) {
+    start()
+  } else if (returning && artwork && !artwork.hasAttribute('data-cover-settled')) {
+    observer = new MutationObserver(() => {
+      if (artwork.hasAttribute('data-cover-ready')) start()
+      else if (artwork.hasAttribute('data-cover-settled')) cleanup()
+    })
+    observer.observe(artwork, { attributes: true, attributeFilter: ['data-cover-ready', 'data-cover-settled'] })
+  } else {
+    cleanup()
+    return null
+  }
+  return motion
+}
+
 export function readDiscSlots(arc) {
   return new Map([...arc.querySelectorAll('.flow-disc-slot')].map((node) => [
     node.dataset.discKey,
@@ -45,7 +110,7 @@ function animateSlot(motions, key, node, from, to, remove = false) {
 export function animateDiscStack(arc, previous, current, motions, slidingKey) {
   const size = arc.querySelector('.flow-disc-position')?.offsetWidth || 0
   if (!size) return
-  const step = size * 0.4
+  const step = size * 0.34
   for (const [key, slot] of current) {
     const interrupted = motions.get(key)
     if (key === slidingKey) {
@@ -53,11 +118,10 @@ export function animateDiscStack(arc, previous, current, motions, slidingKey) {
       continue
     }
     if (previous.has(key) && !interrupted) continue
-    const to = { transform: `translateY(${slot.y * size}px)`, opacity: 1 }
+    const to = { transform: `translateY(${slot.y * size}px)` }
     const from = interrupted ? {
       transform: getComputedStyle(interrupted.node).transform,
-      opacity: getComputedStyle(interrupted.node).opacity,
-    } : { transform: `translateY(${slot.y * size + step}px)`, opacity: 0 }
+    } : { transform: `translateY(${slot.y * size + step}px)` }
     animateSlot(motions, key, slot.node, from, to)
   }
   for (const [key, slot] of previous) {
@@ -74,8 +138,8 @@ export function animateDiscStack(arc, previous, current, motions, slidingKey) {
     arc.append(ghost)
     const fromY = slot.y * size
     animateSlot(motions, key, ghost,
-      { transform: `translateY(${fromY}px)`, opacity: 1 },
-      { transform: `translateY(${fromY + step}px)`, opacity: 0 }, true)
+      { transform: `translateY(${fromY}px)` },
+      { transform: `translateY(${fromY + step}px)` }, true)
   }
 }
 

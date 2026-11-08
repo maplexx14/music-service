@@ -1,5 +1,8 @@
 import { API_URL, SERVER_URL } from '../config'
 import defaultCover from '../assets/default-cover.webp'
+import { isCoverReady, markCoverReady } from './coverCache'
+
+export { isCoverReady } from './coverCache'
 
 // Размер обложки под место на экране. CDN провайдеров отдают один и тот же
 // кадр в разных разрешениях, размер зашит в URL. Импорт кладёт в базу
@@ -10,6 +13,7 @@ import defaultCover from '../assets/default-cover.webp'
 // кадр прокрутки, обложки проявлялись с большой задержкой.
 //   thumb — строки списков и мини-плеер (до ~64px на экране);
 //   card  — карточки, шапки плейлистов (до ~200px);
+//   disc  — компактные обложки фоновых дисков, скорость важнее детализации;
 //   full  — полноэкранный плеер и системный виджет.
 const COVER_VARIANTS = {
   thumb: { google: 'w120-h120', yandex: '200x200', soundcloud: 't300x300', spotify: 'ab67616d00001e02', deezer: '250x250' },
@@ -18,6 +22,16 @@ const COVER_VARIANTS = {
   // другой (320, 120) режется на лету — 0,2–0,7 с на холодную картинку
   // (замер с прода 2026-10-06), что и тормозило сетку на первом заходе.
   card: { google: 'w300-h300', yandex: '400x400', soundcloud: 't500x500', spotify: 'ab67616d00001e02', deezer: '500x500' },
+  // Use supported CDN sizes; arbitrary dimensions can be slow or unavailable.
+  // Spotify's next smaller album variant is 64px. Disc artwork is decorative.
+  disc: {
+    google: 'w160-h160',
+    googleQuality: 50,
+    yandex: '200x200',
+    soundcloud: 't300x300',
+    spotify: 'ab67616d00004851',
+    deezer: '250x250',
+  },
   // Яндекс в full — те же 400: полноэкранный плеер ждёт прогрева обложки
   // (preloadCover, 450мс), а 1000×1000 весит в разы больше.
   // Google — 800 с качеством JPEG 75: обложка ytmusic 1200×1200 при родных
@@ -55,9 +69,12 @@ const sizeCover = (url, size) => {
     const sized = url.replace(/=w\d+-h\d+/, `=${v.google}`)
     // Качество меняем только там, где оно задано: у thumb/card URL остаётся
     // прежним — он уже лежит в кэше браузера и nginx.
-    return v.googleQuality ? sized.replace(/(=w\d+-h\d+)-l\d+/, `$1-l${v.googleQuality}`) : sized
+    return v.googleQuality ? sized.replace(/(=w\d+-h\d+)(?:-l\d+)?/, `$1-l${v.googleQuality}`) : sized
   }
   if (url.includes('ytimg.com')) {
+    if (size === 'disc') {
+      return url.replace(/\/(default|mqdefault|hqdefault|sddefault|maxresdefault)\.jpg/, '/mqdefault.jpg')
+    }
     return size === 'full' || size === 'hero'
       ? url.replace(/\/(default|mqdefault|hqdefault|sddefault)\.jpg/, '/maxresdefault.jpg')
       : url
@@ -83,7 +100,7 @@ const sizeCover = (url, size) => {
 // оно идёт через наш прокси. Бэкенд тянет обложку через свой выход и кэширует.
 const proxyExternalCover = (url) => `${API_URL}/tracks/cover-proxy?url=${encodeURIComponent(url)}`
 
-// Резолвит URL обложки. Второй аргумент — размер: 'thumb' | 'card' | 'full' | 'hero'.
+// Резолвит URL обложки. Второй аргумент — размер: 'thumb' | 'card' | 'disc' | 'full' | 'hero'.
 // true — прежняя форма записи для 'full', по умолчанию 'card'. Свои
 // (загруженные) обложки лежат одним файлом — размер на них не влияет.
 export const resolveCoverUrl = (coverUrl, size = 'card') => {
@@ -109,24 +126,19 @@ export const handleCoverError = (e) => {
 // что у плеера (decode не «пачкает» canvas, чтение пикселей не нужно).
 // Обложки, которые preloadCover уже скачал и декодировал за эту сессию:
 // открытие фуллскрина берёт полную, только если она готова, и не ждёт её.
-const READY_COVERS_MAX = 300
-const readyCovers = new Set()
-
-export const isCoverReady = (url) => Boolean(url) && readyCovers.has(url)
-
-export const preloadCover = (url, timeoutMs = 450) => {
+export const preloadCover = (url, timeoutMs = 450, { priority = 'auto' } = {}) => {
   if (!url) return Promise.resolve(false)
+  if (isCoverReady(url)) return Promise.resolve(true)
   return new Promise((resolve) => {
     const img = new Image()
+    img.fetchPriority = priority
+    img.decoding = 'async'
     let settled = false
     const finish = (ok) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      if (ok) {
-        readyCovers.add(url)
-        if (readyCovers.size > READY_COVERS_MAX) readyCovers.delete(readyCovers.values().next().value)
-      }
+      if (ok) markCoverReady(url)
       resolve(ok)
     }
     const timer = setTimeout(() => finish(false), timeoutMs)

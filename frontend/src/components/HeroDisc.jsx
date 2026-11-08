@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useScreen } from '../hooks/useScreen'
 import { usePowerSave } from '../hooks/usePowerSave'
+import { useDiscCover } from '../hooks/useDiscCover'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { PLAYBACK_ANIMATION_ID } from '../utils/frameMeter'
-import defaultCover from '../assets/default-cover.webp'
-import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { resolveCoverUrl } from '../utils/media'
+import { isLowQuality } from '../utils/streamQuality'
 import './HeroDisc.css'
 
 const DEG = 180 / Math.PI
@@ -48,12 +49,12 @@ function clamp(value, min, max) {
 //
 // Живёт отдельным компонентом, потому что подписан на currentTrack: главная
 // (со всеми полками карточек) на смену трека не перерисовывается.
-function HeroDisc({ track, preview = false }) {
+function HeroDisc({ track, preview = false, upgrade = false }) {
   const playingTrack = usePlayerStore((s) => preview ? null : s.currentTrack)
   const currentTrack = preview ? track : playingTrack
-  const heavyCover = usePlayerStore(
-    (s) => !preview && s.currentTrack?.id != null && s.heavyCoverTrackId === s.currentTrack.id
-  )
+  const heavyCoverAllowed = usePlayerStore((s) => preview || !s.isPlaying ||
+    (s.currentTrack?.id != null && (s.heavyCoverTrackId === s.currentTrack.id ||
+      (s.audibleTrackId === s.currentTrack.id && !isLowQuality()))))
   // duration — только для первичной отрисовки aria-атрибутов; в кадре
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => preview ? 0 : s.duration)
@@ -69,6 +70,12 @@ function HeroDisc({ track, preview = false }) {
   // с позиции, куда диск отпустили.
   const spinRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
+  const coverUrl = resolveCoverUrl(currentTrack?.cover_url, 'disc')
+  const fullCoverUrl = upgrade ? resolveCoverUrl(currentTrack?.cover_url, 'full') : null
+  const { src: shownCover, settled: coverSettled, upgradeSettled } = useDiscCover(coverUrl, fullCoverUrl, preview ? 'auto' : 'high', {
+    allowUpgrade: heavyCoverAllowed,
+    alternateUpgradeUrl: upgrade ? resolveCoverUrl(currentTrack?.cover_url, 'hero') : null,
+  })
 
   const total = readDuration({ duration }, currentTrack)
   // Вращение перезапускается только на смене трека: стор заменяет объект
@@ -322,6 +329,9 @@ function HeroDisc({ track, preview = false }) {
     <div
       ref={rootRef}
       className={`hero-disc${vinyl ? ' is-vinyl' : ''}${preview ? ' is-preview' : ''}${isDragging ? ' is-dragging' : ''}`}
+      data-cover-ready={Boolean(shownCover) || undefined}
+      data-cover-settled={coverSettled || undefined}
+      data-full-cover-settled={Boolean(fullCoverUrl) && upgradeSettled || undefined}
       // Поворот диска — не pull-to-refresh: жест не должен тянуть обновление
       // главной, когда страница проскроллена в самый верх.
       data-no-pull=""
@@ -342,18 +352,15 @@ function HeroDisc({ track, preview = false }) {
           неподвижный слой поверх. Без пластинки (настройка) крутится та же
           обёртка, а обложка занимает весь круг. */}
       <div ref={platterRef} className="hero-disc-spin">
-        <img
+        {shownCover && <img
           className="hero-disc-cover"
-          // Диск крупный (до 520px), а обложки YouTube приходят 120×120 —
-          // просим у CDN увеличенную версию, как полноэкранный плеер. Но только
-          // после старта звука (heavyCoverTrackId): до него — card, иначе
-          // крупная картинка качалась бы наперегонки с первыми байтами трека.
-          src={resolveCoverUrl(currentTrack.cover_url, heavyCover ? 'full' : 'card') || defaultCover}
+          // Decode the compact artwork before showing the record.
+          src={shownCover}
+          data-no-fade=""
           alt=""
           draggable={false}
           decoding="async"
-          onError={handleCoverError}
-        />
+        />}
       </div>
       {vinyl && <div className="hero-disc-light" />}
     </div>

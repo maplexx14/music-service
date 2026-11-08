@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>bolt — уведомление на экране блокировки iOS</title>
+  <style>
+    @font-face { font-family: SF; src: url('./assets/SF-Pro-Display-Regular.otf'); font-weight: 400; }
+    @font-face { font-family: SF; src: url('./assets/SF-Pro-Display-Semibold.otf'); font-weight: 600; }
+    @font-face { font-family: SF; src: url('./assets/SF-Pro-Display-Bold.otf'); font-weight: 700; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1179px; height: 2556px; overflow: hidden; background: #0c1230; }
+    body { font-family: SF, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    .screen { width: 393px; height: 852px; position: relative; overflow: hidden; transform: scale(3); transform-origin: top left; color: #fff; }
+    .wallpaper { position: absolute; inset: 0; background: #080e23; }
+    .wallpaper svg { width: 100%; height: 100%; }
+    .wallpaper::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(3,7,20,.14), transparent 35%, rgba(4,5,15,.3)); }
+    .grain { position: absolute; inset: 0; width: 393px; height: 852px; opacity: .045; mix-blend-mode: soft-light; }
+    .status { position: absolute; top: 22px; left: 28px; right: 28px; height: 18px; display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 600; letter-spacing: -.15px; }
+    .status-icons { display: flex; align-items: center; gap: 5px; }
+    .status-icons svg { display: block; }
+    .island { position: absolute; top: 11px; left: 134px; width: 125px; height: 37px; border-radius: 22px; background: #000; }
+    .lock { position: absolute; width: 13px; height: 19px; left: 190px; top: 79px; }
+    .date { position: absolute; top: 114px; width: 100%; text-align: center; font-size: 21px; font-weight: 600; letter-spacing: -.35px; color: #e9ebff; }
+    .time { position: absolute; top: 141px; width: 100%; text-align: center; font-size: 108px; line-height: 1.05; font-weight: 600; letter-spacing: -4.9px; font-variant-numeric: tabular-nums; color: #e9ebff; }
+    .notification { position: absolute; left: 8px; right: 8px; bottom: 139px; min-height: 103px; padding: 12px 14px 13px 56px; border-radius: 24px; color: #19171f; background: rgba(239,236,251,.80); backdrop-filter: blur(24px) saturate(1.25); -webkit-backdrop-filter: blur(24px) saturate(1.25); box-shadow: 0 7px 30px rgba(3,3,20,.10), inset 0 .5px 0 rgba(255,255,255,.30); }
+    .app-icon { position: absolute; left: 14px; top: 15px; width: 32px; height: 32px; border-radius: 8px; object-fit: cover; box-shadow: 0 .5px 1px rgba(0,0,0,.10); }
+    .notification-header { display: flex; align-items: center; justify-content: space-between; height: 15px; font-size: 12px; line-height: 15px; color: rgba(28,25,36,.60); }
+    .app-name { font-weight: 600; letter-spacing: .05px; }
+    .received { font-size: 11px; font-weight: 400; }
+    .notification-title { margin-top: 3px; font-size: 16px; line-height: 19px; font-weight: 600; letter-spacing: -.18px; }
+    .notification-body { margin-top: 1px; font-size: 15px; line-height: 19px; font-weight: 400; letter-spacing: -.10px; }
+    .quick-action { position: absolute; bottom: 46px; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(12,15,34,.35); backdrop-filter: blur(18px); border: .5px solid rgba(255,255,255,.08); }
+    .flashlight { left: 47px; }
+    .camera { right: 47px; }
+    .home-indicator { position: absolute; bottom: 8px; left: 126px; width: 141px; height: 5px; border-radius: 5px; background: rgba(255,255,255,.94); }
+  </style>
+</head>
+<body>
+  <main class="screen" aria-label="Экран блокировки iPhone с уведомлением bolt">
+    <div class="wallpaper">
+      <svg viewBox="0 0 393 852" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#101634"/><stop offset=".52" stop-color="#1c2154"/><stop offset="1" stop-color="#080d29"/>
+          </linearGradient>
+          <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#8eabff"/><stop offset=".42" stop-color="#6460e8"/><stop offset=".7" stop-color="#b48adb"/><stop offset="1" stop-color="#eaa78b"/>
+          </linearGradient>
+          <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#b95877"/><stop offset=".4" stop-color="#e38e94"/><stop offset="1" stop-color="#8a67c1"/>
+          </linearGradient>
+          <linearGradient id="blue" x1="0" y1="0" x2="1" y2=".3">
+            <stop stop-color="#243ec9"/><stop offset=".55" stop-color="#4766df"/><stop offset="1" stop-color="#9bb7ee"/>
+          </linearGradient>
+          <filter id="soft" filterUnits="userSpaceOnUse" x="-400" y="-400" width="1200" height="1800"><feGaussianBlur stdDeviation="36"/></filter>
+          <filter id="edge" filterUnits="userSpaceOnUse" x="-400" y="-400" width="1200" height="1800"><feGaussianBlur stdDeviation="8"/></filter>
+          <filter id="ribbon-soft" filterUnits="userSpaceOnUse" x="-400" y="-400" width="1200" height="1800"><feGaussianBlur stdDeviation="15"/></filter>
+        </defs>
+        <rect width="393" height="852" fill="url(#base)"/>
+        <ellipse cx="310" cy="129" rx="189" ry="240" fill="#454397" opacity=".5" filter="url(#soft)"/>
+        <path d="M477 -123 C299 103 438 226 237 380 C65 512 175 665 505 746" fill="none" stroke="url(#ribbon)" stroke-width="169" filter="url(#ribbon-soft)" opacity=".72"/>
+        <path d="M421 -88 C316 90 431 212 238 369" fill="none" stroke="url(#coral)" stroke-width="75" filter="url(#edge)" opacity=".73"/>
+        <path d="M-113 956 C-52 615 -34 512 162 449 C318 400 337 477 479 460" fill="none" stroke="url(#blue)" stroke-width="161" filter="url(#ribbon-soft)" opacity=".87"/>
+        <path d="M-61 760 C76 693 149 693 354 838" fill="none" stroke="#6966c7" stroke-width="155" opacity=".55" filter="url(#soft)"/>
+        <ellipse cx="390" cy="717" rx="105" ry="125" fill="#e6a8a0" opacity=".43" filter="url(#soft)"/>
+      </svg>
+    </div>
+    <canvas class="grain" width="1179" height="2556" aria-hidden="true"></canvas>
+    <div class="status">
+      <span>МТС</span>
+      <div class="status-icons" aria-hidden="true">
+        <svg width="18" height="13" viewBox="0 0 18 13" fill="white"><rect x="0" y="9" width="3" height="4" rx=".7"/><rect x="5" y="6" width="3" height="7" rx=".7"/><rect x="10" y="3" width="3" height="10" rx=".7"/><rect x="15" width="3" height="13" rx=".7"/></svg>
+        <svg width="17" height="13" viewBox="0 0 20 15" fill="white"><path d="M.4 3.8a15.3 15.3 0 0 1 19.2 0l-2.1 2.4a12 12 0 0 0-15 0L.4 3.8Zm4 4.6a9 9 0 0 1 11.2 0l-2.1 2.4a5.9 5.9 0 0 0-7 0L4.4 8.4Zm4 4.5a2.7 2.7 0 0 1 3.2 0L10 15l-1.6-2.1Z"/></svg>
+        <svg width="28" height="14" viewBox="0 0 28 14"><rect x=".6" y="1.4" width="23" height="11" rx="3" fill="none" stroke="white" stroke-opacity=".5" stroke-width="1.1"/><rect x="2.5" y="3.1" width="19.2" height="7.6" rx="1.6" fill="white"/><path d="M25 4.9v4.2c2-.3 2-3.9 0-4.2Z" fill="white" fill-opacity=".55"/></svg>
+      </div>
+    </div>
+    <div class="island" aria-hidden="true"></div>
+    <svg class="lock" viewBox="0 0 15 22" fill="none" aria-hidden="true"><path d="M3.8 8.5V5.9a3.7 3.7 0 0 1 7.4 0v2.6" stroke="#e9ebff" stroke-width="2.3"/><rect x="1" y="8" width="13" height="12" rx="2.8" fill="#e9ebff"/></svg>
+    <div class="date">Воскресенье, 8 ноября</div>
+    <div class="time">19:00</div>
+    <article class="notification">
+      <img class="app-icon" src="../../frontend/public/apple-touch-icon-v3.png" alt="bolt">
+      <div class="notification-header"><span class="app-name">bolt</span><span class="received">сейчас</span></div>
+      <div class="notification-title">Свежая волна готова</div>
+      <div class="notification-body">Кино, Сплин и новые находки — включите, когда будет минутка</div>
+    </article>
+    <div class="quick-action flashlight" aria-hidden="true">
+      <svg width="17" height="25" viewBox="0 0 17 26" fill="white"><path d="M3.5 1.5h10V4h-10zM3.5 5.5h10v3.2L11 13v10.5A1.5 1.5 0 0 1 9.5 25h-2A1.5 1.5 0 0 1 6 23.5V13L3.5 8.7V5.5Z"/><rect x="7.3" y="15" width="2.4" height="4.4" rx="1.2" fill="#404266"/></svg>
+    </div>
+    <div class="quick-action camera" aria-hidden="true">
+      <svg width="26" height="22" viewBox="0 0 28 24" fill="white"><path d="m8.5 3 2-2h7l2 2H25a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.5Z"/><circle cx="14" cy="12.5" r="5.6" fill="#57506e"/><circle cx="14" cy="12.5" r="4.2" fill="white"/><circle cx="23.1" cy="6.8" r="1.3" fill="#57506e"/></svg>
+    </div>
+    <div class="home-indicator" aria-hidden="true"></div>
+  </main>
+  <script>
+    const context = document.querySelector('.grain').getContext('2d');
+    const pixels = context.createImageData(1179, 2556);
+    let seed = 1082026;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const value = seed >>> 24;
+      pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = value;
+      pixels.data[i + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+  </script>
+</body>
+</html>

@@ -7,20 +7,20 @@
 
 .flow-disc-transition,
 .flow-disc-stack-transition {
-  display: none;
   position: absolute;
   inset: 0;
   z-index: 6;
   pointer-events: none;
 }
 
+.flow-disc-stack-transition { display: none; }
+
 .flow-disc-slot {
   position: absolute;
   inset: 0;
   transform: translate(var(--slot-x), var(--slot-y));
-  opacity: calc(1 - var(--slot-distance) * 0.12);
   z-index: calc(5 - var(--slot-distance));
-  transition: transform 280ms cubic-bezier(0.65, 0, 0.35, 1), opacity 200ms ease;
+  transition: transform 280ms cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 .flow-disc-position {
@@ -38,6 +38,33 @@
   inset: 0;
   margin: 0;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+/* Animate the outer record without changing slot positioning or playback spin.
+   Hidden screens reset the entrance so it plays when the screen is opened. */
+.flow-disc-arc:not([data-covers-ready]) .flow-disc-slot .hero-disc {
+  visibility: hidden;
+}
+
+.flow-disc-arc[data-entrance-running] .flow-disc-slot,
+.flow-disc-arc[data-entrance-running] .flow-disc-position {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .flow-disc-arc[data-active][data-covers-ready] .flow-disc-slot .hero-disc[data-cover-ready][data-disc-enter] {
+    animation: flow-disc-enter 650ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+    animation-delay: calc(var(--slot-depth) * 160ms);
+  }
+}
+
+@keyframes flow-disc-enter {
+  from {
+    transform: translateX(var(--disc-enter-x)) rotate(var(--disc-enter-rotation)) scale(0.96);
+  }
+  to {
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
 }
 
 .flow-disc-position .hero-disc.is-preview {
@@ -102,9 +129,8 @@
   .flow-disc-slot {
     /* Center the mobile stack; overlap follows the main record's diameter. */
     transform: translateY(calc(var(--disc-size) * var(--slot-mobile-y)));
-    opacity: 1;
     z-index: calc(5 - var(--slot-depth));
-    transition: transform 420ms cubic-bezier(0.32, 0, 0.16, 1), opacity 200ms ease;
+    transition: transform 420ms cubic-bezier(0.32, 0, 0.16, 1);
   }
 
   .flow-disc-position {
@@ -116,7 +142,6 @@
   .flow-disc-slot.is-current .hero-disc,
   .flow-disc-transition .hero-disc { filter: none; }
 
-  .flow-disc-transition,
   .flow-disc-stack-transition { display: block; }
 }
 
@@ -126,6 +151,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .flow-disc-slot,
-  .flow-disc-position { transition: opacity 150ms ease; }
+  .flow-disc-position { transition: none; }
   .flow-disc-arc.is-playing .flow-disc-indicator i { animation: none; }
 }
