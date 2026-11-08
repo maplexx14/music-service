@@ -27,6 +27,7 @@ import TasteAvatar from '../components/TasteAvatar'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
 import { isSoftwareRendering } from '../utils/gpu'
+import { isIOS, isStandalone } from '../services/navigation'
 import { toast } from '../store/toastStore'
 import { MONTH_GENITIVE } from '../utils/format'
 import './Home.css'
@@ -523,6 +524,10 @@ function Home() {
           <div className="hero-grainient">
             {liteMode || noGpu ? (
               <HeroHearts />
+            ) : isIOS && isStandalone ? (
+              // The WebGL background can leave a magenta scanline in iOS PWA.
+              // Use the cover palette without that canvas; keep the disc UI.
+              <div className="hero-grainient-static" />
             ) : (
               <Suspense fallback={<div className="hero-grainient-static" />}>
                 <Grainient
