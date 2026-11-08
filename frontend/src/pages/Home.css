@@ -282,7 +282,7 @@
 .flow-controls {
   position: absolute;
   left: 50%;
-  bottom: 20px;
+  bottom: 16px;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -860,9 +860,9 @@
     z-index: 1;
     flex-direction: column;
     /* Шапка занимает safe-top + 68px, перекрывая поток на 24px.
-       Поток заканчивается на 38px выше нижнего края навигации. */
-    height: calc(100vh - var(--safe-top) - var(--mobile-nav-bottom, 0px) - 82px);
-    height: calc(100svh - var(--safe-top) - var(--mobile-nav-bottom, 0px) - 82px);
+       Нижний край блока оставляет 16px до навигации или мини-плеера. */
+    height: calc(100vh - var(--safe-top) - var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px)) - 44px);
+    height: calc(100svh - var(--safe-top) - var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px)) - 44px);
     padding: 0;
     margin: -24px -16px 0;
     width: calc(100% + 32px);
@@ -873,7 +873,8 @@
 
   .hero-section .wave-widget,
   .hero-section .flow-disc-position {
-    top: calc(53% - (var(--mobile-nav-height, 72px) + var(--safe-bottom)) / 2);
+    /* Anchor the main record and playback control to the visible screen. */
+    top: var(--flow-center-y, calc(50vh - var(--safe-top) - 44px));
   }
 
   .wave-gif-button img {
@@ -886,28 +887,26 @@
     height: 84px;
   }
 
-  .hero-section {
-    --disc-size: min(400px, 88vw, 70vh);
+  .hero-section,
+  .hero-section.has-vinyl {
+    /* Match the reference: the main record fills 90% of the phone's width. */
+    --disc-size: min(600px, 90vw, 76svh);
   }
 
   .hero-section.has-vinyl {
-    --disc-size: min(420px, 86vw, 62svh);
     --heading-gap: 24px;
   }
 
   @supports not (height: 1svh) {
+    .hero-section,
     .hero-section.has-vinyl {
-      --disc-size: min(420px, 86vw, 62vh);
+      --disc-size: min(600px, 90vw, 76vh);
     }
   }
 
   .wave-heading {
     font-size: clamp(40px, 13vw, 60px);
     bottom: calc(100% + 16px);
-  }
-
-  .flow-controls {
-    bottom: calc(16px + var(--mobile-nav-height, 72px) + var(--safe-bottom));
   }
 
   .content-section {
@@ -1116,26 +1115,16 @@
   }
 }
 
-/* Размер диска зависит от фактического места под поток, в том числе
-   после поворота экрана или изменения высоты панелей браузера. */
+/* On desktop, fit the record to the available hero height. Mobile sizing
+   follows the viewport so showing the mini-player cannot shrink the stack. */
 @supports (height: 1cqh) {
-  .hero-section {
-    --disc-size: min(640px, 48vw, 72cqh);
-  }
-
-  .hero-section.has-vinyl {
-    --disc-size: min(600px, 44vw, 60cqh);
-  }
-
-  @media (max-width: 768px) {
+  @media (min-width: 769px) {
     .hero-section {
-      --disc-size: min(400px, 88vw, 72cqh);
+      --disc-size: min(640px, 48vw, 72cqh);
     }
 
     .hero-section.has-vinyl {
-      /* На коротких экранах оставляем место заголовку и кнопке настроек. */
-      --disc-size: min(420px, 86vw, 62cqh, max(84px, calc(100cqh - var(--mobile-nav-height, 72px) - var(--safe-bottom) - 176px)));
+      --disc-size: min(600px, 44vw, 60cqh);
     }
-
   }
 }

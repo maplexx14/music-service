@@ -14,6 +14,7 @@ const MOBILE_QUERY = '(max-width: 768px)'
 const DESKTOP_X = [0, 36]
 const DESKTOP_SCALE = [1, 0.68]
 const MOBILE_Y = [0, 0.4, 0.78]
+const MOBILE_SCALE = [1, 0.84, 0.7]
 const EMPTY_TRACKS = []
 
 function trackKey(track) {
@@ -28,7 +29,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   const transitionRef = useRef(null)
   const stackMotionsRef = useRef(new Map())
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
-  const { active } = useScreen()
+  const { active, scrollerRef } = useScreen()
   const offsets = mobile ? MOBILE_OFFSETS : DESKTOP_OFFSETS
 
   useEffect(() => {
@@ -49,6 +50,29 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     dislikedTrackKeys: s.dislikedTrackKeys,
     flowPreload: s.flowPreload,
   }), shallow)
+
+  useLayoutEffect(() => {
+    const hero = arcRef.current?.parentElement
+    if (!hero || !mobile || !active) return undefined
+    const viewport = window.visualViewport
+    const center = () => {
+      const scrollTop = scrollerRef?.current?.scrollTop ?? window.scrollY
+      const origin = hero.getBoundingClientRect().top + scrollTop
+      const middle = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) / 2
+      hero.style.setProperty('--flow-center-y', `${middle - origin}px`)
+    }
+    center()
+    const observer = new ResizeObserver(center)
+    observer.observe(hero)
+    window.addEventListener('resize', center)
+    viewport?.addEventListener('resize', center)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', center)
+      viewport?.removeEventListener('resize', center)
+      hero.style.removeProperty('--flow-center-y')
+    }
+  }, [mobile, active, scrollerRef])
 
   useLayoutEffect(() => {
     const arc = arcRef.current
@@ -163,6 +187,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
               '--slot-distance': distance,
               '--slot-depth': depth,
               '--slot-mobile-y': MOBILE_Y[depth],
+              '--slot-mobile-scale': MOBILE_SCALE[depth],
             }}
           >
             <div className="flow-disc-position">

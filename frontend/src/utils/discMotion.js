@@ -6,6 +6,9 @@ export const DISC_MOTION = {
 
 export function cloneDiscRecord(source) {
   const record = source.cloneNode(true)
+  const scale = source.closest('.flow-disc-slot')?.style.getPropertyValue('--slot-mobile-scale') || 1
+  record.style.transform = getComputedStyle(source).transform || `translate(-50%, -50%) scale(${scale})`
+  record.style.transition = 'none'
   const platter = source.querySelector('.hero-disc-spin')
   if (platter) {
     record.querySelector('.hero-disc-spin').style.transform =

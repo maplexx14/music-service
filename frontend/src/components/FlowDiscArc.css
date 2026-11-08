@@ -108,8 +108,13 @@
   }
 
   .flow-disc-position {
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%) scale(var(--slot-mobile-scale, 1));
+    transition: transform 420ms cubic-bezier(0.32, 0, 0.16, 1);
   }
+
+  .flow-disc-position .hero-disc { filter: blur(1px); }
+  .flow-disc-slot.is-current .hero-disc,
+  .flow-disc-transition .hero-disc { filter: none; }
 
   .flow-disc-transition,
   .flow-disc-stack-transition { display: block; }
