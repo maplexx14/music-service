@@ -4122,6 +4122,78 @@ def test_flow_relaxes_skip_bans_when_portion_runs_dry(client, db, monkeypatch):
     assert artists["Disliked"] == 0 and artists["SkippedOften"] == 0, artists
 
 
+@pytest.mark.parametrize("mode", ["live", "precompute"])
+@pytest.mark.parametrize("fresh_count", [0, 12])
+def test_exhausted_flow_reuses_old_deliveries_but_keeps_recent_and_feedback_exclusions(
+    db, monkeypatch, mode, fresh_count
+):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    user = create_user(db, username="exhausted-flow")
+    _playlist, seed = _liked(db, user)
+    seed.source = "ytmusic"
+    seed.external_id = "history-seed"
+    old = [_external(f"Artist{i}", f"song-{i}", f"old-{i}") for i in range(12)]
+    recent = _external("RecentArtist", "recent-song", "recent-delivery")
+    played = Track(title="played-song", artist="PlayedArtist", source="ytmusic",
+                   external_id="played-song", duration=180)
+    db.add(played)
+    db.commit()
+    db.execute(user_track_plays.insert().values(
+        user_id=user.id, track_id=played.id, play_count=1,
+        last_played=datetime.now(timezone.utc),
+    ))
+    for event_type, item in (("dislike", old[0]), ("skip", old[1])):
+        db.execute(recommendation_events.insert().values(
+            user_id=user.id, source=item.source, external_id=item.external_id,
+            artist=item.artist, title=item.title, surface="flow", event_type=event_type,
+            occurred_at=datetime.now(timezone.utc),
+        ))
+    db.commit()
+
+    # A small provider pool has already been delivered within the six-hour
+    # history window. Only its last 100 deliveries should remain unavailable
+    # when there is no fresh portion; played/skipped/disliked tracks stay out.
+    history = {
+        "ids": [item.id for item in old]
+        + [f"ytmusic:other-{i}" for i in range(99)] + [recent.id],
+        "keys": [], "artists": [], "meta": {},
+    }
+    fresh = [_external(f"FreshArtist{i}", f"fresh-song-{i}", f"fresh-{i}")
+             for i in range(fresh_count)]
+
+    async def radio(_seed):
+        return [*old, recent, _external(played.artist, played.title, played.external_id), *fresh]
+
+    monkeypatch.setattr(flow_router, "_radio_pool", radio)
+    request = Request({"type": "http", "method": "GET", "path": "/",
+                       "headers": [], "scheme": "http", "server": ("testserver", 80),
+                       "query_string": b""})
+    result = asyncio.run(flow_router._compute_flow(
+        request, Response(), 8, f"{old[2].id},{seed.id}", None, user, db,
+        mode=mode, history=history, schedule_matches=False, preload=True,
+    ))
+    items = result["items"] if mode == "precompute" else result
+    ids = {item["id"] for item in items}
+    assert len(items) == 8
+    assert ids.isdisjoint({old[0].id, old[1].id, old[2].id, recent.id, "ytmusic:played-song"})
+    if fresh_count:
+        assert ids <= {item.id for item in fresh}, "fresh candidates must take priority"
+    else:
+        assert ids <= {item.id for item in old}, "an exhausted pool must still serve music"
+
+
+def test_recycled_delivery_moves_to_the_recent_history_window():
+    recycled = _external("Artist", "song", "recycled")
+    history = {"ids": [recycled.id] + [f"ytmusic:other-{i}" for i in range(110)]}
+    updated = flow_router._history_ids_after(history, [recycled.model_dump()])
+    assert updated[-1] == recycled.id
+    assert updated.count(recycled.id) == 1
+    assert updated[:-1] == history["ids"][1:]
+    assert flow_router._history_ids_after(history, []) == history["ids"]
+
+
 def test_title_tags_ignore_guest_and_producer_credits():
     """Имена из (feat. …) и prod. — не тема трека и не теги вкуса."""
     from app.title_tags import build_title_tag_profile, strip_credits

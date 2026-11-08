@@ -3909,24 +3909,16 @@ async def _deliver_portion(
     # Запоминаем только реально отданные элементы. Нормализованные ключи режут
     # дубли одного трека между YT Music, SoundCloud и локальным каталогом.
     recorded = () if preload else mix
-    returned_ids = []
     returned_keys = []
     for item in recorded:
-        source = item.get("source")
-        external_id = item.get("external_id")
-        if source and external_id:
-            returned_ids.append(f"{source}:{external_id}")
-        elif item.get("id") is not None:
-            returned_ids.append(f"local:{item['id']}")
         returned_keys.append(list(_norm_key(*_flow_item_artist_title(item))))
 
     stage = time.perf_counter()
-    old_ids = list(history.get("ids") or [])
     old_keys = list(history.get("keys") or [])
     await set_cache_async(
         _history_key(user_id),
         {
-            "ids": list(dict.fromkeys(old_ids + returned_ids))[-_FLOW_HISTORY_LIMIT:],
+            "ids": _history_ids_after(history, recorded),
             "keys": [list(k) for k in dict.fromkeys(
                 tuple(k) for k in old_keys + returned_keys
                 if isinstance(k, (list, tuple)) and len(k) == 2
@@ -4193,7 +4185,11 @@ async def _compute_flow(
     # после нескольких запусков весь небольшой локальный пул оказывался исключён.
     if history is None:
         history = await _load_flow_history(db, user_id)
-    history_ids = set(history.get("ids") or [])
+    delivered_ids = list(history.get("ids") or [])
+    # A finite provider pool can be exhausted by the six-hour delivery window.
+    # On the shortage pass retain the newest queue-sized window; actual plays,
+    # skips, dislikes and every client exclusion remain filtered independently.
+    history_ids = set(delivered_ids[-_CLIENT_QUEUE_LIMIT:] if relax else delivered_ids)
     history_keys = {
         tuple(key) for key in (history.get("keys") or [])
         if isinstance(key, list) and len(key) == 2
@@ -5549,7 +5545,11 @@ def _history_ids_after(history: dict, mix: list) -> list:
             returned.append(f"{source}:{external_id}")
         elif item.get("id") is not None:
             returned.append(f"local:{item['id']}")
-    return list(dict.fromkeys(list(history.get("ids") or []) + returned))[-_FLOW_HISTORY_LIMIT:]
+    # A recycled recommendation is a new delivery. Move it to the recent tail
+    # so both live history and the ready-pool context protect it from repeats.
+    returned_ids = set(returned)
+    previous = [item_id for item_id in history.get("ids") or [] if item_id not in returned_ids]
+    return list(dict.fromkeys(previous + returned))[-_FLOW_HISTORY_LIMIT:]
 
 
 async def _store_leftover(

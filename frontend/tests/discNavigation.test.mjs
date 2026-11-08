@@ -24,14 +24,34 @@ async function setup({ ready = false, settled = false } = {}) {
   }
   const liveRecord = record()
   const arc = { clientWidth: 390, append: (ghost) => ghosts.push(ghost) }
+  function animate(frames, options) {
+    let finish
+    const finished = new Promise((resolve) => { finish = resolve })
+    this.animation = {
+      frames, options, finished, finish,
+      effect: { progress: 0, getComputedTiming() { return { progress: this.progress } } },
+      pause() { this.paused = true },
+      play() { this.paused = false },
+      cancel() { this.cancelled = true },
+    }
+    return this.animation
+  }
   const context = vm.createContext({
     getComputedStyle: (node) => ({ transform: node.computedTransform || node.style?.transform || 'matrix(1, 0, 0, 1, -120, -120)' }),
+    DOMMatrixReadOnly: class {
+      constructor(transform) {
+        const values = transform.match(/-?\d+(?:\.\d+)?/g).map(Number)
+        this.m41 = values[4]
+        this.m42 = values[5]
+      }
+    },
     MutationObserver: class {
       constructor(callback) { this.callback = callback; observers.push(this) }
       observe(node) { this.node = node }
       disconnect() { this.disconnected = true }
     },
     document: {
+      timeline: { currentTime: 500 },
       createElement() {
         return {
           style: {}, attributes: {},
@@ -39,12 +59,7 @@ async function setup({ ready = false, settled = false } = {}) {
           append(node) { this.record = node },
           querySelector() { return this.record },
           remove() { this.removed = true },
-          animate(frames, options) {
-            let finish
-            const finished = new Promise((resolve) => { finish = resolve })
-            this.animation = { frames, options, finished, finish, cancel() { this.cancelled = true } }
-            return this.animation
-          },
+          animate,
         }
       },
     },
@@ -64,6 +79,36 @@ async function setup({ ready = false, settled = false } = {}) {
       observers.at(-1)?.callback()
     },
     async finish() { ghosts.at(-1).animation.finish(); await Promise.resolve(); await Promise.resolve() },
+    drumSlots(rows) {
+      return new Map(rows.map(([key, x, ready = true]) => {
+        const art = {
+          hasAttribute: (name) => name === 'data-cover-ready' || name === 'data-cover-settled' ? ready : false,
+        }
+        function discRecord() {
+          const copy = record()
+          copy.querySelector = (name) => name === '.hero-disc' ? art : null
+          copy.cloneNode = discRecord
+          return copy
+        }
+        const disc = discRecord()
+        const node = { style: { visibility: '' }, animate, querySelector: (name) => name === '.hero-disc' ? art : disc }
+        return [key, { node, record: disc, x, desktopY: x ? 43 : 0, art,
+          settle() { art.hasAttribute = () => true; observers.at(-1)?.callback() },
+        }]
+      }))
+    },
+    drum(previous, current, options = {}) {
+      arc.clientWidth = 1000
+      arc.clientHeight = 600
+      arc.querySelector = () => liveRecord
+      return module.namespace.animateDiscDrum(arc, previous, current, { direction: 1, ...options })
+    },
+    entrance(slots, onFinish) {
+      arc.clientWidth = 1000
+      arc.clientHeight = 600
+      arc.querySelector = () => liveRecord
+      return module.namespace.animateDiscRibbonEntrance(arc, slots, onFinish)
+    },
   }
 }
 
@@ -124,4 +169,190 @@ test('a fast backward return continues a departing disc from its current positio
   assert.equal(app.ghosts[1].animation.frames[1].transform, 'translateX(0)')
   await app.finish()
   assert.equal(app.slot.style.visibility, '')
+})
+
+test('desktop navigation moves both existing discs around the drum in one synchronized step', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const current = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const motion = app.drum(previous, current)
+  const first = motion.entries.get('a').animation
+  const next = motion.entries.get('b').animation
+  assert.equal(first.frames[0].transform, 'translate(0px, 0px)')
+  assert.equal(first.frames.at(-1).transform, 'translate(-320px, 258px)')
+  assert.equal(next.frames[0].transform, 'translate(320px, 258px)')
+  assert.equal(next.frames.at(-1).transform, 'translate(0px, 0px)')
+  assert.ok(next.frames.length > 2, 'travel follows a curved drum path')
+  const incoming = motion.entries.get('c').animation.frames
+  const outgoing = motion.entries.get('z').animation.frames
+  assert.equal(incoming[0].transform, 'translate(0px, 418px)')
+  assert.equal(outgoing.at(-1).transform, 'translate(0px, 418px)')
+  const point = (frame) => frame.transform.slice(10, -1).split(', ').map(parseFloat)
+  assert.ok(incoming.slice(0, 13).every((frame) => Math.abs(point(frame)[0]) < 0.001 && point(frame)[1] === 418), 'replacement waits at the hidden bottom')
+  assert.ok(outgoing.slice(12).every((frame) => Math.abs(point(frame)[0]) < 0.001 && point(frame)[1] === 418), 'old record exits before the replacement arrives')
+  assert.ok(outgoing.slice(1, 12).every((frame) => point(frame)[0] > -320 && point(frame)[0] < 0))
+  assert.ok(incoming.slice(13, 24).every((frame) => point(frame)[0] > 0 && point(frame)[0] < 320))
+  assert.ok([...motion.entries.values()].every(({ animation }) => animation.startTime === 500 && animation.options.duration === 650))
+  motion.cleanup()
+  assert.equal(app.ghosts[0].removed, true)
+})
+
+test('three retained desktop discs exchange all positions around a closed circle', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32], ['c', -32]])
+  const current = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const motion = app.drum(previous, current)
+  const bottomPass = motion.entries.get('c').animation.frames
+  assert.equal(bottomPass[0].transform, 'translate(-320px, 258px)')
+  assert.equal(bottomPass.at(-1).transform, 'translate(320px, 258px)')
+  const middle = bottomPass[12].transform.slice(10, -1).split(', ').map(parseFloat)
+  assert.ok(Math.abs(middle[0]) < 0.001)
+  assert.equal(middle[1], 418)
+  assert.equal(app.ghosts.length, 0)
+  motion.cleanup()
+})
+
+test('backward desktop navigation follows the same lower arc in reverse', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const current = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const motion = app.drum(previous, current, { direction: -1 })
+  assert.equal(motion.entries.get('a').animation.frames[0].transform, 'translate(-320px, 258px)')
+  assert.equal(motion.entries.get('a').animation.frames.at(-1).transform, 'translate(0px, 0px)')
+  assert.equal(motion.entries.get('c').animation.frames.at(-1).transform, 'translate(0px, 418px)')
+  assert.equal(motion.entries.get('z').animation.frames[0].transform, 'translate(0px, 418px)')
+  assert.equal(motion.entries.get('z').animation.frames.at(-1).transform, 'translate(-320px, 258px)')
+  motion.cleanup()
+})
+
+test('desktop drum waits for decoded incoming artwork and starts every disc together', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
+  const motion = app.drum(previous, current)
+  assert.ok([...motion.entries.values()].every(({ animation }) => animation.paused && animation.currentTime === 0))
+  assert.equal(current.get('c').node.style.visibility, 'hidden')
+  current.get('c').settle()
+  assert.equal(current.get('c').node.style.visibility, '')
+  assert.ok([...motion.entries.values()].every(({ animation }) => !animation.paused && animation.startTime === 500))
+  motion.cleanup()
+})
+
+test('desktop reversal resumes existing and returning discs from their rendered positions', async () => {
+  const app = await setup()
+  const initial = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const next = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const forward = app.drum(initial, next)
+  forward.entries.get('a').node.computedTransform = 'matrix(1, 0, 0, 1, -150, 24)'
+  forward.entries.get('z').node.computedTransform = 'matrix(1, 0, 0, 1, -450, 258)'
+  for (const entry of forward.entries.values()) entry.animation.effect.progress = 0.25
+  const backward = app.drum(next, initial, { direction: -1, interrupted: forward })
+  assert.equal(backward.entries.get('a').animation.frames[0].transform, 'translate(-150px, 24px)')
+  assert.equal(backward.entries.get('a').animation.frames.at(-1).transform, 'translate(0px, 0px)')
+  assert.equal(backward.entries.get('z').animation.frames[0].transform, 'translate(-450px, 258px)')
+  assert.equal(backward.entries.get('z').animation.frames.at(-1).transform, 'translate(-320px, 258px)')
+  assert.equal(app.ghosts[0].removed, true)
+  backward.cleanup()
+})
+
+test('cancelled desktop artwork wait cannot restart after the screen is closed', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
+  const motion = app.drum(previous, current)
+  const animations = [...motion.entries.values()].map(({ animation }) => animation)
+  motion.cleanup()
+  current.get('c').settle()
+  assert.ok(animations.every((animation) => animation.cancelled && animation.paused))
+  assert.equal(current.get('c').node.style.visibility, '')
+})
+
+test('a moving disc removed by a second skip continues on the orbit without teleporting', async () => {
+  const app = await setup()
+  const initial = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const next = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const forward = app.drum(initial, next)
+  const departing = forward.entries.get('a')
+  departing.animation.effect.progress = 0.25
+  const point = departing.pointAt(0.25)
+  departing.node.isConnected = false
+  const after = app.drumSlots([['c', 0], ['d', 32], ['b', -32]])
+  const continued = app.drum(next, after, { interrupted: forward })
+  assert.equal(continued.entries.get('a').animation.frames[0].transform, `translate(${point.x}px, ${point.y}px)`)
+  assert.equal(continued.entries.get('a').record.style.transform, 'translate(-50%, -50%) scale(1)')
+  continued.cleanup()
+})
+
+test('a disc already hidden at the bottom does not take an extra lap on reversal', async () => {
+  const app = await setup()
+  const initial = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
+  const next = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const forward = app.drum(initial, next)
+  const incoming = forward.entries.get('c')
+  incoming.angleAt = () => Math.PI / 2 + Number.EPSILON
+  incoming.node.computedTransform = 'matrix(1, 0, 0, 1, 0, 418)'
+  const returning = app.drum(next, initial, { direction: -1, interrupted: forward })
+  const frames = returning.entries.get('c').animation.frames
+  assert.ok(frames.every((frame) => {
+    const [x, y] = frame.transform.slice(10, -1).split(', ').map(parseFloat)
+    return Math.abs(x) < 0.001 && Math.abs(y - 418) < 0.001
+  }))
+  returning.cleanup()
+})
+
+test('desktop entrance moves a single opaque ribbon with fixed spacing from the first frame', async () => {
+  const app = await setup()
+  const slots = app.drumSlots([['a', 0], ['b', 32], ['c', -32]])
+  const motion = app.entrance(slots)
+  const point = (frame) => frame.transform.slice(10, -1).split(', ').map(parseFloat)
+  const frames = (key) => slots.get(key).node.animation.frames
+  assert.ok(motion.animations.every((animation) => animation.options.duration === 750 && animation.startTime === 500))
+  assert.ok(Math.abs(point(frames('c')[0])[1] - (600 * 0.47 + 240 / 2 + 2)) < 0.001, 'first record starts just two pixels below the visible edge')
+  assert.equal(frames('a').at(-1).transform, 'translate(0px, 0px)')
+  assert.equal(frames('b').at(-1).transform, 'translate(320px, 258px)')
+  assert.equal(frames('c').at(-1).transform, 'translate(-320px, 258px)')
+  const order = ['c', 'a', 'b']
+  const initial = order.map((key) => point(frames(key)[0])[0])
+  assert.ok(initial[0] > initial[1] && initial[1] > initial[2])
+  const sample = (key, progress) => {
+    const list = frames(key)
+    const index = list.findIndex((frame) => frame.offset >= progress)
+    const from = list[index - 1], to = list[index]
+    const fraction = (progress - from.offset) / (to.offset - from.offset)
+    return point(from)[0] + (point(to)[0] - point(from)[0]) * fraction
+  }
+  const movement = order.map((key, index) => sample(key, 0.1) - initial[index])
+  assert.ok(movement.every((distance) => distance > 0), 'every record advances without waiting at the entrance')
+  assert.ok(Math.abs(movement[1] - movement[2]) < 0.001, 'records still on the straight feed preserve their spacing')
+  assert.ok(motion.animations.every((animation) => animation.frames.every((frame) => !('opacity' in frame))))
+  motion.cleanup()
+})
+
+test('desktop entrance finishes together and cancellation suppresses late completion', async () => {
+  const app = await setup()
+  const slots = app.drumSlots([['a', 0], ['b', 32], ['c', -32]])
+  let completions = 0
+  const motion = app.entrance(slots, () => { completions += 1 })
+  motion.animations[0].finish()
+  motion.animations[1].finish()
+  await Promise.resolve()
+  assert.equal(completions, 0)
+  motion.animations[2].finish()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(completions, 1)
+  assert.ok(motion.animations.every((animation) => animation.cancelled))
+  const cancelled = app.entrance(slots, () => { completions += 1 })
+  cancelled.cleanup()
+  for (const animation of cancelled.animations) animation.finish()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(completions, 1)
+})
+
+test('failed desktop artwork does not enter as an empty record', async () => {
+  const app = await setup()
+  const slots = app.drumSlots([['a', 0], ['b', 32, false], ['c', -32]])
+  const motion = app.entrance(slots)
+  assert.equal(motion.animations.length, 2)
+  assert.equal(slots.get('b').node.animation, undefined)
+  motion.cleanup()
 })

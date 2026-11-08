@@ -49,7 +49,7 @@ function clamp(value, min, max) {
 //
 // Живёт отдельным компонентом, потому что подписан на currentTrack: главная
 // (со всеми полками карточек) на смену трека не перерисовывается.
-function HeroDisc({ track, preview = false, upgrade = false }) {
+function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
   const playingTrack = usePlayerStore((s) => preview ? null : s.currentTrack)
   const currentTrack = preview ? track : playingTrack
   const heavyCoverAllowed = usePlayerStore((s) => preview || !s.isPlaying ||
@@ -72,7 +72,7 @@ function HeroDisc({ track, preview = false, upgrade = false }) {
   const [isDragging, setIsDragging] = useState(false)
   const coverUrl = resolveCoverUrl(currentTrack?.cover_url, 'disc')
   const fullCoverUrl = upgrade ? resolveCoverUrl(currentTrack?.cover_url, 'full') : null
-  const { src: shownCover, settled: coverSettled, upgradeSettled } = useDiscCover(coverUrl, fullCoverUrl, preview ? 'auto' : 'high', {
+  const { src: shownCover, settled: coverSettled, upgradeSettled } = useDiscCover(coverUrl, fullCoverUrl, coverPriority ?? (preview ? 'auto' : 'high'), {
     allowUpgrade: heavyCoverAllowed,
     alternateUpgradeUrl: upgrade ? resolveCoverUrl(currentTrack?.cover_url, 'hero') : null,
   })

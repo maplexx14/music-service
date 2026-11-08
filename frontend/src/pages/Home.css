@@ -151,6 +151,19 @@
   --disc-size: min(640px, 48vw, 64vh);
 }
 
+/* Typed colors let CSS backgrounds share the shader's gradual palette change. */
+@property --hero-c1 { syntax: '<color>'; inherits: true; initial-value: #b070ff; }
+@property --hero-c2 { syntax: '<color>'; inherits: true; initial-value: #8929ff; }
+@property --hero-c3 { syntax: '<color>'; inherits: true; initial-value: #440f85; }
+
+.hero-section {
+  transition: --hero-c1 900ms ease-in-out, --hero-c2 900ms ease-in-out, --hero-c3 900ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-section { transition: none; }
+}
+
 .hero-section.has-vinyl {
   --disc-size: min(600px, 44vw, 54vh);
 }

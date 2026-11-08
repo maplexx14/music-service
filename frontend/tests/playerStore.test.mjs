@@ -2,11 +2,21 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { transform } from 'esbuild'
 import { create } from 'zustand'
 import * as queueUtils from '../src/utils/playerQueue.js'
 import { playbackLabel } from '../src/utils/playbackLabel.js'
 
 const source = await readFile(new URL('../src/store/playerStore.js', import.meta.url), 'utf8')
+// Use ordinary scripts, as in uiSession.test.mjs: Node 20's experimental VM
+// module loader can segfault when fresh store contexts are garbage-collected.
+const { code } = await transform(source, {
+  format: 'cjs', loader: 'js', target: 'es2020',
+  define: { 'import.meta.env.VITE_BUILD_TIME': JSON.stringify('test-build') },
+})
+const storeScript = new vm.Script(`(function (module, exports, require) {\n${code}\n})`, {
+  filename: 'playerStore.js',
+})
 const noop = () => {}
 const track = (id, artist = 'Favorite', protectedArtist = true) => ({
   id: `ytmusic:${id}`, source: 'ytmusic', external_id: id, artist, title: id,
@@ -25,18 +35,12 @@ async function mountStore(apiOverrides = {}, globals = {}) {
     '../services/pageCache': { invalidateCache: noop, patchCache: noop, peekCache: noop, LIKED_CACHE_KEY: 'liked' },
     '../utils/playerQueue': queueUtils,
   }
-  const module = new vm.SourceTextModule(source, {
-    context,
-    initializeImportMeta: (meta) => { meta.env = { VITE_BUILD_TIME: 'test-build' } },
+  const module = { exports: {} }
+  storeScript.runInContext(context)(module, module.exports, (name) => {
+    assert.ok(Object.hasOwn(imports, name), `Unmocked import: ${name}`)
+    return { __esModule: true, ...imports[name] }
   })
-  await module.link(async (name) => {
-    const exports = imports[name]
-    return new vm.SyntheticModule(Object.keys(exports), function () {
-      for (const [key, value] of Object.entries(exports)) this.setExport(key, value)
-    }, { context })
-  })
-  await module.evaluate()
-  return module.namespace.usePlayerStore
+  return module.exports.usePlayerStore
 }
 
 function setQueue(store, queue, extra = {}) {

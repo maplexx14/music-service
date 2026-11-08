@@ -3,7 +3,7 @@ import { shallow } from 'zustand/shallow'
 import { usePlayerStore } from '../store/playerStore'
 import { isDislikedTrack, queueStep } from '../utils/playerQueue'
 import { discNavigationDirection } from '../utils/discTransition'
-import { animateDiscNavigation, animateDiscStack, clearDiscStack, readDiscSlots } from '../utils/discMotion'
+import { animateDiscDrum, animateDiscRibbonEntrance, animateDiscNavigation, animateDiscStack, clearDiscStack, readDiscSlots } from '../utils/discMotion'
 import { useScreen } from '../hooks/useScreen'
 import { useWarmNextDiscCover } from '../hooks/useWarmNextDiscCover'
 import { resolveCoverUrl } from '../utils/media'
@@ -14,7 +14,6 @@ const DESKTOP_OFFSETS = [0, 1, -1]
 const MOBILE_OFFSETS = [0, 1, 2]
 const MOBILE_QUERY = '(max-width: 768px)'
 const DESKTOP_X = [0, 32]
-const DESKTOP_SCALE = [1, 0.78]
 const MOBILE_Y = [0, 0.34, 0.66]
 const MOBILE_SCALE = [1, 0.9, 0.8]
 const EMPTY_TRACKS = []
@@ -34,6 +33,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   const stackMotionsRef = useRef(new Map())
   const flowPreviewRef = useRef(null)
   const finishEntranceRef = useRef(null)
+  const desktopEntranceStartedRef = useRef(false)
   const [upgradeCovers, setUpgradeCovers] = useState(false)
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
   const { active, scrollerRef } = useScreen()
@@ -41,13 +41,21 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
 
   useLayoutEffect(() => {
     const arc = arcRef.current
+    if (!window.matchMedia(MOBILE_QUERY).matches && desktopEntranceStartedRef.current) {
+      arc.setAttribute('data-covers-ready', '')
+      setUpgradeCovers(true)
+      return undefined
+    }
     setUpgradeCovers(false)
     arc.removeAttribute('data-covers-ready')
     if (!active) return undefined
 
     let disposed = false
     let entranceNodes = []
+    let entranceMotion = null
     const finishEntrance = () => {
+      entranceMotion?.cleanup()
+      entranceMotion = null
       arc.removeAttribute('data-entrance-running')
       for (const disc of entranceNodes) {
         disc.removeAttribute('data-disc-enter')
@@ -66,16 +74,30 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       if (!discs.length || discs.some((disc) => !disc.hasAttribute('data-cover-settled'))) return
       if (flowPreviewRef.current) usePlayerStore.getState().pinFlowPreview(flowPreviewRef.current)
       entranceNodes = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
-      for (const disc of entranceNodes) {
-        const style = getComputedStyle(disc)
-        for (const property of ['--disc-enter-x', '--disc-enter-rotation', '--slot-depth']) {
-          disc.style.setProperty(property, style.getPropertyValue(property))
+      const desktop = !window.matchMedia(MOBILE_QUERY).matches
+      if (desktop) desktopEntranceStartedRef.current = true
+      if (!desktop) {
+        for (const disc of entranceNodes) {
+          const style = getComputedStyle(disc)
+          for (const property of ['--disc-enter-x', '--disc-enter-rotation', '--slot-depth']) {
+            disc.style.setProperty(property, style.getPropertyValue(property))
+          }
+          disc.setAttribute('data-disc-enter', '')
         }
-        disc.setAttribute('data-disc-enter', '')
       }
       arc.setAttribute('data-entrance-running', '')
+      if (desktop && !document.hidden && typeof arc.animate === 'function' &&
+          !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        entranceMotion = animateDiscRibbonEntrance(arc, readDiscSlots(arc, true), () => {
+          if (!disposed) finishEntrance()
+        })
+      }
       arc.setAttribute('data-covers-ready', '')
       observer.disconnect()
+      if (desktop) {
+        if (!entranceMotion) finishEntrance()
+        return
+      }
       const animations = entranceNodes.flatMap((disc) => disc.getAnimations()
         .filter((animation) => animation.animationName === 'flow-disc-enter'))
       Promise.all(animations.map((animation) => animation.finished.catch(() => {})))
@@ -143,20 +165,37 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   useLayoutEffect(() => {
     const arc = arcRef.current
     const previous = previousRef.current
-    const currentSlots = readDiscSlots(arc)
+    const currentSlots = readDiscSlots(arc, !mobile)
     previousRef.current = {
       state,
+      mobile,
       record: arc?.querySelector('.flow-disc-slot.is-current .flow-disc-position'),
       slots: currentSlots,
     }
     const direction = discNavigationDirection(previous?.state, state)
-    if (direction && arc.hasAttribute('data-entrance-running')) finishEntranceRef.current?.()
+    if ((direction || (previous && previous.mobile !== mobile)) && arc.hasAttribute('data-entrance-running')) {
+      finishEntranceRef.current?.()
+    }
     const animate = active && !document.hidden && !arc.hasAttribute('data-entrance-running') &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
       typeof arc.animate === 'function'
     if (!animate) {
       transitionRef.current?.cleanup()
       clearDiscStack(stackMotionsRef.current)
+      return
+    }
+    if (previous?.mobile !== mobile) {
+      transitionRef.current?.cleanup()
+      transitionRef.current = null
+      clearDiscStack(stackMotionsRef.current)
+      return
+    }
+    if (!mobile) {
+      if (!direction) return
+      transitionRef.current = animateDiscDrum(arc, previous.slots, currentSlots, {
+        direction,
+        interrupted: transitionRef.current,
+      })
       return
     }
     const returning = direction < 0
@@ -241,7 +280,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
             style={{
               '--slot-x': `${Math.sign(offset) * DESKTOP_X[distance]}%`,
               '--slot-y': offset === 0 ? '0%' : '43%',
-              '--slot-scale': DESKTOP_SCALE[distance],
+              '--slot-scale': 1,
               '--slot-distance': distance,
               '--slot-depth': depth,
               '--disc-enter-x': depth % 2 === 0 ? '100vw' : '-100vw',
@@ -251,7 +290,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
             }}
           >
             <div className="flow-disc-position">
-              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} />
+              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} coverPriority={!mobile && active && !upgradeCovers ? 'high' : undefined} />
             </div>
           </div>
         )

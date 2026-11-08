@@ -83,11 +83,253 @@ export function animateDiscNavigation(arc, liveRecord, { returning, key, interru
   return motion
 }
 
-export function readDiscSlots(arc) {
+export function readDiscSlots(arc, desktop = false) {
   return new Map([...arc.querySelectorAll('.flow-disc-slot')].map((node) => [
     node.dataset.discKey,
-    { node, y: Number(node.style.getPropertyValue('--slot-mobile-y')), depth: Number(node.style.getPropertyValue('--slot-depth')) },
+    {
+      node,
+      y: Number(node.style.getPropertyValue('--slot-mobile-y')),
+      depth: Number(node.style.getPropertyValue('--slot-depth')),
+      ...(desktop ? {
+        x: parseFloat(node.style.getPropertyValue('--slot-x')),
+        desktopY: parseFloat(node.style.getPropertyValue('--slot-y')),
+        // Removed React nodes lose their computed styles; snapshot the platter
+        // while it is still connected, including its playback rotation.
+        record: cloneDiscRecord(node.querySelector('.flow-disc-position')),
+      } : {}),
+    },
   ]))
+}
+
+const DRUM_MOTION = { ...DISC_MOTION, duration: 650 }
+const translate = ({ x, y }) => `translate(${x}px, ${y}px)`
+
+const slotAngle = (x) => x === 0 ? -Math.PI / 2 : x > 0 ? Math.PI / 6 : Math.PI * 5 / 6
+const BOTTOM_ANGLE = Math.PI / 2
+
+// Complete the orbit below the clipped hero. A queued cover replaces the old
+// one only at the bottom, where the entire record is outside the viewport.
+function drumPoint(angle, width, height, size) {
+  const radiusX = width * 0.32 / Math.sin(Math.PI / 3)
+  const radiusY = height * 0.43 / 1.5
+  const bottom = Math.max(radiusY * 2, height * 0.47 + size / 2 + 16)
+  const normalized = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+  const lowerArc = normalized >= Math.PI / 6 && normalized <= Math.PI * 5 / 6
+  const dip = lowerArc ? Math.sin((normalized - Math.PI / 6) * 1.5) ** 2 : 0
+  return {
+    x: Math.cos(angle) * radiusX,
+    y: radiusY + Math.sin(angle) * radiusY + (bottom - radiusY * 2) * dip,
+  }
+}
+
+function drumRoute(fromAngle, targetAngle, direction, range = [0, 1]) {
+  let delta = (targetAngle - fromAngle) % (Math.PI * 2)
+  if (Math.abs(delta) < 0.000001 || Math.PI * 2 - Math.abs(delta) < 0.000001) delta = 0
+  if (direction > 0 && delta > 0) delta -= Math.PI * 2
+  if (direction < 0 && delta < 0) delta += Math.PI * 2
+  return (progress) => fromAngle + delta * Math.max(0, Math.min(1,
+    (progress - range[0]) / (range[1] - range[0]),
+  ))
+}
+
+function drumFrames(from, to, width, height, size, angleAt) {
+  const start = drumPoint(angleAt(0), width, height, size)
+  const driftX = from.x - start.x
+  const driftY = from.y - start.y
+  const points = Array.from({ length: 25 }, (_, index) => {
+    const progress = index / 24
+    const orbit = drumPoint(angleAt(progress), width, height, size)
+    const point = index === 0 ? from : index === 24 ? to :
+      { x: orbit.x + driftX * (1 - progress), y: orbit.y + driftY * (1 - progress) }
+    return point
+  })
+  return {
+    frames: points.map((point, index) => ({ transform: translate(point), offset: index / 24 })),
+    pointAt(progress) {
+      const position = Math.max(0, Math.min(24, progress * 24))
+      const first = points[Math.floor(position)]
+      const last = points[Math.ceil(position)]
+      const fraction = position % 1
+      return { x: first.x + (last.x - first.x) * fraction, y: first.y + (last.y - first.y) * fraction }
+    },
+  }
+}
+
+export function animateDiscRibbonEntrance(arc, slots, onFinish) {
+  const width = arc.clientWidth
+  const height = arc.clientHeight
+  const size = arc.querySelector('.flow-disc-position')?.offsetWidth || 0
+  const ready = [...slots.values()].filter((slot) =>
+    slot.node.querySelector('.hero-disc')?.hasAttribute('data-cover-ready'))
+  // Measure the shared belt in pixels along the curve. An angular stagger
+  // would bunch records together where the orbit bends most sharply.
+  const path = Array.from({ length: 121 }, (_, index) =>
+    drumPoint(-Math.PI * 7 / 6 + index * Math.PI / 72, width, height, size))
+  path[0] = { x: -width * 0.32, y: height * 0.43 }
+  path[48] = { x: 0, y: 0 }
+  path[96] = { x: width * 0.32, y: height * 0.43 }
+  path[120].x = 0
+  for (let index = 0; index < path.length; index += 1) {
+    const previous = path[index - 1]
+    path[index].distance = previous ? previous.distance +
+      Math.hypot(path[index].x - previous.x, path[index].y - previous.y) : 0
+  }
+  const bottom = path.at(-1)
+  // Start the head just below the visible edge. Spending time on the hidden
+  // tangent makes an otherwise ready screen look as though it is still loading.
+  const hiddenY = height * 0.47 + size / 2 + 2
+  const firstHidden = path.findIndex((point, index) => index >= 96 && point.y >= hiddenY)
+  const before = path[firstHidden - 1], after = path[firstHidden]
+  const travel = before.distance + (after.distance - before.distance) *
+    (hiddenY - before.y) / (after.y - before.y)
+  const pointAt = (distance) => {
+    // Continue the belt along its tangent below the clipped hero. All records
+    // already have their spacing here, rather than waiting at the same point.
+    if (distance >= bottom.distance) return { x: bottom.distance - distance, y: bottom.y }
+    let low = 0, high = path.length - 1
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      if (path[middle].distance < distance) low = middle + 1
+      else high = middle
+    }
+    const to = path[low]
+    const from = path[Math.max(0, low - 1)]
+    const fraction = (distance - from.distance) / (to.distance - from.distance || 1)
+    return { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction }
+  }
+  const startTime = document.timeline.currentTime
+  // Every record moves the same distance on the same timeline from frame one.
+  // They enter one after another as a single belt and stop together.
+  const animations = ready.map((slot) => {
+    const to = { x: slot.x * width / 100, y: slot.desktopY * height / 100 }
+    const target = path[slot.x < 0 ? 0 : slot.x === 0 ? 48 : 96].distance
+    const offsets = [0, ...path.filter((point) => point.distance > target && point.distance < target + travel)
+      .map((point) => 1 - (point.distance - target) / travel), 1].sort((a, b) => a - b)
+    const frames = offsets.map((offset) => ({
+      transform: translate(offset === 1 ? to : pointAt(target + travel * (1 - offset))), offset,
+    }))
+    const animation = slot.node.animate(frames, { ...DRUM_MOTION, duration: 750, fill: 'both' })
+    animation.startTime = startTime
+    return animation
+  })
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    for (const animation of animations) animation.cancel()
+  }
+  Promise.all(animations.map((animation) => animation.finished.catch(() => {}))).then(() => {
+    if (cleaned) return
+    cleanup()
+    onFinish?.()
+  })
+  return { animations, cleanup }
+}
+
+export function animateDiscDrum(arc, previous, current, { direction, interrupted }) {
+  const width = arc.clientWidth
+  const height = arc.clientHeight
+  const size = arc.querySelector('.flow-disc-position')?.offsetWidth || 0
+  const bottom = { ...drumPoint(BOTTOM_ANGLE, width, height, size), x: 0 }
+  const sources = new Map()
+  // Sample all moving copies before cancelling any of them. Rapid next/prev
+  // clicks keep the visible position, including an outgoing record that returns.
+  for (const [key, entry] of interrupted?.entries || []) {
+    const progress = entry.animation.effect?.getComputedTiming().progress ?? 0
+    // React may have removed a moving slot in this commit. Detached elements
+    // lose computed styles; their animation still gives us the rendered frame.
+    const matrix = entry.node.isConnected === false ? null :
+      new DOMMatrixReadOnly(getComputedStyle(entry.node).transform)
+    const point = matrix ? { x: matrix.m41, y: matrix.m42 } : entry.pointAt(progress)
+    const record = cloneDiscRecord(entry.record)
+    record.style.transform = 'translate(-50%, -50%) scale(1)'
+    sources.set(key, {
+      ...point, angle: entry.angleAt(progress), record,
+    })
+  }
+  interrupted?.cleanup()
+
+  const entries = new Map()
+  let observer = null
+  let cleaned = false
+  let started = false
+  const motion = { entries, cleanup }
+  function cleanup() {
+    if (cleaned) return
+    cleaned = true
+    observer?.disconnect()
+    for (const entry of entries.values()) {
+      entry.animation.cancel()
+      if (entry.live) entry.node.style.visibility = entry.visibility
+      else entry.node.remove()
+    }
+    entries.clear()
+  }
+  const add = (key, node, record, from, to, live, angleAt) => {
+    const visibility = node.style.visibility
+    const { frames, pointAt } = drumFrames(from, to, width, height, size, angleAt)
+    const animation = node.animate(frames, DRUM_MOTION)
+    animation.pause()
+    animation.currentTime = 0
+    if (live && !record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) {
+      node.style.visibility = 'hidden'
+    }
+    entries.set(key, { node, record, animation, live, visibility, angleAt, pointAt })
+  }
+  for (const [key, slot] of current) {
+    const old = previous.get(key)
+    const source = sources.get(key)
+    const to = { x: slot.x * width / 100, y: slot.desktopY * height / 100 }
+    const from = source || (old ? {
+      x: old.x * width / 100, y: old.desktopY * height / 100,
+    } : bottom)
+    const fromAngle = source?.angle ?? (old ? slotAngle(old.x) : BOTTOM_ANGLE)
+    const entering = !old && !source && slot.x !== 0
+    add(key, slot.node, slot.node.querySelector('.flow-disc-position'), from, to, true,
+      drumRoute(fromAngle, slotAngle(slot.x), direction, entering ? [0.5, 1] : [0, 1]))
+  }
+  const removed = new Map([...previous, ...sources])
+  for (const [key, slot] of removed) {
+    if (current.has(key)) continue
+    const source = sources.get(key)
+    const from = source || { x: slot.x * width / 100, y: slot.desktopY * height / 100 }
+    const record = (source || slot).record
+    if (!record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) continue
+    const ghost = document.createElement('div')
+    ghost.className = 'flow-disc-drum-transition'
+    ghost.setAttribute('data-disc-key', key)
+    ghost.style.zIndex = 3
+    ghost.setAttribute('aria-hidden', 'true')
+    ghost.inert = true
+    ghost.append(record)
+    arc.append(ghost)
+    add(key, ghost, record, from, bottom, false,
+      drumRoute(source?.angle ?? slotAngle(slot.x), BOTTOM_ANGLE, direction,
+        source ? [0, 1] : [0, 0.5]))
+  }
+  // Hold every record at its starting position until new light artwork is
+  // decoded. The entire drum then moves on the same frame, without empty discs
+  // or one preview arriving after the rest of the group.
+  const start = () => {
+    if (cleaned || started) return
+    const live = [...entries.values()].filter((entry) => entry.live)
+    if (live.some((entry) => !entry.record.querySelector('.hero-disc')?.hasAttribute('data-cover-settled'))) return
+    started = true
+    observer?.disconnect()
+    const startTime = document.timeline.currentTime
+    for (const entry of entries.values()) {
+      if (entry.live && entry.record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) {
+        entry.node.style.visibility = entry.visibility
+      }
+      entry.animation.play()
+      entry.animation.startTime = startTime
+    }
+    Promise.all([...entries.values()].map((entry) => entry.animation.finished.catch(() => {}))).then(cleanup)
+  }
+  observer = new MutationObserver(start)
+  observer.observe(arc, { subtree: true, attributes: true, attributeFilter: ['data-cover-settled'] })
+  start()
+  return motion
 }
 
 function animateSlot(motions, key, node, from, to, remove = false) {

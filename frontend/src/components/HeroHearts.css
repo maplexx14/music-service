@@ -10,14 +10,7 @@
   --sky-top: color-mix(in oklab, var(--hero-c3) 80%, #06060f);
   --sky-bottom: color-mix(in oklab, var(--hero-c2) 75%, #0c0c1c);
   background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 100%);
-  transition: --hero-c1 0.8s ease, --hero-c2 0.8s ease, --hero-c3 0.8s ease;
 }
-
-/* Регистрация цветов палитры — без неё градиент при смене трека
-   перескакивает, а не перетекает. */
-@property --hero-c1 { syntax: '<color>'; inherits: true; initial-value: #b070ff; }
-@property --hero-c2 { syntax: '<color>'; inherits: true; initial-value: #8929ff; }
-@property --hero-c3 { syntax: '<color>'; inherits: true; initial-value: #440f85; }
 
 /* Сверху сердца тусклее — заголовок «поток» и шапка читаются чище. */
 .hero-hearts::after {

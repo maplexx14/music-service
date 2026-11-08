@@ -203,6 +203,7 @@ const FRAME_TOLERANCE = 0.004;
 // лерп шёл с шагом 0.025 за кадр, то есть зависел от частоты монитора и от
 // капа FPS: 1.5 = 0.025 × 60 сохраняет прежнюю длительность перехода.
 const MIX_RATE = 1.5;
+const COLOR_TRANSITION_SECONDS = 0.9;
 
 // Один WebGL-контекст на всё приложение, переживающий размонтирование.
 // Раньше каждый заход на главную создавал контекст, а уход — уничтожал его
@@ -453,6 +454,20 @@ const Grainient = ({
     // должна покрывать весь промежуток, включая пропущенные по капу тики,
     // иначе анимация замедлится пропорционально капу.
     let lastT = null;
+    let colorTransition = null;
+    const colorUniforms = [program.uniforms.uColor1, program.uniforms.uColor2, program.uniforms.uColor3];
+    const updateColors = (now) => {
+      if (!colorTransition) return;
+      const progress = Math.min(1, Math.max(0, (now - colorTransition.started) / COLOR_TRANSITION_SECONDS));
+      const eased = progress * progress * (3 - 2 * progress);
+      for (let color = 0; color < colorUniforms.length; color += 1) {
+        const value = colorUniforms[color].value;
+        for (let channel = 0; channel < 3; channel += 1) {
+          value[channel] = lerp(colorTransition.from[color][channel], colorTransition.to[color][channel], eased);
+        }
+      }
+      if (progress === 1) colorTransition = null;
+    };
 
     let raf = 0;
     // Управление циклом рендера: rAF крутится только когда вкладка видима
@@ -484,7 +499,7 @@ const Grainient = ({
     let slowTicks = 0;
 
     const startLoop = () => {
-      if (running || reducedMotion || tier.frozen || powerSave) return;
+      if (running || reducedMotion || ((tier.frozen || powerSave) && !colorTransition)) return;
       if (!pageVisible || !inViewport || scrolling || held || !onScreen) return;
       running = true;
       lastT = null; // сброс дельты, чтобы не было скачка анимации после паузы
@@ -501,15 +516,22 @@ const Grainient = ({
       cancelAnimationFrame(raf);
     };
 
-    // Смена цветов без пересборки контекста (см. colorsRef выше). Если цикл
-    // рендера сейчас стоит (reduced motion, скрытая вкладка, контейнер вне
-    // вьюпорта), дорисовываем один кадр вручную — иначе новый цвет не был бы
-    // виден до следующего запуска цикла.
+    // Retarget from the currently displayed palette, including an unfinished
+    // transition. Reuse the render loop and uniform buffers without rebuilding GL.
     applyColorsRef.current = (nextC1, nextC2, nextC3) => {
-      program.uniforms.uColor1.value = new Float32Array(hexToRgb(nextC1));
-      program.uniforms.uColor2.value = new Float32Array(hexToRgb(nextC2));
-      program.uniforms.uColor3.value = new Float32Array(hexToRgb(nextC3));
-      if (!running) renderer.render({ scene: mesh });
+      const now = performance.now() * 0.001;
+      updateColors(now);
+      const to = [nextC1, nextC2, nextC3].map(hexToRgb);
+      const from = colorUniforms.map((uniform) => Array.from(uniform.value));
+      if (to.every((color, index) => color.every((channel, i) => Math.abs(channel - from[index][i]) < 0.00001))) return;
+      if (reducedMotion || !pageVisible || !onScreen) {
+        colorTransition = null;
+        colorUniforms.forEach((uniform, index) => uniform.value.set(to[index]));
+        if (!contextLost) renderer.render({ scene: mesh });
+        return;
+      }
+      colorTransition = { from, to, started: now };
+      startLoop();
     };
 
     // Понижение уровня на ходу: контекст и программа те же, меняются только
@@ -532,6 +554,7 @@ const Grainient = ({
       if (tier.frozen) {
         stopLoop();
         renderer.render({ scene: mesh });
+        startLoop();
       }
     };
 
@@ -566,11 +589,20 @@ const Grainient = ({
       // отрисовывалось бы вдвое реже и дёргалось. Время кадра берётся из
       // дельты, поэтому смена капа на ходу анимацию не сбивает.
       const isActive = activeRef.current;
-      const frameInterval = 1 / (isActive || mixFactor > 0.01 ? tier.activeFps : tier.idleFps);
+      const fps = colorTransition ? Math.max(30, tier.activeFps || 0)
+        : isActive || mixFactor > 0.01 ? tier.activeFps : tier.idleFps;
+      const frameInterval = 1 / fps;
       if (lastT !== null && now - lastT < frameInterval - FRAME_TOLERANCE) return;
 
       const deltaTime = lastT !== null ? Math.min(now - lastT, 0.1) : 0;
       lastT = now;
+      updateColors(now);
+      // Static/power-saving backgrounds render only this short color change.
+      if (tier.frozen || powerSave) {
+        renderer.render({ scene: mesh });
+        if (!colorTransition) stopLoop();
+        return;
+      }
 
       const targetMix = isActive ? 1 : 0;
       // Экспоненциальное сглаживание вместо лерпа с фиксированным шагом:
@@ -643,7 +675,7 @@ const Grainient = ({
     const offPowerSave = onPowerSaveChange((value) => {
       powerSave = value;
       if (powerSave) stopLoop();
-      else startLoop();
+      startLoop();
     });
 
     const io = new IntersectionObserver((entries) => {
