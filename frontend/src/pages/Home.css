@@ -294,31 +294,31 @@
 .flow-start-button,
 .wave-settings-link {
   height: 44px;
+  min-width: 0;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  appearance: none;
+  -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   white-space: nowrap;
+  font-family: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-primary);
   text-decoration: none;
+  cursor: pointer;
   transition: background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
-.flow-start-button {
-  min-width: 0;
-  padding: 0 14px;
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--text-secondary);
-  font-weight: 400;
-  cursor: pointer;
-  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
-}
-
-.flow-start-button svg {
+.flow-start-button svg,
+.wave-settings-link svg {
   flex-shrink: 0;
 }
 
@@ -331,21 +331,8 @@
   cursor: default;
 }
 
-.wave-settings-link {
-  padding: 0 18px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(0, 0, 0, 0.32);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
 @media (hover: hover) and (pointer: fine) {
-  .flow-start-button:hover:not(:disabled) {
-    color: var(--text-primary);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
+  .flow-start-button:hover:not(:disabled),
   .wave-settings-link:hover {
     background: rgba(0, 0, 0, 0.5);
   }
@@ -876,11 +863,6 @@
   .hero-section .flow-disc-position {
     /* Anchor the main record and playback control to the visible screen. */
     top: var(--flow-center-y, calc(50vh - var(--safe-top) - 44px));
-  }
-
-  .flow-controls {
-    /* Keep settings accessible above the floating controls. */
-    bottom: var(--bottom-controls-clearance, calc(var(--mobile-nav-bottom, 0px) + var(--mobile-nav-height, 72px) + 16px));
   }
 
   .wave-gif-button img {

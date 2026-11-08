@@ -623,7 +623,11 @@ function Home() {
                 aria-label={flowLabel.replace('поток', 'поток рекомендаций')}
                 {...waveIntentHandlers}
               >
-                {flowStarting && <Loader2 size={14} className="wave-loading-icon" aria-hidden="true" />}
+                {flowStarting ? (
+                  <Loader2 size={18} className="wave-loading-icon" aria-hidden="true" />
+                ) : (
+                  <Play size={18} strokeWidth={2.25} aria-hidden="true" />
+                )}
                 <span>{flowLabel}</span>
               </button>
             )}

@@ -107,7 +107,9 @@ void mainImage(out vec4 o, vec2 C){
   float v1=-0.3-b-s;
   vec3 layer1=mix(colDark,colOrg,S(edge0,edge1,blendX));
   vec3 layer2=mix(colOrg,colLav,S(edge0,edge1,blendX));
-  vec3 col=mix(layer1,layer2,S(v0,v1,tuv.y));
+  // GLSL smoothstep is undefined for reversed edges. Use an explicit inverse
+  // so WebKit/Metal and other drivers blend the same way without color bands.
+  vec3 col=mix(layer1,layer2,1.0-S(v1,v0,tuv.y));
   // Гребни волн светлее и тянутся к первому цвету, впадины темнее.
   col*=1.0+rippleW*0.14*rippleFade;
   col=mix(col,colLav,S(0.55,1.0,rippleW)*0.22*rippleFade);
