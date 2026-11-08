@@ -2,10 +2,17 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { transform } from 'esbuild'
 import { create } from 'zustand'
 import { createBrowserHistory } from '@remix-run/router'
 
-const source = async (path) => readFile(new URL(`../src/${path}`, import.meta.url), 'utf8')
+// Keep fresh module scope in each mocked browser with ordinary scripts. The
+// previous experimental VM module loader was active when Node 20 CI hit SIGSEGV.
+const source = async (path) => {
+  const text = await readFile(new URL(`../src/${path}`, import.meta.url), 'utf8')
+  const { code } = await transform(text, { format: 'cjs', loader: 'js', target: 'es2020' })
+  return new vm.Script(`(function (module, exports, require) {\n${code}\n})`, { filename: path })
+}
 const sessionSource = await source('services/uiSession.js')
 const searchSource = await source('store/searchStore.js')
 const cacheSource = await source('services/pageCache.js')
@@ -80,17 +87,14 @@ async function environment(storage = new Map(), { path = '/', android = false, t
     clearTimeout: (id) => timers.delete(id),
     ResizeObserver: observerClass(observers), MutationObserver: observerClass(mutations),
   })
-  async function module(text, imports = {}) {
-    const mod = new vm.SourceTextModule(text, { context })
-    await mod.link((name) => {
+  async function module(script, imports = {}) {
+    const loaded = { exports: {} }
+    script.runInContext(context)(loaded, loaded.exports, (name) => {
       const exports = imports[name]
       assert.ok(exports, `Unexpected import ${name}`)
-      return new vm.SyntheticModule(Object.keys(exports), function () {
-        for (const [key, value] of Object.entries(exports)) this.setExport(key, value)
-      }, { context })
+      return exports.__esModule ? exports : { __esModule: true, ...exports }
     })
-    await mod.evaluate()
-    return mod.namespace
+    return loaded.exports
   }
   const session = await module(sessionSource)
   const search = async () => (await module(searchSource, { zustand: { create }, '../services/uiSession': session })).useSearchStore
