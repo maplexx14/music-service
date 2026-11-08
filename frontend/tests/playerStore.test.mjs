@@ -185,6 +185,82 @@ for (const preload of [false, true]) {
   })
 }
 
+test('flow starts with the visible batch even after its TTL and a background replacement', async () => {
+  const requests = []
+  const store = await mountStore({ get: async (url) => { requests.push(url); return { data: [] } } })
+  store.setState({ prefetchTracks: noop })
+  const shown = [track('shown-first'), track('shown-second'), track('shown-third')]
+  const preview = { tracks: shown, ts: Date.now() - 6 * 60 * 1000 }
+  store.getState().pinFlowPreview(preview)
+  store.getState()._markPrefetchResolved('yt:shown-second')
+  store.setState({ flowPreload: { tracks: [track('replacement')], ts: Date.now() } })
+  assert.equal(await store.getState().startFlow(), true)
+  assert.equal(store.getState().currentTrack.id, shown[0].id)
+  assert.deepEqual(store.getState().queue.map(row => row.id), shown.map(row => row.id))
+  assert.equal(store.getState().flowActive, true)
+  assert.equal(store.getState().flowPreview, null)
+  assert.equal(store.getState().flowPreload, null)
+  assert.deepEqual(requests, [])
+})
+
+test('a visible flow preview preserves the next two discs when shuffle is enabled', async () => {
+  const store = await mountStore()
+  const shown = Array.from({ length: 8 }, (_, i) => ({ id: i + 1, title: `Track ${i}` }))
+  store.setState({ isShuffle: true })
+  store.getState().pinFlowPreview({ tracks: shown, ts: Date.now() })
+  assert.equal(await store.getState().startFlow(), true)
+  assert.equal(store.getState().currentTrack.id, 1)
+  assert.equal(store.getState().getNextTrack(1).id, 2)
+  assert.equal(store.getState().getNextTrack(2).id, 3)
+  assert.equal(store.getState().isShuffle, true)
+  assert.equal(new Set(store.getState().shuffledOrder).size, shown.length)
+  assert.deepEqual(Array.from(store.getState().shuffledOrder.slice(3)).sort(), [3, 4, 5, 6, 7])
+})
+
+test('starting a visible preview does not wait for an unrelated refresh in flight', async () => {
+  let finishRefresh
+  const store = await mountStore({ get: () => new Promise(resolve => { finishRefresh = resolve }) })
+  store.setState({ prefetchTracks: noop })
+  store.getState().pinFlowPreview({ tracks: localTracks(), ts: Date.now() - 6 * 60 * 1000 })
+  store.getState().preloadFlow()
+  const starting = store.getState().startFlow()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(store.getState().currentTrack?.id, 1)
+  finishRefresh({ data: [{ id: 99, title: 'Refreshed' }] })
+  assert.equal(await starting, true)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(store.getState().currentTrack.id, 1)
+})
+
+test('changing preferences invalidates the displayed flow before a new start', async () => {
+  const store = await mountStore({ get: async () => ({ data: [{ id: 99, title: 'New flow' }] }) })
+  store.getState().pinFlowPreview({ tracks: localTracks(), ts: Date.now() })
+  store.getState().markTrackDisliked(localTracks()[0])
+  assert.equal(store.getState().flowPreview, null)
+  assert.equal(await store.getState().startFlow(), true)
+  assert.equal(store.getState().currentTrack.id, 99)
+})
+
+test('an unseen flow can still choose the already resolved first playable track', async () => {
+  const store = await mountStore()
+  store.setState({ prefetchTracks: noop })
+  const batch = [track('cold'), track('ready')]
+  store.setState({ flowPreload: { tracks: batch, ts: Date.now() } })
+  store.getState()._markPrefetchResolved('yt:ready')
+  assert.equal(await store.getState().startFlow(), true)
+  assert.equal(store.getState().currentTrack.id, batch[1].id)
+})
+
+test('playing another queue clears a displayed flow and cannot pin one over playback', async () => {
+  const store = await mountStore()
+  const preview = { tracks: localTracks(), ts: Date.now() }
+  store.getState().pinFlowPreview(preview)
+  store.getState().playTrack({ id: 99, title: 'Selected track' })
+  assert.equal(store.getState().flowPreview, null)
+  store.getState().pinFlowPreview(preview)
+  assert.equal(store.getState().flowPreview, null)
+})
+
 test('shuffle records the click before fetching a playlist and does not double count its start', async () => {
   const clicks = []
   let finishFetch

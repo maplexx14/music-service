@@ -32,9 +32,8 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   const previousRef = useRef(null)
   const transitionRef = useRef(null)
   const stackMotionsRef = useRef(new Map())
-  const previewSnapshotRef = useRef(null)
+  const flowPreviewRef = useRef(null)
   const finishEntranceRef = useRef(null)
-  const [previewTracks, setPreviewTracks] = useState(null)
   const [upgradeCovers, setUpgradeCovers] = useState(false)
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
   const { active, scrollerRef } = useScreen()
@@ -61,11 +60,11 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     finishEntranceRef.current = finishEntrance
 
     // Pin the decoded previews: background flow preloads must not replace a
-    // record halfway through the first entrance. Playback uses the live queue.
+    // record halfway through the first entrance or when playback starts.
     const reveal = () => {
       const discs = [...arc.querySelectorAll('.flow-disc-slot .hero-disc')]
       if (!discs.length || discs.some((disc) => !disc.hasAttribute('data-cover-settled'))) return
-      if (previewSnapshotRef.current) setPreviewTracks(previewSnapshotRef.current)
+      if (flowPreviewRef.current) usePlayerStore.getState().pinFlowPreview(flowPreviewRef.current)
       entranceNodes = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
       for (const disc of entranceNodes) {
         const style = getComputedStyle(disc)
@@ -115,11 +114,8 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     dislikedTrackIds: s.dislikedTrackIds,
     dislikedTrackKeys: s.dislikedTrackKeys,
     flowPreload: s.flowPreload,
+    flowPreview: s.flowPreview,
   }), shallow)
-
-  useEffect(() => {
-    if (!active || state.currentTrack) setPreviewTracks(null)
-  }, [active, state.currentTrack])
 
   useLayoutEffect(() => {
     const hero = arcRef.current?.parentElement
@@ -187,11 +183,14 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   useEffect(() => () => {
     transitionRef.current?.cleanup()
     clearDiscStack(stackMotionsRef.current)
+    if (flowPreviewRef.current && usePlayerStore.getState().flowPreview === flowPreviewRef.current) {
+      usePlayerStore.setState({ flowPreview: null })
+    }
   }, [])
-  const candidates = [
-    ...(!state.currentTrack && previewTracks ? previewTracks : EMPTY_TRACKS),
-    ...(state.flowPreload?.tracks || EMPTY_TRACKS), ...tracks, ...state.queue,
-  ]
+  const preview = state.flowPreview || state.flowPreload
+  const candidates = (state.currentTrack
+    ? [...state.queue, ...tracks]
+    : preview?.tracks || EMPTY_TRACKS)
     .filter((track) => !isDislikedTrack(state, track))
   const center = state.currentTrack || candidates[0]
   const used = new Set([trackKey(center)])
@@ -218,7 +217,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     slots.set(offset, track)
   }
 
-  previewSnapshotRef.current = state.currentTrack ? null : [...slots.values()].filter(Boolean)
+  flowPreviewRef.current = state.currentTrack ? null : preview
 
   const nextStep = state.currentTrack ? queueStep(state, 1) : null
   const nextTrack = state.currentTrack ? (nextStep ? state.queue[nextStep.index] : null) : slots.get(1)

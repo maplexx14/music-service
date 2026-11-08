@@ -135,7 +135,7 @@ function flowArtistKey(name) {
 
 function invalidateFlowPreload() {
   flowPreloadGeneration += 1
-  usePlayerStore.setState({ flowPreload: null })
+  usePlayerStore.setState({ flowPreload: null, flowPreview: null })
 }
 
 function recommendationTrackPayload(track, eventType, value, metadata = null) {
@@ -769,6 +769,7 @@ const usePlayerStore = create((set, get) => ({
       source,
       playContext: capturePlayContext(source, track),
       flowActive: source === 'flow',
+      flowPreview: null,
       seekRequest: null,
       // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
       // а пейджер прежнего плейлиста дописал бы в неё чужие треки.
@@ -789,6 +790,13 @@ const usePlayerStore = create((set, get) => ({
   // Предзагруженный список потока: { tracks, ts }. Заполняется preloadFlow()
   // (монтирование главной / hover по кнопке), потребляется startFlow().
   flowPreload: null,
+  // The batch whose artwork has appeared on Home must also start playback.
+  flowPreview: null,
+  pinFlowPreview: (preload) => {
+    if (!get().currentTrack && !get().flowPreview && preload?.tracks?.length) {
+      set({ flowPreview: preload })
+    }
+  },
 
   // Фоновая предзагрузка потока. Без неё клик по «потоку» ждал ДВЕ
   // последовательные операции: расчёт рекомендаций на бэке
@@ -835,7 +843,8 @@ const usePlayerStore = create((set, get) => ({
     try {
       // Если предзагрузка ещё летит (клик сразу после открытия страницы) —
       // дожидаемся её вместо запуска дублирующего запроса.
-      if (flowPreloadPromise) {
+      let preview = !get().currentTrack ? get().flowPreview : null
+      if (!preview && flowPreloadPromise) {
         try {
           await flowPreloadPromise
         } catch {
@@ -843,21 +852,26 @@ const usePlayerStore = create((set, get) => ({
         }
       }
 
+      preview = !get().currentTrack ? get().flowPreview : null
       // Мгновенный старт из предзагруженного списка: без ожидания
       // расчёта рекомендаций, а резолв первого трека уже прогрет.
       // Список потребляется (обнуляется), чтобы следующий запуск потока
       // получил свежую выдачу с учётом новых сигналов.
-      const preload = get().flowPreload
-      if (preload && Date.now() - preload.ts < FLOW_PRELOAD_TTL_MS && preload.tracks.length > 0) {
-        set({ flowPreload: null })
+      const preload = preview || get().flowPreload
+      const tracks = (preload?.tracks || []).filter((track) => !isDislikedTrack(get(), track))
+      if (preload && (preview || Date.now() - preload.ts < FLOW_PRELOAD_TTL_MS) && tracks.length > 0) {
+        set({ flowPreload: null, flowPreview: null })
         // Стартуем с трека, чей резолв УЖЕ завершён (preloadFlow греет первые
         // два, ready-поллинг помечает готовность). Если первый ещё резолвится,
         // а второй готов — начать со второго значит играть сразу вместо
         // ожидания нескольких секунд; порядок потока при этом не важен, он
         // и так перемешан на бэке. Ничего не готово — стартуем с нулевого.
-        const startIndex = Math.max(preload.tracks.findIndex(isTrackResolved), 0)
-        get().playPlaylist(preload.tracks, startIndex, 'flow', null, { recordClick: false })
-        get().prefetchTracks(preload.tracks.slice(0, 3), 3)
+        // A visible preview fixes the first record and its two neighbors.
+        const startIndex = preview ? 0 : Math.max(tracks.findIndex(isTrackResolved), 0)
+        get().playPlaylist(tracks, startIndex, 'flow', null, {
+          recordClick: false, shufflePrefixLength: preview ? 3 : 0,
+        })
+        get().prefetchTracks(tracks.slice(0, 3), 3)
         set({ flowActive: true })
         return true
       }
@@ -1013,12 +1027,17 @@ const usePlayerStore = create((set, get) => ({
     return queueExtendPromise
   },
 
-  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, { recordClick = true, context } = {}) => {
+  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, {
+    recordClick = true, context, shufflePrefixLength = 0,
+  } = {}) => {
     // startFlow/shufflePlaylist уже записали нажатие до своего запроса.
     if (recordClick) get().recordPlayClick('playlist', { track: tracks[startIndex], source, queueLength: tracks.length })
     if (tracks.length === 0) return
     const { isShuffle } = get()
-    const order = isShuffle ? shuffleArray(tracks.map((_, i) => i)) : tracks.map((_, i) => i)
+    const indices = tracks.map((_, i) => i)
+    const order = isShuffle
+      ? [...indices.slice(0, shufflePrefixLength), ...shuffleArray(indices.slice(shufflePrefixLength))]
+      : indices
     const idx = isShuffle ? order.indexOf(startIndex) : startIndex
     const actualIndex = isShuffle ? order[idx] : startIndex
     set({
@@ -1031,6 +1050,7 @@ const usePlayerStore = create((set, get) => ({
       source,
       playContext: capturePlayContext(source, tracks[actualIndex], context),
       flowActive: source === 'flow',
+      flowPreview: null,
       seekRequest: null,
       // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
       // Прошлый — всегда сбрасываем: он относился к прежнему списку, и дотянуть

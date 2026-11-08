@@ -388,8 +388,8 @@ function Home() {
 
   // Предзагружаем поток рекомендаций: к клику по «потоку» список уже получен,
   // а резолв первых треков прогрет на бэке — старт почти мгновенный.
-  // Через idle, а не сразу: этот запрос ничего не рисует, и при открытии он
-  // отбирал полосу у /recommendations и /tracks, от которых зависит экран.
+  // До первого запуска этот список рисует диски, поэтому запрашиваем сразу.
+  // При уже выбранном треке прогреваем в idle, чтобы не мешать воспроизведению.
   // Главная живёт смонтированной всю сессию (ScreenStack), поэтому одной
   // предзагрузки на монтировании мало: через 5 минут (TTL) список устаревал,
   // и нажатие ждало расчёта рекомендаций на бэке — секунды без отклика.
@@ -406,15 +406,16 @@ function Home() {
     const preload = () => {
       if (!document.hidden) usePlayerStore.getState().preloadFlow()
     }
-    const handle = idle(preload)
+    const handle = hasCurrentTrack ? idle(preload) : null
+    if (!hasCurrentTrack) preload()
     const timer = setInterval(preload, 60 * 1000)
     document.addEventListener('visibilitychange', preload)
     return () => {
-      cancel(handle)
+      if (handle !== null) cancel(handle)
       clearInterval(timer)
       document.removeEventListener('visibilitychange', preload)
     }
-  }, [screenActive])
+  }, [screenActive, hasCurrentTrack])
 
   // Полка плейлистов: при возврате на главную или в приложение, если с
   // прошлой загрузки прошло больше SOUNDCLOUD_PLAYLIST_REFRESH_MS, берём
