@@ -1089,11 +1089,11 @@ function PlayerInner() {
         // playerStore). Тогда дотягиваем его и доигрываем переход по приезде —
         // тем же отложенным путём, что и при неготовом буфере.
         //
-        // Штатное завершение (тянуть неоткуда) остаётся как было: nextTrack()
-        // сам переведёт store в паузу, иначе плеер навсегда остался бы в
-        // состоянии «играю» без звука.
+        // После последней страницы подборки подготавливаем поток. Если его
+        // запрос ещё летит, удерживаем сессию так же, как при догрузке страницы.
         if (!usePlayerStore.getState().getNextTrack(1)) {
-          if (usePlayerStore.getState().queuePager) {
+          const state = usePlayerStore.getState()
+          if (state.queuePager || state.flowActive || state.canContinueWithFlow()) {
             // Сессию держим тишиной, пока летит запрос: отдать её сейчас значит
             // остаться без права на play() к моменту, когда хвост приедет.
             startDeferred()
@@ -1736,9 +1736,8 @@ function PlayerInner() {
   }
   giveUpDeferredRef.current = giveUpDeferred
 
-  // Очередь кончилась, но плейлист — нет: страница успела загрузить только
-  // первые страницы треков (ленивая подгрузка по прокрутке). Дотягиваем хвост
-  // и доигрываем переход.
+  // Дотягиваем страницы плейлиста или рекомендации после его окончания
+  // и доигрываем переход, сохраняя аудиосессию во время запроса.
   //
   // Быстрый путь (буфер следующего уже заряжен) здесь невозможен по построению:
   // трека в очереди не было, а значит и греть было нечего. Поэтому после
@@ -1751,7 +1750,8 @@ function PlayerInner() {
     // получают ОДИН промис догрузки и проснутся вместе). Без этой отметки оба
     // двинули бы очередь, и переход промотал бы два трека вместо одного.
     const fromId = usePlayerStore.getState().currentTrack?.id
-    let grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+    const fromContext = usePlayerStore.getState().playContext
+    let grew = await usePlayerStore.getState().extendPlaybackQueueIfNeeded(true)
     // null — запрос упал (сеть пропала на ходу), а не плейлист кончился.
     // Раньше это читалось как конец, и музыка вставала посреди плейлиста.
     // Повторяем с паузами, пока мост держит сессию.
@@ -1759,13 +1759,20 @@ function PlayerInner() {
       if (grew !== null || !pendingAdvanceRef.current) break
       diag('queueExtend:retry', { delay })
       await new Promise((resolve) => setTimeout(resolve, delay))
-      if (!pendingAdvanceRef.current || usePlayerStore.getState().currentTrack?.id !== fromId) break
-      grew = await usePlayerStore.getState().extendQueueIfNeeded(true)
+      if (!pendingAdvanceRef.current || usePlayerStore.getState().currentTrack?.id !== fromId ||
+          usePlayerStore.getState().playContext !== fromContext) break
+      grew = await usePlayerStore.getState().extendPlaybackQueueIfNeeded(true)
     }
     // Пока летел запрос, пользователь мог нажать паузу или включить другой
     // трек — тогда доигрывать этот переход уже нельзя.
     if (!pendingAdvanceRef.current) return
-    if (usePlayerStore.getState().currentTrack?.id !== fromId) {
+    if (!usePlayerStore.getState().isPlaying) {
+      pendingAdvanceRef.current = false
+      engine.releaseSession()
+      return
+    }
+    if (usePlayerStore.getState().currentTrack?.id !== fromId ||
+        usePlayerStore.getState().playContext !== fromContext) {
       // Очередь уже уехала без нас: переход состоялся другим путём. Снимаем
       // отметку и мост — держать сессию тишиной больше незачем.
       diag('queueExtend:superseded', {})
@@ -1773,8 +1780,8 @@ function PlayerInner() {
       engine.releaseSession()
       return
     }
-    if (!grew) {
-      // Хвоста нет — плейлист правда кончился (или сеть так и не вернулась).
+    if (!grew || !usePlayerStore.getState().getNextTrack()) {
+      // Доступных треков нет или сеть так и не вернулась.
       // Отпускаем сессию и честно встаём на паузу, иначе тишина моста играла
       // бы вечно.
       diag(grew === null ? 'queueExtend:failed' : 'queueExtend:empty', {})
@@ -1965,8 +1972,8 @@ function PlayerInner() {
     }
   }, [isPlaying, currentTrack, setDuration, swapVersion])
 
-  // Как только заиграл текущий трек — прогреваем следующий в очереди на бэке
-  // и, если играет «Моя волна», подтягиваем следующую порцию потока.
+  // Прогреваем следующие треки, дотягиваем страницы подборки и заранее
+  // готовим поток у её конца.
   useEffect(() => {
     if (!currentTrack) return
     // Сам текущий трек обычно уже прогрет (клик, порция потока, прогрев
@@ -1974,13 +1981,12 @@ function PlayerInner() {
     // перезапуска PWA: он стоит на паузе, и первый ▶ иначе шёл холодным путём.
     usePlayerStore.getState().prefetchTracks([currentTrack], 1)
     prefetchNext()
-    usePlayerStore.getState().extendFlowIfNeeded()
     // То же для плейлиста, загруженного постранично: хвост очереди дотягиваем
     // заранее, за несколько треков до конца загруженного (см. queuePager).
     // Именно этот вызов и убирает паузу на границе страницы — к моменту
     // перехода следующий трек уже в очереди и прогрет, а аварийный путь в
     // handleEnded остаётся только на случай упавшего запроса.
-    usePlayerStore.getState().extendQueueIfNeeded()
+    usePlayerStore.getState().extendPlaybackQueueIfNeeded()
   }, [currentTrack?.id, prefetchNext])
 
   // Запись play — не на старте, а по достижении порога реального прослушивания

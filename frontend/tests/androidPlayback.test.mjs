@@ -15,7 +15,7 @@ const noop = () => {}
 
 // Run the real Player effects, audio engine and APK bridge with controllable
 // media events. UI imports are stubs; no browser or device is needed.
-async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = false } = {}) {
+async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = false, trackIds = [1, 2, 3, 4] } = {}) {
   let now = 0
   let dirty = true
   let hookIndex = 0
@@ -127,7 +127,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
       this.emit('ended')
     }
   }
-  const queue = [1, 2, 3, 4].map((id) => ({ id, title: `Track ${id}`, duration: 180 }))
+  const queue = trackIds.map((id) => ({ id, title: `Track ${id}`, duration: 180 }))
   const state = {
     currentTrack: queue[0], queue, isPlaying: true, volume: 1, duration: 180, currentTime: 0,
     likedTrackIds: [], dislikedTrackIds: [], pendingLikeKeys: [],
@@ -137,7 +137,9 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
     setDuration: (duration) => update({ duration }),
     fetchLikedTracks: async () => {}, fetchDislikedTracks: async () => {},
     prefetchNext: async () => {}, prefetchTracks: noop, extendFlowIfNeeded: noop, extendQueueIfNeeded: async () => false,
+    canContinueWithFlow: () => false, extendPlaybackQueueIfNeeded: async () => false,
     nextTrack: () => update(state.getNextTrack() ? { currentTrack: state.getNextTrack() } : { isPlaying: false }),
+    advanceBy: (offset) => update(state.getNextTrack(offset) ? { currentTrack: state.getNextTrack(offset) } : { isPlaying: false }),
     togglePlayPause: () => update({ isPlaying: !state.isPlaying }),
     recordPlayClick: noop,
   }
@@ -417,5 +419,107 @@ test('older APK bridges can still start a cold track in the background', async (
   assert.equal(app.state.currentTrack.id, 2)
   assert.equal(app.engine.getActive().paused, false)
   assert.equal(app.messages.some((message) => message.t === 'requested'), false)
+  app.cleanup()
+})
+
+function pendingFlow(app) {
+  let finish
+  const pending = new Promise(resolve => { finish = resolve })
+  app.state.canContinueWithFlow = () => true
+  app.state.extendPlaybackQueueIfNeeded = () => pending
+  return () => {
+    app.state.queue.push({ id: 100, title: 'Flow', duration: 180 })
+    finish(true)
+  }
+}
+
+for (const platform of ['desktop', 'APK', 'iOS']) {
+  test(`${platform} starts flow after the last collection track while its recommendations are loading`, async () => {
+    const app = await mountPlayer({ apk: platform === 'APK', ios: platform === 'iOS', desktop: platform === 'desktop', trackIds: [1] })
+    const finish = pendingFlow(app)
+    app.document.hidden = platform !== 'desktop'
+    app.engine.getActive().start()
+    app.flush()
+    app.engine.getActive().end()
+    app.flush()
+    assert.equal(app.state.currentTrack.id, 1)
+    assert.equal(app.state.isPlaying, true)
+    finish()
+    await new Promise(resolve => setImmediate(resolve))
+    if (platform === 'iOS') {
+      // The existing background handoff waits for real audio readiness.
+      assert.equal(app.state.currentTrack.id, 1)
+      assert.equal(app.engine.hasPrimedSrc('/api/tracks/100/stream'), true)
+      const next = app.engine.getIdle()
+      next.readyState = next.HAVE_FUTURE_DATA
+      next.emit('canplay')
+    }
+    app.flush()
+    assert.equal(app.state.currentTrack.id, 100)
+    assert.equal(app.state.isPlaying, true)
+    assert.equal(app.engine.getActive().paused, false)
+    assert.equal(app.engine.getActive().src, 'https://boltmusic.lat/api/tracks/100/stream')
+    app.cleanup()
+  })
+}
+
+for (const system of [false, true]) {
+  test(`pausing via ${system ? 'system controls' : 'the player'} while flow loads cancels the automatic transition`, async () => {
+    const app = await mountPlayer({ trackIds: [1] })
+    const finish = pendingFlow(app)
+    app.engine.getActive().start()
+    app.flush()
+    app.engine.getActive().end()
+    if (system) assert.equal(app.window.__boltMediaAction('pause'), true)
+    else app.state.togglePlayPause()
+    finish()
+    await new Promise(resolve => setImmediate(resolve))
+    app.flush()
+    assert.equal(app.state.currentTrack.id, 1)
+    assert.equal(app.state.isPlaying, false)
+    assert.equal(app.engine.getActive().paused, true)
+    app.cleanup()
+  })
+}
+
+test('a new collection with the same current track cancels the old automatic transition', async () => {
+  const app = await mountPlayer({ trackIds: [1] })
+  const finish = pendingFlow(app)
+  app.engine.getActive().start()
+  app.flush()
+  app.engine.getActive().end()
+  app.state.playContext = { kind: 'album', title: 'Another album' }
+  finish()
+  await new Promise(resolve => setImmediate(resolve))
+  app.flush()
+  assert.equal(app.state.currentTrack.id, 1)
+  assert.equal(app.engine.getActive().src, 'https://boltmusic.lat/api/tracks/1/stream')
+  app.cleanup()
+})
+
+test('repeat-one replays the final collection track instead of starting its prepared flow', async () => {
+  const app = await mountPlayer({ trackIds: [1, 100] })
+  app.state.isRepeatOne = true
+  app.engine.getActive().start()
+  app.flush()
+  app.engine.getActive().end()
+  app.flush()
+  assert.equal(app.state.currentTrack.id, 1)
+  assert.equal(app.state.isPlaying, true)
+  assert.equal(app.engine.getActive().currentTime, 0)
+  assert.equal(app.engine.getActive().paused, false)
+  app.cleanup()
+})
+
+test('no available flow stops the finished collection instead of leaving a silent playing state', async () => {
+  const app = await mountPlayer({ trackIds: [1] })
+  app.state.canContinueWithFlow = () => true
+  app.engine.getActive().start()
+  app.flush()
+  app.engine.getActive().end()
+  await new Promise(resolve => setImmediate(resolve))
+  app.flush()
+  assert.equal(app.state.isPlaying, false)
+  assert.equal(app.state.currentTrack.id, 1)
   app.cleanup()
 })

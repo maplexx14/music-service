@@ -99,6 +99,7 @@ const resolvedPrefetchKeys = new Set()
 // дедуп летящего запроса + TTL свежести предзагруженного списка.
 let flowPreloadPromise = null
 let flowPreloadGeneration = 0
+let flowExtendRequest = null
 const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
 // Порции волны короче и чаще: каждая выдача выбирается на бэке из готового
 // пула под сигналы сессии (sess), и чем меньше треков уже стоит в очереди,
@@ -304,6 +305,19 @@ function capturePlayContext(source, track, context = {}) {
     kind: context.kind || source || null,
     path: context.path ?? (typeof window !== 'undefined' ? window.location.pathname : null),
     title: context.title ?? (source === 'album' ? track?.album || null : null),
+  }
+}
+
+function queueTrackState(state, step) {
+  const currentTrack = state.queue[step.index]
+  const entersFlow = state.flowStartIndex != null && step.index >= state.flowStartIndex
+  return {
+    currentTrack, currentIndex: step.index, currentShuffleIndex: step.shuffleIndex,
+    isPlaying: true, currentTime: 0, seekRequest: null,
+    ...(entersFlow ? {
+      source: 'flow', flowActive: true, flowStartIndex: null,
+      playContext: capturePlayContext('flow', currentTrack),
+    } : {}),
   }
 }
 
@@ -769,6 +783,7 @@ const usePlayerStore = create((set, get) => ({
       source,
       playContext: capturePlayContext(source, track),
       flowActive: source === 'flow',
+      flowStartIndex: null,
       flowPreview: null,
       seekRequest: null,
       // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
@@ -787,6 +802,18 @@ const usePlayerStore = create((set, get) => ({
   // --- Персональный поток («Моя волна») ---
   flowActive: false,
   flowLoading: false,
+  // Рекомендации уже в хвосте, но название и режим очереди меняются только
+  // при переходе на первый трек потока.
+  flowStartIndex: null,
+  canContinueWithFlow: () => {
+    const { currentTrack, source, playContext } = get()
+    if (!currentTrack) return false
+    const kind = playContext?.kind || source
+    const path = playContext?.path || ''
+    return ['album', 'playlist', 'liked'].includes(kind) ||
+      path === '/liked' || path.startsWith('/albums/') || path.startsWith('/playlists/') ||
+      (kind === 'external' && (path.startsWith('/external/') || path === '/link'))
+  },
   // Предзагруженный список потока: { tracks, ts }. Заполняется preloadFlow()
   // (монтирование главной / hover по кнопке), потребляется startFlow().
   flowPreload: null,
@@ -892,50 +919,71 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // Подгружает следующую порцию заранее. Запас в FLOW_EXTEND_LEAD треков
-  // маскирует задержку даже при быстрых пропусках подряд (готовый пул — десятки
-  // мс); flowLoading не даёт запустить параллельные дублирующие запросы.
+  // В конце подборки готовит поток, затем пополняет его обычным образом.
+  // Общий промис позволяет ended дождаться уже летящего запроса.
   extendFlowIfNeeded: async () => {
-    const { flowActive, flowLoading, queue } = get()
-    if (!flowActive || flowLoading) return
-    if (get().getNextTrack(FLOW_EXTEND_LEAD)) return
+    const { flowActive, flowLoading, queue, queuePager, playContext } = get()
+    if (queuePager || (!flowActive && !get().canContinueWithFlow())) return false
+    if (get().getNextTrack(FLOW_EXTEND_LEAD)) return false
+    if (flowExtendRequest?.playContext === playContext) return flowExtendRequest.promise
+    if (flowLoading && !flowExtendRequest?.ownsLoading) return false
 
-    set({ flowLoading: true })
-    try {
-      // Исключаем то, что уже в очереди (хвост до 100 треков).
-      const exclude = queue.slice(-100).map((t) => t.id).join(',')
-      const { data } = await api.get('/recommendations/flow', {
-        params: {
-          limit: FLOW_EXTEND_LIMIT,
-          exclude,
-          hour: new Date().getHours(),
-          sess: get()._flowSessionParam(),
-        },
-      })
-      const state = get()
-      if (!state.flowActive) return
-      const known = new Set(state.queue.map((t) => t.id))
-      const fresh = (data || []).filter((t) => !known.has(t.id) && !isDislikedTrack(state, t))
-      if (fresh.length === 0) return
+    const previousRequest = flowExtendRequest
+    const request = { playContext, promise: null, ownsLoading: flowActive }
+    flowExtendRequest = request
+    // Подготовка хвоста не блокирует явное нажатие «поток» на главной.
+    if (flowActive || previousRequest?.ownsLoading) set({ flowLoading: flowActive })
+    request.promise = (async () => {
+      try {
+        // Исключаем то, что уже в очереди (хвост до 100 треков).
+        const exclude = queue.slice(-100).map((t) => t.id).join(',')
+        const { data } = await api.get('/recommendations/flow', {
+          params: {
+            limit: FLOW_EXTEND_LIMIT,
+            exclude,
+            hour: new Date().getHours(),
+            sess: get()._flowSessionParam(),
+            ...(!flowActive ? { preload: 1 } : {}),
+          },
+          skipErrorToast: true,
+        })
+        const state = get()
+        if (state.playContext !== playContext || !state.currentTrack) return false
+        const known = new Set(state.queue.flatMap(trackKeys))
+        const fresh = (data || []).filter((track) => {
+          const keys = trackKeys(track)
+          if (keys.some((key) => known.has(key)) || isDislikedTrack(state, track)) return false
+          keys.forEach((key) => known.add(key))
+          return true
+        })
+        if (fresh.length === 0) return false
 
-      get().prefetchTracks(fresh.slice(0, 2), 2)
+        get().prefetchTracks(fresh.slice(0, 2), 2)
 
-      set((state) => {
-        const startIdx = state.queue.length
-        const newIndices = fresh.map((_, i) => startIdx + i)
-        return {
-          queue: [...state.queue, ...fresh],
-          // При шаффле новые индексы дописываем в конец порядка вперемешку.
-          shuffledOrder: state.isShuffle
-            ? [...state.shuffledOrder, ...shuffleArray(newIndices)]
-            : [...state.shuffledOrder, ...newIndices],
+        set((state) => {
+          const startIdx = state.queue.length
+          const newIndices = fresh.map((_, i) => startIdx + i)
+          return {
+            queue: [...state.queue, ...fresh],
+            flowStartIndex: state.flowActive ? null : state.flowStartIndex ?? startIdx,
+            // При шаффле новые индексы дописываем в конец порядка вперемешку.
+            shuffledOrder: state.isShuffle
+              ? [...state.shuffledOrder, ...shuffleArray(newIndices)]
+              : [...state.shuffledOrder, ...newIndices],
+          }
+        })
+        return true
+      } catch (error) {
+        console.error('Flow extend error:', error)
+        return null
+      } finally {
+        if (flowExtendRequest === request) {
+          flowExtendRequest = null
+          if (request.ownsLoading) set({ flowLoading: false })
         }
-      })
-    } catch (error) {
-      console.error('Flow extend error:', error)
-    } finally {
-      set({ flowLoading: false })
-    }
+      }
+    })()
+    return request.promise
   },
 
   // --- Постраничная очередь ---
@@ -957,7 +1005,10 @@ const usePlayerStore = create((set, get) => ({
   extendQueueIfNeeded: async (force = false) => {
     const { queuePager, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
     if (!queuePager) return false
-    if (queue.length >= queuePager.total) return false
+    if (queue.length >= queuePager.total) {
+      set({ queuePager: null })
+      return false
+    }
     const pos = isShuffle ? currentShuffleIndex : currentIndex
     if (!force && pos < queue.length - 1 - QUEUE_EXTEND_LEAD) return false
     // Запрос уже летит — ждём его, а не запускаем второй за той же страницей.
@@ -1027,6 +1078,27 @@ const usePlayerStore = create((set, get) => ({
     return queueExtendPromise
   },
 
+  // Сначала весь плейлист (включая пустые страницы внешнего источника и
+  // страницы с одними дизлайками), затем поток. Ошибка сети не означает конец.
+  extendPlaybackQueueIfNeeded: async (force = false) => {
+    const playContext = get().playContext
+    let grew = false
+    while (get().queuePager) {
+      const { queue, queuePager } = get()
+      const result = await get().extendQueueIfNeeded(force)
+      if (get().playContext !== playContext) return false
+      if (result === null) return null
+      grew ||= result
+      if (!force || get().getNextTrack() || !get().queuePager) break
+      if (get().queue.length === queue.length && get().queuePager.cursor === queuePager.cursor) break
+    }
+    const extendingFlow = get().extendFlowIfNeeded()
+    // Приехавший трек плейлиста можно включать сразу, не дожидаясь потока.
+    if (force && get().getNextTrack()) return true
+    const flowGrew = await extendingFlow
+    return flowGrew === null ? null : grew || flowGrew
+  },
+
   playPlaylist: (tracks, startIndex = 0, source = null, pager = null, {
     recordClick = true, context, shufflePrefixLength = 0,
   } = {}) => {
@@ -1050,6 +1122,7 @@ const usePlayerStore = create((set, get) => ({
       source,
       playContext: capturePlayContext(source, tracks[actualIndex], context),
       flowActive: source === 'flow',
+      flowStartIndex: null,
       flowPreview: null,
       seekRequest: null,
       // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
@@ -1124,7 +1197,11 @@ const usePlayerStore = create((set, get) => ({
       return
     }
     if (!state.isShuffle) {
-      const order = shuffleArray(state.queue.map((_, i) => i))
+      const indices = state.queue.map((_, i) => i)
+      const boundary = state.flowStartIndex ?? indices.length
+      // Подготовленный поток всегда идёт после подборки, даже если режим
+      // перемешивания включили, когда рекомендации уже приехали.
+      const order = [...shuffleArray(indices.slice(0, boundary)), ...shuffleArray(indices.slice(boundary))]
       const shuffleIndex = order.indexOf(state.currentIndex)
       set({ isShuffle: true, shuffledOrder: order, currentShuffleIndex: shuffleIndex })
     } else {
@@ -1362,11 +1439,7 @@ const usePlayerStore = create((set, get) => ({
       set({ isPlaying: false, seekRequest: null })
       return
     }
-    set({
-      currentTrack: state.queue[step.index], currentIndex: step.index,
-      currentShuffleIndex: step.shuffleIndex, isPlaying: true,
-      currentTime: 0, seekRequest: null,
-    })
+    set(queueTrackState(state, step))
   },
 
   // Переход сразу на n треков вперёд — когда промежуточные не загрузились
@@ -1381,13 +1454,12 @@ const usePlayerStore = create((set, get) => ({
     get()._recordSkipIfNeeded(via, n)
     get()._recordListenProgress()
     const state = get()
-    const moved = { isPlaying: true, currentTime: 0, seekRequest: null }
     const step = queueStep(state, 1, n)
     if (!step) {
       set({ isPlaying: false, seekRequest: null })
       return
     }
-    set({ ...moved, currentTrack: state.queue[step.index], currentIndex: step.index, currentShuffleIndex: step.shuffleIndex })
+    set(queueTrackState(state, step))
   },
 
   previousTrack: () => {
@@ -1453,6 +1525,9 @@ const usePlayerStore = create((set, get) => ({
       currentTime: 0,
       seekRequest: null,
       source: null,
+      playContext: null,
+      flowActive: false,
+      flowStartIndex: null,
       isFullScreen: false,
       queuePager: null,
       heavyCoverTrackId: null,

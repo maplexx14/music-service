@@ -93,6 +93,8 @@ function snapshot() {
     source: state.source,
     playContext: state.playContext,
     flowActive: state.flowActive,
+    flowStartIndex: state.flowStartIndex != null && state.flowStartIndex >= start && state.flowStartIndex < end
+      ? state.flowStartIndex - start : null,
     // Пейджер считает смещение по длине очереди — после обрезки оно неверное.
     queuePager: trimmed ? null : state.queuePager,
     position,
@@ -251,6 +253,8 @@ function applySnapshot(data) {
       source: data.source ?? null,
       playContext: data.playContext ?? null,
       flowActive: Boolean(data.flowActive),
+      flowStartIndex: Number.isInteger(data.flowStartIndex) && data.flowStartIndex >= 0 && data.flowStartIndex < data.queue.length
+        ? data.flowStartIndex : null,
       queuePager: data.queuePager ?? null,
       isPlaying: false,
     })
