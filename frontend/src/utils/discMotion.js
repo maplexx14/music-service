@@ -220,7 +220,7 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
     const record = cloneDiscRecord(entry.record)
     record.style.transform = 'translate(-50%, -50%) scale(1)'
     sources.set(key, {
-      ...point, angle: entry.angleAt(progress), record,
+      ...point, angle: entry.angleAt(progress), record, waiting: entry.waiting,
     })
   }
   interrupted?.cleanup()
@@ -240,7 +240,7 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
     }
     entries.clear()
   }
-  const add = (key, node, record, from, to, live, angleAt) => {
+  const add = (key, node, record, from, to, live, angleAt, waiting = false) => {
     const visibility = node.style.visibility
     const { frames, pointAt } = drumFrames(from, to, width, height, size, angleAt)
     const animation = node.animate(frames, DRUM_MOTION)
@@ -249,7 +249,7 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
     if (live && !record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) {
       node.style.visibility = 'hidden'
     }
-    entries.set(key, { node, record, animation, live, visibility, angleAt, pointAt })
+    entries.set(key, { node, record, animation, live, visibility, angleAt, pointAt, waiting })
   }
   for (const [key, slot] of current) {
     const old = previous.get(key)
@@ -260,8 +260,11 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
     } : bottom)
     const fromAngle = source?.angle ?? (old ? slotAngle(old.x) : BOTTOM_ANGLE)
     const entering = !old && !source && slot.x !== 0
+    const waiting = slot.x !== 0 && (entering || source?.waiting) &&
+      !slot.node.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')
     add(key, slot.node, slot.node.querySelector('.flow-disc-position'), from, to, true,
-      drumRoute(fromAngle, slotAngle(slot.x), direction, entering ? [0.5, 1] : [0, 1]))
+      drumRoute(fromAngle, slotAngle(slot.x), waiting ? Math.sign(slot.x) : direction,
+        entering && !waiting ? [0.5, 1] : [0, 1]), waiting)
   }
   const removed = new Map([...previous, ...sources])
   for (const [key, slot] of removed) {
@@ -282,41 +285,71 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
       drumRoute(source?.angle ?? slotAngle(slot.x), BOTTOM_ANGLE, direction,
         source ? [0, 1] : [0, 0.5]))
   }
-  // A cold upcoming cover must never hold the selected record in place.
-  // Decode only controls visibility; every record moves on the skip's timeline.
+  // Keep only a new, undecoded preview at the hidden bottom. Its own entrance
+  // starts when artwork can paint; the selected and departing records move now.
+  const finished = [...entries.values()].map((entry) => entry.animation.finished.catch(() => {}))
+  const startTime = document.timeline.currentTime
+  for (const entry of entries.values()) {
+    if (entry.waiting) continue
+    entry.animation.play()
+    entry.animation.startTime = startTime
+  }
   const revealReady = () => {
     if (cleaned) return
     for (const entry of entries.values()) {
-      if (entry.live && entry.record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) {
+      if (!entry.live) continue
+      const artwork = entry.record.querySelector('.hero-disc')
+      if (artwork?.hasAttribute('data-cover-ready')) {
         entry.node.style.visibility = entry.visibility
+        if (entry.waiting) {
+          entry.waiting = false
+          entry.animation.play()
+          entry.animation.startTime = document.timeline.currentTime
+        }
+      } else if (entry.waiting && artwork?.hasAttribute('data-cover-settled')) {
+        entry.waiting = false
+        entry.animation.cancel()
       }
     }
   }
   observer = new MutationObserver(revealReady)
-  observer.observe(arc, { subtree: true, attributes: true, attributeFilter: ['data-cover-ready'] })
+  observer.observe(arc, { subtree: true, attributes: true, attributeFilter: ['data-cover-ready', 'data-cover-settled'] })
   revealReady()
-  const startTime = document.timeline.currentTime
-  for (const entry of entries.values()) {
-    entry.animation.play()
-    entry.animation.startTime = startTime
-  }
-  Promise.all([...entries.values()].map((entry) => entry.animation.finished.catch(() => {}))).then(cleanup)
+  Promise.all(finished).then(cleanup)
   return motion
 }
 
 function animateSlot(motions, key, node, from, to, remove = false) {
   motions.get(key)?.cleanup()
-  const animation = node.animate([from, to], DISC_MOTION)
+  const animation = node.animate([from, to], { ...DISC_MOTION, fill: 'both' })
+  let observer = null
   let cleaned = false
   const cleanup = () => {
     if (cleaned) return
     cleaned = true
+    observer?.disconnect()
     animation.cancel()
     if (remove) node.remove()
     if (motions.get(key)?.cleanup === cleanup) motions.delete(key)
   }
   motions.set(key, { node, animation, cleanup })
   animation.finished.then(cleanup, cleanup)
+  const artwork = !remove && node.querySelector('.hero-disc')
+  if (artwork && !artwork.hasAttribute('data-cover-ready')) {
+    animation.pause()
+    animation.currentTime = 0
+    const revealReady = () => {
+      if (cleaned) return
+      if (artwork.hasAttribute('data-cover-ready')) {
+        observer.disconnect()
+        animation.play()
+        animation.startTime = document.timeline.currentTime
+      } else if (artwork.hasAttribute('data-cover-settled')) cleanup()
+    }
+    observer = new MutationObserver(revealReady)
+    observer.observe(artwork, { attributes: true, attributeFilter: ['data-cover-ready', 'data-cover-settled'] })
+    revealReady()
+  }
 }
 
 // Newly queued records enter from below. Removed previews leave through the
