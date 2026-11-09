@@ -228,7 +228,6 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
   const entries = new Map()
   let observer = null
   let cleaned = false
-  let started = false
   const motion = { entries, cleanup }
   function cleanup() {
     if (cleaned) return
@@ -283,28 +282,25 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
       drumRoute(source?.angle ?? slotAngle(slot.x), BOTTOM_ANGLE, direction,
         source ? [0, 1] : [0, 0.5]))
   }
-  // Hold every record at its starting position until new light artwork is
-  // decoded. The entire drum then moves on the same frame, without empty discs
-  // or one preview arriving after the rest of the group.
-  const start = () => {
-    if (cleaned || started) return
-    const live = [...entries.values()].filter((entry) => entry.live)
-    if (live.some((entry) => !entry.record.querySelector('.hero-disc')?.hasAttribute('data-cover-settled'))) return
-    started = true
-    observer?.disconnect()
-    const startTime = document.timeline.currentTime
+  // A cold upcoming cover must never hold the selected record in place.
+  // Decode only controls visibility; every record moves on the skip's timeline.
+  const revealReady = () => {
+    if (cleaned) return
     for (const entry of entries.values()) {
       if (entry.live && entry.record.querySelector('.hero-disc')?.hasAttribute('data-cover-ready')) {
         entry.node.style.visibility = entry.visibility
       }
-      entry.animation.play()
-      entry.animation.startTime = startTime
     }
-    Promise.all([...entries.values()].map((entry) => entry.animation.finished.catch(() => {}))).then(cleanup)
   }
-  observer = new MutationObserver(start)
-  observer.observe(arc, { subtree: true, attributes: true, attributeFilter: ['data-cover-settled'] })
-  start()
+  observer = new MutationObserver(revealReady)
+  observer.observe(arc, { subtree: true, attributes: true, attributeFilter: ['data-cover-ready'] })
+  revealReady()
+  const startTime = document.timeline.currentTime
+  for (const entry of entries.values()) {
+    entry.animation.play()
+    entry.animation.startTime = startTime
+  }
+  Promise.all([...entries.values()].map((entry) => entry.animation.finished.catch(() => {}))).then(cleanup)
   return motion
 }
 

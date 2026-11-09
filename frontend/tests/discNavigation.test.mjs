@@ -225,16 +225,33 @@ test('backward desktop navigation follows the same lower arc in reverse', async 
   motion.cleanup()
 })
 
-test('desktop drum waits for decoded incoming artwork and starts every disc together', async () => {
+test('a cold upcoming cover cannot delay a desktop skip and joins its existing timeline after decoding', async () => {
   const app = await setup()
   const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
   const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
   const motion = app.drum(previous, current)
-  assert.ok([...motion.entries.values()].every(({ animation }) => animation.paused && animation.currentTime === 0))
+  assert.ok([...motion.entries.values()].every(({ animation }) => !animation.paused && animation.startTime === 500))
   assert.equal(current.get('c').node.style.visibility, 'hidden')
+  const incoming = motion.entries.get('c').animation
+  incoming.currentTime = 120
   current.get('c').settle()
   assert.equal(current.get('c').node.style.visibility, '')
+  assert.equal(incoming.currentTime, 120, 'decoding must not restart the moving preview')
   assert.ok([...motion.entries.values()].every(({ animation }) => !animation.paused && animation.startTime === 500))
+  motion.cleanup()
+})
+
+test('skipping to a cold selected cover still moves the previous record immediately', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32, false]])
+  const current = app.drumSlots([['b', 0, false], ['c', 32, false], ['a', -32]])
+  const motion = app.drum(previous, current)
+  assert.equal(motion.entries.get('a').animation.paused, false)
+  assert.equal(motion.entries.get('a').animation.startTime, 500)
+  assert.equal(motion.entries.get('b').animation.paused, false)
+  assert.equal(current.get('b').node.style.visibility, 'hidden')
+  current.get('b').settle()
+  assert.equal(current.get('b').node.style.visibility, '')
   motion.cleanup()
 })
 
@@ -255,7 +272,7 @@ test('desktop reversal resumes existing and returning discs from their rendered 
   backward.cleanup()
 })
 
-test('cancelled desktop artwork wait cannot restart after the screen is closed', async () => {
+test('a cancelled desktop skip cannot restart when pending artwork is decoded', async () => {
   const app = await setup()
   const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
   const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
@@ -263,7 +280,8 @@ test('cancelled desktop artwork wait cannot restart after the screen is closed',
   const animations = [...motion.entries.values()].map(({ animation }) => animation)
   motion.cleanup()
   current.get('c').settle()
-  assert.ok(animations.every((animation) => animation.cancelled && animation.paused))
+  assert.ok(animations.every((animation) => animation.cancelled))
+  assert.equal(app.observers.at(-1).disconnected, true)
   assert.equal(current.get('c').node.style.visibility, '')
 })
 
