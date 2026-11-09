@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from typing import List, NamedTuple, Optional
+from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -569,6 +570,8 @@ async def search_endpoint(
 _CLIENT_ID_KEY = "soundcloud:client_id"
 _CLIENT_ID_TTL = 24 * 3600
 _API_V2 = "https://api-v2.soundcloud.com"
+_SHORT_LINK_HOSTS = {"on.soundcloud.com", "soundcloud.app.goo.gl"}
+_WEB_HOSTS = {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"}
 
 # Клэмп параллельности к api-v2. Все запросы метаданных SoundCloud идут через
 # ОДИН прокси-выход (soundcloud_proxy), и веер фоновых прогревов рекомендаций
@@ -613,6 +616,45 @@ def _api_v2_client() -> "httpx.AsyncClient":
             _API_V2_CLIENT_GRACE, lambda old=current[2]: loop.create_task(old.aclose())
         )
     return client
+
+
+def is_short_link(url: str) -> bool:
+    parsed = urlparse(url or "")
+    return parsed.scheme in ("http", "https") and parsed.hostname in _SHORT_LINK_HOSTS
+
+
+async def resolve_short_link(url: str) -> str:
+    """Мобильная ссылка → permalink, включая ключ доступа приватного плейлиста."""
+    import httpx
+
+    if not is_short_link(url):
+        return url
+    client = _api_v2_client()
+    try:
+        for _ in range(5):
+            # Используем тот же прокси, что и для метаданных. Конечную страницу
+            # не загружаем: для импорта нужен Location, а HTML может быть закрыт.
+            response = await client.get(
+                url, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False
+            )
+            if not response.is_redirect or not response.headers.get("location"):
+                break
+            target = urljoin(url, response.headers["location"])
+            parsed = urlparse(target)
+            if parsed.scheme not in ("http", "https"):
+                break
+            if parsed.hostname in _WEB_HOSTS:
+                return target
+            if not is_short_link(target):
+                break
+            url = target
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("SoundCloud short link resolve failed: %s", type(exc).__name__)
+    raise HTTPException(
+        status_code=502,
+        detail="Не удалось раскрыть короткую ссылку SoundCloud. Попробуйте ещё раз "
+        "или скопируйте полную ссылку на soundcloud.com.",
+    )
 
 
 async def _scrape_client_id(client: "httpx.AsyncClient") -> Optional[str]:
@@ -1560,6 +1602,13 @@ async def get_playlist_tracks(
     data = await _api_get(f"/playlists/{playlist_id}", {})
     if not data:
         return None, []
+    return await _playlist_tracks_from_data(request, data)
+
+
+async def _playlist_tracks_from_data(
+    request: Request, data: dict
+) -> tuple[Optional[ExternalPlaylistResponse], List[ExternalTrackResponse]]:
+    """Метаданные плейлиста из /resolve или /playlists + дотяжка треков по id."""
     meta = _normalize_playlist(data)
 
     raw_tracks = data.get("tracks") or []
@@ -1590,7 +1639,9 @@ async def resolve_playlist_url(
     pl_id = (data or {}).get("id") if isinstance(data, dict) else None
     if not pl_id or (data or {}).get("kind") != "playlist":
         return None, []
-    return await get_playlist_tracks(request, str(pl_id))
+    # /resolve уже вернул плейлист с учётом /s-... в URL. Повторный запрос
+    # /playlists/{id} теряет этот доступ и для приватного плейлиста даёт 404.
+    return await _playlist_tracks_from_data(request, data)
 
 
 @router.get("/search/playlists", response_model=List[ExternalPlaylistResponse])

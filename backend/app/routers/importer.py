@@ -152,15 +152,17 @@ def _detect(url: str) -> Tuple[str, str]:
 async def _normalize_url(url: str) -> str:
     """Приводит ссылку к разбираемому виду до _detect.
 
-    Мобильное «Поделиться» в Spotify и Deezer даёт короткую ссылку
-    (spotify.link/..., link.deezer.com/s/...) — из неё нельзя вытащить тип и
-    id, пока не пройден редирект.
+    Мобильное «Поделиться» в Spotify, Deezer и SoundCloud даёт короткую ссылку
+    (spotify.link/..., link.deezer.com/s/..., on.soundcloud.com/...) — из неё
+    нельзя вытащить тип и id, пока не пройден редирект.
     """
     url = (url or "").strip()
     if spotify.is_short_link(url):
         return await spotify.resolve_short_link(url)
     if deezer_links.is_short_link(url):
         return await deezer_links.resolve_short_link(url)
+    if soundcloud.is_short_link(url):
+        return await soundcloud.resolve_short_link(url)
     return url
 
 
