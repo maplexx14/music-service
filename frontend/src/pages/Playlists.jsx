@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Download, Trash2, Upload } from 'lucide-react'
+import { Plus, Download, Trash2, Upload, Link2, X, ChevronDown, ArrowRight, Loader2 } from 'lucide-react'
 import api from '../services/api'
 import {
   peekCache,
@@ -11,6 +11,7 @@ import {
 } from '../services/pageCache'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
+import ImportFormDialog from '../components/ImportFormDialog'
 import ImportCollectionPicker, {
   allCollectionKeys,
   selectedTrackCount,
@@ -18,8 +19,20 @@ import ImportCollectionPicker, {
 import { useImportStore } from '../store/importStore'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import defaultCover from '../assets/default-cover.webp'
+import spotifyLogo from '../assets/service-logos/spotify.svg'
+import deezerLogo from '../assets/service-logos/deezer.png'
+import yandexMusicLogo from '../assets/service-logos/yandex-music.svg'
+import soundcloudLogo from '../assets/service-logos/soundcloud.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { plural } from '../utils/format'
 import './Playlists.css'
+
+const IMPORT_SERVICES = [
+  { source: 'spotify', name: 'Spotify', logo: spotifyLogo, examples: ['open.spotify.com/playlist/…', 'open.spotify.com/album/…', 'open.spotify.com/track/…'] },
+  { source: 'deezer', name: 'Deezer', logo: deezerLogo, examples: ['deezer.com/playlist/…', 'deezer.com/album/…', 'link.deezer.com/s/…'] },
+  { source: 'yandex', name: 'Яндекс Музыка', logo: yandexMusicLogo, examples: ['music.yandex.ru/users/login', 'music.yandex.ru/users/login/playlists/…', 'music.yandex.ru/album/…'] },
+  { source: 'soundcloud', name: 'SoundCloud', logo: soundcloudLogo, examples: ['soundcloud.com/user/sets/playlist', 'soundcloud.com/user/track'] },
+]
 
 function Playlists() {
   // Список из прошлого захода рисуется сразу, свежий приезжает фоном: вкладка
@@ -37,11 +50,15 @@ function Playlists() {
   const [preview, setPreview] = useState(null)
   const [previewing, setPreviewing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const importTriggerRef = useRef(null)
+  const previewRequest = useRef(null)
   // Профиль Yandex Music: какие коллекции импортировать (ключи из превью).
   const [selectedCollections, setSelectedCollections] = useState(new Set())
   // Законченный импорт добавил плейлисты — перечитываем медиатеку.
   const importsCompleted = useImportStore((s) => s.completed)
 
+  useEffect(() => () => previewRequest.current?.abort(), [])
 
   // Медиатека растёт без потолка, а обложка у каждого плейлиста своя — рисуем
   // карточки партиями по мере прокрутки. resetKey константный: медиатека здесь
@@ -102,24 +119,44 @@ function Playlists() {
     }
   }
 
+  const clearPreview = () => {
+    previewRequest.current?.abort()
+    previewRequest.current = null
+    setPreviewing(false)
+    setPreview(null)
+    setImportError('')
+    setSelectedCollections(new Set())
+  }
+
   const handlePreview = async () => {
     if (!importUrl.trim() || previewing) return
+    const controller = new AbortController()
+    previewRequest.current = controller
     setPreviewing(true)
     setPreview(null)
+    setImportError('')
     try {
-      const { data } = await api.post('/import/preview', { url: importUrl.trim() })
+      const { data } = await api.post('/import/preview', { url: importUrl.trim() }, {
+        signal: controller.signal,
+        skipErrorToast: true,
+      })
+      if (controller.signal.aborted) return
       setPreview(data)
       setSelectedCollections(allCollectionKeys(data))
     } catch (error) {
+      if (controller.signal.aborted) return
       const detail = error.response?.data?.detail || 'Не удалось прочитать ссылку'
-      toast.error(detail)
+      setImportError(typeof detail === 'string' ? detail : 'Не удалось прочитать ссылку')
     } finally {
-      setPreviewing(false)
+      if (previewRequest.current === controller) {
+        previewRequest.current = null
+        setPreviewing(false)
+      }
     }
   }
 
   const handleImport = async () => {
-    if (!importUrl.trim() || importing) return
+    if (!preview || !importUrl.trim() || previewing || importing || (isProfilePreview && !selectedCollections.size)) return
     setImporting(true)
     // Ход и итог — в окне импорта (ImportTracker): оно переживает уход со
     // страницы, а «Открыть плейлист» в нём ведёт к результату.
@@ -147,13 +184,13 @@ function Playlists() {
   }
 
   const resetImport = () => {
+    clearPreview()
     setShowImportForm(false)
     setImportUrl('')
-    setPreview(null)
-    setSelectedCollections(new Set())
   }
 
   const isProfilePreview = preview?.kind === 'profile' && preview.collections?.length > 0
+  const previewService = IMPORT_SERVICES.find((service) => service.source === preview?.source)
 
 
   if (loading) {
@@ -174,15 +211,22 @@ function Playlists() {
             Загрузить трек
           </Link>
           <button
+            ref={importTriggerRef}
             className="btn btn--secondary import-playlist-btn"
-            onClick={() => { setShowImportForm(!showImportForm); setShowCreateForm(false) }}
+            aria-expanded={showImportForm}
+            aria-controls="playlist-import-form"
+            onClick={() => {
+              if (showImportForm) resetImport()
+              else setShowImportForm(true)
+              setShowCreateForm(false)
+            }}
           >
             <Download size={20} />
             Импорт по ссылке
           </button>
           <button
             className="btn btn--primary create-playlist-btn"
-            onClick={() => { setShowCreateForm(!showCreateForm); setShowImportForm(false) }}
+            onClick={() => { setShowCreateForm(!showCreateForm); resetImport() }}
           >
             <Plus size={20} />
             Создать плейглист
@@ -191,105 +235,145 @@ function Playlists() {
       </div>
 
       {showImportForm && (
-        <div className="import-playlist-form">
-          <p className="import-hint">
-            Вставьте ссылку на плейлист, альбом, профиль или избранное SoundCloud, Yandex Music,
-            Spotify либо Deezer. Из профиля
-            Yandex Music переносятся открытые плейлисты и «Мне нравится» — каждый отдельным
-            плейлистом.
-          </p>
-          <div className="import-examples">
-            <div className="import-example">
-              <span className="import-example-label">Spotify:</span>
-              <span className="import-example-url">open.spotify.com/playlist/37i9dQ...</span>
-              <span className="import-example-url">open.spotify.com/album/1DFixL...</span>
-              <span className="import-example-url">open.spotify.com/track/4cOdK2...</span>
+        <ImportFormDialog onClose={resetImport} triggerRef={importTriggerRef}>
+          <form
+            id="playlist-import-form"
+            className="import-playlist-form"
+            aria-labelledby="playlist-import-title"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (preview) handleImport()
+              else handlePreview()
+            }}
+          >
+            <div className="import-form-header">
+              <h2 id="playlist-import-title">Импорт музыки</h2>
+              <button type="button" className="btn btn--ghost import-close" onClick={resetImport} aria-label="Закрыть импорт">
+                <X size={20} aria-hidden="true" />
+              </button>
             </div>
+            <p className="import-hint">Добавьте музыку из другого сервиса по одной ссылке.</p>
+            <ul className="import-services" aria-label="Поддерживаемые сервисы">
+              {IMPORT_SERVICES.map(({ source, name, logo }) => (
+                <li key={source} className="import-service">
+                  <img src={logo} className="import-service-logo" alt="" width={18} height={18} draggable={false} />
+                  <span>{name}</span>
+                </li>
+              ))}
+            </ul>
 
-            <div className="import-example">
-              <span className="import-example-label">Deezer:</span>
-              <span className="import-example-url">deezer.com/playlist/908622995</span>
-              <span className="import-example-url">deezer.com/album/302127</span>
-              <span className="import-example-url">link.deezer.com/s/...</span>
+            <label className="import-field-label" htmlFor="playlist-import-url">Ссылка на музыку</label>
+            <div className="import-url-field">
+              <Link2 size={18} aria-hidden="true" />
+              <input
+                id="playlist-import-url"
+                className="field import-url-input"
+                type="url"
+                inputMode="url"
+                enterKeyHint="go"
+                placeholder="Вставьте ссылку"
+                value={importUrl}
+                onChange={(e) => { clearPreview(); setImportUrl(e.target.value) }}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                disabled={importing}
+                aria-invalid={Boolean(importError)}
+                aria-describedby={importError ? 'playlist-import-error' : 'playlist-import-hint'}
+              />
             </div>
-           
-            <div className="import-example">
-              <span className="import-example-label">Yandex Music:</span>
-              <span className="import-example-url">music.yandex.ru/users/login (профиль)</span>
-              <span className="import-example-url">music.yandex.ru/users/login/playlists/1003</span>
-              <span className="import-example-url">music.yandex.ru/album/5307899</span>
-            </div>
+            {importError ? (
+              <p id="playlist-import-error" className="import-field-error" role="alert">{importError}</p>
+            ) : (
+              <p id="playlist-import-hint" className="import-field-hint">Скопируйте её через «Поделиться» в нужном сервисе.</p>
+            )}
 
-            <div className="import-example">
-              <span className="import-example-label">SoundCloud:</span>
-              <span className="import-example-url">soundcloud.com/user/sets/playlist</span>
-              <span className="import-example-url">soundcloud.com/user/track</span>
-            </div>
-          </div>
+            {preview && (
+              <section className="import-preview" aria-labelledby="playlist-import-preview-title">
+                <div className="import-preview-header">
+                  <img
+                    className="import-preview-cover"
+                    src={resolveCoverUrl(preview.cover_url, 'thumb') || defaultCover}
+                    alt=""
+                    onError={handleCoverError}
+                  />
+                  <div className="import-preview-info">
+                    <h3 id="playlist-import-preview-title" className="import-preview-title">{preview.title || 'Коллекция'}</h3>
+                    <p className="import-preview-meta">
+                      {preview.track_count} {plural(preview.track_count, 'трек', 'трека', 'треков')}
+                      {' · '}
+                      <span className="import-preview-source">
+                        {previewService && <img src={previewService.logo} className="import-service-logo" alt="" width={14} height={14} draggable={false} />}
+                        {previewService?.name || preview.source}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                {isProfilePreview ? (
+                  <ImportCollectionPicker
+                    collections={preview.collections}
+                    selected={selectedCollections}
+                    onChange={setSelectedCollections}
+                    disabled={importing}
+                  />
+                ) : (
+                  <ul className="import-preview-list">
+                    {(preview.tracks || []).slice(0, 5).map((t, i) => (
+                      <li key={i}>
+                        <span className="import-preview-number" aria-hidden="true">{i + 1}</span>
+                        <div className="import-preview-song">
+                          <span className="import-preview-track">{t.title}</span>
+                          <span className="import-preview-artist">{t.artist}</span>
+                        </div>
+                      </li>
+                    ))}
+                    {preview.track_count > 5 && <li className="import-preview-more">И ещё {preview.track_count - 5} {plural(preview.track_count - 5, 'трек', 'трека', 'треков')}</li>}
+                  </ul>
+                )}
+              </section>
+            )}
 
-          <div className="import-input-row">
-            <input
-              className="field"
-              type="url"
-              placeholder="Ссылка Spotify, Deezer, Yandex Music или SoundCloud"
-              value={importUrl}
-              onChange={(e) => { setImportUrl(e.target.value); setPreview(null) }}
-              autoFocus
-            />
-            <button
-              type="button"
-              className="btn btn--primary submit-btn"
-              onClick={handlePreview}
-              disabled={previewing || importing || !importUrl.trim()}
-            >
-              {previewing ? 'Проверка...' : 'Проверить'}
-            </button>
-          </div>
-
-          {preview && (
-            <div className="import-preview">
-              <div className="import-preview-title">
-                {preview.title || 'Коллекция'} · {preview.track_count} треков · {preview.source}
-              </div>
-              {isProfilePreview ? (
-                <ImportCollectionPicker
-                  collections={preview.collections}
-                  selected={selectedCollections}
-                  onChange={setSelectedCollections}
-                  disabled={importing}
-                />
-              ) : (
-                <ul className="import-preview-list">
-                  {preview.tracks.slice(0, 5).map((t, i) => (
-                    <li key={i}>
-                      <span className="import-preview-track">{t.title}</span>
-                      <span className="import-preview-artist">{t.artist}</span>
-                    </li>
-                  ))}
-                  {preview.track_count > 5 && <li>…и ещё {preview.track_count - 5}</li>}
-                </ul>
+            <div className="import-form-actions">
+              {isProfilePreview && (
+                <p className="import-selection-count">
+                  Выбрано: {selectedCollections.size} {plural(selectedCollections.size, 'плейлист', 'плейлиста', 'плейлистов')}
+                  {' · '}{selectedTrackCount(preview, selectedCollections)} {plural(selectedTrackCount(preview, selectedCollections), 'трек', 'трека', 'треков')}
+                </p>
               )}
+              <button
+                type="submit"
+                className="btn btn--primary btn--lg import-submit"
+                disabled={previewing || importing || !importUrl.trim() || (isProfilePreview && !selectedCollections.size)}
+              >
+                {previewing || importing
+                  ? <Loader2 size={18} className="import-busy-icon" aria-hidden="true" />
+                  : preview ? <Download size={18} aria-hidden="true" /> : <ArrowRight size={18} aria-hidden="true" />}
+                {previewing ? 'Проверяем ссылку…' : importing ? 'Импортируем…' : preview ? 'Импортировать' : 'Проверить ссылку'}
+              </button>
             </div>
-          )}
 
-          <div className="form-actions">
-            <button
-              type="button"
-              className="btn btn--primary submit-btn"
-              onClick={handleImport}
-              disabled={importing || !importUrl.trim() || (isProfilePreview && !selectedCollections.size)}
-            >
-              {importing
-                ? 'Импорт...'
-                : isProfilePreview
-                  ? `Импортировать (${selectedCollections.size} · ${selectedTrackCount(preview, selectedCollections)} треков)`
-                  : 'Импортировать'}
-            </button>
-            <button type="button" className="btn btn--ghost cancel-btn" onClick={resetImport}>
-              Отмена
-            </button>
-          </div>
-        </div>
+            <details className="import-help">
+              <summary>Какие ссылки подходят<ChevronDown size={16} aria-hidden="true" /></summary>
+              <div className="import-examples">
+                {IMPORT_SERVICES.map(({ source, name, logo, examples }) => (
+                  <div className="import-example" key={source}>
+                    <span className="import-example-label">
+                      <img src={logo} className="import-service-logo" alt="" width={18} height={18} draggable={false} />
+                      {name}
+                    </span>
+                    {examples.map((url) => <code className="import-example-url" key={url}>{url}</code>)}
+                  </div>
+                ))}
+              </div>
+              <p className="import-help-note">
+                Из профиля Яндекс Музыки можно перенести открытые плейлисты и «Мне нравится».
+                Каждая выбранная коллекция сохранится отдельным плейлистом.
+              </p>
+            </details>
+          </form>
+        </ImportFormDialog>
       )}
 
       {showCreateForm && (
