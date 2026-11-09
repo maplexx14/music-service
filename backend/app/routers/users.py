@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from pydantic import BaseModel, Field
+from app.identifiers import UUIDString, normalize_uuid, uuid_or_none
 from app.database import get_db
 from app.cache import get_cache, set_cache, delete_cache, redis_client
 from app.models import Playlist, User, Track, UserPlayerState, playback_events, user_track_plays
@@ -50,7 +51,7 @@ def complete_onboarding(
 
 # --- Музыкальные предпочтения (онбординг / настройки) ---
 # NB: эти GET-маршруты обязаны идти ДО /{user_id}, иначе "genres"
-# будет попадать в параметр user_id: int и давать 422.
+# будет попадать в параметр user_id: UUIDString и давать 422.
 @router.get("/genres", response_model=List[GenreOption])
 async def list_genres():
     """Список жанров для выбора — теги Last.fm плюс наши ключи.
@@ -321,18 +322,17 @@ def _online_user_ids() -> set:
     """
     try:
         ids = {
-            int(key.rsplit(":", 1)[-1])
+            user_id
             for key in redis_client.scan_iter(match="users:online:*")
+            if (user_id := uuid_or_none(key.rsplit(":", 1)[-1]))
         }
     except Exception:
         logger.exception("failed to read online markers")
         ids = set()
     for user_id, state in _now_playing_states().items():
         if isinstance(state, dict) and state.get("is_playing"):
-            try:
-                ids.add(int(user_id))
-            except ValueError:
-                continue
+            if parsed_id := uuid_or_none(user_id):
+                ids.add(parsed_id)
     return ids
 
 
@@ -343,7 +343,7 @@ def _online_user_ids() -> set:
 _ADMIN_TASTE_TTL = 600
 
 
-def _admin_taste(db: Session, user_id: int) -> dict:
+def _admin_taste(db: Session, user_id: UUIDString) -> dict:
     cache_key = f"admin:taste:{user_id}"
     cached = get_cache(cache_key)
     if cached is not None:
@@ -365,7 +365,7 @@ def _admin_taste(db: Session, user_id: int) -> dict:
     return result
 
 
-def _admin_last_tracks(db: Session, user_ids: List[int]) -> Dict[int, dict]:
+def _admin_last_tracks(db: Session, user_ids: List[str]) -> Dict[str, dict]:
     """Последний прослушанный трек каждого юзера страницы — одним запросом.
 
     Берётся из агрегата user_track_plays (last_played обновляется на каждом
@@ -393,7 +393,7 @@ def _admin_last_tracks(db: Session, user_ids: List[int]) -> Dict[int, dict]:
         .join(Track, Track.id == user_track_plays.c.track_id)
         .all()
     )
-    result: Dict[int, dict] = {}
+    result: Dict[str, dict] = {}
     for user_id, played_at, track in rows:
         result.setdefault(user_id, {
             "id": track.id,
@@ -461,7 +461,7 @@ def _admin_users_page(
     return total, profiles
 
 
-def _admin_last_heard(user_ids: List[int]) -> Dict[int, dict]:
+def _admin_last_heard(user_ids: List[str]) -> Dict[str, dict]:
     """Последний игравший трек из событий now-playing (см. LAST_HEARD_TTL),
     в том числе не дослушанный до порога user_track_plays."""
     if not user_ids:
@@ -470,7 +470,7 @@ def _admin_last_heard(user_ids: List[int]) -> Dict[int, dict]:
         raw = redis_client.mget([f"{_LAST_HEARD_PREFIX}{uid}" for uid in user_ids])
     except Exception:
         return {}
-    result: Dict[int, dict] = {}
+    result: Dict[str, dict] = {}
     for uid, value in zip(user_ids, raw):
         if not value:
             continue
@@ -540,9 +540,9 @@ def get_admin_users_taste(
 ):
     """Профили вкуса (detected_*) для уже показанных карточек админки."""
     try:
-        user_ids = list(dict.fromkeys(int(raw) for raw in ids.split(",") if raw.strip()))
+        user_ids = list(dict.fromkeys(normalize_uuid(raw.strip()) for raw in ids.split(",") if raw.strip()))
     except ValueError:
-        raise HTTPException(status_code=422, detail="ids must be comma-separated integers")
+        raise HTTPException(status_code=422, detail="ids must be comma-separated UUIDs")
     if len(user_ids) > 200:
         raise HTTPException(status_code=422, detail="too many ids")
     return {"profiles": {str(uid): _admin_taste(db, uid) for uid in user_ids}}
@@ -587,18 +587,19 @@ class PlayContextPayload(BaseModel):
     title: Optional[str] = Field(None, max_length=300)
 
 
-_PLAYLIST_PATH = re.compile(r"^/playlists/(\d+)$")
+_PLAYLIST_PATH = re.compile(r"^/playlists/([0-9a-fA-F-]{36})$")
 
 
-def _play_context(db: Session, user_id: int, context: Optional[PlayContextPayload]) -> Optional[dict]:
+def _play_context(db: Session, user_id: UUIDString, context: Optional[PlayContextPayload]) -> Optional[dict]:
     """Контекст для админки; имя плейлиста клиент не шлёт — берём из БД.
     Только свой или публичный: чужой приватный плейлист по id не раскрываем."""
     if context is None:
         return None
     result = context.model_dump()
     match = _PLAYLIST_PATH.match(context.path or "")
-    if match and not result.get("title"):
-        playlist = db.get(Playlist, int(match.group(1)))
+    playlist_id = uuid_or_none(match.group(1)) if match else None
+    if playlist_id and not result.get("title"):
+        playlist = db.get(Playlist, playlist_id)
         if playlist is not None and (playlist.owner_id == user_id or playlist.is_public):
             result["title"] = playlist.name
             result["liked"] = bool(playlist.is_liked)
@@ -636,6 +637,7 @@ def record_play_click(
     db.execute(playback_events.insert().values(
         user_id=current_user.id,
         event_type="play_click",
+        occurred_at=datetime.now(timezone.utc),
         metadata=metadata,
     ))
     db.commit()
@@ -829,7 +831,7 @@ def get_admin_now_playing(current_user: User = Depends(get_current_admin_user)):
 
 
 @router.get("/{user_id}", response_model=UserResponse)
-def get_user(user_id: int, db: Session = Depends(get_db)):
+def get_user(user_id: UUIDString, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

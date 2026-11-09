@@ -17,6 +17,7 @@ import base64
 import httpx
 from pathlib import Path
 from mutagen import File as MutagenFile
+from app.identifiers import UUIDString
 from app.database import SessionLocal, get_db
 from app.cache import get_cache, get_cache_async, set_cache, set_cache_async
 from app.recommendation_cache import (
@@ -102,7 +103,7 @@ def get_tracks(
     # пользователей одна и та же) — короткий Redis-кэш.
     cache_key = None
     if not genre and not artist and skip == 0:
-        cache_key = f"tracks:popular:{limit}"
+        cache_key = f"tracks:popular:uuid:{limit}"
         cached = get_cache(cache_key)
         if cached is not None:
             return [TrackResponse(**t) for t in cached]
@@ -341,7 +342,7 @@ async def proxy_external_cover(url: str):
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
-def get_track(track_id: int, db: Session = Depends(get_db)):
+def get_track(track_id: UUIDString, db: Session = Depends(get_db)):
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -377,7 +378,7 @@ async def iter_file_range(file_path: Path, start: int, end: int, chunk_size: int
 
 @router.get("/{track_id}/stream")
 async def stream_track(
-    track_id: int,
+    track_id: UUIDString,
     request: Request,
     db: Session = Depends(get_db)
 ):
@@ -599,7 +600,7 @@ def create_track(
     return db_track
 
 
-def _load_track_released(db: Session, track_id: int) -> Optional[Track]:
+def _load_track_released(db: Session, track_id: UUIDString) -> Optional[Track]:
     """Трек для стрима — с уже отпущенным соединением БД.
 
     Сессия из Depends(get_db) закрывается только после того, как
@@ -1049,7 +1050,7 @@ async def complete_chunked_upload(
 
 @router.post("/{track_id}/cover", response_model=TrackResponse)
 async def upload_track_cover(
-    track_id: int,
+    track_id: UUIDString,
     cover: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1086,14 +1087,14 @@ async def upload_track_cover(
 
 
 def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
-    # Порядок по id обязателен: до миграции 0021 уникальности в БД не было, и
+    # Порядок по времени создания обязателен: до миграции 0021 уникальности в БД не было, и
     # два одновременных лайка могли создать второй is_liked-плейлист. Читатели
     # (профиль вкуса, рекомендации) выбирают самый старый — здесь тот же выбор,
     # иначе лайки расползлись бы по двум плейлистам.
     playlist = (
         db.query(Playlist)
         .filter(Playlist.owner_id == user.id, Playlist.is_liked.is_(True))
-        .order_by(Playlist.id)
+        .order_by(Playlist.created_at, Playlist.id)
         .first()
     )
     if playlist is None:
@@ -1112,7 +1113,7 @@ def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
             playlist = (
                 db.query(Playlist)
                 .filter(Playlist.owner_id == user.id, Playlist.is_liked.is_(True))
-                .order_by(Playlist.id)
+                .order_by(Playlist.created_at, Playlist.id)
                 .first()
             )
             if playlist is None:
@@ -1124,7 +1125,7 @@ def get_or_create_liked_playlist(db: Session, user: User) -> Playlist:
 
 @router.post("/{track_id}/like", status_code=status.HTTP_200_OK)
 def like_track(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1143,11 +1144,11 @@ def like_track(
 
     max_position = db.query(func.max(playlist_tracks.c.position)).filter(
         playlist_tracks.c.playlist_id == liked_playlist.id
-    ).scalar() or -1
+    ).scalar()
     db.execute(playlist_tracks.insert().values(
         playlist_id=liked_playlist.id,
         track_id=track_id,
-        position=max_position + 1,
+        position=(max_position if max_position is not None else -1) + 1,
     ))
     # Лайк снимает дизлайк/скип: строка в user_track_skips исключает трек из
     # рекомендаций и волны, а лайкнутый трек в чёрном списке — противоречие.
@@ -1165,7 +1166,7 @@ def like_track(
 
 @router.delete("/{track_id}/like", status_code=status.HTTP_200_OK)
 def unlike_track(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1215,7 +1216,7 @@ def get_liked_tracks(
     return query.all()
 
 
-@router.get("/me/liked/ids", response_model=List[int])
+@router.get("/me/liked/ids", response_model=List[UUIDString])
 def get_liked_track_ids(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1248,7 +1249,7 @@ def get_listening_history(
 
 @router.post("/{track_id}/play", status_code=status.HTTP_200_OK)
 def record_track_play(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1320,7 +1321,7 @@ def record_track_play(
 
 @router.post("/{track_id}/skip")
 def record_track_skip(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1358,7 +1359,7 @@ def record_track_skip(
 
 @router.post("/{track_id}/dislike", status_code=status.HTTP_200_OK)
 def dislike_track(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1406,7 +1407,7 @@ def dislike_track(
 
 @router.delete("/{track_id}/dislike", status_code=status.HTTP_200_OK)
 def undislike_track(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -1423,7 +1424,7 @@ def undislike_track(
     return {"message": "Dislike removed"}
 
 
-@router.get("/me/disliked/ids", response_model=List[int])
+@router.get("/me/disliked/ids", response_model=List[UUIDString])
 def get_disliked_track_ids(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1463,7 +1464,7 @@ class ListenEventPayload(BaseModel):
 
 @router.post("/{track_id}/listen", status_code=status.HTTP_200_OK)
 def record_listen_event(
-    track_id: int,
+    track_id: UUIDString,
     payload: ListenEventPayload,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -1493,7 +1494,7 @@ def record_listen_event(
 
 @router.delete("/{track_id}", status_code=status.HTTP_200_OK)
 def delete_track(
-    track_id: int,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):

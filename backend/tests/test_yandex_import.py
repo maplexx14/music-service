@@ -843,11 +843,11 @@ def test_import_progress_records_error(client, db, monkeypatch):
 
 
 def test_import_progress_is_per_user(client, db):
-    create_user(db)
+    user = create_user(db)
     create_user(db, "bob")
     from app.cache import set_cache
 
-    set_cache("import:progress:1:imp-12345678", {"stage": "matching"}, expire=60)
+    set_cache(f"import:progress:{user.id}:imp-12345678", {"stage": "matching"}, expire=60)
     mine = client.get("/api/import/progress/imp-12345678", headers=auth_headers(client))
     assert mine.status_code == 200
     other = client.get("/api/import/progress/imp-12345678", headers=auth_headers(client, "bob"))

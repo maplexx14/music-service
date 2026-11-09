@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import artist_cards, push
+from app.identifiers import UUIDString
 from app.artist_utils import artist_key
 from app.cache import get_cache_async, set_cache_async
 from app.database import get_db
@@ -110,7 +111,7 @@ def _week_tag(now: datetime) -> str:
     return f"{year}-W{week:02d}"
 
 
-def _heard_artist_keys(db: Session, user_id: int) -> set:
+def _heard_artist_keys(db: Session, user_id: UUIDString) -> set:
     rows = db.execute(
         select(func.lower(Track.artist))
         .join(user_track_plays, user_track_plays.c.track_id == Track.id)
@@ -150,7 +151,7 @@ def pick_new_artists(similar_lists: List[List[str]], blocked: set, limit: int) -
     return picked
 
 
-def _weekly_track_ids(db: Session, user: User, artist_keys: List[str], week: str) -> List[int]:
+def _weekly_track_ids(db: Session, user: User, artist_keys: List[str], week: str) -> List[str]:
     if not artist_keys:
         return []
     skipped = set(
@@ -180,7 +181,7 @@ def _weekly_track_ids(db: Session, user: User, artist_keys: List[str], week: str
     return picked[:WEEKLY_LIMIT]
 
 
-def _load_tracks(db: Session, ids: List[int]) -> List[Track]:
+def _load_tracks(db: Session, ids: List[str]) -> List[Track]:
     if not ids:
         return []
     found = {track.id: track for track in db.query(Track).filter(Track.id.in_(ids)).all()}

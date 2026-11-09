@@ -8,6 +8,7 @@ from app.email_verification import (
     reissue_pending_token,
 )
 from app.models import User
+from tests.identifiers import uuid_for
 from app.trusted_devices import DEVICE_TOKEN_HEADER
 from tests.conftest import create_user, trust_device
 
@@ -227,6 +228,7 @@ def test_resend_succeeds_for_unverified(client, db):
 
 def test_consume_token_returns_user_id_once():
     """Уровень модуля: getdel гасит ключ, второй вызов пустой."""
-    token = issue_token(4242)
-    assert consume_token(token) == 4242
+    user_id = uuid_for(4242)
+    token = issue_token(user_id)
+    assert consume_token(token) == user_id
     assert consume_token(token) is None

@@ -6,7 +6,7 @@ import { create } from 'zustand'
 // ошибок), а у мини-плеера — отдельная панель с <select>.
 //
 // request: { track, resolveId?, excludePlaylistId? }
-//   resolveId — как получить числовой id трека в БД. По умолчанию
+//   resolveId — как получить UUID трека в БД. По умолчанию
 //     materializeTrack из playerStore; плееру нужен свой (materializeCurrentTrack
 //     заодно обновляет текущий трек).
 //   excludePlaylistId — плейлист, который в списке не показываем (страница

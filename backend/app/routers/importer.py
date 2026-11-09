@@ -36,6 +36,7 @@ from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app import deezer_links
+from app.identifiers import UUIDString
 from app.artist_utils import split_title_artist
 from app.cache import get_cache_async, redis_client, set_cache, set_cache_async
 from app.database import get_db
@@ -776,7 +777,7 @@ class _Progress:
     фронт после перезагрузки страницы находит идущие импорты (GET /active).
     """
 
-    def __init__(self, user_id: int, import_id: Optional[str], url: Optional[str] = None):
+    def __init__(self, user_id: UUIDString, import_id: Optional[str], url: Optional[str] = None):
         valid = bool(import_id and _IMPORT_ID_RE.match(import_id))
         self.key = f"import:progress:{user_id}:{import_id}" if valid else None
         self.index_key = _active_key(user_id) if valid else None
@@ -833,7 +834,7 @@ class _Progress:
                 pass
 
 
-def _active_key(user_id: int) -> str:
+def _active_key(user_id: UUIDString) -> str:
     return f"import:active:{user_id}"
 
 
@@ -848,7 +849,7 @@ def _with_stalled(state: dict) -> dict:
     return {**state, "stalled": stalled}
 
 
-def _user_imports_sync(user_id: int) -> List[dict]:
+def _user_imports_sync(user_id: UUIDString) -> List[dict]:
     """Все импорты юзера за последний час (идущие и законченные), старые первыми."""
     index_key = _active_key(user_id)
     try:
@@ -1227,7 +1228,7 @@ def _save_playlist(
     # Сначала материализуем ВСЕ треки (get_or_create_external_track идемпотентен
     # по (source, external_id) и коммитит сам, в т.ч. с откатом при гонке —
     # поэтому делаем это ДО создания плейлиста, чтобы его вставку не откатило).
-    track_ids: List[int] = []
+    track_ids: List[str] = []
     seen: set = set()
     for imp in imports:
         track = get_or_create_external_track(db, imp)
@@ -1353,7 +1354,7 @@ async def _import_yandex_profile(
     )
 
 
-async def _refresh_flow_after_import(user_id: int, request: Request) -> None:
+async def _refresh_flow_after_import(user_id: UUIDString, request: Request) -> None:
     """Коллекция поменяла вкус: сбросить выдачу и сразу пересчитать порцию
     волны. Импорт в онбординге (53-й на проде, 145 с) заканчивается прямо
     перед первой волной — без этого её считали бы вживую."""

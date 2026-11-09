@@ -1,6 +1,6 @@
 // Локальный контекст интерфейса. Без токенов, отдельно для текущего аккаунта.
 // Запись отложена, но уход в фон сохраняет последний кадр сразу.
-export const UI_SESSION_KEY = 'bolt-ui-session-v1'
+export const UI_SESSION_KEY = 'bolt-ui-session-v2'
 const MAX_AGE_MS = 48 * 60 * 60 * 1000
 const MAX_BYTES = 1500000
 let userId = null

@@ -1,3 +1,4 @@
+import { isUuid } from '../utils/identifiers'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
@@ -128,7 +129,7 @@ function ExternalPlaylist() {
   // Материализует внешний трек в БД и запоминает db_id в списке, чтобы
   // индикация лайка работала после действия.
   const ensureDbId = async (track) => {
-    if (typeof track.db_id === 'number') return track.db_id
+    if (isUuid(track.db_id)) return track.db_id
     const dbId = await materializeTrack(track)
     setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: dbId } : t)))
     return dbId
@@ -228,7 +229,7 @@ function ExternalPlaylist() {
             <tbody>
               {visibleTracks.map((track, index) => {
                 const isCurrent = currentTrackId === track.id
-                const dbId = typeof track.db_id === 'number' ? track.db_id : null
+                const dbId = isUuid(track.db_id) ? track.db_id : null
                 const isLiked =
                   (dbId ? likedSet.has(dbId) : false) ||
                   pendingLikeKeys.includes(trackLikeKey(track))

@@ -322,7 +322,7 @@ def samples_from_outcomes(rows: Iterable[dict]) -> list[tuple[dict, int, float, 
     return samples
 
 
-def train_and_store(db, user_ids: Iterable[int], now: Optional[datetime] = None) -> dict:
+def train_and_store(db, user_ids: Iterable[str], now: Optional[datetime] = None) -> dict:
     """Обучить глобальную и пользовательские модели и положить их в Redis."""
     from app.discovery_feedback import delivery_outcomes
 
@@ -359,7 +359,7 @@ def _store(key: str, model: Optional[dict]) -> None:
         redis_client.set(key, json.dumps(model), ex=_MODEL_TTL)
 
 
-def load(user_id: int) -> Optional[dict]:
+def load(user_id: str) -> Optional[dict]:
     """Модель юзера, иначе глобальная, иначе None."""
     for key in (_USER_KEY.format(user_id), _GLOBAL_KEY):
         try:

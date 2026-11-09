@@ -19,6 +19,7 @@ import logging
 import os
 import secrets
 
+from app.identifiers import normalize_uuid
 from app.cache import redis_client
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,11 @@ def _token_key(digest: str) -> str:
     return f"auth:handoff:{digest}"
 
 
-def _user_key(user_id: int) -> str:
+def _user_key(user_id: str) -> str:
     return f"auth:handoff-for:{user_id}"
 
 
-def issue_handoff(user_id: int) -> str:
+def issue_handoff(user_id: str) -> str:
     """Новый токен юзера; прежний гаснет — живой всегда один."""
     token = secrets.token_urlsafe(32)
     digest = _digest(token)
@@ -62,7 +63,7 @@ def issue_handoff(user_id: int) -> str:
     return token
 
 
-def revoke_handoff(user_id: int) -> None:
+def revoke_handoff(user_id: str) -> None:
     """Гасит живой токен юзера: выход, «забыть все устройства», смена пароля.
     Redis недоступен — токен доживёт свой срок, выход от этого не ломаем."""
     try:
@@ -76,7 +77,7 @@ def revoke_handoff(user_id: int) -> None:
         logger.warning("could not revoke session handoff of user %s", user_id)
 
 
-def consume_handoff(token: str) -> int | None:
+def consume_handoff(token: str) -> str | None:
     """id юзера по токену; токен гаснет. None — чужой, протух или уже взят."""
     if not token:
         return None
@@ -101,6 +102,6 @@ def consume_handoff(token: str) -> int | None:
     if isinstance(raw, bytes):
         raw = raw.decode()
     try:
-        return int(raw)
+        return normalize_uuid(raw.decode() if isinstance(raw, bytes) else raw)
     except ValueError:
         return None

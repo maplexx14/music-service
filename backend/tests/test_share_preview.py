@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.models import Track
+from tests.identifiers import uuid_for
 from app.routers import share
 
 INDEX = "<!doctype html><html><head><meta charset=\"utf-8\"><title>bolt — музыка</title></head><body><div id=\"root\"></div></body></html>"
@@ -66,7 +67,7 @@ def test_title_is_escaped(client, db):
 
 
 def test_missing_track_serves_plain_index(client):
-    resp = client.get("/api/share/track/999999")
+    resp = client.get(f"/api/share/track/{uuid_for(999999)}")
 
     assert resp.status_code == 200
     assert resp.text == INDEX
@@ -77,4 +78,4 @@ def test_frontend_down_returns_502(client, monkeypatch):
         raise httpx.ConnectError("down")
     monkeypatch.setattr(share, "_load_index", broken)
 
-    assert client.get("/api/share/track/1").status_code == 502
+    assert client.get(f"/api/share/track/{uuid_for(1)}").status_code == 502

@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
+from app.identifiers import UUIDString
 from app.rate_limit import limiter
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -928,7 +929,7 @@ def disable_email_two_factor(
 EMAIL_TAKEN = "Email already registered"
 
 
-def _email_taken(db: Session, email: str, user_id: int) -> bool:
+def _email_taken(db: Session, email: str, user_id: UUIDString) -> bool:
     return (
         db.query(User.id)
         .filter(func.lower(User.email) == email.lower(), User.id != user_id)
@@ -1051,7 +1052,7 @@ def get_trusted_devices(
 
 @router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_trusted_device(
-    device_id: int,
+    device_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):

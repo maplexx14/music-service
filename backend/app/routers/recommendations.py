@@ -13,6 +13,7 @@ import math
 import os
 import re
 from app import censorship, mainstream
+from app.identifiers import UUIDString, uuid_or_none
 from app.database import get_db
 from app.cache import (
     get_cache,
@@ -291,7 +292,7 @@ def _varied_popular(
     keep=None,
     used: Optional[dict] = None,
     restrict_artists: Optional[set] = None,
-    user_id: Optional[int] = None,
+    user_id: Optional[UUIDString] = None,
     exclude_select=None,
 ) -> list:
     """Случайная выборка из широкого пула популярного (без иностранного).
@@ -367,9 +368,9 @@ def _cold_start_candidates(
     *,
     preferred_genres: list[str],
     preferred_artists: list[str],
-    exclude_ids: set[int],
+    exclude_ids: set[str],
     limit: int,
-    user_id: int,
+    user_id: UUIDString,
 ) -> list[Track]:
     """Build a personalized first page before behavioral history exists."""
     if limit <= 0 or not (preferred_genres or preferred_artists):
@@ -504,7 +505,7 @@ def _rank_public_playlists(
         .filter(playlist_tracks.c.playlist_id.in_(playlist_ids))
         .all()
     )
-    by_playlist: dict[int, list[tuple[str, str | None]]] = {}
+    by_playlist: dict[str, list[tuple[str, str | None]]] = {}
     for playlist_id, artist, title, album, source, genre in details:
         effective_artist, _effective_title = effective_artist_title(
             title or "",
@@ -887,7 +888,7 @@ def _external_pool_store(key: str, pool: list) -> None:
         logger.exception("external pool cache store failed")
 
 
-def _collection_exclude_select(user_id: int):
+def _collection_exclude_select(user_id: UUIDString):
     """Вся коллекция юзера (плейлисты, включая «Понравившиеся», повторные
     прослушивания) плюс скипнутое — единым UNION-подзапросом.
 
@@ -931,7 +932,7 @@ def _scoped_window(
         query.with_entities(
             Track.id, Track.artist, Track.title, Track.source, Track.album
         )
-        .order_by(desc(Track.id))
+        .order_by(desc(Track.created_at), Track.id)
         .limit(_CANDIDATE_SCAN_LIMIT)
         .all()
     )
@@ -1124,7 +1125,7 @@ def _compute_recommendations(
         .group_by(user_play_events.c.track_id)
         .limit(_TASTE_QUERY_LIMIT)
     ).all()
-    completion_by_track = {int(tid): (float(avg_c), int(cnt)) for tid, avg_c, cnt in completion_rows}
+    completion_by_track = {tid: (float(avg_c), int(cnt)) for tid, avg_c, cnt in completion_rows}
 
     # «Уставшие» показы: трек показывался в рекомендациях >= порога раз и так
     # и не был сыгран (строка удаляется при /play) — больше не показываем.
@@ -1136,7 +1137,7 @@ def _compute_recommendations(
         ).where(rec_impressions.c.user_id == current_user.id)
     ).all()
     fatigue_by_track = {
-        int(track_id): fatigue_score(shown_count, last_shown, now=ranking_now)
+        track_id: fatigue_score(shown_count, last_shown, now=ranking_now)
         for track_id, shown_count, last_shown in fatigue_rows
         if track_id is not None
     }
@@ -1212,7 +1213,7 @@ def _compute_recommendations(
     # Тот же набор id исключает и локальные кандидаты: user_track_ids ниже
     # собран из урезанных лимитом списков, и добор популярным возвращал юзеру
     # его же старые треки из большого импорта.
-    collection_track_ids: set[int] = set()
+    collection_track_ids: set[str] = set()
     for track_id, source, external_id, artist, title, album in (
         db.query(
             Track.id, Track.source, Track.external_id, Track.artist, Track.title, Track.album
@@ -1297,7 +1298,7 @@ def _compute_recommendations(
     library_discovery = discovery_ratio(current_user)
 
     def _candidate_score(track, content_bonus: Optional[float] = None) -> float:
-        is_external = not isinstance(getattr(track, "id", None), int)
+        is_external = uuid_or_none(getattr(track, "id", None)) is None
         if content_bonus is None:
             content_bonus = 0.08 if is_external else 0.0
         row = skip_by_track.get(track.id)
@@ -1819,7 +1820,7 @@ def _compute_recommendations(
                 # писался и каждый заход на главную платил полный холодный путь.
                 # Коллекция исключается подзапросом (exclude_select), в
                 # литеральный IN идут только уже набранные кандидаты.
-                {tid for tid in candidate_pool if isinstance(tid, int)},
+                {tid for tid in candidate_pool if uuid_or_none(tid) is not None},
                 max(limit * 4, limit),
                 exclude_select=exclude_select,
                 keep=keep_unrelated,
@@ -1865,7 +1866,7 @@ def _compute_recommendations(
             track
             for track in candidate_pool.values()
             if track.id not in exclude_ids
-            and (not isinstance(track.id, int) or keep_track(track))
+            and (uuid_or_none(track.id) is None or keep_track(track))
         ]
         # Скор одного кандидата ~0.2мс, а нужен он и сортировке, и rerank —
         # считаем один раз.
@@ -1889,7 +1890,7 @@ def _compute_recommendations(
         local_ranked_ids = [
             track.id
             for track in ranked_pool[: max(limit * 3, limit)]
-            if isinstance(track.id, int)
+            if uuid_or_none(track.id) is not None
         ]
         recommended_tracks = mmr(
             ranked_pool[: max(limit * 3, limit)],
@@ -1924,7 +1925,7 @@ def _compute_recommendations(
             for candidate in (*recommended_tracks, *external_candidates):
                 identity = (
                     f"{candidate.source}:{candidate.external_id}"
-                    if not isinstance(candidate.id, int)
+                    if uuid_or_none(candidate.id) is None
                     else f"local:{candidate.id}"
                 )
                 if identity in seen_candidates:
@@ -1990,7 +1991,7 @@ def _compute_recommendations(
             score = _candidate_score(track)
         response_model = (
             TrackResponse
-            if isinstance(track.id, int)
+            if uuid_or_none(track.id) is not None
             else ExternalTrackResponse
         )
         payload = response_model.model_validate(track).model_copy(

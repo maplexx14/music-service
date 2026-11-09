@@ -1,6 +1,7 @@
 import io
 
 from app.models import Track
+from tests.identifiers import uuid_for
 from tests.conftest import create_user, auth_headers
 
 
@@ -79,7 +80,7 @@ def test_dislike_flow(client, db):
 def test_dislike_unknown_track_404(client, db):
     create_user(db, "dis2")
     headers = auth_headers(client, "dis2")
-    assert client.post("/api/tracks/999999/dislike", headers=headers).status_code == 404
+    assert client.post(f"/api/tracks/{uuid_for(999999)}/dislike", headers=headers).status_code == 404
 
 
 def test_disliked_provider_keys_are_scoped_to_user_and_removed_by_like(client, db):

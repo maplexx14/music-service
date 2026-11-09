@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import text
 
 from app.cache import clear_pattern
+from app.identifiers import uuid_or_none
 from app.discovery import DEFAULT_DISCOVERY_RATIO, discovery_slots, liked_slots
 from app.models import (
     Track,
@@ -1146,7 +1147,7 @@ def test_flow_excludes_played_tracks_but_keeps_new_tracks_by_same_artist(client,
     )
     assert resp.status_code == 200, resp.text
 
-    ids = {t["id"] for t in resp.json() if isinstance(t["id"], int)}
+    ids = {t["id"] for t in resp.json() if uuid_or_none(t["id"])}
     assert fresh_id in ids, "новый трек знакомого артиста должен попасть в flow"
     assert ids.isdisjoint(played_ids), (
         "flow вернул уже прослушанный трек вместо другой композиции артиста"

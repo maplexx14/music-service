@@ -397,7 +397,7 @@ async def save_artist_playlist(
     """Сохраняет плейлист исполнителя в медиатеку пользователя.
 
     Внешние треки при этом материализуются в БД (get_or_create_external_track):
-    в плейлист можно положить только запись с числовым id, а без сохранения
+    в плейлист можно положить только запись с UUID из БД, а без сохранения
     подборка развалилась бы при следующем перезапуске выдачи провайдера.
 
     Повторный вызов не плодит копии: плейлист с этим именем дополняется теми
@@ -457,7 +457,7 @@ def _save_artist_tracks(
         )
     }
 
-    track_ids: List[int] = [t.id for t in local]
+    track_ids: List[str] = [t.id for t in local]
     for ext in external:
         try:
             saved = get_or_create_external_track(
@@ -472,7 +472,7 @@ def _save_artist_tracks(
                     cover_url=ext.cover_url,
                     # stream_url НЕ сохраняем: в нём зашит текущий хост, а он
                     # меняется при переносе деплоя (см. resolveRawUrl на фронте
-                    # — для записи с числовым id поток строится заново).
+                    # — для записи с UUID из БД поток строится заново).
                     genre=ext.genre,
                 ),
             )

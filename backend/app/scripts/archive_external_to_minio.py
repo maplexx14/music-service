@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("archive_external_to_minio")
 
 
-def _candidate_ids(limit: int | None, playlists_only: bool = False) -> list[int]:
+def _candidate_ids(limit: int | None, playlists_only: bool = False) -> list[str]:
     """id внешних треков, которые ещё не в MinIO и относятся к архивируемым источникам."""
     db = SessionLocal()
     try:
@@ -70,7 +70,7 @@ def _candidate_ids(limit: int | None, playlists_only: bool = False) -> list[int]
 
 
 async def _worker(
-    track_id: int,
+    track_id: str,
     sem: asyncio.Semaphore,
     client: httpx.AsyncClient,
     stats: Counter,

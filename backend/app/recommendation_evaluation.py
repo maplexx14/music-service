@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models import recommendation_events, recommendation_impressions
 
 
-def user_metrics(db: Session, user_id: int, days: int = 30) -> dict:
+def user_metrics(db: Session, user_id: str, days: int = 30) -> dict:
     """Return actionable funnel and diversity metrics for one user."""
     days = max(1, min(int(days), 365))
     since = datetime.now(timezone.utc) - timedelta(days=days)

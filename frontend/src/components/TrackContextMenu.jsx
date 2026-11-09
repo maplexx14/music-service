@@ -1,3 +1,4 @@
+import { getTrackDbId } from '../utils/identifiers'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ListPlus, ShieldCheck, X } from 'lucide-react'
@@ -148,7 +149,7 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
   const canLinkOriginal = isAdmin && track.source === 'ytmusic' && Boolean(track.external_id)
 
   const dbId =
-    typeof track.id === 'number' ? track.id : typeof track.db_id === 'number' ? track.db_id : null
+    getTrackDbId(track)
   const isLiked =
     (dbId ? likedTrackIds.includes(dbId) : false) || pendingLikeKeys.includes(trackLikeKey(track))
 

@@ -81,23 +81,23 @@ def mask_email(email: str) -> str:
     return f"{hidden}@{domain}"
 
 
-def _code_key(user_id: int, purpose: str) -> str:
+def _code_key(user_id: str, purpose: str) -> str:
     return f"2fa:mail:code:{purpose}:{user_id}"
 
 
-def _attempts_key(user_id: int, purpose: str) -> str:
+def _attempts_key(user_id: str, purpose: str) -> str:
     return f"2fa:mail:tries:{purpose}:{user_id}"
 
 
-def _cooldown_key(user_id: int, purpose: str) -> str:
+def _cooldown_key(user_id: str, purpose: str) -> str:
     return f"2fa:mail:cooldown:{purpose}:{user_id}"
 
 
-def _new_email_key(user_id: int) -> str:
+def _new_email_key(user_id: str) -> str:
     return f"2fa:mail:new_email:{user_id}"
 
 
-def set_pending_email(user_id: int, new_email: str) -> None:
+def set_pending_email(user_id: str, new_email: str) -> None:
     """Запоминает адрес, на который юзер меняет почту, пока жив код к нему.
 
     Адрес хранится рядом с кодом, а не приходит повторно с подтверждением:
@@ -109,7 +109,7 @@ def set_pending_email(user_id: int, new_email: str) -> None:
         raise EmailCodeUnavailable(str(exc)) from exc
 
 
-def get_pending_email(user_id: int) -> str | None:
+def get_pending_email(user_id: str) -> str | None:
     try:
         raw = redis_client.get(_new_email_key(user_id))
     except Exception as exc:  # noqa: BLE001
@@ -119,7 +119,7 @@ def get_pending_email(user_id: int) -> str | None:
     return raw.decode() if isinstance(raw, bytes) else raw
 
 
-def clear_pending_email(user_id: int) -> None:
+def clear_pending_email(user_id: str) -> None:
     clear_email_code(user_id, PURPOSE_CHANGE_EMAIL)
     try:
         redis_client.delete(_new_email_key(user_id))
@@ -140,7 +140,7 @@ def normalize_email_code(code: str) -> str:
     return "".join(ch for ch in (code or "") if ch.isdigit())
 
 
-def issue_email_code(user_id: int, purpose: str = PURPOSE_LOGIN) -> str:
+def issue_email_code(user_id: str, purpose: str = PURPOSE_LOGIN) -> str:
     """Новый код: гасит предыдущий, обнуляет счётчик попыток, ставит cooldown.
 
     Поднимает EmailCodeCooldown, если письмо просили меньше минуты назад —
@@ -167,7 +167,7 @@ def issue_email_code(user_id: int, purpose: str = PURPOSE_LOGIN) -> str:
     except Exception as exc:  # noqa: BLE001 — сеть/таймаут Redis
         raise EmailCodeUnavailable(str(exc)) from exc
     return code
-def code_pending(user_id: int, purpose: str = PURPOSE_LOGIN) -> bool:
+def code_pending(user_id: str, purpose: str = PURPOSE_LOGIN) -> bool:
     """Есть ли сейчас живой код. Нужно фронту: после перезагрузки страницы
     показать «код отправлен» вместо кнопки «выслать»."""
     try:
@@ -176,7 +176,7 @@ def code_pending(user_id: int, purpose: str = PURPOSE_LOGIN) -> bool:
         raise EmailCodeUnavailable(str(exc)) from exc
 
 
-def verify_email_code(user_id: int, code: str, purpose: str = PURPOSE_LOGIN) -> bool:
+def verify_email_code(user_id: str, code: str, purpose: str = PURPOSE_LOGIN) -> bool:
     """Проверяет код и гасит его при совпадении (одноразовость).
 
     Неудачные попытки считаются; на EMAIL_CODE_MAX_ATTEMPTS код гасится
@@ -213,7 +213,7 @@ def verify_email_code(user_id: int, code: str, purpose: str = PURPOSE_LOGIN) -> 
     return True
 
 
-def clear_email_code(user_id: int, purpose: str = PURPOSE_LOGIN) -> None:
+def clear_email_code(user_id: str, purpose: str = PURPOSE_LOGIN) -> None:
     """Снимает код и cooldown. Вызывается при выключении почтовой 2FA, чтобы
     не оставлять действующий код от отключённого фактора."""
     try:

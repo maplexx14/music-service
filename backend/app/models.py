@@ -1,14 +1,15 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON, Index, select, text
+from sqlalchemy import Column, Integer, String, Uuid, ForeignKey, DateTime, Boolean, Table, Text, Float, JSON, Index, select, text
 from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.sql import func
 from app.database import Base
+from app.identifiers import new_uuid
 
 # Association table for many-to-many relationship between playlists and tracks
 playlist_tracks = Table(
     'playlist_tracks',
     Base.metadata,
-    Column('playlist_id', Integer, ForeignKey('playlists.id'), primary_key=True),
-    Column('track_id', Integer, ForeignKey('tracks.id'), primary_key=True),
+    Column('playlist_id', Uuid(as_uuid=False), ForeignKey('playlists.id'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id'), primary_key=True),
     Column('position', Integer, default=0),
     Column('added_at', DateTime(timezone=True), server_default=func.now())
 )
@@ -17,8 +18,8 @@ playlist_tracks = Table(
 user_liked_tracks = Table(
     'user_liked_tracks',
     Base.metadata,
-    Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
-    Column('track_id', Integer, ForeignKey('tracks.id'), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id'), primary_key=True),
     Column('liked_at', DateTime(timezone=True), server_default=func.now())
 )
 
@@ -26,8 +27,8 @@ user_liked_tracks = Table(
 user_track_plays = Table(
     'user_track_plays',
     Base.metadata,
-    Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
-    Column('track_id', Integer, ForeignKey('tracks.id'), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id'), primary_key=True),
     Column('play_count', Integer, default=1),
     Column('last_played', DateTime(timezone=True), server_default=func.now())
 )
@@ -40,8 +41,8 @@ user_track_plays = Table(
 user_track_skips = Table(
     'user_track_skips',
     Base.metadata,
-    Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
-    Column('track_id', Integer, ForeignKey('tracks.id'), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id'), primary_key=True),
     Column('skip_count', Integer, default=1),
     Column('last_skipped', DateTime(timezone=True), server_default=func.now()),
     Column('disliked', Boolean, nullable=False, server_default='false', default=False),
@@ -55,9 +56,9 @@ user_track_skips = Table(
 user_play_events = Table(
     'user_play_events',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
-    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), nullable=False),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='CASCADE'), nullable=False),
     Column('played_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column('completion', Float, nullable=True),
     Column('client_hour', Integer, nullable=True),
@@ -68,8 +69,8 @@ user_play_events = Table(
 playback_events = Table(
     'playback_events',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
     Column('event_type', String(32), nullable=False),
     Column('occurred_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column('metadata', JSON, nullable=False),
@@ -82,8 +83,8 @@ playback_events = Table(
 rec_impressions = Table(
     'rec_impressions',
     Base.metadata,
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
-    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
     Column('shown_count', Integer, nullable=False, default=1),
     Column('last_shown', DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
@@ -93,9 +94,9 @@ rec_impressions = Table(
 recommendation_impressions = Table(
     'recommendation_impressions',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
-    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
     Column('source', String, nullable=True),
     Column('external_id', String, nullable=True),
     Column('title', String, nullable=True),
@@ -119,9 +120,9 @@ recommendation_impressions = Table(
 recommendation_events = Table(
     'recommendation_events',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
-    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='SET NULL'), nullable=True, index=True),
     Column('source', String, nullable=True),
     Column('external_id', String, nullable=True),
     Column('title', String, nullable=True),
@@ -142,8 +143,8 @@ recommendation_events = Table(
 track_cooccurrence = Table(
     'track_cooccurrence',
     Base.metadata,
-    Column('track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
-    Column('other_track_id', Integer, ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
+    Column('other_track_id', Uuid(as_uuid=False), ForeignKey('tracks.id', ondelete='CASCADE'), primary_key=True),
     Column('score', Float, nullable=False),
     Column('common_users', Integer, nullable=False, server_default='0'),
     Column('updated_at', DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -158,8 +159,8 @@ track_cooccurrence = Table(
 user_trusted_devices = Table(
     'user_trusted_devices',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
     Column('token_hash', String, nullable=False, unique=True, index=True),
     # Человекочитаемая подпись для списка устройств в настройках: из User-Agent.
     Column('label', String, nullable=True),
@@ -176,8 +177,8 @@ user_trusted_devices = Table(
 push_subscriptions = Table(
     'push_subscriptions',
     Base.metadata,
-    Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
+    Column('id', Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True),
+    Column('user_id', Uuid(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True),
     Column('endpoint', Text, nullable=False, unique=True),
     Column('p256dh', String(256), nullable=False),
     Column('auth', String(64), nullable=False),
@@ -201,7 +202,7 @@ app_secrets = Table(
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
@@ -260,7 +261,7 @@ class User(Base):
 class Track(Base):
     __tablename__ = "tracks"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True, index=True)
     title = Column(String, nullable=False, index=True)
     artist = Column(String, nullable=False, index=True)
     album = Column(String, nullable=True)
@@ -312,7 +313,7 @@ class Playlist(Base):
         ),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     cover_url = Column(String, nullable=True)
@@ -323,7 +324,7 @@ class Playlist(Base):
     # semantic separate from description prevents imported tracks becoming fake
     # play history and lets ranking apply a deliberately smaller signal.
     origin = Column(String(16), nullable=False, default="manual", server_default="manual", index=True)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    owner_id = Column(Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -357,7 +358,7 @@ class CensorOverride(Base):
         Index("uq_censor_overrides_source_external", "source", "external_id", unique=True),
     )
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True)
     # Цензурная версия: источник каталога (пока только ytmusic) и её id там.
     source = Column(String(16), nullable=False, default="ytmusic", server_default="ytmusic")
     external_id = Column(String, nullable=False)
@@ -381,7 +382,7 @@ class CensorOverride(Base):
     # насколько цензурная версия расходится с оригиналом. NULL — привязка без
     # сравнения (вручную или по метаданным).
     evidence = Column(JSON, nullable=True)
-    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_by = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -396,7 +397,7 @@ class UserPlayerState(Base):
     """
     __tablename__ = "user_player_states"
 
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     state = Column(JSON, nullable=False)
     # Время снимка по часам клиента (мс) — им клиент сравнивает серверную
     # запись со своей локальной и берёт свежую.
@@ -412,8 +413,8 @@ class DeveloperMessage(Base):
     """
     __tablename__ = "developer_messages"
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     message = Column(Text, nullable=False)
     context = Column(JSON, nullable=True)
     is_read = Column(Boolean, nullable=False, default=False, server_default="false")
@@ -430,8 +431,8 @@ class ServiceRating(Base):
     """
     __tablename__ = "service_ratings"
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    id = Column(Uuid(as_uuid=False), default=new_uuid, server_default=func.gen_random_uuid(), primary_key=True)
+    user_id = Column(Uuid(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
     score = Column(Integer, nullable=False)
     comment = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

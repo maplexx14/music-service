@@ -65,7 +65,7 @@ async def save_album_to_library(
     """Сохраняет альбом в медиатеку пользователя отдельным плейлистом.
 
     Треки материализуются в БД (get_or_create_external_track): в плейлист можно
-    положить только запись с числовым id. Повторный вызов копий не плодит —
+    положить только запись с UUID из БД. Повторный вызов копий не плодит —
     плейлист с этим названием дополняется теми треками, которых в нём ещё нет
     (в переиздание могли добавить бонусы).
     """
@@ -111,7 +111,7 @@ def _save_album_tracks(db: Session, current_user: User, album, tracks) -> AlbumS
         )
     }
 
-    track_ids: List[int] = []
+    track_ids: List[str] = []
     for ext in tracks:
         try:
             saved = get_or_create_external_track(
@@ -126,7 +126,7 @@ def _save_album_tracks(db: Session, current_user: User, album, tracks) -> AlbumS
                     cover_url=ext.cover_url,
                     # stream_url НЕ сохраняем: в нём зашит текущий хост, а он
                     # меняется при переносе деплоя (см. resolveRawUrl на фронте
-                    # — для записи с числовым id поток строится заново).
+                    # — для записи с UUID из БД поток строится заново).
                     genre=ext.genre,
                 ),
             )

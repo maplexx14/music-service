@@ -8,6 +8,7 @@
 import pytest
 
 from app.cache import clear_pattern
+from app.identifiers import uuid_or_none
 from app.models import (
     Track,
     Playlist,
@@ -459,7 +460,7 @@ def test_recommendations_retrieve_provider_track_from_imported_playlist(
     assert similar_calls == []
 
 
-def test_popular_fallback_excludes_only_integer_ids(client, db, monkeypatch):
+def test_popular_fallback_excludes_only_uuid_ids(client, db, monkeypatch):
     """Внешние кандидаты (id-строки) не должны попадать в Track.id.in_().
 
     Боевая регрессия: внешние кандидаты попадали в candidate_pool, а добор
@@ -521,8 +522,8 @@ def test_popular_fallback_excludes_only_integer_ids(client, db, monkeypatch):
     assert seen_exclude_ids, "popular fallback did not run"
     for exclude_ids in seen_exclude_ids:
         assert all(
-            isinstance(tid, int) for tid in exclude_ids
-        ), f"non-integer Track.id leaked into SQL: {exclude_ids}"
+            uuid_or_none(tid) is not None for tid in exclude_ids
+        ), f"non-UUID Track.id leaked into SQL: {exclude_ids}"
 
 
 def test_recommendations_use_real_artist_for_legacy_soundcloud_scope(

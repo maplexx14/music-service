@@ -8,6 +8,7 @@
 """
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -45,21 +46,23 @@ def test_second_liked_playlist_is_rejected(db):
 def test_find_liked_playlist_id_prefers_oldest_on_legacy_duplicates(db):
     user = create_user(db)
     _drop_unique_index(db)
-    first = Playlist(name="Понравившиеся", is_liked=True, owner_id=user.id)
+    first = Playlist(name="Понравившиеся", is_liked=True, owner_id=user.id,
+                     created_at=datetime.now(timezone.utc) - timedelta(days=1))
     second = Playlist(name="Понравившиеся", is_liked=True, owner_id=user.id)
     db.add_all([first, second])
     db.commit()
 
     # До фикса это был `.scalar()` и здесь падало MultipleResultsFound.
-    assert find_liked_playlist_id(db, user.id) == min(first.id, second.id)
+    assert find_liked_playlist_id(db, user.id) == first.id
     # get_or_create выбирает тот же плейлист, иначе лайки разъехались бы.
-    assert get_or_create_liked_playlist(db, user).id == min(first.id, second.id)
+    assert get_or_create_liked_playlist(db, user).id == first.id
 
 
 def test_admin_dashboard_survives_legacy_duplicate_liked_playlists(client, db):
     admin = create_user(db, "admin", is_admin=True)
     _drop_unique_index(db)
-    older = Playlist(name="Понравившиеся", is_liked=True, owner_id=admin.id)
+    older = Playlist(name="Понравившиеся", is_liked=True, owner_id=admin.id,
+                     created_at=datetime.now(timezone.utc) - timedelta(days=1))
     newer = Playlist(name="Понравившиеся", is_liked=True, owner_id=admin.id)
     db.add_all([older, newer])
     db.commit()

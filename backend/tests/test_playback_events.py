@@ -81,7 +81,7 @@ def test_repeated_play_clicks_are_distinct_attempts(client, db):
             action="resume", via=via, track_id="123", position=12.5,
         ))
         assert response.status_code == 204, response.text
-    rows = db.execute(playback_events.select().order_by(playback_events.c.id)).mappings().all()
+    rows = db.execute(playback_events.select().order_by(playback_events.c.occurred_at)).mappings().all()
     assert [row["metadata"]["via"] for row in rows] == ["mini_player", "media_session"]
     assert all(row["metadata"]["position"] == 12.5 for row in rows)
 

@@ -47,7 +47,7 @@ def search(
     # Кэш зависит от пользователя: в выдачу попадают его приватные плейлисты.
     user_key = current_user.id if current_user else "anon"
     normalized_q = " ".join(q.lower().split())
-    cache_key = f"search:{normalized_q}:{limit}:{user_key}"
+    cache_key = f"search:uuid:{normalized_q}:{limit}:{user_key}"
     cached = get_cache(cache_key)
     if cached is not None:
         return SearchResponse(**cached)

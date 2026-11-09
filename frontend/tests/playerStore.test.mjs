@@ -5,6 +5,8 @@ import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { create } from 'zustand'
 import * as queueUtils from '../src/utils/playerQueue.js'
+import * as identifiers from '../src/utils/identifiers.js'
+import { uuid } from './helpers/identifiers.mjs'
 import { playbackLabel } from '../src/utils/playbackLabel.js'
 
 const source = await readFile(new URL('../src/store/playerStore.js', import.meta.url), 'utf8')
@@ -40,6 +42,7 @@ async function mountStore(apiOverrides = {}, globals = {}) {
     zustand: { create }, '../services/api': { default: api },
     '../services/pageCache': { invalidateCache: noop, patchCache: noop, peekCache: noop, LIKED_CACHE_KEY: 'liked' },
     '../utils/playerQueue': queueUtils,
+    '../utils/identifiers': identifiers,
   }
   const module = { exports: {} }
   storeScript.runInContext(context)(module, module.exports, (name) => {
@@ -54,6 +57,22 @@ function setQueue(store, queue, extra = {}) {
     shuffledOrder: queue.map((_, i) => i), currentShuffleIndex: -1,
     flowActive: true, ...extra })
 }
+
+test('UUID tracks bypass import and recommendation feedback retains the database ID', async () => {
+  const calls = []
+  const store = await mountStore({ post: async (url, data) => { calls.push({ url, data }); return { data: {} } } })
+  const local = { id: uuid(1), source: 'local', title: 'Local', artist: 'Artist', recommendation_id: 'delivery' }
+  assert.equal(await store.getState().materializeTrack(local), uuid(1))
+  assert.equal(await store.getState().materializeTrack({ ...track('external'), db_id: uuid(2) }), uuid(2))
+  assert.equal(calls.length, 0)
+  setQueue(store, [local], { flowActive: false })
+  await store.getState().toggleTrackLike(local.id)
+  assert.ok(store.getState().likedTrackIds.includes(uuid(1)))
+  assert.equal(calls[0].url, `/tracks/${uuid(1)}/like`)
+  const feedback = calls.find(call => call.url === '/recommendations/events')
+  assert.equal(feedback.data.track_id, uuid(1))
+  assert.equal(feedback.data.external_id, undefined)
+})
 
 function mountPersistence(store, storage = new Map()) {
   const listeners = new Map()
@@ -83,7 +102,7 @@ test('a protected artist survives two distinct skipped songs; duplicate events c
   setQueue(store, queue)
   const signal = (row) => store.getState()._noteFlowSignal(row, 's')
   signal(queue[0])
-  signal({ ...queue[0], id: 77, db_id: 77 })
+  signal({ ...queue[0], id: uuid(77), db_id: uuid(77) })
   signal({ ...queue[0], source: 'soundcloud', id: 'soundcloud:alias', external_id: 'alias' })
   signal(queue[1])
   assert.equal(store.getState().queue.length, 6)
@@ -95,7 +114,7 @@ test('a protected artist survives two distinct skipped songs; duplicate events c
 test('dislike blocks queued aliases before materialization; next, preview and advance agree', async () => {
   const store = await mountStore()
   const disliked = track('bad')
-  const queue = [disliked, { ...disliked, id: 90, db_id: 90 }, track('good'), track('bad'), track('last')]
+  const queue = [disliked, { ...disliked, id: uuid(90), db_id: uuid(90) }, track('good'), track('bad'), track('last')]
   setQueue(store, queue, { flowActive: false })
   store.getState().markTrackDisliked(disliked)
   assert.equal(store.getState().getNextTrack().title, 'good')
@@ -109,17 +128,17 @@ test('dislike blocks queued aliases before materialization; next, preview and ad
 
 test('shuffle navigation excludes dislikes and undo or like restores all aliases', async () => {
   const store = await mountStore()
-  const bad = { ...track('bad'), db_id: 90 }
+  const bad = { ...track('bad'), db_id: uuid(90) }
   const queue = [track('start'), bad, track('good')]
   setQueue(store, queue, { isShuffle: true, currentShuffleIndex: 0 })
-  await store.getState().toggleTrackDislike(90, bad)
+  await store.getState().toggleTrackDislike(uuid(90), bad)
   assert.equal(store.getState().getNextTrack().title, 'good')
   store.getState().nextTrack('ended')
   assert.equal(store.getState().currentShuffleIndex, 2)
-  await store.getState().toggleTrackDislike(90, bad)
+  await store.getState().toggleTrackDislike(uuid(90), bad)
   assert.equal(store.getState().getPrevTrack().title, 'bad')
-  await store.getState().toggleTrackDislike(90, bad)
-  await store.getState().toggleTrackLike(90, bad)
+  await store.getState().toggleTrackDislike(uuid(90), bad)
+  await store.getState().toggleTrackLike(uuid(90), bad)
   assert.equal(store.getState().getPrevTrack().title, 'bad')
 })
 
@@ -146,15 +165,15 @@ test('loading dislikes preserves a concurrent immediate dislike', async () => {
   }) })
   const loading = store.getState().fetchDislikedTracks()
   store.getState().markTrackDisliked(track('during-fetch'))
-  resolveIds({ data: [90] })
-  resolveKeys({ data: ['local:90', 'ytmusic:old'] })
+  resolveIds({ data: [uuid(90)] })
+  resolveKeys({ data: [`local:${uuid(90)}`, 'ytmusic:old'] })
   await loading
   assert.ok(store.getState().dislikedTrackKeys.includes('ytmusic:during-fetch'))
   assert.ok(store.getState().dislikedTrackKeys.includes('ytmusic:old'))
 })
 
 const clickUrl = '/users/me/play-click'
-const localTracks = () => [{ id: 1, title: 'First' }, { id: 2, title: 'Second' }]
+const localTracks = () => [{ id: uuid(1), title: 'First' }, { id: uuid(2), title: 'Second' }]
 
 test('a track click without recommendation attribution is recorded before playback changes', async () => {
   const clicks = []
@@ -212,7 +231,7 @@ for (const preload of [false, true]) {
     assert.equal(clicks.length, 1)
     assert.equal(clicks[0].action, 'flow')
     store.getState().nextTrack('ended')
-    assert.equal(store.getState().currentTrack.id, 2)
+    assert.equal(store.getState().currentTrack.id, uuid(2))
     assert.equal(clicks.length, 1)
   })
 }
@@ -237,13 +256,13 @@ test('flow starts with the visible batch even after its TTL and a background rep
 
 test('a visible flow preview preserves the next two discs when shuffle is enabled', async () => {
   const store = await mountStore()
-  const shown = Array.from({ length: 8 }, (_, i) => ({ id: i + 1, title: `Track ${i}` }))
+  const shown = Array.from({ length: 8 }, (_, i) => ({ id: uuid(i + 1), title: `Track ${i}` }))
   store.setState({ isShuffle: true })
   store.getState().pinFlowPreview({ tracks: shown, ts: Date.now() })
   assert.equal(await store.getState().startFlow(), true)
-  assert.equal(store.getState().currentTrack.id, 1)
-  assert.equal(store.getState().getNextTrack(1).id, 2)
-  assert.equal(store.getState().getNextTrack(2).id, 3)
+  assert.equal(store.getState().currentTrack.id, uuid(1))
+  assert.equal(store.getState().getNextTrack(1).id, uuid(2))
+  assert.equal(store.getState().getNextTrack(2).id, uuid(3))
   assert.equal(store.getState().isShuffle, true)
   assert.equal(new Set(store.getState().shuffledOrder).size, shown.length)
   assert.deepEqual(Array.from(store.getState().shuffledOrder.slice(3)).sort(), [3, 4, 5, 6, 7])
@@ -257,20 +276,20 @@ test('starting a visible preview does not wait for an unrelated refresh in fligh
   store.getState().preloadFlow()
   const starting = store.getState().startFlow()
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(store.getState().currentTrack?.id, 1)
-  finishRefresh({ data: [{ id: 99, title: 'Refreshed' }] })
+  assert.equal(store.getState().currentTrack?.id, uuid(1))
+  finishRefresh({ data: [{ id: uuid(99), title: 'Refreshed' }] })
   assert.equal(await starting, true)
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(store.getState().currentTrack.id, 1)
+  assert.equal(store.getState().currentTrack.id, uuid(1))
 })
 
 test('changing preferences invalidates the displayed flow before a new start', async () => {
-  const store = await mountStore({ get: async () => ({ data: [{ id: 99, title: 'New flow' }] }) })
+  const store = await mountStore({ get: async () => ({ data: [{ id: uuid(99), title: 'New flow' }] }) })
   store.getState().pinFlowPreview({ tracks: localTracks(), ts: Date.now() })
   store.getState().markTrackDisliked(localTracks()[0])
   assert.equal(store.getState().flowPreview, null)
   assert.equal(await store.getState().startFlow(), true)
-  assert.equal(store.getState().currentTrack.id, 99)
+  assert.equal(store.getState().currentTrack.id, uuid(99))
 })
 
 test('an unseen flow can still choose the already resolved first playable track', async () => {
@@ -287,7 +306,7 @@ test('playing another queue clears a displayed flow and cannot pin one over play
   const store = await mountStore()
   const preview = { tracks: localTracks(), ts: Date.now() }
   store.getState().pinFlowPreview(preview)
-  store.getState().playTrack({ id: 99, title: 'Selected track' })
+  store.getState().playTrack({ id: uuid(99), title: 'Selected track' })
   assert.equal(store.getState().flowPreview, null)
   store.getState().pinFlowPreview(preview)
   assert.equal(store.getState().flowPreview, null)
@@ -304,7 +323,7 @@ test('shuffle records the click before fetching a playlist and does not double c
   assert.equal(clicks.length, 1)
   assert.equal(clicks[0].action, 'shuffle')
   assert.equal(store.getState().currentTrack, null)
-  finishFetch({ data: { tracks: [...localTracks(), { id: 3, title: 'Third' }] } })
+  finishFetch({ data: { tracks: [...localTracks(), { id: uuid(3), title: 'Third' }] } })
   await starting
   assert.equal(clicks.length, 1)
   assert.equal(store.getState().isPlaying, true)
@@ -323,7 +342,7 @@ test('playlist selection and an explicit resume are clicks; pause and internal s
   store.getState().togglePlayPause() // Internal state sync.
   store.getState().togglePlayPause()
   assert.deepEqual(clicks.map(click => click.action), ['playlist', 'resume'])
-  assert.equal(clicks[0].track_id, '2')
+  assert.equal(clicks[0].track_id, uuid(2))
   assert.equal(clicks[1].position, 12.5)
   assert.equal(clicks[1].via, 'mini_player')
 })
@@ -340,14 +359,14 @@ for (const synchronous of [false, true]) {
     store.getState().playTrack(localTracks()[0])
     await Promise.resolve()
     assert.equal(store.getState().isPlaying, true)
-    assert.equal(store.getState().currentTrack.id, 1)
+    assert.equal(store.getState().currentTrack.id, uuid(1))
   })
 }
 
 for (const scenario of [
   { source: 'flow', path: '/', label: 'поток' },
   { source: null, path: '/liked', context: { kind: 'liked', title: 'Понравившиеся' }, label: 'Понравившиеся' },
-  { source: null, path: '/playlists/42', context: { kind: 'playlist', title: 'Вечерний плейлист' }, label: 'Вечерний плейлист' },
+  { source: null, path: `/playlists/${uuid(42)}`, context: { kind: 'playlist', title: 'Вечерний плейлист' }, label: 'Вечерний плейлист' },
   { source: 'artist', path: '/artists/Muse', context: { title: 'Muse' }, label: 'Muse' },
   { source: 'album', path: '/albums/deezer/42', context: { title: 'Название альбома' }, label: 'Название альбома' },
   { source: 'external', path: '/external/soundcloud/playlists/42', context: { kind: 'playlist', title: 'SoundCloud mix' }, label: 'SoundCloud mix' },
@@ -356,7 +375,7 @@ for (const scenario of [
   test(`playback label stays ${scenario.label} through track changes, navigation and pause`, async () => {
     const location = { pathname: scenario.path }
     const store = await mountStore({}, { window: { location } })
-    const tracks = [{ id: 1, artist: 'First Artist' }, { id: 2, artist: 'Other Artist' }]
+    const tracks = [{ id: uuid(1), artist: 'First Artist' }, { id: uuid(2), artist: 'Other Artist' }]
     store.getState().playPlaylist(tracks, 0, scenario.source, null, { context: scenario.context })
     assert.equal(playbackLabel(store.getState()), scenario.label)
     location.pathname = '/search'
@@ -373,15 +392,15 @@ for (const scenario of [
 
 test('shuffle captures the playlist name and originating page before awaiting more tracks', async () => {
   let finishFetch
-  const location = { pathname: '/playlists/42' }
+  const location = { pathname: `/playlists/${uuid(42)}` }
   const store = await mountStore({ get: () => new Promise(resolve => { finishFetch = resolve }) }, { window: { location } })
-  const starting = store.getState().shufflePlaylist(localTracks(), null, { url: '/playlists/42', total: 3 }, {
+  const starting = store.getState().shufflePlaylist(localTracks(), null, { url: `/playlists/${uuid(42)}`, total: 3 }, {
     context: { kind: 'playlist', title: 'Original Playlist' },
   })
   location.pathname = '/artists/Another'
-  finishFetch({ data: { tracks: [...localTracks(), { id: 3, artist: 'Other Artist' }] } })
+  finishFetch({ data: { tracks: [...localTracks(), { id: uuid(3), artist: 'Other Artist' }] } })
   await starting
-  assert.equal(store.getState().playContext.path, '/playlists/42')
+  assert.equal(store.getState().playContext.path, `/playlists/${uuid(42)}`)
   assert.equal(playbackLabel(store.getState()), 'Original Playlist')
 })
 
@@ -395,7 +414,7 @@ test('legacy contexts identify flow, liked and encoded artist pages without usin
   assert.equal(playbackLabel({ currentTrack: null, playContext: { title: 'Previous Playlist' } }), 'поток')
 })
 
-const flowTracks = (start = 100) => Array.from({ length: 6 }, (_, i) => ({ id: start + i, title: `Flow ${start + i}` }))
+const flowTracks = (start = 100) => Array.from({ length: 6 }, (_, i) => ({ id: uuid(start + i), title: `Flow ${start + i}` }))
 
 for (const scenario of [
   { source: 'album', context: { title: 'Album' } },
@@ -411,7 +430,7 @@ for (const scenario of [
       get: async (url, config) => {
         assert.equal(url, '/recommendations/flow')
         assert.equal(config.params.preload, 1)
-        assert.equal(config.params.exclude, '1,2')
+        assert.equal(config.params.exclude, [uuid(1), uuid(2)].join(','))
         return { data: flowTracks() }
       },
       post: async (url, body) => { if (url === clickUrl) clicks.push(body); return { data: {} } },
@@ -419,14 +438,14 @@ for (const scenario of [
     store.getState().playPlaylist(localTracks(), 0, scenario.source, null, { context: scenario.context })
     const label = playbackLabel(store.getState())
     assert.equal(await store.getState().extendPlaybackQueueIfNeeded(), true)
-    assert.equal(store.getState().currentTrack.id, 1)
+    assert.equal(store.getState().currentTrack.id, uuid(1))
     assert.equal(store.getState().flowActive, false)
     assert.equal(playbackLabel(store.getState()), label)
     store.getState().nextTrack('ended')
-    assert.equal(store.getState().currentTrack.id, 2)
+    assert.equal(store.getState().currentTrack.id, uuid(2))
     assert.equal(store.getState().flowActive, false)
     store.getState().nextTrack('ended')
-    assert.equal(store.getState().currentTrack.id, 100)
+    assert.equal(store.getState().currentTrack.id, uuid(100))
     assert.equal(store.getState().isPlaying, true)
     assert.equal(store.getState().flowActive, true)
     assert.equal(store.getState().source, 'flow')
@@ -442,7 +461,7 @@ test('flow preparation stays near the end and the resulting flow keeps replenish
     requests.push(config.params)
     return { data: flowTracks(requests.length * 100) }
   } })
-  const album = Array.from({ length: 7 }, (_, i) => ({ id: i + 1 }))
+  const album = Array.from({ length: 7 }, (_, i) => ({ id: uuid(i + 1) }))
   store.getState().playPlaylist(album, 0, 'album')
   assert.equal(await store.getState().extendPlaybackQueueIfNeeded(), false)
   assert.equal(requests.length, 0)
@@ -450,20 +469,20 @@ test('flow preparation stays near the end and the resulting flow keeps replenish
   await store.getState().extendPlaybackQueueIfNeeded()
   assert.equal(requests.length, 1)
   store.getState().advanceBy(4, 'ended')
-  assert.equal(store.getState().currentTrack.id, 100)
+  assert.equal(store.getState().currentTrack.id, uuid(100))
   assert.equal(store.getState().flowActive, true)
   store.getState().advanceBy(3, 'ended')
   await store.getState().extendPlaybackQueueIfNeeded()
   assert.equal(requests.length, 2)
   assert.equal(requests[1].preload, undefined)
   store.getState().advanceBy(3, 'ended')
-  assert.equal(store.getState().currentTrack.id, 200)
+  assert.equal(store.getState().currentTrack.id, uuid(200))
 })
 
 for (const shuffleBeforePreload of [false, true]) {
   test(`flow stays after the collection when shuffle is enabled ${shuffleBeforePreload ? 'before' : 'after'} preload`, async () => {
     const store = await mountStore({ get: async () => ({ data: flowTracks() }) })
-    const album = [{ id: 1 }, { id: 2 }, { id: 3 }]
+    const album = [{ id: uuid(1) }, { id: uuid(2) }, { id: uuid(3) }]
     if (shuffleBeforePreload) await store.getState().shufflePlaylist(album, 'album')
     else store.getState().playPlaylist(album, 0, 'album')
     await store.getState().extendPlaybackQueueIfNeeded()
@@ -473,11 +492,11 @@ for (const shuffleBeforePreload of [false, true]) {
     while (store.getState().currentShuffleIndex < 2) {
       store.getState().nextTrack('ended')
       assert.equal(store.getState().flowActive, false)
-      assert.ok(store.getState().currentTrack.id < 100)
+      assert.ok(album.some(track => track.id === store.getState().currentTrack.id))
     }
     store.getState().nextTrack('ended')
     assert.equal(store.getState().flowActive, true)
-    assert.ok(store.getState().currentTrack.id >= 100)
+    assert.ok(flowTracks().some(track => track.id === store.getState().currentTrack.id))
   })
 }
 
@@ -486,22 +505,22 @@ test('liked songs finish loading their pages before flow is appended', async () 
   const store = await mountStore({ get: async (url, config) => {
     requests.push(url)
     if (url === '/recommendations/flow') return { data: flowTracks() }
-    return { data: { tracks: [{ id: config.params.skip + 1 }] }, headers: { 'x-total-count': '3' } }
+    return { data: { tracks: [{ id: uuid(config.params.skip + 1) }] }, headers: { 'x-total-count': '3' } }
   } })
-  store.getState().playPlaylist([{ id: 1 }], 0, null, { url: '/playlists/me/liked', total: 3 }, {
+  store.getState().playPlaylist([{ id: uuid(1) }], 0, null, { url: '/playlists/me/liked', total: 3 }, {
     context: { kind: 'liked' },
   })
   await store.getState().extendPlaybackQueueIfNeeded(true)
   assert.deepEqual(requests, ['/playlists/me/liked'])
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 2)
+  assert.equal(store.getState().currentTrack.id, uuid(2))
   await store.getState().extendPlaybackQueueIfNeeded()
   assert.deepEqual(requests, ['/playlists/me/liked', '/playlists/me/liked', '/recommendations/flow'])
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 3)
+  assert.equal(store.getState().currentTrack.id, uuid(3))
   assert.equal(store.getState().flowActive, false)
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 100)
+  assert.equal(store.getState().currentTrack.id, uuid(100))
   assert.equal(store.getState().flowActive, true)
 })
 
@@ -509,12 +528,12 @@ test('a playable last page does not wait for the flow request to finish', async 
   let finishFlow
   const store = await mountStore({ get: (url) => url === '/recommendations/flow'
     ? new Promise(resolve => { finishFlow = resolve })
-    : Promise.resolve({ data: { tracks: [{ id: 2 }] }, headers: { 'x-total-count': '2' } }),
+    : Promise.resolve({ data: { tracks: [{ id: uuid(2) }] }, headers: { 'x-total-count': '2' } }),
   })
-  store.getState().playPlaylist([{ id: 1 }], 0, null, { url: '/playlists/1', total: 2 }, { context: { kind: 'playlist' } })
+  store.getState().playPlaylist([{ id: uuid(1) }], 0, null, { url: `/playlists/${uuid(1)}`, total: 2 }, { context: { kind: 'playlist' } })
   assert.equal(await store.getState().extendPlaybackQueueIfNeeded(true), true)
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 2)
+  assert.equal(store.getState().currentTrack.id, uuid(2))
   const pending = store.getState().extendPlaybackQueueIfNeeded(true)
   finishFlow({ data: flowTracks() })
   assert.equal(await pending, true)
@@ -525,16 +544,16 @@ test('empty cursor pages and disliked tracks cannot make an unfinished imported 
   const store = await mountStore({ get: async (url, config) => {
     assert.equal(url, '/links/playlist')
     pages.push(config.params.skip)
-    return { data: { tracks: config.params.skip === 20 ? [] : [{ id: 2 }], next_offset: config.params.skip + 20 }, headers: {} }
+    return { data: { tracks: config.params.skip === 20 ? [] : [{ id: uuid(2) }], next_offset: config.params.skip + 20 }, headers: {} }
   } })
-  store.getState().playPlaylist([{ id: 1 }, { id: 9 }], 0, 'external', {
+  store.getState().playPlaylist([{ id: uuid(1) }, { id: uuid(9) }], 0, 'external', {
     url: '/links/playlist', total: 100, cursor: 20,
   }, { context: { kind: 'playlist' } })
-  store.getState().markTrackDisliked({ id: 9 })
+  store.getState().markTrackDisliked({ id: uuid(9) })
   assert.equal(await store.getState().extendPlaybackQueueIfNeeded(true), true)
   assert.deepEqual(pages, [20, 40])
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 2)
+  assert.equal(store.getState().currentTrack.id, uuid(2))
   assert.equal(store.getState().flowActive, false)
 })
 
@@ -545,14 +564,14 @@ test('ended waits for the same flow request as the background preparation', asyn
     requests += 1
     return new Promise(resolve => { finishFlow = resolve })
   } })
-  store.getState().playPlaylist([{ id: 1 }], 0, 'album')
+  store.getState().playPlaylist([{ id: uuid(1) }], 0, 'album')
   const preparing = store.getState().extendPlaybackQueueIfNeeded()
   const ending = store.getState().extendPlaybackQueueIfNeeded(true)
   assert.equal(requests, 1)
   finishFlow({ data: flowTracks() })
   assert.deepEqual(await Promise.all([preparing, ending]), [true, true])
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 100)
+  assert.equal(store.getState().currentTrack.id, uuid(100))
 })
 
 test('preparing autoplay does not block an explicit flow start or replace its selected tracks', async () => {
@@ -561,13 +580,13 @@ test('preparing autoplay does not block an explicit flow start or replace its se
     ? new Promise(resolve => { finishPreload = resolve })
     : Promise.resolve({ data: flowTracks(200) }),
   })
-  store.getState().playPlaylist([{ id: 1 }], 0, 'album')
+  store.getState().playPlaylist([{ id: uuid(1) }], 0, 'album')
   const pending = store.getState().extendPlaybackQueueIfNeeded()
   assert.equal(await store.getState().startFlow(), true)
-  assert.equal(store.getState().currentTrack.id, 200)
+  assert.equal(store.getState().currentTrack.id, uuid(200))
   finishPreload({ data: flowTracks() })
   assert.equal(await pending, false)
-  assert.equal(store.getState().currentTrack.id, 200)
+  assert.equal(store.getState().currentTrack.id, uuid(200))
   assert.equal(store.getState().queue.length, 6)
   assert.equal(store.getState().flowActive, true)
 })
@@ -576,12 +595,12 @@ for (const target of ['page', 'flow']) {
   test(`a failed ${target} request preserves the collection and can be retried`, async () => {
     let fail = true
     const store = await mountStore({ get: async (url) => {
-      if (target === 'page') assert.equal(url, '/playlists/1')
+      if (target === 'page') assert.equal(url, `/playlists/${uuid(1)}`)
       if (fail) throw new Error('offline')
-      return { data: target === 'flow' ? flowTracks() : { tracks: [{ id: 2 }] }, headers: { 'x-total-count': '3' } }
+      return { data: target === 'flow' ? flowTracks() : { tracks: [{ id: uuid(2) }] }, headers: { 'x-total-count': '3' } }
     } }, { console: { ...console, error: noop } })
-    const pager = target === 'page' ? { url: '/playlists/1', total: 3 } : null
-    store.getState().playPlaylist([{ id: 1 }], 0, 'album', pager)
+    const pager = target === 'page' ? { url: `/playlists/${uuid(1)}`, total: 3 } : null
+    store.getState().playPlaylist([{ id: uuid(1) }], 0, 'album', pager)
     assert.equal(await store.getState().extendPlaybackQueueIfNeeded(true), null)
     assert.equal(store.getState().queue.length, 1)
     assert.equal(store.getState().flowActive, false)
@@ -596,9 +615,9 @@ for (const action of ['replace', 'clear', 'pause']) {
   test(`a pending autoplay request respects ${action}`, async () => {
     let finishFlow
     const store = await mountStore({ get: () => new Promise(resolve => { finishFlow = resolve }) })
-    store.getState().playPlaylist([{ id: 1 }], 0, 'album')
+    store.getState().playPlaylist([{ id: uuid(1) }], 0, 'album')
     const pending = store.getState().extendPlaybackQueueIfNeeded()
-    if (action === 'replace') store.getState().playPlaylist([{ id: 1 }, { id: 2 }], 0, 'album')
+    if (action === 'replace') store.getState().playPlaylist([{ id: uuid(1) }, { id: uuid(2) }], 0, 'album')
     else if (action === 'clear') store.getState().clearQueue()
     else store.getState().togglePlayPause()
     finishFlow({ data: flowTracks() })
@@ -610,36 +629,36 @@ for (const action of ['replace', 'clear', 'pause']) {
 }
 
 test('autoplay excludes collection aliases, dislikes and repeated recommendations', async () => {
-  const original = { ...track('original'), id: 1, db_id: 1 }
-  const store = await mountStore({ get: async () => ({ data: [track('original'), { id: 101 }, { id: 100 }, { id: 100 }] }) })
+  const original = { ...track('original'), id: uuid(1), db_id: uuid(1) }
+  const store = await mountStore({ get: async () => ({ data: [track('original'), { id: uuid(101) }, { id: uuid(100) }, { id: uuid(100) }] }) })
   store.setState({ prefetchTracks: noop })
-  store.getState().playPlaylist([original, { id: 2 }], 0, 'album')
-  store.getState().markTrackDisliked({ id: 101 })
-  store.getState().markTrackDisliked({ id: 2 })
+  store.getState().playPlaylist([original, { id: uuid(2) }], 0, 'album')
+  store.getState().markTrackDisliked({ id: uuid(101) })
+  store.getState().markTrackDisliked({ id: uuid(2) })
   await store.getState().extendPlaybackQueueIfNeeded()
-  assert.deepEqual(Array.from(store.getState().queue, row => row.id), [1, 2, 100])
+  assert.deepEqual(Array.from(store.getState().queue, row => row.id), [1, 2, 100].map(uuid))
   store.getState().nextTrack('ended')
-  assert.equal(store.getState().currentTrack.id, 100)
+  assert.equal(store.getState().currentTrack.id, uuid(100))
   assert.equal(store.getState().flowActive, true)
 })
 
 test('an empty flow leaves the completed collection stopped and search queues do not start flow', async () => {
   let requests = 0
   const store = await mountStore({ get: async () => { requests += 1; return { data: [] } } })
-  store.getState().playPlaylist([{ id: 1 }], 0, 'album')
+  store.getState().playPlaylist([{ id: uuid(1) }], 0, 'album')
   assert.equal(await store.getState().extendPlaybackQueueIfNeeded(true), false)
   store.getState().nextTrack('ended')
   assert.equal(store.getState().isPlaying, false)
   assert.equal(store.getState().flowActive, false)
   assert.equal(store.getState().flowStartIndex, null)
-  store.getState().playTrack({ id: 2 })
+  store.getState().playTrack({ id: uuid(2) })
   assert.equal(await store.getState().extendPlaybackQueueIfNeeded(), false)
   assert.equal(requests, 1)
 })
 
 test('restoring a trimmed queue preserves the transition from its last album track into flow', async () => {
   const store = await mountStore({ get: async () => ({ data: flowTracks() }) })
-  const album = Array.from({ length: 80 }, (_, i) => ({ id: i + 1 }))
+  const album = Array.from({ length: 80 }, (_, i) => ({ id: uuid(i + 1) }))
   store.getState().playPlaylist(album, 79, 'album')
   await store.getState().extendPlaybackQueueIfNeeded()
   const persist = mountPersistence(store)
@@ -652,12 +671,12 @@ test('restoring a trimmed queue preserves the transition from its last album tra
 
   const reopened = await mountStore()
   mountPersistence(reopened, persist.storage).restorePlayer(7)
-  assert.equal(reopened.getState().currentTrack.id, 80)
+  assert.equal(reopened.getState().currentTrack.id, uuid(80))
   assert.equal(reopened.getState().isPlaying, false)
   assert.equal(reopened.getState().flowActive, false)
   reopened.getState().togglePlayPause()
   reopened.getState().nextTrack('ended')
-  assert.equal(reopened.getState().currentTrack.id, 100)
+  assert.equal(reopened.getState().currentTrack.id, uuid(100))
   assert.equal(reopened.getState().flowActive, true)
   assert.equal(playbackLabel(reopened.getState()), 'поток')
 })

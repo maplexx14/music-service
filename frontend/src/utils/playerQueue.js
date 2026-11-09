@@ -1,7 +1,9 @@
+import { getTrackDbId } from './identifiers.js'
+
 export function trackKeys(track) {
   if (!track) return []
   const keys = []
-  const dbId = track.db_id ?? (typeof track.id === 'number' ? track.id : null)
+  const dbId = getTrackDbId(track)
   if (dbId != null) keys.push(`local:${dbId}`)
   if (track.source && track.external_id) keys.push(`${track.source}:${track.external_id}`)
   if (typeof track.id === 'string') keys.push(track.id)
@@ -9,7 +11,7 @@ export function trackKeys(track) {
 }
 
 export function isDislikedTrack(state, track) {
-  const dbId = track?.db_id ?? (typeof track?.id === 'number' ? track.id : null)
+  const dbId = getTrackDbId(track)
   return (dbId != null && state.dislikedTrackIds?.includes(dbId)) ||
     trackKeys(track).some((key) => state.dislikedTrackKeys?.includes(key))
 }

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import censorship
+from app.identifiers import UUIDString
 from app.censorship import STATUS_CONFIRMED, STATUS_REJECTED, STATUS_SUGGESTED
 from app.database import get_db
 from app.dependencies import get_current_admin_user
@@ -32,7 +33,7 @@ class OverrideCreate(BaseModel):
     soundcloud: str
 
 
-def _get_row(db: Session, override_id: int) -> CensorOverride:
+def _get_row(db: Session, override_id: UUIDString) -> CensorOverride:
     row = db.query(CensorOverride).filter(CensorOverride.id == override_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Привязка не найдена")
@@ -134,7 +135,7 @@ async def check_video(
 
 @router.post("/overrides/{override_id}/confirm")
 def confirm_override(
-    override_id: int,
+    override_id: UUIDString,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ) -> dict:
@@ -143,7 +144,7 @@ def confirm_override(
 
 @router.post("/overrides/{override_id}/reject")
 def reject_override(
-    override_id: int,
+    override_id: UUIDString,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ) -> dict:

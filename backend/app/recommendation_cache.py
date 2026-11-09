@@ -39,7 +39,7 @@ DELIVERY_DEDUP_TTL = 60
 
 
 def recommendation_cache_key(
-    user_id: int,
+    user_id: str,
     limit: int,
     bucket: Optional[str],
     algorithm_version: str = ALGORITHM_VERSION,
@@ -57,7 +57,7 @@ def _delivery_key(cache_key: str) -> str:
     return f"{cache_key}:delivery"
 
 
-def claim_delivery(user_id: int, cache_key: str, request_id: str) -> Optional[str]:
+def claim_delivery(user_id: str, cache_key: str, request_id: str) -> Optional[str]:
     """Застолбить request_id за закэшированной выдачей.
 
     None — окно наше, выдачу надо записать под request_id. Строка — выдачу
@@ -86,11 +86,11 @@ def remember_delivery(cache_key: str, request_id: str) -> None:
         pass
 
 
-def _index_key(user_id: int) -> str:
+def _index_key(user_id: str) -> str:
     return f"recs:index:{user_id}"
 
 
-def _add_to_index(user_id: int, cache_key: str) -> None:
+def _add_to_index(user_id: str, cache_key: str) -> None:
     try:
         index_key = _index_key(user_id)
         pipe = redis_client.pipeline(transaction=False)
@@ -101,7 +101,7 @@ def _add_to_index(user_id: int, cache_key: str) -> None:
         pass
 
 
-def store_recommendations(user_id: int, cache_key: str, payload: Any, expire: int) -> None:
+def store_recommendations(user_id: str, cache_key: str, payload: Any, expire: int) -> None:
     """Закэшировать выдачу и записать её ключ в индекс юзера.
 
     Сначала сама выдача, потом индекс: в обратном порядке инвалидация между
@@ -118,11 +118,11 @@ def store_recommendations(user_id: int, cache_key: str, payload: Any, expire: in
 _NEGATIVE_SIGNAL_TTL = 2 * 60 * 60
 
 
-def negative_signal_key(user_id: int) -> str:
+def negative_signal_key(user_id: str) -> str:
     return f"flow:negative:{user_id}"
 
 
-def mark_negative_signal(user_id: int) -> None:
+def mark_negative_signal(user_id: str) -> None:
     """Звать ПОСЛЕ коммита скипа/дизлайка: читающий видит метку — увидит и строку."""
     try:
         redis_client.set(
@@ -146,17 +146,17 @@ _FLOW_SIGNAL_SKIPS = int(os.getenv("FLOW_SIGNAL_SKIPS", "2"))
 _FLOW_SIGNAL_TTL = 2 * 60 * 60
 
 
-def flow_pc_meta_key(user_id: int) -> str:
+def flow_pc_meta_key(user_id: str) -> str:
     # Пишется выдачей потока (flow._enqueue_precompute) на сутки.
     return f"flow:pc:meta:{user_id}"
 
 
-def flow_ready_key(user_id: int) -> str:
+def flow_ready_key(user_id: str) -> str:
     """Готовый пул потока (см. routers.flow._take_ready_portion)."""
     return f"flow:ready:{user_id}"
 
 
-def invalidate_flow_ready(user_id: int) -> None:
+def invalidate_flow_ready(user_id: str) -> None:
     """Сбросить готовый пул и попросить flow-warmer посчитать новый: настройки
     (ползунок новизны, любимые артисты, жанры, исключения) поменялись, а пул
     посчитан под старые. Прод, 2026-10-14: ползунок опустили с 0.6 до 0.2, а
@@ -168,17 +168,17 @@ def invalidate_flow_ready(user_id: int) -> None:
     mark_flow_signal(user_id, "explicit")
 
 
-def flow_signal_key(user_id: int) -> str:
+def flow_signal_key(user_id: str) -> str:
     """Время сигнала, после которого готовая порция устарела."""
     return f"flow:pc:signal:{user_id}"
 
 
-def flow_skips_key(user_id: int) -> str:
+def flow_skips_key(user_id: str) -> str:
     """Разные треки, скипнутые после последнего расчёта порции."""
     return f"flow:pc:skips:{user_id}"
 
 
-def mark_flow_signal(user_id: int, kind: str, identity: Optional[str] = None) -> None:
+def mark_flow_signal(user_id: str, kind: str, identity: Optional[str] = None) -> None:
     """Звать ПОСЛЕ коммита. kind="explicit" — лайк/дизлайк и их отмена,
     kind="skip" — скип трека identity (local:id или source:external_id: скип
     одного трека приходит и в /tracks/{id}/skip, и в /recommendations/events)."""
@@ -204,7 +204,7 @@ def mark_flow_signal(user_id: int, kind: str, identity: Optional[str] = None) ->
         pass
 
 
-def invalidate_recommendation_cache(user_id: int) -> None:
+def invalidate_recommendation_cache(user_id: str) -> None:
     # Все поколения скорера юзера лежат в одном индексе: ключ версионирован
     # (ALGORITHM_VERSION), но store_recommendations пишет в индекс любой.
     try:

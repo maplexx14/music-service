@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import requests
+from app.identifiers import UUIDString, uuid_or_none
 from app.provider_work import provider_call
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -678,7 +679,7 @@ def _external_population_stats_on_bind(bind, items, now=None) -> dict:
         local_db.close()
 
 
-def _collection_rows(db: Session, user_id: int) -> list:
+def _collection_rows(db: Session, user_id: UUIDString) -> list:
     """Вся коллекция юзера (лайки и свои плейлисты) строками для ключей песен."""
     return (
         db.query(
@@ -775,7 +776,7 @@ def flow_rejected_artist_keys(event_rows, collection_counts=None) -> set:
     }
 
 
-def fresh_collection_artist_keys(db: Session, user_id: int, now=None) -> List[str]:
+def fresh_collection_artist_keys(db: Session, user_id: UUIDString, now=None) -> List[str]:
     """Артисты, чья первая песня в коллекции добавлена за _FRESH_CLUSTER_DAYS.
 
     Пусто, если свежая вся коллекция: у нового юзера нет долгосрочного ядра,
@@ -817,7 +818,7 @@ def fresh_collection_artist_keys(db: Session, user_id: int, now=None) -> List[st
     return fresh
 
 
-def _taste_profile(db: Session, user_id: int) -> dict:
+def _taste_profile(db: Session, user_id: UUIDString) -> dict:
     """Собирает профиль вкуса пользователя из лайков и истории (блокирующая)."""
     liked_playlist_id = find_liked_playlist_id(db, user_id)
     liked = (
@@ -1886,7 +1887,7 @@ def _local_candidates(db: Session, profile: dict, limit: int, extra_exclude_ids:
             t.id,
         )
 
-    candidates_by_id: dict[int, Track] = {}
+    candidates_by_id: dict[str, Track] = {}
     if filters:
         q = db.query(Track).filter(or_(*filters))
         # Кандидат обязан быть от артиста, по которому у юзера есть свой сигнал.
@@ -3519,32 +3520,32 @@ def _live_semaphore() -> asyncio.Semaphore:
     return semaphore
 
 
-def _history_key(user_id: int) -> str:
+def _history_key(user_id: UUIDString) -> str:
     return f"flow:history:v2:{user_id}"
 
 
-def _ready_key(user_id: int) -> str:
+def _ready_key(user_id: UUIDString) -> str:
     return flow_ready_key(user_id)
 
 
-def _pc_meta_key(user_id: int) -> str:
+def _pc_meta_key(user_id: UUIDString) -> str:
     return flow_pc_meta_key(user_id)
 
 
-def _ranking_context(user_id: int, history: dict) -> str:
+def _ranking_context(user_id: UUIDString, history: dict) -> str:
     return f"flow:{user_id}:" + "|".join(
         str(value) for value in list(history.get("ids") or [])[-50:]
     )
 
 
-async def _load_flow_history(db: Session, user_id: int) -> dict:
+async def _load_flow_history(db: Session, user_id: UUIDString) -> dict:
     history = await get_cache_async(_history_key(user_id)) or {}
     if not any(history.get(name) for name in ("ids", "keys", "artists")):
         history = await asyncio.to_thread(_persisted_history_released, db, user_id)
     return history
 
 
-def _persisted_history_released(db: Session, user_id: int) -> dict:
+def _persisted_history_released(db: Session, user_id: UUIDString) -> dict:
     try:
         return _persisted_flow_history(db, user_id, _FLOW_HISTORY_LIMIT)
     finally:
@@ -3576,7 +3577,7 @@ def _exclude_from_history(history: dict, limit: int = _CLIENT_QUEUE_LIMIT) -> st
 
 
 def _precompute_exclude(db: Session, history: dict) -> str:
-    """exclude для предрасчёта: очередь клиента плюс числовые id каталога.
+    """exclude для предрасчёта: очередь клиента плюс UUID каталога.
 
     Трек из локального каталога фронт присылает числом, а в истории (особенно
     восстановленной из БД или записанной до появления history["queue"]) он
@@ -3600,7 +3601,7 @@ def _precompute_exclude(db: Session, history: dict) -> str:
     return ",".join(dict.fromkeys(parts))
 
 
-def _enqueue_precompute_blocking(user_id: int, meta: dict) -> None:
+def _enqueue_precompute_blocking(user_id: UUIDString, meta: dict) -> None:
     pipe = redis_client.pipeline()
     pipe.sadd(_PC_QUEUED, user_id)
     pipe.set(_pc_meta_key(user_id), json.dumps(meta), ex=_PC_META_TTL)
@@ -3618,7 +3619,7 @@ _PC_START_LIMIT = 8
 
 
 def request_precompute_blocking(
-    user_id: int, base_url: str, hour: Optional[int] = None
+    user_id: UUIDString, base_url: str, hour: Optional[int] = None
 ) -> None:
     """Попросить flow-warmer посчитать порцию сейчас, не дожидаясь выдачи.
 
@@ -3647,7 +3648,7 @@ def request_precompute_blocking(
         logger.warning("flow precompute request failed user=%s", user_id, exc_info=True)
 
 
-async def _enqueue_precompute(user_id: int, meta: dict) -> None:
+async def _enqueue_precompute(user_id: UUIDString, meta: dict) -> None:
     if not _FLOW_PRECOMPUTE:
         return
     try:
@@ -3656,7 +3657,7 @@ async def _enqueue_precompute(user_id: int, meta: dict) -> None:
         logger.warning("flow precompute enqueue failed user=%s", user_id, exc_info=True)
 
 
-def _fresh_negatives(db: Session, user_id: int, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
+def _fresh_negatives(db: Session, user_id: UUIDString, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
     """Скипы и дизлайки после since: (идентичности треков, ключи артистов).
 
     Готовая порция посчитана до них — то, что юзер успел отвергнуть, пока
@@ -3669,7 +3670,7 @@ def _fresh_negatives(db: Session, user_id: int, since: datetime, protected: Opti
         db.rollback()
 
 
-def _fresh_negatives_query(db: Session, user_id: int, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
+def _fresh_negatives_query(db: Session, user_id: UUIDString, since: datetime, protected: Optional[set] = None) -> tuple[set, set]:
     identities: set = set()
     negative_items: dict[str, set] = {}
 
@@ -3725,7 +3726,7 @@ def _fresh_negatives_query(db: Session, user_id: int, since: datetime, protected
 
 async def _take_ready_portion(
     db: Session,
-    user_id: int,
+    user_id: UUIDString,
     history: dict,
     limit: int,
     exclude: str,
@@ -3753,8 +3754,8 @@ async def _take_ready_portion(
     if time.time() - created > _READY_MAX_AGE:
         return None, "stale"
 
-    excl_numeric, _videos, excl_external = _parse_exclude(exclude)
-    queued = {f"local:{item_id}" for item_id in excl_numeric} | excl_external
+    excl_local, _videos, excl_external = _parse_exclude(exclude)
+    queued = {f"local:{item_id}" for item_id in excl_local} | excl_external
     # Метку ставят скип/дизлайк после коммита (recommendation_cache.
     # mark_negative_signal). Нет её или она старше порции — в БД идти незачем.
     if isinstance(negative_at, (int, float)) and negative_at >= created:
@@ -3784,7 +3785,7 @@ async def _take_ready_portion(
                 if isinstance(value, str) and value.startswith(built_for):
                     item[field] = base_url + value[len(built_for):]
         identities = {_flow_item_identity(item)}
-        if isinstance(item.get("id"), int):
+        if uuid_or_none(item.get("id")) is not None:
             identities.add(f"local:{item['id']}")
         if identities & queued or identities & negatives:
             continue
@@ -3804,7 +3805,7 @@ async def _take_ready_portion(
 
 
 def _record_flow_delivery(
-    telemetry_bind, user_id: int, mix: list, request_id: str, scores: dict, features: dict
+    telemetry_bind, user_id: UUIDString, mix: list, request_id: str, scores: dict, features: dict
 ) -> None:
     # Своя короткая сессия: запрос не держит соединение из пула, пока ждёт
     # провайдеров, а телеметрии нужна одна транзакция.
@@ -3831,7 +3832,7 @@ def _record_flow_delivery(
 async def _deliver_portion(
     *,
     request: Request,
-    user_id: int,
+    user_id: UUIDString,
     limit: int,
     hour: Optional[int],
     exclude: str,
@@ -4030,17 +4031,18 @@ def _flow_item_identity(item) -> str:
 def _parse_exclude(exclude: str) -> tuple:
     """Разбирает exclude, не смешивая id разных провайдеров.
 
-    Чистые числа — id локальной БД. Только ``ytmusic:*`` можно использовать
+    UUID — id локальной БД. Только ``ytmusic:*`` можно использовать
     как videoId и continuation-сид; ``soundcloud:*`` и неизвестные источники
     остаются внешними исключениями, но никогда не передаются в YT Music radio.
     """
-    numeric, yt_videos, external_ids = set(), [], set()
+    local_ids, yt_videos, external_ids = set(), [], set()
     for part in (exclude or "").split(","):
         part = part.strip()
         if not part:
             continue
-        if part.isdigit():
-            numeric.add(int(part))
+        local_id = uuid_or_none(part)
+        if local_id:
+            local_ids.add(local_id)
             continue
         if ":" not in part:
             continue
@@ -4050,10 +4052,10 @@ def _parse_exclude(exclude: str) -> tuple:
         external_ids.add(f"{source}:{external_id}")
         if source == "ytmusic" and external_id not in yt_videos:
             yt_videos.append(external_id)
-    return numeric, yt_videos, external_ids
+    return local_ids, yt_videos, external_ids
 
 
-def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
+def _persisted_flow_history(db: Session, user_id: UUIDString, limit: int) -> dict:
     """Recover recent flow history when the shared cache is unavailable.
 
     Redis is the normal fast path, but a cache outage must not turn a finite
@@ -4084,6 +4086,7 @@ def _persisted_flow_history(db: Session, user_id: int, limit: int) -> dict:
                 )
                 .order_by(
                     recommendation_impressions.c.shown_at.desc(),
+                    recommendation_impressions.c.position.desc(),
                     recommendation_impressions.c.id.desc(),
                 )
                 .limit(limit)
@@ -4294,7 +4297,7 @@ async def _compute_flow(
         # число просмотров перебивало наш счётчик, а на общей кривой и хит, и
         # безымянная загрузка выходили одинаково «популярными». Считаем обе
         # популярности на своей шкале и берём лучшую уже НОРМАЛИЗОВАННУЮ.
-        is_external = not isinstance(getattr(item, "id", None), int)
+        is_external = uuid_or_none(item.get("id") if isinstance(item, dict) else getattr(item, "id", None)) is None
         local_popularity = popularity_score(
             population.get("play_count", 0) if is_external else item_play_count,
             max(item_listener_count, population.get("listener_count", 0)),
@@ -5422,7 +5425,7 @@ async def _session_select(
     features: dict,
     *,
     limit: int,
-    user_id: int,
+    user_id: UUIDString,
     history: dict,
     session: str,
     arm: Optional[str] = None,
@@ -5553,7 +5556,7 @@ def _history_ids_after(history: dict, mix: list) -> list:
 
 
 async def _store_leftover(
-    user_id: int,
+    user_id: UUIDString,
     history: dict,
     delivered: list,
     leftover: list,
@@ -5675,7 +5678,7 @@ if not _served_logger.handlers:
     _served_logger.propagate = False
 
 
-def _log_served(user_id: int, path: str, ready_state: str, mix: list, started: float) -> None:
+def _log_served(user_id: UUIDString, path: str, ready_state: str, mix: list, started: float) -> None:
     _served_logger.info(
         "flow served user=%s path=%s ready=%s items=%d %.0fms",
         user_id, path, ready_state, len(mix), (time.perf_counter() - started) * 1000,

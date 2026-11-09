@@ -34,6 +34,7 @@ from fastapi import Response
 from sqlalchemy import func, select
 from starlette.requests import Request
 
+from app.identifiers import uuid_or_none
 from app.cache import get_cache_async, redis_client, set_cache_async
 from app.recommendation_cache import FLOW_PC_DELAYED, flow_signal_key, flow_skips_key
 from app.database import SessionLocal
@@ -128,12 +129,12 @@ def _is_current(payload, context: str, limit: int, signal_at: float = 0.0) -> bo
     )
 
 
-async def precompute_user(user_id: int, session_factory=SessionLocal) -> bool:
+async def precompute_user(user_id: str, session_factory=SessionLocal) -> bool:
     """Считает следующую порцию юзера и кладёт её в flow:ready. True — готово."""
     return await _precompute(user_id, session_factory) in ("computed", "current")
 
 
-async def _precompute(user_id: int, session_factory=SessionLocal) -> str:
+async def _precompute(user_id: str, session_factory=SessionLocal) -> str:
     # По loop: тесты гоняют каждый asyncio.run в своём (как flow._live_semaphore).
     key = (id(asyncio.get_running_loop()), user_id)
     lock = _user_locks.setdefault(key, asyncio.Lock())
@@ -141,7 +142,7 @@ async def _precompute(user_id: int, session_factory=SessionLocal) -> str:
         return await _precompute_unlocked(user_id, session_factory)
 
 
-async def _precompute_unlocked(user_id: int, session_factory) -> str:
+async def _precompute_unlocked(user_id: str, session_factory) -> str:
     meta = await get_cache_async(flow._pc_meta_key(user_id)) or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -194,14 +195,14 @@ async def _precompute_unlocked(user_id: int, session_factory) -> str:
     return "computed"
 
 
-def _pop_job() -> Optional[int]:
+def _pop_job() -> Optional[str]:
     item = redis_client.blpop([flow._PC_QUEUE], timeout=_POP_TIMEOUT)
     if not item:
         return None
-    user_id = int(item[1])
+    user_id = uuid_or_none(item[1])
     # Снимаем отметку ДО расчёта: новая выдача за время расчёта должна снова
     # поставить юзера — его история к тому моменту уже другая.
-    redis_client.srem(flow._PC_QUEUED, user_id)
+    redis_client.srem(flow._PC_QUEUED, item[1])
     return user_id
 
 
@@ -253,10 +254,9 @@ def _stale_active_users(session_factory=SessionLocal) -> list:
     for key in redis_client.scan_iter(match="flow:pc:meta:*", count=500):
         if isinstance(key, bytes):
             key = key.decode()
-        try:
-            users.add(int(key.rsplit(":", 1)[1]))
-        except ValueError:
-            continue
+        user_id = uuid_or_none(key.rsplit(":", 1)[1])
+        if user_id:
+            users.add(user_id)
     stale = []
     for user_id in users:
         ttl = redis_client.ttl(flow._ready_key(user_id))
@@ -282,7 +282,9 @@ def _pop_due_signals() -> list:
     for member in due:
         # ZREM — отметка «забрал»: при нескольких процессах юзер уйдёт один раз.
         if redis_client.zrem(FLOW_PC_DELAYED, member):
-            users.append(int(member))
+            user_id = uuid_or_none(member)
+            if user_id:
+                users.append(user_id)
     return users
 
 

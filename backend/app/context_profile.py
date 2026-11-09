@@ -64,7 +64,7 @@ def _normalise(value: Any) -> str:
 
 def build_context_profile(
     db: Session,
-    user_id: int,
+    user_id: str,
     bucket: Optional[str],
     *,
     now: Optional[datetime] = None,

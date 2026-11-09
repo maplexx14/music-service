@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.identifiers import normalize_uuid
 from app.database import SessionLocal
 from app.discovery_feedback import acceptance_factor, delivery_outcomes
 from app.models import recommendation_impressions
@@ -39,7 +40,7 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--surface", default="flow")
     parser.add_argument("--version", help="algorithm_version, например hybrid-v8")
-    parser.add_argument("--user", type=int, help="только этот user_id")
+    parser.add_argument("--user", type=normalize_uuid, help="только этот user_id")
     args = parser.parse_args()
 
     since = datetime.now(timezone.utc) - timedelta(days=args.days)

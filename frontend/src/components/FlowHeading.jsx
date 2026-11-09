@@ -15,7 +15,7 @@ export default function FlowHeading() {
     if (!active || !context || context.title || context.kind === 'flow') return undefined
     // У очередей из старых версий было сохранено только местоположение
     // плейлиста. Восстанавливаем имя, не требуя запускать музыку заново.
-    const local = /^\/playlists\/(\d+)\/?$/.exec(context.path || '')
+    const local = /^\/playlists\/([0-9a-f-]{36})\/?$/.exec(context.path || '')
     const external = /^\/external\/soundcloud\/playlists\/([^/]+)\/?$/.exec(context.path || '')
     if (!local && !external) return undefined
     let cancelled = false

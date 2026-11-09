@@ -1,3 +1,4 @@
+import { isUuid, getTrackDbId } from '../utils/identifiers'
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
@@ -145,12 +146,12 @@ const DIRECT_STREAM_PREFIX = {
 // качество — иначе прогрев качал бы не то, что заиграет.
 function resolveRawUrl(track, isExternal) {
   if (!track) return undefined
-  // Материализованный в БД трек (числовой id) — всегда через свой бэкенд-эндпоинт
+  // Материализованный в БД трек (UUID) — всегда через свой бэкенд-эндпоинт
   // стрима: он реконструирует URL провайдера против ТЕКУЩЕГО хоста. Сохранённый
   // в track.stream_url хост зашит на момент сохранения и умирает при переносе
   // деплоя/смене туннеля. У результатов поиска id строковый ("ytmusic:...") —
   // они не в БД, для них stream_url свежий, с текущим хостом.
-  if (typeof track.id === 'number') {
+  if (isUuid(track.id)) {
     // Внешний источник с известным external_id — минуем /tracks/{id}/stream
     // и его 307-редирект, идём сразу на эндпоинт провайдера (тот же путь,
     // куда редиректит бэк). Фолбэк на старый путь, если external_id нет.
@@ -571,7 +572,7 @@ function PlayerInner() {
   const isExternalTrack = EXTERNAL_SOURCES.includes(currentTrack?.source)
   // Числовой id БД: db_id (после материализации) или сам id у локальных/списочных.
   const dbTrackId =
-    currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
+    getTrackDbId(currentTrack)
   // С треком можно взаимодействовать, если он в БД или его можно туда добавить.
   const canInteract = dbTrackId !== null || isExternalTrack
 
@@ -1999,7 +2000,7 @@ function PlayerInner() {
     const state = usePlayerStore.getState()
     const track = state.currentTrack
     if (!state.isPlaying || !track) return
-    const dbId = track.db_id ?? (typeof track.id === 'number' ? track.id : null)
+    const dbId = getTrackDbId(track)
     const external = EXTERNAL_SOURCES.includes(track.source)
     if (dbId === null && !external) return
     const dur = audio.duration

@@ -96,7 +96,7 @@ _lazy_sem: Optional[asyncio.Semaphore] = None
 
 # Дедуп ленивых архиваций: пока трек качается, повторные прослушивания
 # не должны стартовать вторую задачу на тот же id.
-_inflight: set[int] = set()
+_inflight: set[str] = set()
 
 # Повторная попытка при транзиентных ошибках (сеть, таймаут).
 _MAX_RETRIES = 4
@@ -800,7 +800,7 @@ async def _deezer_serves(video_id: Optional[str]) -> bool:
         return False
 
 
-async def schedule_archive(track_id: int) -> None:
+async def schedule_archive(track_id: str) -> None:
     """Ленивая фоновая архивация одного трека при прослушивании.
 
     Fire-and-forget: вешается как BackgroundTask на redirect стрима внешнего

@@ -27,7 +27,7 @@ import { noteSpan } from '../utils/frameMeter'
 // старше 48 часов не восстанавливается: сервер отдаёт пустоту по своему
 // updated_at, локальный отбрасываем по savedAt.
 
-export const PLAYER_PERSIST_KEY = 'bolt-player-v1'
+export const PLAYER_PERSIST_KEY = 'bolt-player-v2'
 
 // Окно очереди вокруг текущего трека: длинный плейлист целиком раздул бы
 // localStorage (квота ~5 МБ на всё приложение), а дальний хвост дотянется

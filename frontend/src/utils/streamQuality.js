@@ -74,7 +74,7 @@ const UPGRADE_THRESHOLD = 0
 // подпись) и /soundcloud/stream/{token} под шаблоны не подходят и остаются
 // нетронутыми.
 const QUALITY_AWARE = [
-  /\/tracks\/\d+\/stream(?:$|[?&])/,
+  /\/tracks\/[0-9a-f-]{36}\/stream(?:$|[?&])/,
   /\/ytdlp\/stream\//,
   /\/soulseek\/stream\//,
 ]

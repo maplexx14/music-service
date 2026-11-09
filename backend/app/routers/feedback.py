@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.identifiers import UUIDString
 from app.database import get_db
 from app.dependencies import get_current_active_user, get_current_admin_user
 from app.models import DeveloperMessage, ServiceRating, User
@@ -81,7 +82,7 @@ def list_messages(
 
 @router.post("/{message_id}/read")
 def mark_read(
-    message_id: int,
+    message_id: UUIDString,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ):

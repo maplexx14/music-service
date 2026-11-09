@@ -17,11 +17,11 @@ from app.models import Track, rec_impressions, user_play_events, user_track_play
 def record_imported_track_plays(
     db: Session,
     *,
-    user_id: int,
-    track_ids: Iterable[int],
+    user_id: str,
+    track_ids: Iterable[str],
 ) -> int:
     """Legacy idempotent backfill helper; new imports must not call it."""
-    unique_track_ids = list(dict.fromkeys(int(track_id) for track_id in track_ids))
+    unique_track_ids = list(dict.fromkeys(track_ids))
     if not unique_track_ids:
         return 0
 

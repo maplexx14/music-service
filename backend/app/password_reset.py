@@ -5,6 +5,7 @@ import os
 import secrets
 from urllib.parse import quote
 
+from app.identifiers import normalize_uuid
 from app.cache import redis_client
 from app.email_verification import PUBLIC_URL
 from app.mailer import send_mail
@@ -23,11 +24,11 @@ def _token_key(token: str) -> str:
     return f"password:reset:{digest}"
 
 
-def _user_token_key(user_id: int) -> str:
+def _user_token_key(user_id: str) -> str:
     return f"password:reset:user:{user_id}"
 
 
-def issue_reset_token(user_id: int) -> str:
+def issue_reset_token(user_id: str) -> str:
     """Выписывает ссылку и инвалидирует предыдущую ссылку пользователя."""
     token = secrets.token_urlsafe(32)
     token_key = _token_key(token)
@@ -52,7 +53,7 @@ def issue_reset_token(user_id: int) -> str:
     return token
 
 
-def consume_reset_token(token: str) -> int | None:
+def consume_reset_token(token: str) -> str | None:
     """Атомарно поглощает токен и возвращает id пользователя."""
     script = """
     local user_id = redis.call('get', KEYS[1])
@@ -68,7 +69,7 @@ def consume_reset_token(token: str) -> int | None:
     if raw is None:
         return None
     try:
-        return int(raw)
+        return normalize_uuid(raw.decode() if isinstance(raw, bytes) else raw)
     except (TypeError, ValueError):
         return None
 

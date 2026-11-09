@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { isDislikedTrack, queueStep } from '../src/utils/playerQueue.js'
+import { uuid } from './helpers/identifiers.mjs'
 
 const source = await readFile(new URL('../src/components/FlowDiscArc.jsx', import.meta.url), 'utf8')
 const { code } = await transform(source, { format: 'cjs', loader: 'jsx', jsx: 'automatic', target: 'es2020' })
@@ -16,7 +17,7 @@ function mount({ mobile = true, ready = [], failed = [], active = true, count = 
   const hooks = [], observers = [], pinned = [], ribbons = []
   let hookIndex = 0, effects = [], tree, visibleDiscs = []
   const screen = { active }
-  const tracks = Array.from({ length: count }, (_, id) => ({ id, cover_url: `/cover-${id}.jpg` }))
+  const tracks = Array.from({ length: count }, (_, id) => ({ id: uuid(id), cover_url: `/cover-${id}.jpg` }))
   const state = {
     currentTrack: currentIndex === null ? null : tracks[currentIndex],
     queue: currentIndex === null ? [] : tracks,
@@ -113,7 +114,7 @@ function mount({ mobile = true, ready = [], failed = [], active = true, count = 
     tree = module.exports.default({ playing: false })
     tree.props.ref.current = arc
     visibleDiscs = tree.props.children.filter(Boolean).map((slot) =>
-      discs[slot.props.children.props.children.props.track.id])
+      discs[tracks.findIndex(track => track.id === slot.props.children.props.children.props.track.id)])
     for (const run of effects.splice(0)) run()
   }
   render()
@@ -215,7 +216,7 @@ test('desktop preview starts with the current and next records, without a previo
   const app = mount({ mobile: false })
   const slots = app.tree.props.children.filter(Boolean)
   assert.equal(slots.length, 2)
-  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [0, 1])
+  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [uuid(0), uuid(1)])
   assert.ok(slots.every((slot) => slot.props.style['--slot-x'] !== '-32%'))
 })
 
@@ -229,18 +230,18 @@ test('the first selected queue track has no previous record', () => {
 test('a previous record appears only at an eligible position before the current track', () => {
   const app = mount({ mobile: false, currentIndex: 1 })
   const previous = app.tree.props.children.find((slot) => slot?.props.style['--slot-x'] === '-32%')
-  assert.equal(previous.props.children.props.children.props.track.id, 0)
+  assert.equal(previous.props.children.props.children.props.track.id, uuid(0))
 })
 
 test('shuffle has no previous record at its first position even when the queue index is nonzero', () => {
   const app = mount({ mobile: false, currentIndex: 2, isShuffle: true, shuffledOrder: [2, 0, 1] })
   const slots = app.tree.props.children.filter(Boolean)
   assert.ok(slots.every((slot) => slot.props.style['--slot-x'] !== '-32%'))
-  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [2, 0])
+  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [uuid(2), uuid(0)])
 })
 
 test('a disliked previous track is not replaced by an upcoming recommendation', () => {
-  const app = mount({ mobile: false, currentIndex: 1, dislikedTrackIds: [0] })
+  const app = mount({ mobile: false, currentIndex: 1, dislikedTrackIds: [uuid(0)] })
   const slots = app.tree.props.children.filter(Boolean)
   assert.ok(slots.every((slot) => slot.props.style['--slot-x'] !== '-32%'))
 })

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+from app.identifiers import UUIDString
 from app.database import get_db
 from app.email_verification import PUBLIC_URL
 from app.models import Track
@@ -111,7 +112,7 @@ def inject_track_meta(index_html: str, track: Track) -> str:
 
 
 @router.get("/track/{track_id}", response_class=HTMLResponse, include_in_schema=False)
-async def share_track_page(track_id: int, db: Session = Depends(get_db)):
+async def share_track_page(track_id: UUIDString, db: Session = Depends(get_db)):
     try:
         index_html = await _load_index()
     except httpx.HTTPError as exc:

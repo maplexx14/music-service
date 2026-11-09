@@ -135,7 +135,7 @@ def _claims() -> dict:
 
 
 def save_subscription(
-    db: Session, user_id: int, endpoint: str, p256dh: str, auth: str, user_agent: Optional[str]
+    db: Session, user_id: str, endpoint: str, p256dh: str, auth: str, user_agent: Optional[str]
 ) -> None:
     """Подписка устройства. Endpoint уже чей-то (вышел один, вошёл другой на
     том же браузере) — переходит новому владельцу."""
@@ -148,7 +148,7 @@ def save_subscription(
     db.commit()
 
 
-def remove_subscription(db: Session, user_id: int, endpoint: str) -> None:
+def remove_subscription(db: Session, user_id: str, endpoint: str) -> None:
     db.execute(
         delete(push_subscriptions).where(
             push_subscriptions.c.user_id == user_id, push_subscriptions.c.endpoint == endpoint
@@ -157,7 +157,7 @@ def remove_subscription(db: Session, user_id: int, endpoint: str) -> None:
     db.commit()
 
 
-def send_to_user(db: Session, user_id: int, payload: dict) -> int:
+def send_to_user(db: Session, user_id: str, payload: dict) -> int:
     """Шлёт уведомление на все устройства юзера (блокирующая). → сколько
     дошло до push-сервиса. Протухшие подписки (404/410) удаляет."""
     rows = db.execute(select(push_subscriptions).where(push_subscriptions.c.user_id == user_id)).fetchall()
@@ -331,11 +331,11 @@ def _subscribed_users(db: Session) -> List[User]:
     return db.query(User).filter(User.id.in_(ids), User.is_active.is_(True)).all()
 
 
-def _notified_key(user_id: int) -> str:
+def _notified_key(user_id: str) -> str:
     return f"push:notified:{user_id}"
 
 
-def _reengage_key(user_id: int) -> str:
+def _reengage_key(user_id: str) -> str:
     return f"push:reengage:{user_id}"
 
 

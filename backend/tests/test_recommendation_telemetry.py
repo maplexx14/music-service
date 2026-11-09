@@ -52,7 +52,7 @@ def _delivery_rows(db, user_id):
     return db.execute(
         recommendation_impressions.select()
         .where(recommendation_impressions.c.user_id == user_id)
-        .order_by(recommendation_impressions.c.id)
+        .order_by(recommendation_impressions.c.shown_at, recommendation_impressions.c.position)
     ).mappings().all()
 
 
@@ -169,7 +169,7 @@ def test_cached_response_gets_a_fresh_delivery_id(client, db, monkeypatch):
     rows = db.execute(
         recommendation_impressions.select()
         .where(recommendation_impressions.c.user_id == user.id)
-        .order_by(recommendation_impressions.c.id)
+        .order_by(recommendation_impressions.c.shown_at, recommendation_impressions.c.position)
     ).mappings().all()
     assert len(rows) == 2
     assert [row["request_id"] for row in rows] == [

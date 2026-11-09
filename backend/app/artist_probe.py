@@ -85,7 +85,7 @@ PROBE_RANKING_LOG = 5
 _PAYLOAD_VERSION = 1
 
 
-def probe_key(user_id: int) -> str:
+def probe_key(user_id: str) -> str:
     """Redis-ключ пика для юзера."""
     return f"flow:probe:v{_PAYLOAD_VERSION}:{user_id}"
 
@@ -478,7 +478,7 @@ async def compare_artists(
     }
 
 
-async def cached_pick(user_id: int):
+async def cached_pick(user_id: str):
     """Готовый пик для ``get_flow`` — один Redis GET, без сети.
 
     Возвращает ``ExternalTrackResponse`` или None. Битый/старый payload — это
@@ -499,7 +499,7 @@ async def cached_pick(user_id: int):
         return None
 
 
-def _taste_profile_for(user_id: int) -> Optional[dict]:
+def _taste_profile_for(user_id: str) -> Optional[dict]:
     """Профиль вкуса в своей короткой сессии (блокирующая, для to_thread).
 
     Сессия закрывается здесь же: дальше идут секунды сетевых ожиданий, и
@@ -519,7 +519,7 @@ def _taste_profile_for(user_id: int) -> Optional[dict]:
         db.close()
 
 
-def active_user_ids(*, days: int, limit: int) -> list[int]:
+def active_user_ids(*, days: int, limit: int) -> list[str]:
     """Кого сравнивать: юзеры, слушавшие хоть что-то за последние ``days``.
 
     Пик нужен только тому, кто откроет поток, а профиль вкуса — самая дорогая
@@ -546,7 +546,7 @@ def active_user_ids(*, days: int, limit: int) -> list[int]:
             .order_by(last_played.desc())
             .limit(limit)
         ).all()
-        return [int(row[0]) for row in rows if row[0] is not None]
+        return [row[0] for row in rows if row[0] is not None]
     except Exception:  # noqa: BLE001 — на старой схеме таблицы может не быть
         logger.debug("artist probe: active users unavailable", exc_info=True)
         return []
@@ -554,7 +554,7 @@ def active_user_ids(*, days: int, limit: int) -> list[int]:
         db.close()
 
 
-async def probe_user(user_id: int) -> Optional[dict]:
+async def probe_user(user_id: str) -> Optional[dict]:
     """Один проход по одному юзеру: сравнить артистов и запомнить пик."""
     profile = await asyncio.to_thread(_taste_profile_for, user_id)
     if not profile:
@@ -598,7 +598,7 @@ async def probe_user(user_id: int) -> Optional[dict]:
 
 async def refresh_probes(
     *,
-    users: Optional[Iterable[int]] = None,
+    users: Optional[Iterable[str]] = None,
     days: Optional[int] = None,
     limit: Optional[int] = None,
 ) -> int:

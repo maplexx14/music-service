@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
 import { trackKeys } from '../src/utils/playerQueue.js'
+import { uuid } from './helpers/identifiers.mjs'
 
 const source = await readFile(new URL('../src/utils/discTransition.js', import.meta.url), 'utf8')
 const context = vm.createContext({})
@@ -13,7 +14,7 @@ await module.link(() => new vm.SyntheticModule(['trackKeys'], function () {
 await module.evaluate()
 const { discNavigationDirection } = module.namespace
 
-const queue = [1, 2, 3, 4].map((id) => ({ id }))
+const queue = [1, 2, 3, 4].map((id) => ({ id: uuid(id) }))
 const state = (currentIndex, extra = {}) => ({
   queue, currentTrack: queue[currentIndex], currentIndex,
   isShuffle: false, shuffledOrder: [], currentShuffleIndex: -1, ...extra,
@@ -36,12 +37,12 @@ test('shuffle direction follows playback order rather than queue indices', () =>
 test('materializing the same external track does not animate a navigation', () => {
   const external = { id: 'ytmusic:abc', source: 'ytmusic', external_id: 'abc' }
   assert.equal(discNavigationDirection(state(0, { currentTrack: external }),
-    state(0, { currentTrack: { ...external, id: 99, db_id: 99 } })), 0)
+    state(0, { currentTrack: { ...external, id: uuid(99), db_id: uuid(99) } })), 0)
 })
 
 test('initial playback, stopped playback and an unrelated queue have no directional exit', () => {
   assert.equal(discNavigationDirection(null, state(0)), 0)
   assert.equal(discNavigationDirection(state(0), { currentTrack: null }), 0)
-  assert.equal(discNavigationDirection(state(0), state(0, { currentTrack: { id: 99 } })), 0)
+  assert.equal(discNavigationDirection(state(0), state(0, { currentTrack: { id: uuid(99) } })), 0)
   assert.equal(discNavigationDirection(state(0), state(0)), 0)
 })

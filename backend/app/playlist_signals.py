@@ -35,7 +35,7 @@ def aggregate_playlist_origin():
     )
 
 
-def find_liked_playlist_id(db: Session, user_id: int) -> int | None:
+def find_liked_playlist_id(db: Session, user_id: str) -> str | None:
     """Id of the user's is_liked playlist, or None when there is none yet.
 
     Uniqueness is only enforced from migration 0021 onwards, and a pair of
@@ -47,7 +47,7 @@ def find_liked_playlist_id(db: Session, user_id: int) -> int | None:
     return (
         db.query(Playlist.id)
         .filter(Playlist.owner_id == user_id, Playlist.is_liked.is_(True))
-        .order_by(Playlist.id)
+        .order_by(Playlist.created_at, Playlist.id)
         .limit(1)
         .scalar()
     )

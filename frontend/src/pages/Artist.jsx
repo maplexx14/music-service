@@ -1,3 +1,4 @@
+import { isUuid } from '../utils/identifiers'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Play, Pause, ListPlus, ListChecks, Shuffle } from 'lucide-react'
@@ -287,11 +288,11 @@ function Artist() {
   }
 
   // Внешний трек нужно сначала материализовать в БД — только у записи с
-  // числовым id есть лайк и добавление в плейлист. У треков из библиотеки id
-  // уже числовой, и лишнего запроса не будет.
+  // UUID из БД есть лайк и добавление в плейлист. У треков из библиотеки UUID
+  // уже есть, и лишнего запроса не будет.
   const ensureDbId = async (track) => {
-    if (typeof track.id === 'number') return track.id
-    if (typeof track.db_id === 'number') return track.db_id
+    if (isUuid(track.id)) return track.id
+    if (isUuid(track.db_id)) return track.db_id
     const dbId = await materializeTrack(track)
     setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: dbId } : t)))
     return dbId
@@ -477,9 +478,9 @@ function Artist() {
                 {visibleTracks.map((track, index) => {
                   const isCurrent = currentTrackId === track.id
                   const dbId =
-                    typeof track.id === 'number'
+                    isUuid(track.id)
                       ? track.id
-                      : typeof track.db_id === 'number'
+                      : isUuid(track.db_id)
                         ? track.db_id
                         : null
                   const isLiked =

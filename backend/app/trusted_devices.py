@@ -11,10 +11,10 @@ import hashlib
 import logging
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import func
 
 from app.cache import redis_client
 from app.models import user_trusted_devices
@@ -45,12 +45,12 @@ MAX_DEVICES_PER_USER = int(os.getenv("MAX_TRUSTED_DEVICES", "10"))
 RECENT_VERIFY_WINDOW_SEC = int(os.getenv("RECENT_VERIFY_WINDOW_SEC", str(30 * 60)))
 
 
-def _recent_verify_key(user_id: int, ip: str) -> str:
+def _recent_verify_key(user_id: str, ip: str) -> str:
     # IP хэшем: ключи Redis видны в мониторинге, адреса юзеров там не нужны.
     return f"auth:verified_ip:{user_id}:{hashlib.sha256(ip.encode()).hexdigest()[:32]}"
 
 
-def note_verified_ip(user_id: int, ip: str | None) -> None:
+def note_verified_ip(user_id: str, ip: str | None) -> None:
     """Отметить, что с этого IP юзер только что прошёл второй фактор.
 
     Звать только после настоящего подтверждения (код, ссылка из письма), а не
@@ -64,7 +64,7 @@ def note_verified_ip(user_id: int, ip: str | None) -> None:
         logger.warning("could not note verified ip for user %s", user_id)
 
 
-def recently_verified_ip(user_id: int, ip: str | None) -> bool:
+def recently_verified_ip(user_id: str, ip: str | None) -> bool:
     if not ip or RECENT_VERIFY_WINDOW_SEC <= 0:
         return False
     try:
@@ -126,7 +126,7 @@ def device_label_from_user_agent(user_agent: str | None) -> str:
     return f"{platform} · {browser}" if browser else platform
 
 
-def is_trusted_device(db: Session, user_id: int, token: str | None) -> bool:
+def is_trusted_device(db: Session, user_id: str, token: str | None) -> bool:
     """Знакомо ли устройство. Заодно продлевает last_seen_at.
 
     Просроченные записи не удаляем здесь: чистка на пути логина — лишняя
@@ -150,7 +150,7 @@ def is_trusted_device(db: Session, user_id: int, token: str | None) -> bool:
     db.execute(
         update(user_trusted_devices)
         .where(user_trusted_devices.c.id == row.id)
-        .values(last_seen_at=func.now())
+        .values(last_seen_at=datetime.now(timezone.utc))
     )
     db.commit()
     return True
@@ -163,8 +163,6 @@ def _is_expired(last_seen) -> bool:
     по-разному, и один диалект-специфичный SQL сломал бы тесты на sqlite.
     SQLite отдаёт naive datetime, Postgres — aware, поэтому приводим к UTC.
     """
-    from datetime import datetime, timedelta, timezone
-
     if last_seen is None:
         return True
     if last_seen.tzinfo is None:
@@ -173,7 +171,7 @@ def _is_expired(last_seen) -> bool:
 
 
 def remember_device(
-    db: Session, user_id: int, user_agent: str | None, presented_token: str | None = None
+    db: Session, user_id: str, user_agent: str | None, presented_token: str | None = None
 ) -> str:
     """Запоминает устройство и возвращает токен для клиента.
 
@@ -190,11 +188,14 @@ def remember_device(
         return presented_token
 
     token = generate_device_token()
+    now = datetime.now(timezone.utc)
     db.execute(
         user_trusted_devices.insert().values(
             user_id=user_id,
             token_hash=hash_device_token(token),
             label=device_label_from_user_agent(user_agent),
+            created_at=now,
+            last_seen_at=now,
         )
     )
     db.commit()
@@ -202,19 +203,15 @@ def remember_device(
     return token
 
 
-def _evict_extra_devices(db: Session, user_id: int) -> None:
+def _evict_extra_devices(db: Session, user_id: str) -> None:
     """Оставляет MAX_DEVICES_PER_USER самых свежих устройств.
 
     Вытесняем по last_seen_at: заброшенный браузер полугодовой давности —
     первый кандидат на удаление, активный рабочий ноутбук — последний.
 
-    Добивка по id обязательна: last_seen_at ставится server-side (func.now()),
-    а у него грубое разрешение — CURRENT_TIMESTAMP в SQLite это целые секунды,
-    в Postgres now() одинаков внутри транзакции. Несколько устройств,
-    зарегистрированных подряд, получают ОДИН timestamp, и без tie-break порядок
-    внутри группы не определён: вытеснить может как самое давнее, так и только
-    что добавленное (последнее и ловил flaky-падение
-    test_device_limit_evicts_least_recently_used).
+    Новые отметки пишутся с микросекундами: UUID не определяет порядок входов.
+    Добивка по id оставляет детерминированный порядок у старых записей,
+    у которых last_seen_at совпадает с точностью до секунды.
     """
     ids = [
         row.id
@@ -234,7 +231,7 @@ def _evict_extra_devices(db: Session, user_id: int) -> None:
     db.commit()
 
 
-def list_devices(db: Session, user_id: int) -> list[dict]:
+def list_devices(db: Session, user_id: str) -> list[dict]:
     """Устройства юзера для экрана настроек, свежие сверху."""
     rows = db.execute(
         select(
@@ -262,7 +259,7 @@ def list_devices(db: Session, user_id: int) -> list[dict]:
     ]
 
 
-def current_device_id(db: Session, user_id: int, token: str | None) -> int | None:
+def current_device_id(db: Session, user_id: str, token: str | None) -> str | None:
     """id устройства, с которого пришёл запрос — чтобы в списке настроек
     отметить «это устройство» и не дать отозвать его случайно."""
     if not token:
@@ -276,7 +273,7 @@ def current_device_id(db: Session, user_id: int, token: str | None) -> int | Non
     return row.id if row else None
 
 
-def revoke_device(db: Session, user_id: int, device_id: int) -> bool:
+def revoke_device(db: Session, user_id: str, device_id: str) -> bool:
     """Отзывает доверие. False — устройства нет или оно чужое.
 
     Фильтр по user_id обязателен: без него любой юзер отзывал бы устройства
@@ -292,7 +289,7 @@ def revoke_device(db: Session, user_id: int, device_id: int) -> bool:
     return result.rowcount > 0
 
 
-def revoke_all_devices(db: Session, user_id: int, keep_token: str | None = None) -> int:
+def revoke_all_devices(db: Session, user_id: str, keep_token: str | None = None) -> int:
     """Отзывает все устройства, кроме текущего (если передан его токен).
 
     Кнопка «выйти со всех устройств»: юзеру нужно вышибить чужой доступ, не

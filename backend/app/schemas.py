@@ -2,6 +2,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Dict, Optional, List
 from datetime import datetime
 
+from app.identifiers import UUIDString
 from app import storage
 
 
@@ -39,7 +40,7 @@ class CaptchaConfig(BaseModel):
 
 
 class UserResponse(UserBase):
-    id: int
+    id: UUIDString
     avatar_url: Optional[str] = None
     is_active: bool
     is_admin: bool = False
@@ -176,7 +177,7 @@ class LoginResult(BaseModel):
 
 class TrustedDeviceResponse(BaseModel):
     """Устройство в списке настроек."""
-    id: int
+    id: UUIDString
     label: str
     created_at: datetime
     last_seen_at: datetime
@@ -305,7 +306,7 @@ class TrackCreate(TrackBase):
 
 
 class TrackResponse(TrackBase):
-    id: int
+    id: UUIDString
     cover_url: Optional[str] = None
     play_count: int
     release_date: Optional[datetime] = None
@@ -370,8 +371,8 @@ class PlaylistSummaryResponse(PlaylistBase):
     """Плейлист без треков — для списков и поиска. Отсутствие поля tracks
     важно: сериализация не трогает relationship и не тянет содержимое каждого
     плейлиста. track_count считается в том же SELECT (см. Playlist.track_count)."""
-    id: int
-    owner_id: int
+    id: UUIDString
+    owner_id: UUIDString
     is_liked: bool = False
     origin: str = "manual"
     created_at: datetime
@@ -513,7 +514,7 @@ class RecommendationResponse(BaseModel):
 class RecommendationEventPayload(BaseModel):
     """Client feedback for local or provider-backed recommendation items."""
     event_type: str = Field(..., min_length=2, max_length=32)
-    track_id: Optional[int] = Field(None, ge=1)
+    track_id: Optional[UUIDString] = None
     source: Optional[str] = Field(None, max_length=32)
     external_id: Optional[str] = Field(None, max_length=512)
     title: Optional[str] = Field(None, max_length=512)
@@ -575,7 +576,7 @@ class AlbumSaveRequest(BaseModel):
 
 class AlbumSaveResponse(BaseModel):
     """Итог сохранения альбома в медиатеку (поля те же, что у ArtistSaveResponse)."""
-    playlist_id: int
+    playlist_id: UUIDString
     name: str
     created: bool  # плейлист создан (False — дополнили существующий)
     added: int     # сколько треков добавлено этим вызовом
@@ -599,7 +600,7 @@ class ArtistPageResponse(BaseModel):
     """Страница исполнителя: его треки одним плейлистом.
 
     Два списка вместо одного — потому что типы разные: у треков из библиотеки
-    числовой id (лайк и добавление в плейлист работают сразу), у внешних —
+    UUID (лайк и добавление в плейлист работают сразу), у внешних —
     строковый ("ytmusic:...", материализуются по действию пользователя).
     Порядок склейки на фронте: tracks, затем external.
 
@@ -618,7 +619,7 @@ class ArtistPageResponse(BaseModel):
     external: List[ExternalTrackResponse] = []
     albums: List[ExternalAlbumResponse] = []
     is_liked: bool = False
-    playlist_id: Optional[int] = None
+    playlist_id: Optional[UUIDString] = None
 
 
 class ArtistSummary(BaseModel):
@@ -640,7 +641,7 @@ class ArtistLikeResponse(BaseModel):
 
 class ArtistSaveResponse(BaseModel):
     """Итог сохранения плейлиста исполнителя в медиатеку."""
-    playlist_id: int
+    playlist_id: UUIDString
     name: str
     created: bool  # плейлист создан (False — дополнили существующий)
     added: int     # сколько треков добавлено этим вызовом

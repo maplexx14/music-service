@@ -27,10 +27,10 @@ LAST_SEEN_WRITE_INTERVAL = 60.0
 # худшее — лишний SETEX.
 ONLINE_MARKER_TTL = 120
 ONLINE_MARKER_INTERVAL = 60.0
-_online_marked_at: dict[int, float] = {}
+_online_marked_at: dict[str, float] = {}
 
 
-def _mark_online(user_id: int) -> None:
+def _mark_online(user_id: str) -> None:
     now = time.monotonic()
     if now - _online_marked_at.get(user_id, float("-inf")) < ONLINE_MARKER_INTERVAL:
         return

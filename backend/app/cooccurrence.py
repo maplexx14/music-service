@@ -14,8 +14,9 @@ common / sqrt(pop_a * pop_b) — иначе глобальные хиты «по
 """
 import logging
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
+from app.models import track_cooccurrence
 
 logger = logging.getLogger(__name__)
 
@@ -135,18 +136,14 @@ def pair_scores(db: Session, track_ids) -> dict:
     размера базы (сколько юзеров вообще держат пару), а MMR сравнивает штраф с
     релевантностью в шкале 0..1.
     """
-    ids = [int(t) for t in track_ids]
+    ids = list(track_ids)
     if len(ids) < 2:
         return {}
     rows = db.execute(
-        text(
-            """
-            SELECT track_id, other_track_id, score
-            FROM track_cooccurrence
-            WHERE track_id IN :ids AND other_track_id IN :ids
-            """
-        ).bindparams(bindparam("ids", expanding=True)),
-        {"ids": ids},
+        select(track_cooccurrence.c.track_id, track_cooccurrence.c.other_track_id,
+               track_cooccurrence.c.score)
+        .where(track_cooccurrence.c.track_id.in_(ids),
+               track_cooccurrence.c.other_track_id.in_(ids))
     ).all()
     if not rows:
         return {}
@@ -156,7 +153,7 @@ def pair_scores(db: Session, track_ids) -> dict:
         s = float(score) / top
         # Матрица асимметрична (нормировка по популярности), а MMR нужен
         # симметричный «насколько это одно и то же» — берём максимум.
-        key, rkey = (int(a), int(b)), (int(b), int(a))
+        key, rkey = (a, b), (b, a)
         pairs[key] = max(pairs.get(key, 0.0), s)
         pairs[rkey] = max(pairs.get(rkey, 0.0), s)
     return pairs
@@ -169,22 +166,15 @@ def similar_track_ids(db: Session, seed_ids, limit: int = 100):
     суммируются по всем seed'ам: трек, похожий сразу на несколько любимых,
     выигрывает у похожего на один.
     """
-    seed_ids = [int(s) for s in seed_ids]
+    seed_ids = list(seed_ids)
     if not seed_ids:
         return []
-    # IN с expanding bindparam, а не `= ANY(:seeds)`: ANY — Postgres-изм, на
-    # SQLite (тесты) он падал с "no such function: ANY". План в Postgres тот же.
+    # Typed columns normalize UUID parameters/results on both PostgreSQL and SQLite.
     rows = db.execute(
-        text(
-            """
-            SELECT other_track_id, SUM(score) AS s
-            FROM track_cooccurrence
-            WHERE track_id IN :seeds
-            GROUP BY other_track_id
-            ORDER BY s DESC
-            LIMIT :lim
-            """
-        ).bindparams(bindparam("seeds", expanding=True)),
-        {"seeds": seed_ids, "lim": limit},
+        select(track_cooccurrence.c.other_track_id, func.sum(track_cooccurrence.c.score))
+        .where(track_cooccurrence.c.track_id.in_(seed_ids))
+        .group_by(track_cooccurrence.c.other_track_id)
+        .order_by(func.sum(track_cooccurrence.c.score).desc())
+        .limit(limit)
     ).all()
-    return [(int(tid), float(score)) for tid, score in rows]
+    return [(tid, float(score)) for tid, score in rows]

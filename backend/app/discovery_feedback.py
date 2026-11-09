@@ -81,7 +81,7 @@ def _artist(value) -> str:
 
 def delivery_outcomes(
     db: Session,
-    user_id: int,
+    user_id: str,
     *,
     since: datetime,
     surface: str = "flow",
@@ -186,7 +186,7 @@ def delivery_outcomes(
     return rows
 
 
-def acceptance_counts(db: Session, user_id: int, now: Optional[datetime] = None) -> dict:
+def acceptance_counts(db: Session, user_id: str, now: Optional[datetime] = None) -> dict:
     """Исходы отданных в волне треков: новые против знакомых артистов."""
     now = _utc(now) or datetime.now(timezone.utc)
     counts = {"novel_good": 0, "novel_n": 0, "familiar_good": 0, "familiar_n": 0}
@@ -197,7 +197,7 @@ def acceptance_counts(db: Session, user_id: int, now: Optional[datetime] = None)
     return counts
 
 
-def _positive_history(db: Session, user_id: int) -> dict[str, list[datetime]]:
+def _positive_history(db: Session, user_id: str) -> dict[str, list[datetime]]:
     """Когда у юзера появлялся положительный сигнал по артисту (по возрастанию)."""
     rows = db.execute(
         select(Track.artist, playlist_tracks.c.added_at)
@@ -241,7 +241,7 @@ def acceptance_factor(counts: dict) -> float:
     return max(MIN_FACTOR, min(1.0, novel_rate / familiar_rate))
 
 
-def origin_counts(db: Session, user_id: int, now: Optional[datetime] = None) -> dict:
+def origin_counts(db: Session, user_id: str, now: Optional[datetime] = None) -> dict:
     """Исходы по источникам кандидатов: {origin: [good, n]} за ``WINDOW_DAYS``."""
     now = _utc(now) or datetime.now(timezone.utc)
     counts: dict[str, list[int]] = {}
@@ -255,7 +255,7 @@ def origin_counts(db: Session, user_id: int, now: Optional[datetime] = None) -> 
     return counts
 
 
-def cached_origin_counts(db: Session, user_id: int) -> dict:
+def cached_origin_counts(db: Session, user_id: str) -> dict:
     """``origin_counts`` с часовым кэшем; при ошибке — пусто (поправки нет)."""
     key = _ORIGIN_CACHE_KEY.format(user_id)
     cached = get_cache(key)
@@ -366,7 +366,7 @@ def outcome_reward(row: dict) -> float:
     return NEUTRAL_REWARD
 
 
-def outcome_stats(db: Session, user_id: int, now: Optional[datetime] = None) -> dict:
+def outcome_stats(db: Session, user_id: str, now: Optional[datetime] = None) -> dict:
     """Исходы волны за ``WINDOW_DAYS`` по источнику и письменности:
     {"origin": {origin: [good, n, reward]}, "script": {"cyr"|"lat": [...]}}."""
     from app.lang import script_of
@@ -389,7 +389,7 @@ def outcome_stats(db: Session, user_id: int, now: Optional[datetime] = None) -> 
     return stats
 
 
-def cached_outcome_stats(db: Session, user_id: int) -> dict:
+def cached_outcome_stats(db: Session, user_id: str) -> dict:
     """``outcome_stats`` с часовым кэшем; при ошибке — пусто."""
     key = _OUTCOME_CACHE_KEY.format(user_id)
     cached = get_cache(key)

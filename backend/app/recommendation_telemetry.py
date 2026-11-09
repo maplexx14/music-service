@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.models import rec_impressions, recommendation_events, recommendation_impressions
+from app.identifiers import uuid_or_none
 from app.recommendation_scoring import ALGORITHM_VERSION
 
 ALLOWED_EVENT_TYPES = frozenset({
@@ -38,7 +40,7 @@ def _field(item: Any, name: str, default: Any = None) -> Any:
 def record_delivery(
     db: Session,
     *,
-    user_id: int,
+    user_id: str,
     items: Iterable[Any],
     surface: str,
     request_id: Optional[str] = None,
@@ -54,10 +56,11 @@ def record_delivery(
     provider identity.
     """
     request_id = request_id or new_request_id()
+    shown_at = datetime.now(timezone.utc)
     rows = []
     for position, item in enumerate(items):
         item_id = _field(item, "id")
-        local_id = item_id if isinstance(item_id, int) else _field(item, "db_id")
+        local_id = uuid_or_none(item_id) or uuid_or_none(_field(item, "db_id"))
         external_id = _field(item, "external_id")
         source = _field(item, "source")
         score = None
@@ -69,7 +72,7 @@ def record_delivery(
         rows.append(
             {
                 "user_id": user_id,
-                "track_id": local_id if isinstance(local_id, int) else None,
+                "track_id": local_id,
                 "source": source,
                 "external_id": external_id,
                 "title": _field(item, "title"),
@@ -80,6 +83,7 @@ def record_delivery(
                 "algorithm_version": algorithm_version,
                 "request_id": request_id,
                 "session_id": session_id,
+                "shown_at": shown_at,
                 # This is a server delivery.  The client records a separate
                 # ``impression`` event after IntersectionObserver/audio proves
                 # that the item was actually visible.
@@ -95,9 +99,9 @@ def record_delivery(
 def record_event(
     db: Session,
     *,
-    user_id: int,
+    user_id: str,
     event_type: str,
-    track_id: Optional[int] = None,
+    track_id: Optional[str] = None,
     source: Optional[str] = None,
     external_id: Optional[str] = None,
     title: Optional[str] = None,
@@ -128,6 +132,7 @@ def record_event(
             request_id=request_id,
             client_hour=client_hour,
             metadata=metadata,
+            occurred_at=datetime.now(timezone.utc),
         )
     )
 
@@ -135,9 +140,9 @@ def record_event(
 def mark_impression_visible(
     db: Session,
     *,
-    user_id: int,
+    user_id: str,
     request_id: Optional[str] = None,
-    track_id: Optional[int] = None,
+    track_id: Optional[str] = None,
     source: Optional[str] = None,
     external_id: Optional[str] = None,
     position: Optional[int] = None,
@@ -195,8 +200,8 @@ def mark_impression_visible(
 def _increment_fatigue(
     db: Session,
     *,
-    user_id: int,
-    track_id: int,
+    user_id: str,
+    track_id: str,
     count: int = 1,
 ) -> None:
     """Increment the compact fatigue aggregate by ``count`` atomically."""
@@ -250,10 +255,10 @@ def _increment_fatigue(
 def link_materialized_deliveries(
     db: Session,
     *,
-    user_id: int,
+    user_id: str,
     source: Optional[str],
     external_id: Optional[str],
-    track_id: Optional[int],
+    track_id: Optional[str],
 ) -> int:
     """Link visible provider deliveries once their local row is created.
 
@@ -288,9 +293,9 @@ def link_materialized_deliveries(
 def record_impression(
     db: Session,
     *,
-    user_id: int,
+    user_id: str,
     request_id: Optional[str] = None,
-    track_id: Optional[int] = None,
+    track_id: Optional[str] = None,
     source: Optional[str] = None,
     external_id: Optional[str] = None,
     position: Optional[int] = None,

@@ -6,6 +6,7 @@ import os
 import uuid
 import aiofiles
 from pathlib import Path
+from app.identifiers import UUIDString
 from app.database import get_db
 from app.models import Playlist, Track, User, playlist_tracks
 from app.schemas import PlaylistResponse, PlaylistSummaryResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
@@ -19,7 +20,7 @@ from app.recommendation_cache import invalidate_recommendation_cache
 DEFAULT_TRACKS_LIMIT = 20
 
 
-def _track_in_playlist(db: Session, playlist_id: int, track_id: int) -> bool:
+def _track_in_playlist(db: Session, playlist_id: UUIDString, track_id: UUIDString) -> bool:
     """EXISTS по таблице связей: `track in playlist.tracks` грузил весь
     плейлист ORM-объектами ради проверки одной строки."""
     return db.query(
@@ -144,7 +145,7 @@ def get_my_liked_playlist(
 
 @router.get("/{playlist_id}", response_model=PlaylistResponse)
 def get_playlist(
-    playlist_id: int,
+    playlist_id: UUIDString,
     response: Response,
     skip: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_TRACKS_LIMIT, ge=1, le=100),
@@ -180,7 +181,7 @@ def create_playlist(
 
 @router.put("/{playlist_id}", response_model=PlaylistResponse)
 def update_playlist(
-    playlist_id: int,
+    playlist_id: UUIDString,
     playlist_update: PlaylistUpdate,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -204,7 +205,7 @@ def update_playlist(
 
 @router.post("/{playlist_id}/cover", response_model=PlaylistResponse)
 async def upload_playlist_cover(
-    playlist_id: int,
+    playlist_id: UUIDString,
     cover: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -243,7 +244,7 @@ async def upload_playlist_cover(
 
 @router.delete("/{playlist_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_playlist(
-    playlist_id: int,
+    playlist_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -265,8 +266,8 @@ def delete_playlist(
 
 @router.post("/{playlist_id}/tracks/{track_id}", status_code=status.HTTP_200_OK)
 def add_track_to_playlist(
-    playlist_id: int,
-    track_id: int,
+    playlist_id: UUIDString,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -289,14 +290,14 @@ def add_track_to_playlist(
     from sqlalchemy import func
     max_position = db.query(func.max(playlist_tracks.c.position)).filter(
         playlist_tracks.c.playlist_id == playlist_id
-    ).scalar() or -1
+    ).scalar()
     
     # Add track with next position
     from sqlalchemy import insert
     stmt = insert(playlist_tracks).values(
         playlist_id=playlist_id,
         track_id=track_id,
-        position=max_position + 1
+        position=(max_position if max_position is not None else -1) + 1
     )
     db.execute(stmt)
     # Трек вставляется в таблицу связей напрямую, мимо ORM-объекта плейлиста,
@@ -312,8 +313,8 @@ def add_track_to_playlist(
 
 @router.delete("/{playlist_id}/tracks/{track_id}", status_code=status.HTTP_200_OK)
 def remove_track_from_playlist(
-    playlist_id: int,
-    track_id: int,
+    playlist_id: UUIDString,
+    track_id: UUIDString,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):

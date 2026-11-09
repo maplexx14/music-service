@@ -1,3 +1,4 @@
+import { isUuid, getTrackDbId } from '../utils/identifiers'
 import { create } from 'zustand'
 import api from '../services/api'
 import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
@@ -29,14 +30,14 @@ function prefetchKeyFor(track) {
   return null
 }
 
-// Ключ идентификации трека для индикации лайка. У записей из БД (числовой
+// Ключ идентификации трека для индикации лайка. У записей из БД (UUID
 // id/db_id) — стабильный db-ключ; у внешних (строчный id вида «ytmusic:...»)
 // — source + external_id. Нужен, чтобы залить сердечко ОПТИМИСТИЧНО ещё до
 // материализации внешнего трека в БД (см. toggleLikeForTrack).
 function trackLikeKey(track) {
   if (!track) return null
-  if (typeof track.id === 'number') return `db:${track.id}`
-  if (typeof track.db_id === 'number') return `db:${track.db_id}`
+  if (isUuid(track.id)) return `db:${track.id}`
+  if (isUuid(track.db_id)) return `db:${track.db_id}`
   const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
   return externalId ? `${track.source}:${externalId}` : null
 }
@@ -145,7 +146,7 @@ function recommendationTrackPayload(track, eventType, value, metadata = null) {
   // a request id cannot be evaluated and only duplicate the generic signals.
   if (!track?.recommendation_id || !eventType) return null
   const localId =
-    track.db_id ?? (typeof track.id === 'number' ? track.id : null)
+    getTrackDbId(track)
   const rawId = typeof track.id === 'string' ? track.id : ''
   const externalId =
     track.external_id ?? (rawId.includes(':') ? rawId.split(':').slice(1).join(':') : null)
@@ -405,12 +406,12 @@ const usePlayerStore = create((set, get) => ({
   },
 
   // Материализует произвольный внешний трек в БД (для лайков/плейлистов).
-  // Возвращает числовой id локальной записи. Идемпотентно на бэке.
-  // Локальные треки (числовой id) возвращаются как есть.
+  // Возвращает UUID локальной записи. Идемпотентно на бэке.
+  // Материализованные треки возвращаются как есть.
   materializeTrack: async (track) => {
     if (!track) return null
-    if (typeof track.id === 'number') return track.id
-    if (typeof track.db_id === 'number') return track.db_id
+    if (isUuid(track.id)) return track.id
+    if (isUuid(track.db_id)) return track.db_id
 
     const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
     const { data } = await api.post('/tracks/import', {
@@ -427,11 +428,11 @@ const usePlayerStore = create((set, get) => ({
   },
 
   // Материализует текущий внешний трек в БД (для лайков/плейлистов/истории).
-  // Возвращает числовой id локальной записи. Идемпотентно на бэке.
+  // Возвращает UUID локальной записи. Идемпотентно на бэке.
   materializeCurrentTrack: async () => {
     const { currentTrack } = get()
     if (!currentTrack) return null
-    if (typeof currentTrack.id === 'number') return currentTrack.id
+    if (isUuid(currentTrack.id)) return currentTrack.id
   
     const externalId =
       currentTrack.external_id ?? String(currentTrack.id).split(':').slice(1).join(':')
@@ -481,8 +482,8 @@ const usePlayerStore = create((set, get) => ({
   // pending-ключа (иначе между ними проскакивал кадр с незалитым сердцем).
   toggleLikeForTrack: async (track, onMaterialized = null) => {
     if (!track) return null
-    const numericId = typeof track.id === 'number' ? track.id : null
-    const dbId = numericId ?? (typeof track.db_id === 'number' ? track.db_id : null)
+    const localId = isUuid(track.id) ? track.id : null
+    const dbId = localId ?? (isUuid(track.db_id) ? track.db_id : null)
     if (dbId) {
       await get().toggleTrackLike(dbId, track)
       return dbId
@@ -1258,7 +1259,7 @@ const usePlayerStore = create((set, get) => ({
     }
     invalidateFlowPreload()
     const dbId =
-      currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
+      getTrackDbId(currentTrack)
     if (dbId) {
       postSkipWithRetry(dbId)
     } else if (currentTrack.source) {
@@ -1288,7 +1289,7 @@ const usePlayerStore = create((set, get) => ({
     else if (completion >= 0.55) get()._noteFlowSignal(currentTrack, 'c')
     invalidateFlowPreload()
     const dbId =
-      currentTrack.db_id ?? (typeof currentTrack.id === 'number' ? currentTrack.id : null)
+      getTrackDbId(currentTrack)
     if (dbId) {
       postListenEvent(dbId, completion)
     } else if (currentTrack.source) {

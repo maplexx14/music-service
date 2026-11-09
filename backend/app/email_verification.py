@@ -16,6 +16,7 @@ import os
 import secrets
 from urllib.parse import quote
 
+from app.identifiers import normalize_uuid
 from app.cache import redis_client
 from app.mailer import send_mail, smtp_configured  # noqa: F401 — smtp_configured в публичном API модуля
 
@@ -58,7 +59,7 @@ def _token_key(token: str) -> str:
     return f"email:verify:{digest}"
 
 
-def _user_tokens_key(user_id: int) -> str:
+def _user_tokens_key(user_id: str) -> str:
     return f"email:verify:user:{user_id}"
 
 
@@ -299,7 +300,7 @@ def issue_registration_claim(pending: PendingRegistration) -> str | None:
     return claim
 
 
-def grant_registration_claim(pending: PendingRegistration, user_id: int) -> None:
+def grant_registration_claim(pending: PendingRegistration, user_id: str) -> None:
     """Почта подтверждена — claim этой заявки теперь открывает вход."""
     try:
         digest = redis_client.get(_claim_for_key(pending.id))
@@ -313,7 +314,7 @@ def grant_registration_claim(pending: PendingRegistration, user_id: int) -> None
         logger.warning("could not grant registration claim %s", pending.id)
 
 
-def consume_registration_claim(claim: str) -> int | None:
+def consume_registration_claim(claim: str) -> str | None:
     """id юзера, если почту уже подтвердили; claim гаснет. None — ещё нет
     (или claim чужой/протух — снаружи эти случаи не различаем)."""
     if not claim:
@@ -331,7 +332,7 @@ def consume_registration_claim(claim: str) -> int | None:
     if not raw:
         return None
     try:
-        return int(raw)
+        return normalize_uuid(raw.decode() if isinstance(raw, bytes) else raw)
     except (TypeError, ValueError):
         return None
 
@@ -346,14 +347,14 @@ def _used_token_key(token: str) -> str:
     return f"email:registration:used:{digest}"
 
 
-def mark_token_used(token: str, user_id: int) -> None:
+def mark_token_used(token: str, user_id: str) -> None:
     try:
         redis_client.setex(_used_token_key(token), VERIFY_TOKEN_TTL_SEC, str(user_id))
     except Exception:  # noqa: BLE001 — повтор ссылки просто получит 400
         logger.warning("could not remember used verification link for user %s", user_id)
 
 
-def used_token_user(token: str) -> int | None:
+def used_token_user(token: str) -> str | None:
     """id юзера, если по этой ссылке уже подтверждали почту."""
     if not token:
         return None
@@ -362,7 +363,7 @@ def used_token_user(token: str) -> int | None:
     except Exception:  # noqa: BLE001
         return None
     try:
-        return int(raw) if raw else None
+        return normalize_uuid(raw.decode() if isinstance(raw, bytes) else raw) if raw else None
     except (TypeError, ValueError):
         return None
 
@@ -383,7 +384,7 @@ def delete_pending_registration(pending: PendingRegistration) -> None:
         logger.exception("could not clean pending registration %s", pending.id)
 
 
-def issue_token(user_id: int) -> str:
+def issue_token(user_id: str) -> str:
     """Новый токен подтверждения для юзера.
 
     Прошлый токен инвалидируется: после «отправить письмо снова» старая
@@ -403,7 +404,7 @@ def issue_token(user_id: int) -> str:
     return token
 
 
-def consume_token(token: str) -> int | None:
+def consume_token(token: str) -> str | None:
     """Возвращает user_id и гасит токен. None — токен неверен или протух.
 
     Гашение через getdel атомарно: две параллельные попытки по одной ссылке
@@ -418,7 +419,7 @@ def consume_token(token: str) -> int | None:
     if raw is None:
         return None
     try:
-        user_id = int(raw)
+        user_id = normalize_uuid(raw.decode() if isinstance(raw, bytes) else raw)
     except (TypeError, ValueError):
         return None
     try:

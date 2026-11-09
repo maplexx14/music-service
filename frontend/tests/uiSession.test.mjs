@@ -118,7 +118,7 @@ test('backgrounding flushes the latest search; reopening restores query, filter 
   search.getState().setFilter('library')
   search.getState().setResults({ tracks: [{ id: 42, title: 'Uprising' }], playlists: [] }, 'Muse')
   search.getState().finishSearch('Muse')
-  assert.equal(storage.has('bolt-ui-session-v1'), false)
+  assert.equal(storage.has('bolt-ui-session-v2'), false)
   app.document.hidden = true
   app.document.dispatchEvent(new Event('visibilitychange'))
   const reopened = await environment(storage)
@@ -138,7 +138,7 @@ test('continuous scrolling keeps persistence off the interaction and saves the f
   for (let top = 110; top <= 900; top += 10) scroll.rememberScroll(location, top)
   assert.equal(app.timers.has(firstTimer), false, 'An earlier write would serialize the session during scrolling')
   assert.equal(app.timers.size, 1)
-  assert.equal(app.storage.has('bolt-ui-session-v1'), false)
+  assert.equal(app.storage.has('bolt-ui-session-v2'), false)
   assert.equal(scroll.savedScroll(location), 900)
   app.timers.values().next().value()
   const reopened = await environment(app.storage)
@@ -156,14 +156,14 @@ test('switching accounts and logout clear private context and pending writes', a
   app.session.clearUiSession()
   app.session.setUiSessionUser(null)
   for (const fn of app.timers.values()) fn()
-  assert.equal(app.storage.has('bolt-ui-session-v1'), false)
+  assert.equal(app.storage.has('bolt-ui-session-v2'), false)
 })
 
 test('corrupt, expired and other-user sessions are ignored', async () => {
   for (const data of ['{', JSON.stringify({ userId: '8', savedAt: Date.now(), values: { search: { query: 'secret' } } }),
     JSON.stringify({ userId: '7', savedAt: Date.now() - 49 * 3600000, values: { search: { query: 'old' } } })]) {
     const storage = authStorage()
-    storage.set('bolt-ui-session-v1', data)
+    storage.set('bolt-ui-session-v2', data)
     const app = await environment(storage)
     assert.equal((await app.search()).getState().query, '')
   }

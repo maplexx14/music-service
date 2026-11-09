@@ -1,3 +1,4 @@
+import { getTrackDbId } from '../utils/identifiers'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2, ListPlus } from 'lucide-react'
@@ -538,7 +539,7 @@ function FullScreenPlayer() {
 
   const isExternalTrack = ['jamendo', 'soulseek', 'ytmusic', 'soundcloud'].includes(currentTrack?.source)
   const dbTrackId =
-    currentTrack?.db_id ?? (typeof currentTrack?.id === 'number' ? currentTrack.id : null)
+    getTrackDbId(currentTrack)
   const canInteract = dbTrackId !== null || Boolean(currentTrack?.source)
 
   // Переключение идёт через Player (services/playerTransport): только он умеет
