@@ -35,6 +35,19 @@ async def get_current_user_info(current_user: User = Depends(get_current_active_
     return current_user
 
 
+@router.post("/me/onboarding/complete", response_model=UserResponse)
+def complete_onboarding(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Запоминает и пустой выбор, не меняя предпочтения и импортированную музыку."""
+    if not current_user.onboarding_completed:
+        current_user.onboarding_completed = True
+        db.commit()
+        db.refresh(current_user)
+    return current_user
+
+
 # --- Музыкальные предпочтения (онбординг / настройки) ---
 # NB: эти GET-маршруты обязаны идти ДО /{user_id}, иначе "genres"
 # будет попадать в параметр user_id: int и давать 422.

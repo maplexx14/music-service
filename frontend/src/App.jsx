@@ -54,12 +54,8 @@ function AfterLoginRedirect() {
   return <Navigate to={safeNextPath(searchParams)} replace />
 }
 
-// Новичка — на онбординг. Решаем на каждом переходе, а не в рендере App:
-// отметка «показан» живёт в localStorage, а не в сторе, App после неё не
-// перерисовывается, и вычисленный заранее <Navigate> возвращал вышедшего с
-// онбординга без выбора («Пропустить», системное «назад») снова на шаг 1.
+// Онбординг нужен до завершения последнего шага. Статус общий для всех устройств.
 function OnboardingGate({ user, children }) {
-  useLocation()
   return needsOnboarding(user) ? <Navigate to="/onboarding" replace /> : children
 }
 
@@ -246,9 +242,13 @@ function App() {
           path="/onboarding"
           element={
             isAuthenticated ? (
-              <Suspense fallback={<Spinner page />}>
-                <PreferencesOnboarding />
-              </Suspense>
+              !needsOnboarding(user) ? (
+                <Navigate to="/" replace />
+              ) : (
+                <Suspense fallback={<Spinner page />}>
+                  <PreferencesOnboarding />
+                </Suspense>
+              )
             ) : (
               <Navigate to="/login" />
             )

@@ -45,6 +45,7 @@ class UserResponse(UserBase):
     is_admin: bool = False
     email_verified: bool = False
     email_2fa_enabled: bool = False
+    onboarding_completed: bool = False
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []

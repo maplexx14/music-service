@@ -33,12 +33,11 @@ function Login() {
   const { login, verifyMfa, sendEmailCode, resendVerification } = useAuthStore()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  // Пришёл со страницы подтверждения — после входа показываем онбординг,
-  // который до этого жил сразу за регистрацией.
+  // Пришёл со страницы подтверждения — показываем уведомление об успехе.
   const justVerified = searchParams.get('verified') === '1'
 
-  // Иначе — туда, откуда отправили на вход (ссылка на трек и т.п.).
-  const afterLogin = () => navigate(justVerified ? '/onboarding' : safeNextPath(searchParams))
+  // Онбординг решает OnboardingGate по профилю, включая вход после письма.
+  const afterLogin = () => navigate(safeNextPath(searchParams))
 
   const handleSubmit = async (e) => {
     e.preventDefault()

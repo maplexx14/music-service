@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, Download, Link2 } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
-import { markOnboardingSeen } from '../services/onboarding'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import defaultCover from '../assets/default-cover.webp'
 import GenreSelect from '../components/GenreSelect'
@@ -46,10 +45,7 @@ const ARTIST_STEP = 2
 
 function PreferencesOnboarding() {
   const navigate = useNavigate()
-  const { updatePreferences, user } = useAuthStore()
-
-  // Показан — больше сам не открывается (см. services/onboarding.js).
-  useEffect(() => markOnboardingSeen(user?.id), [user?.id])
+  const { updatePreferences, completeOnboarding } = useAuthStore()
 
   const [step, setStep] = useState(0)
   const [genres, setGenres] = useState([])
@@ -57,7 +53,7 @@ function PreferencesOnboarding() {
   const [excludedArtists, setExcludedArtists] = useState([])
   const [detected, setDetected] = useState({ genres: [], artists: [] })
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [savedPreferences, setSavedPreferences] = useState(null)
 
   const [importUrl, setImportUrl] = useState('')
   const [preview, setPreview] = useState(null)
@@ -93,21 +89,22 @@ function PreferencesOnboarding() {
 
   const finish = () => navigate('/')
 
-  /** Сохраняет выбор перед уходом с онбординга. Пустой выбор не сохраняем:
+  /** Сохраняет выбор перед уходом с онбординга. Пустой первый выбор не сохраняем:
    *  PUT со пустыми списками затёр бы предпочтения, если юзер уже что-то
    *  выбирал раньше и просто прошёл онбординг мимо. */
   const savePreferences = async () => {
-    if (saved || (!genres.length && !artists.length && !excludedArtists.length)) {
+    const selection = JSON.stringify([genres, artists, excludedArtists])
+    if (savedPreferences === selection || (
+      savedPreferences === null && !genres.length && !artists.length && !excludedArtists.length
+    )) {
       return true
     }
-    setSaving(true)
     const result = await updatePreferences(genres, artists, excludedArtists)
-    setSaving(false)
     if (!result.success) {
       toast.error(result.error)
       return false
     }
-    setSaved(true)
+    setSavedPreferences(selection)
     return true
   }
 
@@ -116,7 +113,18 @@ function PreferencesOnboarding() {
       setStep(step + 1)
       return
     }
-    if (await savePreferences()) finish()
+    setSaving(true)
+    try {
+      if (!await savePreferences()) return
+      const result = await completeOnboarding()
+      if (!result.success) {
+        toast.error(result.error)
+        return
+      }
+      finish()
+    } finally {
+      setSaving(false)
+    }
   }
 
   // Пропуск артистов не отменяет уже выбранные жанры.
@@ -206,8 +214,6 @@ function PreferencesOnboarding() {
             onChange={({ artists: nextArtists, excludedArtists: nextExcluded }) => {
               setArtists(nextArtists)
               setExcludedArtists(nextExcluded)
-              // Выбор изменился — сохранять придётся заново.
-              setSaved(false)
             }}
           />
         )}

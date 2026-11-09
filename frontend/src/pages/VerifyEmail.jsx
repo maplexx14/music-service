@@ -30,10 +30,10 @@ function VerifyEmail() {
       if (cancelled) return
       if (result.success) {
         setStatus('done')
-        // replace: системное «назад» с онбординга не должно возвращать на
+        // OnboardingGate проверит профиль. «Назад» не должно возвращать на
         // одноразовую ссылку — повторная проверка токена кончается ошибкой.
         setTimeout(
-          () => navigate(result.authenticated ? '/onboarding' : '/login?verified=1', { replace: true }),
+          () => navigate(result.authenticated ? '/' : '/login?verified=1', { replace: true }),
           600,
         )
       } else {
