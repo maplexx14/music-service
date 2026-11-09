@@ -101,7 +101,7 @@ export function readDiscSlots(arc, desktop = false) {
   ]))
 }
 
-const DRUM_MOTION = { ...DISC_MOTION, duration: 650 }
+const DRUM_MOTION = { ...DISC_MOTION, duration: 350 }
 const translate = ({ x, y }) => `translate(${x}px, ${y}px)`
 
 const slotAngle = (x) => x === 0 ? -Math.PI / 2 : x > 0 ? Math.PI / 6 : Math.PI * 5 / 6
@@ -184,7 +184,7 @@ export function animateDiscDialEntrance(arc, slots, onFinish) {
     const animation = record.slot.node.animate([
       { transform: transform(record, rotation) },
       { transform: transform(record, 0) },
-    ], { ...DRUM_MOTION, duration: 750, fill: 'both' })
+    ], { ...DRUM_MOTION, duration: 400, fill: 'both' })
     animation.startTime = startTime
     return animation
   })

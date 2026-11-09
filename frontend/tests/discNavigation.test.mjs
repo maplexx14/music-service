@@ -192,7 +192,7 @@ test('desktop navigation moves both existing discs around the drum in one synchr
   assert.ok(outgoing.slice(12).every((frame) => Math.abs(point(frame)[0]) < 0.001 && point(frame)[1] === 418), 'old record exits before the replacement arrives')
   assert.ok(outgoing.slice(1, 12).every((frame) => point(frame)[0] > -320 && point(frame)[0] < 0))
   assert.ok(incoming.slice(13, 24).every((frame) => point(frame)[0] > 0 && point(frame)[0] < 320))
-  assert.ok([...motion.entries.values()].every(({ animation }) => animation.startTime === 500 && animation.options.duration === 650))
+  assert.ok([...motion.entries.values()].every(({ animation }) => animation.startTime === 500 && animation.options.duration === 350))
   motion.cleanup()
   assert.equal(app.ghosts[0].removed, true)
 })
@@ -312,7 +312,7 @@ test('desktop entrance rotates around one common pivot with fixed spacing and an
   const slots = app.drumSlots([['a', 0], ['b', 32], ['c', -32]])
   const motion = app.entrance(slots)
   const frames = (key) => slots.get(key).node.animation.frames
-  assert.ok(motion.animations.every((animation) => animation.options.duration === 750 && animation.startTime === 500))
+  assert.ok(motion.animations.every((animation) => animation.options.duration === 400 && animation.startTime === 500))
   assert.ok(Math.abs(dialPoint(frames('c')[0]).y - (600 * 0.47 + 240 / 2 + 2)) < 0.001, 'first existing record starts just below the visible edge')
   for (const [key, x, y] of [['a', 0, 0], ['b', 320, 258], ['c', -320, 258]]) {
     const end = dialPoint(frames(key).at(-1))
