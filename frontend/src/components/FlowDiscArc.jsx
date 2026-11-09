@@ -3,7 +3,7 @@ import { shallow } from 'zustand/shallow'
 import { usePlayerStore } from '../store/playerStore'
 import { isDislikedTrack, queueStep } from '../utils/playerQueue'
 import { discNavigationDirection } from '../utils/discTransition'
-import { animateDiscDrum, animateDiscRibbonEntrance, animateDiscNavigation, animateDiscStack, clearDiscStack, readDiscSlots } from '../utils/discMotion'
+import { animateDiscDrum, animateDiscDialEntrance, animateDiscNavigation, animateDiscStack, clearDiscStack, readDiscSlots } from '../utils/discMotion'
 import { useScreen } from '../hooks/useScreen'
 import { useWarmNextDiscCover } from '../hooks/useWarmNextDiscCover'
 import { resolveCoverUrl } from '../utils/media'
@@ -33,7 +33,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   const stackMotionsRef = useRef(new Map())
   const flowPreviewRef = useRef(null)
   const finishEntranceRef = useRef(null)
-  const desktopEntranceStartedRef = useRef(false)
+  const entranceStartedRef = useRef(false)
   const [upgradeCovers, setUpgradeCovers] = useState(false)
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
   const { active, scrollerRef } = useScreen()
@@ -41,7 +41,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
 
   useLayoutEffect(() => {
     const arc = arcRef.current
-    if (!window.matchMedia(MOBILE_QUERY).matches && desktopEntranceStartedRef.current) {
+    if (entranceStartedRef.current) {
       arc.setAttribute('data-covers-ready', '')
       setUpgradeCovers(true)
       return undefined
@@ -71,11 +71,16 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     // record halfway through the first entrance or when playback starts.
     const reveal = () => {
       const discs = [...arc.querySelectorAll('.flow-disc-slot .hero-disc')]
-      if (!discs.length || discs.some((disc) => !disc.hasAttribute('data-cover-settled'))) return
-      if (flowPreviewRef.current) usePlayerStore.getState().pinFlowPreview(flowPreviewRef.current)
-      entranceNodes = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
+      if (!discs.length) return
       const desktop = !window.matchMedia(MOBILE_QUERY).matches
-      if (desktop) desktopEntranceStartedRef.current = true
+      const pending = discs.some((disc) => !disc.hasAttribute('data-cover-settled'))
+      const ready = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
+      // Start as soon as mobile artwork can paint, but put every mounted
+      // record on the same entrance timeline, including still-loading covers.
+      if (pending && (desktop || !ready.length)) return
+      if (flowPreviewRef.current) usePlayerStore.getState().pinFlowPreview(flowPreviewRef.current)
+      entranceNodes = desktop ? ready : discs
+      entranceStartedRef.current = true
       if (!desktop) {
         for (const disc of entranceNodes) {
           const style = getComputedStyle(disc)
@@ -88,7 +93,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       arc.setAttribute('data-entrance-running', '')
       if (desktop && !document.hidden && typeof arc.animate === 'function' &&
           !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        entranceMotion = animateDiscRibbonEntrance(arc, readDiscSlots(arc, true), () => {
+        entranceMotion = animateDiscDialEntrance(arc, readDiscSlots(arc, true), () => {
           if (!disposed) finishEntrance()
         })
       }
@@ -100,6 +105,8 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
       }
       const animations = entranceNodes.flatMap((disc) => disc.getAnimations()
         .filter((animation) => animation.animationName === 'flow-disc-enter'))
+      const startTime = document.timeline.currentTime
+      for (const animation of animations) animation.startTime = startTime
       Promise.all(animations.map((animation) => animation.finished.catch(() => {})))
         .then(() => { if (!disposed) finishEntrance() })
     }
@@ -245,9 +252,10 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     used.add(key)
   }
 
-  // Fill available previews without inventing records before tracks arrive.
+  // Before playback, preview only upcoming records. Once a track is selected,
+  // every neighbor must come from queueStep; never wrap or fill from suggestions.
   for (const offset of offsets) {
-    if (slots.get(offset)) continue
+    if (state.currentTrack || offset < 0 || slots.get(offset)) continue
     const track = candidates.find((candidate) => {
       const key = trackKey(candidate)
       return key && !used.has(key)
@@ -290,7 +298,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
             }}
           >
             <div className="flow-disc-position">
-              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} coverPriority={!mobile && active && !upgradeCovers ? 'high' : undefined} />
+              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} coverPriority={active && (offset === 0 || (!mobile && !upgradeCovers)) ? 'high' : undefined} />
             </div>
           </div>
         )

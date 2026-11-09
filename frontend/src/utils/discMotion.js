@@ -155,60 +155,36 @@ function drumFrames(from, to, width, height, size, angleAt) {
   }
 }
 
-export function animateDiscRibbonEntrance(arc, slots, onFinish) {
+export function animateDiscDialEntrance(arc, slots, onFinish) {
   const width = arc.clientWidth
   const height = arc.clientHeight
   const size = arc.querySelector('.flow-disc-position')?.offsetWidth || 0
   const ready = [...slots.values()].filter((slot) =>
     slot.node.querySelector('.hero-disc')?.hasAttribute('data-cover-ready'))
-  // Measure the shared belt in pixels along the curve. An angular stagger
-  // would bunch records together where the orbit bends most sharply.
-  const path = Array.from({ length: 121 }, (_, index) =>
-    drumPoint(-Math.PI * 7 / 6 + index * Math.PI / 72, width, height, size))
-  path[0] = { x: -width * 0.32, y: height * 0.43 }
-  path[48] = { x: 0, y: 0 }
-  path[96] = { x: width * 0.32, y: height * 0.43 }
-  path[120].x = 0
-  for (let index = 0; index < path.length; index += 1) {
-    const previous = path[index - 1]
-    path[index].distance = previous ? previous.distance +
-      Math.hypot(path[index].x - previous.x, path[index].y - previous.y) : 0
-  }
-  const bottom = path.at(-1)
-  // Start the head just below the visible edge. Spending time on the hidden
-  // tangent makes an otherwise ready screen look as though it is still loading.
+  // Rotate the whole arrangement around one pivot, like a telephone dial.
+  // Keep the pivot below the clipped edge, so even a tall desktop viewport
+  // has enough room to conceal the records before their first entrance.
   const hiddenY = height * 0.47 + size / 2 + 2
-  const firstHidden = path.findIndex((point, index) => index >= 96 && point.y >= hiddenY)
-  const before = path[firstHidden - 1], after = path[firstHidden]
-  const travel = before.distance + (after.distance - before.distance) *
-    (hiddenY - before.y) / (after.y - before.y)
-  const pointAt = (distance) => {
-    // Continue the belt along its tangent below the clipped hero. All records
-    // already have their spacing here, rather than waiting at the same point.
-    if (distance >= bottom.distance) return { x: bottom.distance - distance, y: bottom.y }
-    let low = 0, high = path.length - 1
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2)
-      if (path[middle].distance < distance) low = middle + 1
-      else high = middle
-    }
-    const to = path[low]
-    const from = path[Math.max(0, low - 1)]
-    const fraction = (distance - from.distance) / (to.distance - from.distance || 1)
-    return { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction }
-  }
+  const sideX = width * 0.32, sideY = height * 0.43
+  const pivotY = Math.max((sideX ** 2 + sideY ** 2) / (2 * sideY), hiddenY)
+  const records = ready.map((slot) => {
+    const x = slot.x * width / 100, y = slot.desktopY * height / 100 - pivotY
+    return { slot, x, y, angle: Math.atan2(y, x), radius: Math.hypot(x, y) }
+  })
+  const head = records.reduce((first, record) => !first || record.angle < first.angle ? record : first, null)
+  // The first existing record starts just below the edge. With no previous
+  // track, the current record leads the entrance instead of an invented slot.
+  const rotation = head ? (Math.asin((hiddenY - pivotY) / head.radius) - head.angle) * 180 / Math.PI : 0
+  const transform = (record, angle) =>
+    `translate(0px, ${pivotY}px) rotate(${angle}deg) translate(${record.x}px, ${record.y}px) rotate(${-angle}deg)`
   const startTime = document.timeline.currentTime
-  // Every record moves the same distance on the same timeline from frame one.
-  // They enter one after another as a single belt and stop together.
-  const animations = ready.map((slot) => {
-    const to = { x: slot.x * width / 100, y: slot.desktopY * height / 100 }
-    const target = path[slot.x < 0 ? 0 : slot.x === 0 ? 48 : 96].distance
-    const offsets = [0, ...path.filter((point) => point.distance > target && point.distance < target + travel)
-      .map((point) => 1 - (point.distance - target) / travel), 1].sort((a, b) => a - b)
-    const frames = offsets.map((offset) => ({
-      transform: translate(offset === 1 ? to : pointAt(target + travel * (1 - offset))), offset,
-    }))
-    const animation = slot.node.animate(frames, { ...DRUM_MOTION, duration: 750, fill: 'both' })
+  // Identical angular motion preserves the distance between every pair of
+  // records. Counter-rotation keeps their artwork upright during the orbit.
+  const animations = records.map((record) => {
+    const animation = record.slot.node.animate([
+      { transform: transform(record, rotation) },
+      { transform: transform(record, 0) },
+    ], { ...DRUM_MOTION, duration: 750, fill: 'both' })
     animation.startTime = startTime
     return animation
   })

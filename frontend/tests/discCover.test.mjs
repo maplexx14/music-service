@@ -90,6 +90,19 @@ test('artwork remains hidden until download and decoding both finish', async () 
   assert.equal(app.settled, true)
 })
 
+test('cached compact artwork is visible on the first render without a new download', async () => {
+  const app = await mount('/cover.jpg', null, { known: ['/cover.jpg'] })
+  assert.equal(app.result, '/cover.jpg')
+  assert.equal(app.settled, true)
+  assert.equal(app.images.length, 0)
+})
+
+test('cached full artwork is visible before effects update the disc state', async () => {
+  const app = await mount('/small.jpg', '/full.jpg', { known: ['/full.jpg'], allowUpgrade: false })
+  assert.equal(app.result, '/full.jpg')
+  assert.equal(app.settled, true)
+})
+
 test('missing artwork and failed downloads never reveal a placeholder', async () => {
   const empty = await mount(null)
   assert.equal(empty.images.length, 0)

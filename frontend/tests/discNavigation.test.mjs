@@ -107,7 +107,7 @@ async function setup({ ready = false, settled = false } = {}) {
       arc.clientWidth = 1000
       arc.clientHeight = 600
       arc.querySelector = () => liveRecord
-      return module.namespace.animateDiscRibbonEntrance(arc, slots, onFinish)
+      return module.namespace.animateDiscDialEntrance(arc, slots, onFinish)
     },
   }
 }
@@ -300,31 +300,52 @@ test('a disc already hidden at the bottom does not take an extra lap on reversal
   returning.cleanup()
 })
 
-test('desktop entrance moves a single opaque ribbon with fixed spacing from the first frame', async () => {
+function dialPoint(frame, progress = 0) {
+  const [_, pivot, rotation, x, y, counterRotation] = frame.transform.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/g).map(Number)
+  assert.equal(rotation + counterRotation, 0, 'artwork stays upright')
+  const angle = rotation * (1 - progress) * Math.PI / 180
+  return { x: x * Math.cos(angle) - y * Math.sin(angle), y: pivot + x * Math.sin(angle) + y * Math.cos(angle), pivot }
+}
+
+test('desktop entrance rotates around one common pivot with fixed spacing and angular speed', async () => {
   const app = await setup()
   const slots = app.drumSlots([['a', 0], ['b', 32], ['c', -32]])
   const motion = app.entrance(slots)
-  const point = (frame) => frame.transform.slice(10, -1).split(', ').map(parseFloat)
   const frames = (key) => slots.get(key).node.animation.frames
   assert.ok(motion.animations.every((animation) => animation.options.duration === 750 && animation.startTime === 500))
-  assert.ok(Math.abs(point(frames('c')[0])[1] - (600 * 0.47 + 240 / 2 + 2)) < 0.001, 'first record starts just two pixels below the visible edge')
-  assert.equal(frames('a').at(-1).transform, 'translate(0px, 0px)')
-  assert.equal(frames('b').at(-1).transform, 'translate(320px, 258px)')
-  assert.equal(frames('c').at(-1).transform, 'translate(-320px, 258px)')
-  const order = ['c', 'a', 'b']
-  const initial = order.map((key) => point(frames(key)[0])[0])
-  assert.ok(initial[0] > initial[1] && initial[1] > initial[2])
-  const sample = (key, progress) => {
-    const list = frames(key)
-    const index = list.findIndex((frame) => frame.offset >= progress)
-    const from = list[index - 1], to = list[index]
-    const fraction = (progress - from.offset) / (to.offset - from.offset)
-    return point(from)[0] + (point(to)[0] - point(from)[0]) * fraction
+  assert.ok(Math.abs(dialPoint(frames('c')[0]).y - (600 * 0.47 + 240 / 2 + 2)) < 0.001, 'first existing record starts just below the visible edge')
+  for (const [key, x, y] of [['a', 0, 0], ['b', 320, 258], ['c', -320, 258]]) {
+    const end = dialPoint(frames(key).at(-1))
+    assert.ok(Math.abs(end.x - x) < 0.001 && Math.abs(end.y - y) < 0.001)
   }
-  const movement = order.map((key, index) => sample(key, 0.1) - initial[index])
-  assert.ok(movement.every((distance) => distance > 0), 'every record advances without waiting at the entrance')
-  assert.ok(Math.abs(movement[1] - movement[2]) < 0.001, 'records still on the straight feed preserve their spacing')
+  const order = ['c', 'a', 'b']
+  const points = (progress) => order.map((key) => dialPoint(frames(key)[0], progress))
+  const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+  const initial = points(0)
+  assert.ok(initial.every((point) => point.y >= 404 - 0.001), 'every record starts below the clip')
+  for (const progress of [0.1, 0.5, 0.9, 1]) {
+    const current = points(progress)
+    assert.ok(current.every((point) => point.pivot === initial[0].pivot))
+    for (let index = 0; index < current.length; index++) {
+      assert.ok(Math.abs(distance(current[index], current[(index + 1) % current.length]) -
+        distance(initial[index], initial[(index + 1) % initial.length])) < 0.001, 'records move as a rigid dial')
+      assert.ok(Math.abs(Math.hypot(current[index].x, current[index].y - current[index].pivot) -
+        Math.hypot(initial[index].x, initial[index].y - initial[index].pivot)) < 0.001, 'each record follows a circle')
+    }
+  }
   assert.ok(motion.animations.every((animation) => animation.frames.every((frame) => !('opacity' in frame))))
+  motion.cleanup()
+})
+
+test('without a previous track the current record leads the circular desktop entrance', async () => {
+  const app = await setup()
+  const slots = app.drumSlots([['a', 0], ['b', 32]])
+  const motion = app.entrance(slots)
+  const main = dialPoint(slots.get('a').node.animation.frames[0])
+  const next = dialPoint(slots.get('b').node.animation.frames[0])
+  assert.ok(Math.abs(main.y - 404) < 0.001)
+  assert.ok(next.y >= 404)
+  assert.equal(motion.animations.length, 2)
   motion.cleanup()
 })
 

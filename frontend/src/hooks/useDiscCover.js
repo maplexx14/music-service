@@ -36,8 +36,11 @@ export function useDiscCover(url, upgradeUrl, priority = 'auto', {
 } = {}) {
   const [cover, setCover] = useState(null)
   const [upgradeAttempt, setUpgradeAttempt] = useState(null)
-  const settled = !url || cover?.url === url
-  const ready = Boolean(url) && settled && Boolean(cover?.src)
+  // Decoded artwork can paint on the first render, including after remounting
+  // a record. Waiting for an effect would briefly hide a cached cover again.
+  const cachedSrc = url ? [alternateUpgradeUrl, upgradeUrl, url].find(isCoverReady) : null
+  const src = (url && cover?.url === url && cover.src) || cachedSrc || null
+  const settled = !url || Boolean(src) || cover?.url === url
 
   useEffect(() => {
     if (!url) return undefined
@@ -78,7 +81,7 @@ export function useDiscCover(url, upgradeUrl, priority = 'auto', {
 
   // A different track must never inherit readiness from the previous artwork.
   return {
-    src: ready ? cover.src : null,
+    src,
     settled,
     upgradeSettled: !upgradeUrl || upgradeUrl === url || upgradeAttempt === upgradeUrl,
   }
