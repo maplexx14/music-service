@@ -90,7 +90,7 @@ def test_recommendations_respect_taste_and_skips(client, db):
 
 
 def test_recommendations_cold_start_shows_popular(client, db):
-    """Без сигналов вкуса — холодный старт: показываем популярное сервиса."""
+    """При пустых жанрах каталога остаётся запасная выдача популярного."""
     create_user(db, username="bob")
     hit = _track(db, "cold-hit", "Whoever", play_count=500)
 
@@ -98,6 +98,106 @@ def test_recommendations_cold_start_shows_popular(client, db):
     assert resp.status_code == 200, resp.text
     ids = {t["id"] for t in resp.json()["tracks"]}
     assert hit.id in ids
+
+
+def test_skipped_onboarding_prefers_neutral_tracks_outside_popular_window(client, db):
+    user = create_user(db)
+    headers = auth_headers(client)
+    skipped = client.post("/api/users/me/onboarding/complete", headers=headers)
+    assert skipped.status_code == 200, skipped.text
+    # These tracks used to occupy the entire cold-start retrieval window.
+    db.add_all([
+        Track(title=f"niche-{i}", artist=f"NicheArtist{i}", duration=180,
+              source="ytmusic", external_id=f"niche-{i}", play_count=10000,
+              genre="phonk" if i % 2 else "metal")
+        for i in range(120)
+    ])
+    db.commit()
+    neutral = [
+        _track(db, f"ordinary-{i}", f"Singer{i}", play_count=1, genre=genre)
+        for i, genre in enumerate(("Pop", "Soft-Rock", "acoustic", "lo-fi"))
+    ]
+
+    response = client.get("/api/recommendations/?limit=4", headers=headers)
+    assert response.status_code == 200, response.text
+    assert {t["id"] for t in response.json()["tracks"]} == {t.id for t in neutral}
+    db.refresh(user)
+    assert user.preferred_genres == []
+    assert user.preferred_artists == []
+
+
+def test_neutral_start_ranks_known_genres_before_unknown_and_uses_audience(client, db):
+    create_user(db)
+    broad = _track(db, "shared-favorite", "SingerA", play_count=40, genre="pop")
+    broad.unique_listener_count = 20
+    repeat = _track(db, "one-listener-favorite", "SingerB", play_count=100000, genre="pop")
+    repeat.unique_listener_count = 1
+    unknown = _track(db, "untagged-hit", "SingerC", play_count=100000)
+    unknown.unique_listener_count = 100
+    db.commit()
+
+    response = client.get("/api/recommendations/", headers=auth_headers(client))
+    assert response.status_code == 200, response.text
+    assert [t["id"] for t in response.json()["tracks"]] == [broad.id, repeat.id, unknown.id]
+
+
+def test_neutral_start_does_not_fill_short_page_with_niche_tracks(client, db):
+    create_user(db)
+    neutral = _track(db, "ordinary-song", "Singer", genre="pop")
+    _track(db, "aggressive-song", "Band", play_count=10000, genre="metal")
+    _track(db, "Song (Phonk Remix)", "Producer", play_count=20000, genre="pop")
+    _track(db, "Song (Bass Boosted)", "Uploader", play_count=20000)
+
+    response = client.get("/api/recommendations/", headers=auth_headers(client))
+    assert response.status_code == 200, response.text
+    assert [t["id"] for t in response.json()["tracks"]] == [neutral.id]
+
+
+def test_neutral_start_preserves_skips_excluded_artists_and_artist_cap(client, db):
+    from collections import Counter
+    from app.models import rec_impressions
+
+    user = create_user(db)
+    user.excluded_artists = ["ExcludedSinger"]
+    tracks = [_track(db, f"ordinary-{i}", "Singer", genre="pop") for i in range(5)]
+    skipped = _track(db, "skip-me", "SkippedSinger", genre="pop")
+    tired = _track(db, "already-seen", "TiredSinger", genre="pop")
+    excluded = _track(db, "exclude-me", "ExcludedSinger", genre="pop")
+    db.execute(user_track_skips.insert().values(
+        user_id=user.id, track_id=skipped.id, skip_count=1))
+    db.execute(rec_impressions.insert().values(
+        user_id=user.id, track_id=tired.id, shown_count=20))
+    db.commit()
+
+    response = client.get("/api/recommendations/", headers=auth_headers(client))
+    assert response.status_code == 200, response.text
+    result = response.json()["tracks"]
+    ids = {t["id"] for t in result}
+    assert ids & {t.id for t in tracks}
+    assert not ids & {skipped.id, tired.id, excluded.id}
+    assert max(Counter(t["artist"] for t in result).values()) <= 2
+
+
+def test_skipped_onboarding_switches_to_personalization_after_like(client, db):
+    create_user(db)
+    headers = auth_headers(client)
+    assert client.post("/api/users/me/onboarding/complete", headers=headers).status_code == 200
+    neutral = _track(db, "ordinary-song", "Singer", genre="pop")
+    liked = _track(db, "chosen-song", "HeavyBand")
+    related = _track(db, "another-song", "HeavyBand", genre="metal")
+
+    first = client.get("/api/recommendations/", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["tracks"][0]["id"] == neutral.id
+    assert related.id not in {t["id"] for t in first.json()["tracks"]}
+    assert client.post(f"/api/tracks/{liked.id}/like", headers=headers).status_code == 200
+
+    second = client.get("/api/recommendations/", headers=headers)
+    assert second.status_code == 200, second.text
+    ids = {t["id"] for t in second.json()["tracks"]}
+    assert related.id in ids
+    assert neutral.id not in ids
+    assert liked.id not in ids
 
 
 def test_recommendations_cold_start_varies_between_users(client, db):

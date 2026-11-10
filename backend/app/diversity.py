@@ -187,6 +187,7 @@ def interleave_artists(
     min_gap: int = 3,
     previous_artists=None,
     context: object = "",
+    preserve_order: bool = False,
 ):
     """Разносит треки одного артиста, не превращая выдачу в ротацию.
 
@@ -197,6 +198,9 @@ def interleave_artists(
 
     Выбор следующего артиста псевдослучайный и воспроизводимый для заданного
     context, с весом по числу неотданных треков.
+    preserve_order сохраняет приоритет входного ранжирования среди доступных
+    артистов: нужен нейтральному старту, где случайная перестановка вытеснила
+    бы проверенные жанры запасными треками без метаданных.
     Детерминированный критерий («берём артиста с наибольшим числом оставшихся»)
     вместе с жёстким кулдауном оставлял ровно одну возможную последовательность:
     артист освобождается точно через min_gap позиций, и тот же критерий выбирает
@@ -245,7 +249,9 @@ def interleave_artists(
             pool = [key for key, weight in scored.items() if weight > 0]
             weights = [scored[key] for key in pool]
 
-        if pool:
+        if pool and preserve_order:
+            key = min(pool, key=first_index.get)
+        elif pool:
             weighted_keys = list(zip(pool, weights))
             position_context = f"{context}:{len(ordered)}"
             key = max(

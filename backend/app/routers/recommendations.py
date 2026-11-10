@@ -89,6 +89,7 @@ from app.recommendation_telemetry import (
     record_impression,
 )
 from app.recommendation_evaluation import user_metrics
+from app.neutral_recommendations import NEUTRAL_GENRES, neutral_tier
 from app.routers import flow as flow_router
 
 router = APIRouter()
@@ -295,15 +296,14 @@ def _varied_popular(
     user_id: Optional[UUIDString] = None,
     exclude_select=None,
 ) -> list:
-    """Случайная выборка из широкого пула популярного (без иностранного).
-    Не фиксированный топ-N: у каждого юзера свой набор — и для холодного
-    старта, и для добора тонкой выдачи, чтобы рекомендации были свои у
-    каждого, а не один и тот же глобальный список.
+    """Добор тонкой персональной выдачи из релевантного популярного.
+    Не фиксированный топ-N: у каждого юзера свой набор. Нейтральный холодный
+    старт обрабатывается отдельно в _neutral_start_candidates.
 
     keep — предикат вкуса; передаётся, когда у юзера УЖЕ есть профиль. Без него
     этот путь был главной причиной нерелевантной выдачи: у слушателя русского
     рэпа он занимал большинство слотов глобальными хитами (Rick Astley, AC/DC,
-    Hell March). При холодном старте keep нет — фильтровать нечем и не по чему.
+    Hell March).
 
     used — сколько мест артисты уже заняли в собираемой выдаче. Без него лимит
     считался с нуля на каждом пути отбора и они складывались: 2 трека из
@@ -313,8 +313,7 @@ def _varied_popular(
     ОБЩИЙ на всех юзеров (инкрементится на любом прослушивании любым юзером), а
     владельца у трека нет, поэтому «популярное сервиса» возглавляет тот, кто
     последним импортировал большой плейлист, и его библиотека ехала в выдачу
-    остальным. Передаётся вместе с keep (т.е. когда профиль есть); на холодном
-    старте скоупа нет и глобальное популярное остаётся единственным вариантом.
+    остальным. Передаётся вместе с keep (т.е. когда профиль есть).
     """
     if need <= 0:
         return []
@@ -363,54 +362,54 @@ def _varied_popular(
     return cap_per_artist(pool, _MAX_PER_ARTIST, used=used)[:need]
 
 
-def _cold_start_candidates(
+def _neutral_start_candidates(
     db: Session,
     *,
-    preferred_genres: list[str],
-    preferred_artists: list[str],
     exclude_ids: set[str],
     limit: int,
     user_id: UUIDString,
+    excluded_artists: list[str],
 ) -> list[Track]:
-    """Build a personalized first page before behavioral history exists."""
-    if limit <= 0 or not (preferred_genres or preferred_artists):
+    """Prefer approachable music before any explicit or behavioral taste exists."""
+    if limit <= 0:
         return []
-    wanted_genres = {str(g).strip().lower() for g in preferred_genres if g}
-    wanted_artists = {artist_key(a) for a in preferred_artists if artist_key(a)}
-    filters = []
-    if wanted_genres:
-        filters.append(func.lower(Track.genre).in_(wanted_genres))
-    if wanted_artists:
-        filters.append(
-            or_(func.lower(Track.artist).in_(wanted_artists), Track.source == "soundcloud")
-        )
-    if not filters:
-        return []
-    query = db.query(Track).filter(or_(*filters))
+    query = db.query(Track)
     if exclude_ids:
         query = query.filter(~Track.id.in_(exclude_ids))
-    pool = query.order_by(desc(Track.play_count), Track.id).limit(max(100, limit * 30)).all()
-    filtered_pool = []
-    for track in pool:
-        effective_key = artist_key(effective_track_artist_title(track)[0])
-        genre_key = str(track.genre or "").strip().lower()
-        if (
-            track.source == "soundcloud"
-            and wanted_artists
-            and effective_key not in wanted_artists
-            and genre_key not in wanted_genres
-        ):
+    window = max(100, limit * 20)
+    query = query.order_by(
+        desc(Track.unique_listener_count), desc(Track.play_count), Track.id,
+    )
+    # Retrieve neutral genres separately: a large imported niche library must
+    # not push every neutral track outside the bounded popularity window.
+    genre_key = func.replace(func.lower(func.trim(Track.genre)), "-", " ")
+    tagged = query.filter(genre_key.in_(NEUTRAL_GENRES)).limit(window).all()
+    fallback = query.limit(window).all()
+    banned = {artist_key(name) for name in excluded_artists if artist_key(name)}
+    tiers = {}
+    pool = []
+    for track in {t.id: t for t in (*tagged, *fallback)}.values():
+        artist, _title = effective_track_artist_title(track)
+        if artist_key(artist) in banned or primary_artist_key(artist) in banned:
             continue
-        filtered_pool.append(track)
-    pool = filtered_pool
+        tier = neutral_tier(track)
+        if tier is not None:
+            tiers[track.id] = tier
+            pool.append(track)
+    # Neutrality and audience breadth lead. Small, stable variation among
+    # similarly popular tracks gives newcomers different pages without
+    # rotating unknown or niche material ahead of the neutral selection.
     pool.sort(
         key=lambda track: (
-            -score_track(track, user_id=user_id, genres=preferred_genres, novelty=True),
-            stable_jitter(user_id, track.id),
+            tiers[track.id],
+            -(track.unique_listener_count or 0),
+            -(score_track(track, user_id=user_id) + 0.25 * stable_jitter(user_id, track.id)),
             track.id,
         )
     )
-    return cap_per_artist(pool, _MAX_PER_ARTIST)[:limit]
+    return cap_per_artist(
+        pool, _MAX_PER_ARTIST, artist_of=lambda t: effective_track_artist_title(t)[0],
+    )[:limit]
 
 
 def _rank_public_playlists(
@@ -1897,48 +1896,16 @@ def _compute_recommendations(
             pair_scores(db, local_ranked_ids),
         )[:limit]
     else:
-        # Холодный старт: сигналов вкуса ещё нет — показываем популярное сервиса.
-        # (Раньше популярным добивали ЛЮБУЮ неполную выдачу, из-за чего у активных
-        # юзеров место релевантного занимали глобальные хиты — это и убрано.)
-        recommended_tracks = _cold_start_candidates(
+        # Пропущенный онбординг без коллекции/повторов: нейтральный старт.
+        # Не сохраняем этот приор как вкус пользователя: первый собственный
+        # выбор сразу включает обычную персонализацию в ветке выше.
+        recommended_tracks = _neutral_start_candidates(
             db,
-            preferred_genres=preferred_genres,
-            preferred_artists=preferred_artists,
             exclude_ids=skipped_track_ids | fatigued_ids,
             limit=limit,
             user_id=current_user.id,
+            excluded_artists=list(current_user.excluded_artists or []),
         )
-        if len(recommended_tracks) < limit:
-            recommended_tracks += _varied_popular(
-                db,
-                skipped_track_ids | fatigued_ids | {t.id for t in recommended_tracks},
-                limit - len(recommended_tracks),
-                used=Counter(
-                    primary_artist_key(effective_track_artist_title(t)[0])
-                    for t in recommended_tracks
-                ),
-                user_id=current_user.id,
-            )
-        if external_candidates:
-            combined = []
-            seen_candidates = set()
-            for candidate in (*recommended_tracks, *external_candidates):
-                identity = (
-                    f"{candidate.source}:{candidate.external_id}"
-                    if uuid_or_none(candidate.id) is None
-                    else f"local:{candidate.id}"
-                )
-                if identity in seen_candidates:
-                    continue
-                seen_candidates.add(identity)
-                combined.append(candidate)
-            combined.sort(
-                key=lambda track: (
-                    -_candidate_score(track),
-                    stable_jitter(current_user.id, track.id),
-                )
-            )
-            recommended_tracks = combined[:limit]
 
     # min_gap=4: прежние 3 допускали A _ _ A _ _ A — формально «не подряд», а
     # на слух «опять он» (см. _MIN_ARTIST_GAP во flow.py).
@@ -1946,6 +1913,7 @@ def _compute_recommendations(
         recommended_tracks,
         artist_getter=lambda track: effective_track_artist_title(track)[0],
         min_gap=4,
+        preserve_order=not (user_track_ids or has_explicit_preferences),
     )[:limit]
 
     # Фиксируем показы (для сигнала «показан N раз — не сыгран»). Пока ответ

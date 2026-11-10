@@ -36,6 +36,14 @@ def _items(*artists):
     return [{"artist": a, "title": f"t{i}"} for i, a in enumerate(artists)]
 
 
+def test_preserve_order_keeps_ranked_artists_and_spreads_repeats():
+    items = _items("A", "A", "B", "C", "D", "E")
+    result = interleave_artists(
+        items, artist_getter=lambda t: t["artist"], min_gap=4, preserve_order=True,
+    )
+    assert result == [items[i] for i in (0, 2, 3, 4, 1, 5)]
+
+
 def _order(artists, min_gap=4, previous_artists=None, context=""):
     return _artists(
         interleave_artists(
