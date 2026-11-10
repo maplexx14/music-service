@@ -36,6 +36,7 @@ import { useCoverColors } from '../hooks/useCoverColors'
 import { diag, diagPing, diagStreamRequests, snapshotAudio, playWithDiag } from '../utils/playerDiag'
 import { isLowQuality, noteStarvation, noteStartup, sameStream, subscribeQuality, withQuality } from '../utils/streamQuality'
 import * as engine from '../services/audioEngine'
+import { createPlaybackRecovery } from '../services/playbackRecovery'
 import { notePosition, restorePlayer, takeRestorePosition } from '../services/playerPersist'
 import { registerSkipForward } from '../services/playerTransport'
 import { isAndroidApp, sendTrackFeedback, subscribeAndroidPlayback } from '../services/androidApp'
@@ -762,6 +763,17 @@ function PlayerInner() {
     // очередь на лишний трек.
     const isLive = () => engine.getActive() === audio
 
+    const recovery = isAndroidApp() ? createPlaybackRecovery({
+      audio,
+      isCurrent: () => isLive() && usePlayerStore.getState().currentTrack?.id === currentTrack?.id,
+      wantsPlayback: () => usePlayerStore.getState().isPlaying,
+      play: () => playWithDiag(audio, 'recovery:load'),
+      onRecover: (detail) => diag('recovery:stall', detail),
+    }) : null
+    const unsubscribeRecovery = recovery && usePlayerStore.subscribe((state) => {
+      if (!state.isPlaying || state.currentTrack?.id !== currentTrack?.id) recovery.cancel()
+    })
+
     const syncPositionState = () => {
       if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
       const mediaDuration = resolveTrackDuration(audio, currentTrack)
@@ -867,6 +879,7 @@ function PlayerInner() {
         : NO_PROGRESS_STALL_MS
     }
     const isStalledStart = () =>
+      !recovery?.isRestoring() &&
       !audio.paused &&
       audio.currentTime === 0 &&
       Date.now() - lastProgressAt > stallGraceMs()
@@ -1025,6 +1038,12 @@ function PlayerInner() {
     const handlePause = () => {
       if (!isLive()) return
       pausedAtRef.current = Date.now()
+      // WebView owns audio focus. A real mid-track pause (e.g. a call) must
+      // cancel playback intent too, or canplay/visibility could restart it.
+      if (isAndroidApp() && audio.paused && !audio.ended &&
+          (audio.currentTime > 0 || recovery?.wasInterrupted())) {
+        usePlayerStore.setState({ isPlaying: false })
+      }
       // Позиция виджета обновляется событиями, не тиками (см. updateTime):
       // на паузе ставим точную, чтобы экран блокировки не застыл на прошлой
       // сверке.
@@ -1148,6 +1167,7 @@ function PlayerInner() {
         giveUpDeferredRef.current?.('timeout')
       }
       if (!isLive()) return
+      if (recovery?.tick()) return
       const { isPlaying: playing } = usePlayerStore.getState()
       if (!playing || !audio.src || audio.ended) {
         stalledTicks = 0
@@ -1314,6 +1334,8 @@ function PlayerInner() {
     syncPositionState()
 
     return () => {
+      unsubscribeRecovery?.()
+      recovery?.dispose()
       DIAG_EVENTS.forEach((type) => audio.removeEventListener(type, logMediaEvent))
       document.removeEventListener('visibilitychange', logVisibility)
       clearInterval(watchdog)
@@ -1895,7 +1917,7 @@ function PlayerInner() {
 
     const handleCanPlay = () => {
       if (!isLive()) return
-      if (isPlaying && audio.paused) {
+      if (usePlayerStore.getState().isPlaying && audio.paused) {
         playWithDiag(audio, 'canplay')
       }
     }

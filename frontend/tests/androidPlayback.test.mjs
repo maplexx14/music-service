@@ -4,9 +4,10 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
 
-const [playerSource, engineSource, androidSource, bridgeSource] = await Promise.all([
+const [playerSource, engineSource, recoverySource, androidSource, bridgeSource] = await Promise.all([
   readFile(new URL('../src/components/Player.jsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/services/audioEngine.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/services/playbackRecovery.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/services/androidApp.js', import.meta.url), 'utf8'),
   readFile(new URL('../../android/app/src/main/assets/bridge.js', import.meta.url), 'utf8'),
 ])
@@ -142,6 +143,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
     advanceBy: (offset) => update(state.getNextTrack(offset) ? { currentTrack: state.getNextTrack(offset) } : { isPlaying: false }),
     togglePlayPause: () => update({ isPlaying: !state.isPlaying }),
     recordPlayClick: noop,
+    materializeCurrentTrack: async () => state.currentTrack,
   }
   function update(value) {
     if (!Object.keys(value).some((key) => !Object.is(state[key], value[key]))) return
@@ -175,6 +177,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
     },
   }
   const navigator = {
+    onLine: true,
     userAgent: ios ? 'iPhone AppleWebKit/605.1 Safari/605.1' : desktop ? 'Windows NT 10.0 Chrome/130.0 Edg/130.0' : 'Android vivo Chrome/130.0 BoltAndroid/1.8',
     mediaSession: {
       setActionHandler: (action, handler) => actions.set(action, handler),
@@ -214,7 +217,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   const cached = new Map()
   async function link(name) {
     if (cached.has(name)) return cached.get(name)
-    const source = name === '../services/audioEngine' ? engineSource : name === '../services/androidApp' ? androidSource : null
+    const source = name === '../services/audioEngine' ? engineSource : name === '../services/playbackRecovery' ? recoverySource : name === '../services/androidApp' ? androidSource : null
     const exports = Object.fromEntries((importNames.get(name) || []).map((key) => [key, noop]))
     Object.assign(exports, overrides[name])
     const module = source ? new vm.SourceTextModule(source, { context }) : new vm.SyntheticModule(Object.keys(exports), function () {
@@ -240,8 +243,12 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   flush()
   const engine = cached.get('../services/audioEngine').namespace
   return {
-    state, messages, document, window, engine, actions, flush,
+    state, messages, document, window, navigator, engine, actions, flush,
     elapse: (ms) => { now += ms },
+    watchdog: () => {
+      for (const timer of [...timers.values()]) if (timer.delay === 3000) timer.callback()
+      flush()
+    },
     cleanup: () => { for (const hook of hooks) hook?.cleanup?.() },
   }
 }
@@ -373,6 +380,191 @@ test('an explicit pause reaches the native bridge before another React render', 
   assert.equal(app.engine.getActive().paused, true)
   app.cleanup()
 })
+
+function stallMidTrack(app) {
+  const audio = app.engine.getActive()
+  audio.start()
+  audio.currentTime = 42
+  audio.emit('timeupdate')
+  audio.readyState = audio.HAVE_CURRENT_DATA
+  app.document.hidden = true
+  return audio
+}
+
+test('APK reloads a stalled mid-track stream in the background and restores its position', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  const loads = audio.loadCalls
+  app.elapse(12000)
+  app.watchdog()
+  assert.equal(audio.loadCalls, loads + 1)
+  assert.equal(audio.currentTime, 42)
+  // Some decoders expose 0 until metadata arrives; the guarded restore wins.
+  audio.currentTime = 0
+  audio.readyState = audio.HAVE_METADATA
+  audio.emit('loadedmetadata')
+  assert.equal(audio.currentTime, 42)
+  audio.readyState = audio.HAVE_ENOUGH_DATA
+  audio.emit('canplay')
+  audio.emit('playing')
+  audio.currentTime = 46
+  audio.emit('timeupdate')
+  app.watchdog()
+  assert.equal(audio.loadCalls, loads + 1)
+  assert.equal(audio.paused, false)
+  assert.equal(app.state.currentTrack.id, 1)
+  app.cleanup()
+})
+
+test('healthy playback, arriving bytes, and a fresh seek do not reload the APK stream', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  const loads = audio.loadCalls
+  for (let i = 0; i < 30; i++) {
+    app.elapse(3000)
+    audio.currentTime += 3
+    audio.emit('timeupdate')
+    app.watchdog()
+  }
+  for (let i = 0; i < 10; i++) {
+    app.elapse(3000)
+    audio.emit('progress')
+    app.watchdog()
+  }
+  app.elapse(9000)
+  audio.seeking = true
+  audio.emit('seeking')
+  app.watchdog()
+  assert.equal(audio.loadCalls, loads)
+  app.cleanup()
+})
+
+test('APK waits while offline and recovers the same position when connectivity returns', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  const loads = audio.loadCalls
+  app.navigator.onLine = false
+  app.elapse(60000)
+  app.watchdog()
+  assert.equal(audio.loadCalls, loads)
+  app.navigator.onLine = true
+  app.watchdog()
+  assert.equal(audio.loadCalls, loads + 1)
+  assert.equal(audio.currentTime, 42)
+  app.cleanup()
+})
+
+test('mid-track recovery has bounded retries and startup recovery cannot bypass that limit', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  const loads = audio.loadCalls
+  app.elapse(12000)
+  app.watchdog()
+  audio.currentTime = 0
+  app.elapse(9000)
+  audio.emit('stalled')
+  assert.equal(audio.loadCalls, loads + 1, 'stalled event must not overwrite the pending position')
+  for (let i = 0; i < 10; i++) {
+    app.elapse(30000)
+    app.watchdog()
+    audio.currentTime = 0
+  }
+  assert.equal(audio.loadCalls, loads + 3)
+  app.cleanup()
+})
+
+for (const systemPause of [false, true]) {
+  test(`${systemPause ? 'system' : 'explicit'} pause cancels recovery before React flush and late canplay`, async () => {
+    const app = await mountPlayer()
+    const audio = stallMidTrack(app)
+    app.elapse(12000)
+    app.watchdog()
+    const plays = audio.playCalls
+    if (systemPause) audio.pause()
+    else app.state.togglePlayPause()
+    audio.emit('loadedmetadata')
+    audio.emit('canplay')
+    app.flush()
+    app.elapse(60000)
+    app.watchdog()
+    app.document.hidden = false
+    app.document.emit('visibilitychange')
+    assert.equal(app.state.isPlaying, false)
+    assert.equal(audio.paused, true)
+    assert.equal(audio.playCalls, plays)
+    assert.equal(audio.currentTime, 42)
+    app.cleanup()
+  })
+}
+
+test('an OS pause during ordinary playback is not undone by canplay or foregrounding', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  const plays = audio.playCalls
+  audio.pause()
+  audio.emit('canplay')
+  app.document.hidden = false
+  app.document.emit('visibilitychange')
+  app.elapse(60000)
+  app.watchdog()
+  assert.equal(audio.paused, true)
+  assert.equal(audio.playCalls, plays)
+  assert.equal(app.state.isPlaying, false)
+  app.cleanup()
+})
+
+test('an OS pause before recovered metadata arrives cancels playback even at position zero', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  app.elapse(12000)
+  app.watchdog()
+  audio.currentTime = 0
+  const plays = audio.playCalls
+  audio.pause()
+  audio.emit('loadedmetadata')
+  audio.emit('canplay')
+  app.watchdog()
+  assert.equal(app.state.isPlaying, false)
+  assert.equal(audio.paused, true)
+  assert.equal(audio.playCalls, plays)
+  app.cleanup()
+})
+
+test('changing tracks invalidates a pending position restore even before React flush', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  app.elapse(12000)
+  app.watchdog()
+  app.window.__boltMediaAction('nexttrack')
+  audio.emit('loadedmetadata')
+  app.flush()
+  assert.equal(app.state.currentTrack.id, 2)
+  assert.equal(app.engine.getActive().currentTime, 0)
+  app.cleanup()
+})
+
+test('unmount cancels a pending position restore', async () => {
+  const app = await mountPlayer()
+  const audio = stallMidTrack(app)
+  app.elapse(12000)
+  app.watchdog()
+  app.cleanup()
+  audio.currentTime = 0
+  audio.emit('loadedmetadata')
+  assert.equal(audio.currentTime, 0)
+})
+
+for (const options of [{ apk: false }, { apk: false, ios: true }]) {
+  test(`mid-track APK recovery does not reload ${options.ios ? 'iOS' : 'Android browser'} audio`, async () => {
+    const app = await mountPlayer(options)
+    const audio = stallMidTrack(app)
+    const loads = audio.loadCalls
+    app.elapse(60000)
+    app.watchdog()
+    assert.equal(audio.loadCalls, loads)
+    app.cleanup()
+  })
+}
 
 test('system Play records one intent before touching audio, including a failed start', async () => {
   const app = await mountPlayer()
