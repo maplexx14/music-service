@@ -23,7 +23,6 @@ import Carousel from '../components/Carousel'
 import FlowDiscArc from '../components/FlowDiscArc'
 import FlowHeading from '../components/FlowHeading'
 import HeroHearts from '../components/HeroHearts'
-import HeroWaveform from '../components/HeroWaveform'
 import TasteAvatar from '../components/TasteAvatar'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
@@ -525,7 +524,7 @@ function Home() {
         </div>
         <div
           className={`hero-section${vinylDisc ? ' has-vinyl' : ''}${!mobileHero ? ' has-solid-backdrop' : ''}`}
-          // Палитра обложки для фона потока и waveform.
+          // Палитра обложки для фона потока.
           style={{
             '--hero-c1': heroColors[0],
             '--hero-c2': heroColors[1],
@@ -573,7 +572,6 @@ function Home() {
               </Suspense>
             )}
           </div>
-          {!mobileHero && <HeroWaveform playing={isPlaying} enabled={!liteMode} trackKey={currentTrackId} colors={heroColors} />}
           <FlowDiscArc tracks={recommendations.tracks} playing={isPlaying} />
           <div className={`wave-widget ${isPlaying ? 'is-playing' : ''}`}>
             <div className="wave-center">
