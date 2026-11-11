@@ -84,6 +84,18 @@
   pointer-events: none;
 }
 
+/* A mounted layer fades in late artwork; cached covers paint immediately. */
+.hero-disc-artwork {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.hero-disc[data-cover-ready] .hero-disc-artwork {
+  opacity: 1;
+}
+
 .hero-disc-cover {
   /* Без пластинки обложка — размытый фон под заголовком и кнопкой потока: на
      чёткой картинке белый текст терялся. Размытие на краях подмешивает

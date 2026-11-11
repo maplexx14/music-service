@@ -240,7 +240,7 @@ function Playlists() {
             onClick={() => { setShowCreateForm(!showCreateForm); resetImport() }}
           >
             <Plus size={20} />
-            Создать плейглист
+            Создать плейлист
           </button>
         </div>
       </div>

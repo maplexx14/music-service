@@ -193,6 +193,20 @@
   border-radius: inherit;
 }
 
+.hero-section.has-solid-backdrop {
+  transition: none;
+}
+
+.hero-section.has-solid-backdrop::after {
+  background: rgba(8, 6, 10, 0.28);
+}
+
+.hero-solid {
+  position: absolute;
+  inset: 0;
+  background: var(--hero-c3);
+}
+
 .hero-grainient-static {
   position: absolute;
   inset: 0;

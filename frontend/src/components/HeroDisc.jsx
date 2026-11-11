@@ -352,15 +352,17 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
           неподвижный слой поверх. Без пластинки (настройка) крутится та же
           обёртка, а обложка занимает весь круг. */}
       <div ref={platterRef} className="hero-disc-spin">
-        {shownCover && <img
-          className="hero-disc-cover"
-          // Add artwork once decoded; the record is already visible.
-          src={shownCover}
-          data-no-fade=""
-          alt=""
-          draggable={false}
-          decoding="async"
-        />}
+        <div className="hero-disc-artwork">
+          {shownCover && <img
+            className="hero-disc-cover"
+            // Add artwork once decoded; the record is already visible.
+            src={shownCover}
+            data-no-fade=""
+            alt=""
+            draggable={false}
+            decoding="async"
+          />}
+        </div>
       </div>
       {vinyl && <div className="hero-disc-light" />}
     </div>

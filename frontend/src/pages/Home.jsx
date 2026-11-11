@@ -23,6 +23,7 @@ import Carousel from '../components/Carousel'
 import FlowDiscArc from '../components/FlowDiscArc'
 import FlowHeading from '../components/FlowHeading'
 import HeroHearts from '../components/HeroHearts'
+import HeroWaveform from '../components/HeroWaveform'
 import TasteAvatar from '../components/TasteAvatar'
 import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
 import { DEFAULT_HERO_COLORS } from '../utils/coverColor'
@@ -34,6 +35,7 @@ import './Home.css'
 
 // Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
 const Grainient = lazy(() => import('../components/Grainient'))
+const MOBILE_HERO_QUERY = '(max-width: 768px), (pointer: coarse)'
 
 const SOUNDCLOUD_PLAYLIST_LIMIT = 12
 const SOUNDCLOUD_SEED_LIMIT = 3
@@ -221,6 +223,7 @@ function Home() {
   const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
   const hasCurrentTrack = usePlayerStore((s) => !!s.currentTrack)
   const liteMode = useUiSettingsStore((s) => s.liteMode)
+  const [mobileHero, setMobileHero] = useState(() => window.matchMedia(MOBILE_HERO_QUERY).matches)
   const vinylDisc = useUiSettingsStore((s) => s.vinylDisc)
   // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
   // и они тоже красятся в тон трека. Разбор — один thumb на трек, дёшево.
@@ -232,6 +235,14 @@ function Home() {
   // Без аппаратного ускорения WebGL-шейдер на весь hero считается на CPU —
   // вместо него тот же лёгкий фон, что в облегчённом режиме.
   const noGpu = isSoftwareRendering()
+
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_HERO_QUERY)
+    const sync = () => setMobileHero(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
 
   // Разбор обложки следующего трека — заранее. Разбор идёт через сеть и декод
   // картинки, поэтому без прогрева фон докрашивался бы уже во время трека, а на
@@ -513,9 +524,8 @@ function Home() {
           </Link>
         </div>
         <div
-          className={`hero-section${vinylDisc ? ' has-vinyl' : ''}`}
-          // Палитра под обложку текущего трека: WebGL-градиент получает её
-          // пропсами, сердца облегчённого режима и фолбэк Suspense — отсюда.
+          className={`hero-section${vinylDisc ? ' has-vinyl' : ''}${!mobileHero ? ' has-solid-backdrop' : ''}`}
+          // Палитра обложки для фона потока и waveform.
           style={{
             '--hero-c1': heroColors[0],
             '--hero-c2': heroColors[1],
@@ -523,7 +533,9 @@ function Home() {
           }}
         >
           <div className="hero-grainient">
-            {liteMode || noGpu ? (
+            {!mobileHero ? (
+              <div className="hero-solid" />
+            ) : liteMode || noGpu ? (
               <HeroHearts />
             ) : isIOS && isStandalone ? (
               // The WebGL background can leave a magenta scanline in iOS PWA.
@@ -555,13 +567,13 @@ function Home() {
                   centerY={0}
                   zoom={0.9}
                   rippleFrom=".flow-disc-slot.is-current .hero-disc"
-                  rippleStrength={1}
                   rippleKey={currentTrackId != null ? 1 : 0}
                   active={isPlaying}
                 />
               </Suspense>
             )}
           </div>
+          {!mobileHero && <HeroWaveform playing={isPlaying} enabled={!liteMode} trackKey={currentTrackId} colors={heroColors} />}
           <FlowDiscArc tracks={recommendations.tracks} playing={isPlaying} />
           <div className={`wave-widget ${isPlaying ? 'is-playing' : ''}`}>
             <div className="wave-center">
