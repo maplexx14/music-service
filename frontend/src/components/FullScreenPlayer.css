@@ -1087,7 +1087,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 @media (max-width: 380px), (max-height: 720px) {
   .fullscreen-player {
-    padding-top: 14px;
+    padding-top: calc(var(--safe-top) + 14px);
     --fs-art: min(300px, 68vw, 36vh);
   }
 
@@ -1109,6 +1109,29 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
   .fullscreen-controls {
     margin-top: 20px;
+  }
+}
+
+@media (max-width: 380px) {
+  .fullscreen-controls {
+    gap: 4px;
+  }
+
+  .fullscreen-controls .fullscreen-icon,
+  .fullscreen-controls .fullscreen-transport .fullscreen-icon {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+  }
+
+  .fullscreen-transport {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .fullscreen-play {
+    width: 64px;
+    height: 64px;
   }
 }
 

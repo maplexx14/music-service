@@ -14,6 +14,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
+import { plural } from '../utils/format'
 import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 // Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
@@ -218,7 +219,7 @@ function Album() {
                 </li>
               )}
               {album.year && <li>{album.year}</li>}
-              {tracks.length > 0 && <li>{tracks.length} треков</li>}
+              {tracks.length > 0 && <li>{tracks.length} {plural(tracks.length, 'трек', 'трека', 'треков')}</li>}
             </ul>
           </div>
         </div>

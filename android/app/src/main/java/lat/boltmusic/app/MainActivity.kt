@@ -61,8 +61,10 @@ class MainActivity : ComponentActivity() {
     private var bridgeScript: String = ""
     private var injectedAtDocumentStart = false
     private var askedNotifications = false
+    private var notificationPermissionPending = false
     private var safeTopCss = 0
     private val updater by lazy { Updater(this) }
+    private val backgroundPlayback by lazy { BackgroundPlayback(this) }
 
     private val startOrigin: Uri = Uri.parse(BuildConfig.START_URL)
 
@@ -83,7 +85,10 @@ class MainActivity : ComponentActivity() {
         }
 
     private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            notificationPermissionPending = false
+            offerBackgroundPlayback()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -215,6 +220,17 @@ class MainActivity : ComponentActivity() {
         CookieManager.getInstance().flush()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // В том числе после закрытия запроса уведомлений: не ставим два
+        // системных запроса поверх друг друга и не открываем их из фона.
+        if (hasFocus) offerBackgroundPlayback()
+    }
+
+    private fun offerBackgroundPlayback() {
+        if (!notificationPermissionPending) backgroundPlayback.offerIfNeeded()
+    }
+
     override fun onDestroy() {
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         if (PlayerHub.actionSink != null) PlayerHub.actionSink = null
@@ -331,10 +347,12 @@ class MainActivity : ComponentActivity() {
             "state" -> {
                 PlayerHub.setPlaybackState(message.optString("v", "none"))
                 syncPlaybackService()
+                offerBackgroundPlayback()
             }
             "requested" -> {
                 PlayerHub.setPlaybackRequested(message.optBoolean("v"))
                 syncPlaybackService()
+                offerBackgroundPlayback()
             }
             "pos" -> PlayerHub.setPosition(
                 message.optDouble("d", 0.0),
@@ -350,6 +368,7 @@ class MainActivity : ComponentActivity() {
                 message.optBoolean("liked"),
                 message.optBoolean("disliked"),
             )
+            "background-settings" -> if (hasWindowFocus()) backgroundPlayback.openSettings()
             "share" -> share(
                 message.optString("title"),
                 message.optString("text"),
@@ -405,6 +424,7 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
+            notificationPermissionPending = true
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }

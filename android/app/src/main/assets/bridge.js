@@ -152,6 +152,11 @@
     send({ t: 'requested', v: !!requested })
   }
 
+  // Доступность функции служит проверкой поддержки в установленной оболочке.
+  window.__boltOpenBackgroundPlaybackSettings = function () {
+    send({ t: 'background-settings' })
+  }
+
   // Системный лист «Поделиться» вместо копирования в буфер.
   try {
     Object.defineProperty(navigator, 'share', {

@@ -290,7 +290,7 @@ const useAuthStore = create((set, get) => ({
             email,
             password,
             captcha_token: captchaToken || null,
-          })
+          }, { skipErrorToast: true })
 
           // Бэк не пускает до подтверждения почты: форма показывает экран
           // «проверьте письмо» и по claimToken сама входит, когда ссылку
@@ -318,7 +318,27 @@ const useAuthStore = create((set, get) => ({
               error: 'Подтвердите, что вы не робот, и повторите отправку',
             }
           }
-          return { success: false, error: detail || 'Registration failed' }
+          // FastAPI returns validation errors as objects, which cannot be
+          // rendered as React children. Keep the form usable after a 422.
+          if (status === 422 || (detail && typeof detail !== 'string')) {
+            const invalidEmail = Array.isArray(detail) && detail.some((item) =>
+              Array.isArray(item?.loc) && item.loc.includes('email')
+            )
+            return {
+              success: false,
+              error: invalidEmail
+                ? 'Проверьте адрес почты'
+                : 'Проверьте данные регистрации и попробуйте ещё раз',
+            }
+          }
+          const messages = {
+            'Username already registered': 'Это имя пользователя уже занято',
+            'Email already registered': 'Эта почта уже зарегистрирована',
+          }
+          return {
+            success: false,
+            error: messages[detail] || detail || 'Не удалось зарегистрироваться. Попробуйте ещё раз',
+          }
         }
       },
       

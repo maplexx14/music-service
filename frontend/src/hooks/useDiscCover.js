@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { isCoverReady, markCoverReady, subscribeCoverReady } from '../utils/coverCache'
 
-// Keep the record hidden until its artwork can be painted. Loading a larger
+// Add artwork only once it can be painted. Loading a larger
 // version must not replace the already decoded artwork with an empty image.
 function loadCover(url, priority, onReady) {
   const image = new Image()
@@ -37,7 +37,7 @@ export function useDiscCover(url, upgradeUrl, priority = 'auto', {
   const [cover, setCover] = useState(null)
   const [upgradeAttempt, setUpgradeAttempt] = useState(null)
   // Decoded artwork can paint on the first render, including after remounting
-  // a record. Waiting for an effect would briefly hide a cached cover again.
+  // a record. Waiting for an effect would briefly clear a cached cover again.
   const cachedSrc = url ? [alternateUpgradeUrl, upgradeUrl, url].find(isCoverReady) : null
   const src = (url && cover?.url === url && cover.src) || cachedSrc || null
   const settled = !url || Boolean(src) || cover?.url === url

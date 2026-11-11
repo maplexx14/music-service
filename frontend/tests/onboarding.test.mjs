@@ -51,6 +51,7 @@ function browser(server = { user: newUser() }) {
     },
     async post(path) {
       requests.push({ path })
+      if (path === '/auth/register') throw server.registrationError
       assert.equal(path, '/users/me/onboarding/complete')
       if (server.complete) await server.complete()
       server.user.onboarding_completed = true
@@ -270,4 +271,31 @@ test('a completion response cannot mark another signed-in account as completed',
   await pending
   assert.equal(app.store.getState().user.id, 2)
   assert.equal(app.store.getState().user.onboarding_completed, false)
+})
+
+test('registration translates FastAPI email validation into a renderable message', async () => {
+  const app = browser({ user: newUser(), registrationError: {
+    response: { status: 422, data: { detail: [{
+      type: 'value_error', loc: ['body', 'email'],
+      msg: 'value is not a valid email address', input: 'qa@example',
+    }] } },
+  } })
+  const result = await app.store.getState().register('qa', 'qa@example', 'password', 'captcha')
+  assert.equal(result.success, false)
+  assert.equal(result.error, 'Проверьте адрес почты')
+  assert.equal(app.store.getState().isAuthenticated, false)
+})
+
+test('registration keeps malformed API errors and unavailable captcha safe to render', async () => {
+  for (const [status, detail, expected] of [
+    [422, [{ loc: ['body', 'username'], msg: 'too short' }], 'Проверьте данные регистрации и попробуйте ещё раз'],
+    [400, { message: 'invalid input' }, 'Проверьте данные регистрации и попробуйте ещё раз'],
+    [503, 'Captcha temporarily unavailable', 'Проверка «я не робот» сейчас недоступна — попробуйте ещё раз'],
+    [400, 'Captcha verification failed', 'Подтвердите, что вы не робот, и повторите отправку'],
+  ]) {
+    const app = browser({ user: newUser(), registrationError: { response: { status, data: { detail } } } })
+    const result = await app.store.getState().register('qa', 'qa@example.com', 'password', 'captcha')
+    assert.equal(result.success, false)
+    assert.equal(result.error, expected)
+  }
 })

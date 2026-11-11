@@ -45,13 +45,13 @@
 .btn--sm {
   height: var(--control-h-sm);
   padding: 0 14px;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .btn--lg {
   height: var(--control-h-lg);
   padding: 0 28px;
-  font-size: 15px;
+  font-size: var(--text-md);
 }
 
 .btn--block {

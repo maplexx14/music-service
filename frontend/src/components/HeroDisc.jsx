@@ -354,7 +354,7 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
       <div ref={platterRef} className="hero-disc-spin">
         {shownCover && <img
           className="hero-disc-cover"
-          // Decode the compact artwork before showing the record.
+          // Add artwork once decoded; the record is already visible.
           src={shownCover}
           data-no-fade=""
           alt=""

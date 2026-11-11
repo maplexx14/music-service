@@ -539,11 +539,11 @@
   }
 
   .player-track-title {
-    font-size: 15px;
+    font-size: var(--text-md);
   }
 
   .player-track-artist {
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
 
   .play-pause-btn {

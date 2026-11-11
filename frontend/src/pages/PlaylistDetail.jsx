@@ -18,6 +18,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
+import { plural } from '../utils/format'
 import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import { shareLink } from '../utils/shareLink'
 import './PlaylistDetail.css'
@@ -211,7 +212,7 @@ function PlaylistDetail() {
             )}
             <ul className="artist-stats">
               <li>{playlist.owner?.username || 'Пользователь'}</li>
-              {totalTracks > 0 && <li>{totalTracks} треков</li>}
+              {totalTracks > 0 && <li>{totalTracks} {plural(totalTracks, 'трек', 'трека', 'треков')}</li>}
             </ul>
           </div>
         </div>

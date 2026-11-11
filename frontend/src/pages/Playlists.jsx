@@ -11,6 +11,7 @@ import {
 } from '../services/pageCache'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'
+import PageLoadError from '../components/PageLoadError'
 import ImportFormDialog from '../components/ImportFormDialog'
 import ImportCollectionPicker, {
   allCollectionKeys,
@@ -39,6 +40,7 @@ function Playlists() {
   // «Медиатека» открывается без спиннера.
   const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
   const [loading, setLoading] = useState(() => !peekCache(LIBRARY_CACHE_KEY))
+  const [loadError, setLoadError] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [coverFile, setCoverFile] = useState(null)
@@ -74,15 +76,17 @@ function Playlists() {
   // Создание и удаление правят список на месте — кэш следует за ним, иначе
   // возврат на вкладку на миг показал бы прошлую версию.
   useEffect(() => {
-    if (!loading) writeCache(LIBRARY_CACHE_KEY, playlists)
-  }, [playlists, loading])
+    if (!loading && !loadError) writeCache(LIBRARY_CACHE_KEY, playlists)
+  }, [playlists, loading, loadError])
 
   const fetchPlaylists = async () => {
+    setLoadError(false)
     try {
-      const response = await api.get('/playlists/me')
+      const response = await api.get('/playlists/me', { skipErrorToast: playlists.length === 0 })
       setPlaylists(response.data)
     } catch (error) {
       console.error('Error fetching playlists:', error)
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -197,6 +201,13 @@ function Playlists() {
     return (
       <Spinner page />
     )
+  }
+
+  if (loadError && playlists.length === 0) {
+    return <PageLoadError title="Не удалось загрузить медиатеку" onRetry={() => {
+      setLoading(true)
+      fetchPlaylists()
+    }} />
   }
 
   return (

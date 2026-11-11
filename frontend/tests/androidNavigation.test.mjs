@@ -292,7 +292,7 @@ test('Closing and reopening the player does not consume the next real back gestu
   app.cleanup()
 })
 
-test('Android bridge advertises native back and preserves next/previous commands', () => {
+function mountBridge() {
   const messages = []
   const navigator = {}
   const window = {
@@ -305,6 +305,11 @@ test('Android bridge advertises native back and preserves next/previous commands
     document: { readyState: 'complete', createElement: () => ({}), head: { appendChild() {} } },
   })
   vm.runInContext(bridgeSource, context)
+  return { window, navigator, messages }
+}
+
+test('Android bridge advertises native back and preserves next/previous commands', () => {
+  const { window, navigator, messages } = mountBridge()
   assert.equal(window.__boltNativeBack, true)
   const commands = []
   navigator.mediaSession.setActionHandler('nexttrack', (details) => commands.push(details.action))
@@ -315,4 +320,14 @@ test('Android bridge advertises native back and preserves next/previous commands
   navigator.mediaSession.setActionHandler('nexttrack', null)
   assert.equal(window.__boltMediaAction('nexttrack'), false)
   assert.ok(messages.some((message) => message.t === 'actions'))
+})
+
+test('background settings open only on explicit request without changing playback', () => {
+  const { window, navigator, messages } = mountBridge()
+  assert.equal(typeof window.__boltOpenBackgroundPlaybackSettings, 'function')
+  navigator.mediaSession.playbackState = 'playing'
+  assert.equal(messages.some((message) => message.t === 'background-settings'), false)
+  window.__boltOpenBackgroundPlaybackSettings()
+  assert.deepEqual(messages.at(-1), { t: 'background-settings' })
+  assert.equal(navigator.mediaSession.playbackState, 'playing')
 })

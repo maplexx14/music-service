@@ -41,7 +41,7 @@
 }
 
 /* Gate the first entrance; keep revealed records visible across tabs. */
-.flow-disc-arc:not([data-covers-ready]) .flow-disc-slot .hero-disc {
+.flow-disc-arc:not([data-discs-ready]) .flow-disc-slot .hero-disc {
   visibility: hidden;
 }
 
@@ -51,9 +51,8 @@
 }
 
 @media (max-width: 768px) and (prefers-reduced-motion: no-preference) {
-  /* Loading covers join the same timeline while hidden; decoding must not
-     start a new entrance or reveal a stationary record halfway through it. */
-  .flow-disc-arc[data-active][data-covers-ready] .flow-disc-slot .hero-disc[data-disc-enter] {
+  /* Every record enters together, independently of artwork loading. */
+  .flow-disc-arc[data-active][data-discs-ready] .flow-disc-slot .hero-disc[data-disc-enter] {
     animation: flow-disc-enter 650ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
   }
 }

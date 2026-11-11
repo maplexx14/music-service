@@ -4,6 +4,13 @@ import { usePlayerStore } from '../store/playerStore'
 
 export const isAndroidApp = () => typeof window !== 'undefined' && !!window.__boltAndroid
 
+export const canConfigureAndroidBackgroundPlayback = () =>
+  isAndroidApp() && typeof window.__boltOpenBackgroundPlaybackSettings === 'function'
+
+export function openAndroidBackgroundPlaybackSettings() {
+  if (canConfigureAndroidBackgroundPlayback()) window.__boltOpenBackgroundPlaybackSettings()
+}
+
 // Намерение продолжать очередь отдельно от mediaSession.playbackState:
 // загрузка нового src временно ставит элемент на паузу, но фоновый сервис
 // в этот момент должен продолжать защищать WebView от сна.

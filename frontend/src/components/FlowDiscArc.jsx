@@ -42,12 +42,12 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
   useLayoutEffect(() => {
     const arc = arcRef.current
     if (entranceStartedRef.current) {
-      arc.setAttribute('data-covers-ready', '')
+      arc.setAttribute('data-discs-ready', '')
       setUpgradeCovers(true)
       return undefined
     }
     setUpgradeCovers(false)
-    arc.removeAttribute('data-covers-ready')
+    arc.removeAttribute('data-discs-ready')
     if (!active) return undefined
 
     let disposed = false
@@ -67,19 +67,14 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     }
     finishEntranceRef.current = finishEntrance
 
-    // Pin the decoded previews: background flow preloads must not replace a
+    // Pin the previews: background flow preloads must not replace a
     // record halfway through the first entrance or when playback starts.
     const reveal = () => {
       const discs = [...arc.querySelectorAll('.flow-disc-slot .hero-disc')]
       if (!discs.length) return
       const desktop = !window.matchMedia(MOBILE_QUERY).matches
-      const pending = discs.some((disc) => !disc.hasAttribute('data-cover-settled'))
-      const ready = discs.filter((disc) => disc.hasAttribute('data-cover-ready'))
-      // Start as soon as mobile artwork can paint, but put every mounted
-      // record on the same entrance timeline, including still-loading covers.
-      if (pending && (desktop || !ready.length)) return
       if (flowPreviewRef.current) usePlayerStore.getState().pinFlowPreview(flowPreviewRef.current)
-      entranceNodes = desktop ? ready : discs
+      entranceNodes = discs
       entranceStartedRef.current = true
       if (!desktop) {
         for (const disc of entranceNodes) {
@@ -97,7 +92,7 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
           if (!disposed) finishEntrance()
         })
       }
-      arc.setAttribute('data-covers-ready', '')
+      arc.setAttribute('data-discs-ready', '')
       observer.disconnect()
       if (desktop) {
         if (!entranceMotion) finishEntrance()
@@ -114,8 +109,6 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
     observer.observe(arc, {
       childList: true,
       subtree: true,
-      attributes: true,
-      attributeFilter: ['data-cover-settled'],
     })
     reveal()
     return () => {

@@ -29,7 +29,7 @@ async function setup({ ready = false, settled = false } = {}) {
     let finish
     const finished = new Promise((resolve) => { finish = resolve })
     this.animation = {
-      frames, options, finished, finish,
+      frames, options, finished, finish, paused: false, startTime: timeline.currentTime,
       effect: { progress: 0, getComputedTiming() { return { progress: this.progress } } },
       pause() { this.paused = true },
       play() { this.paused = false },
@@ -131,10 +131,10 @@ async function setup({ ready = false, settled = false } = {}) {
   }
 }
 
-test('return waits for artwork and flies visibly from the right before revealing the live disc', async () => {
+test('return flies from the right before artwork loads and then reveals the live disc', async () => {
   const app = await setup()
   const motion = app.start()
-  assert.equal(app.ghosts.length, 0)
+  assert.equal(app.ghosts.length, 1)
   assert.equal(app.slot.style.visibility, 'hidden')
   app.update('data-cover-ready', 'data-cover-settled')
   const ghost = app.ghosts[0]
@@ -158,14 +158,16 @@ test('cached artwork starts returning immediately at the full current-disc size'
   assert.equal(app.ghosts[0].inert, true)
 })
 
-test('failed artwork releases the hidden slot without animating an empty copy', async () => {
-  const app = await setup()
+test('a disc with failed artwork returns normally and releases the live slot on arrival', async () => {
+  const app = await setup({ settled: true })
   const motion = app.start()
   app.update('data-cover-settled')
-  assert.equal(app.ghosts.length, 0)
+  assert.equal(app.ghosts.length, 1)
+  assert.equal(app.slot.style.visibility, 'hidden')
+  await app.finish()
   assert.equal(app.slot.style.visibility, '')
   assert.equal(app.completions[0], motion)
-  assert.equal(app.observers[0].disconnected, true)
+  assert.equal(app.observers.length, 0)
 })
 
 test('a cancelled return cannot start later when its artwork finishes loading', async () => {
@@ -173,7 +175,8 @@ test('a cancelled return cannot start later when its artwork finishes loading', 
   const motion = app.start()
   motion.cleanup()
   app.update('data-cover-ready', 'data-cover-settled')
-  assert.equal(app.ghosts.length, 0)
+  assert.equal(app.ghosts.length, 1)
+  assert.equal(app.ghosts[0].removed, true)
   assert.equal(app.slot.style.visibility, '')
   assert.equal(app.completions.length, 1)
 })
@@ -244,7 +247,7 @@ test('backward desktop navigation follows the same lower arc in reverse', async 
   motion.cleanup()
 })
 
-test('a late upcoming cover enters the desktop drum after decoding without delaying the selected record', async () => {
+test('an upcoming desktop disc enters with the other records before its cover loads', async () => {
   const app = await setup()
   const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32]])
   const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
@@ -253,66 +256,73 @@ test('a late upcoming cover enters the desktop drum after decoding without delay
     assert.equal(motion.entries.get(key).animation.paused, false)
     assert.equal(motion.entries.get(key).animation.startTime, 500)
   }
-  assert.equal(current.get('c').node.style.visibility, 'hidden')
+  assert.equal(current.get('c').node.style.visibility, '')
   const incoming = motion.entries.get('c').animation
-  assert.equal(incoming.paused, true)
+  assert.equal(incoming.paused, false)
+  assert.equal(incoming.startTime, 500)
   assert.equal(incoming.currentTime, 0)
   app.timeline.currentTime = 1500
   current.get('c').settle()
   assert.equal(current.get('c').node.style.visibility, '')
   assert.equal(incoming.paused, false)
-  assert.equal(incoming.startTime, 1500)
+  assert.equal(incoming.startTime, 500, 'late artwork must not restart the record')
   assert.equal(incoming.frames[0].transform, 'translate(0px, 418px)')
   assert.equal(incoming.frames.at(-1).transform, 'translate(320px, 258px)')
-  assert.notEqual(incoming.frames[1].transform, incoming.frames[0].transform, 'decoded artwork starts moving immediately')
+  assert.notEqual(incoming.frames[13].transform, incoming.frames[0].transform, 'the replacement follows the shared drum timeline')
   assert.equal(motion.entries.get('b').animation.startTime, 500)
   motion.cleanup()
 })
 
-test('failed incoming desktop artwork releases its pending entrance', async () => {
+test('failed incoming desktop artwork does not cancel the record entrance', async () => {
   const app = await setup()
   const previous = app.drumSlots([['a', 0], ['b', 32]])
   const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
   const motion = app.drum(previous, current)
   const incoming = motion.entries.get('c').animation
   current.get('c').settle(false)
-  assert.equal(incoming.cancelled, true)
+  assert.notEqual(incoming.cancelled, true)
+  assert.equal(incoming.paused, false)
+  assert.equal(current.get('c').node.style.visibility, '')
   for (const { animation } of motion.entries.values()) animation.finish()
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(motion.entries.size, 0)
-  assert.equal(app.observers.at(-1).disconnected, true)
+  assert.equal(app.observers.length, 0)
 })
 
-test('a second desktop skip keeps an undecoded incoming preview waiting at the hidden edge', async () => {
+test('a second desktop skip continues a loading incoming disc from its current position', async () => {
   const app = await setup()
   const previous = app.drumSlots([['a', 0], ['b', 32]])
   const current = app.drumSlots([['b', 0], ['c', 32, false], ['a', -32]])
   const first = app.drum(previous, current)
-  first.entries.get('c').node.isConnected = false
+  const entering = first.entries.get('c')
+  entering.animation.effect.progress = 0.75
+  const point = entering.pointAt(0.75)
+  entering.node.isConnected = false
   const after = app.drumSlots([['a', 0], ['c', 32, false]])
   const second = app.drum(current, after, { direction: -1, interrupted: first })
   const incoming = second.entries.get('c').animation
-  assert.equal(incoming.paused, true)
-  assert.equal(incoming.frames[0].transform, 'translate(0px, 418px)')
-  assert.ok(incoming.frames.every((frame) => parseFloat(frame.transform.slice(10)) >= -0.001), 'the pending right preview enters along the right lower arc')
+  assert.equal(incoming.paused, false)
+  assert.equal(incoming.frames[0].transform, `translate(${point.x}px, ${point.y}px)`)
+  assert.equal(incoming.frames.at(-1).transform, 'translate(320px, 258px)')
+  assert.equal(after.get('c').node.style.visibility, '')
   after.get('c').settle()
   assert.equal(incoming.paused, false)
   second.cleanup()
 })
 
-test('the last mobile record waits for its cover and then visibly enters from below', async () => {
+test('the last mobile record enters from below while its cover is still loading', async () => {
   const app = await setup()
   const previous = app.stackSlots([['a', 0], ['b', 0.34], ['c', 0.66]])
   const current = app.stackSlots([['b', 0], ['c', 0.34], ['d', 0.66, false]])
   const motions = app.stack(previous, current)
   const incoming = current.get('d').node.animation
-  assert.equal(incoming.paused, true)
-  assert.equal(incoming.currentTime, 0)
+  assert.equal(incoming.paused, false)
+  assert.equal(incoming.startTime, 500)
   assert.equal(current.get('b').node.animation, undefined, 'retained discs keep their immediate CSS movement')
   app.timeline.currentTime = 1500
   current.get('d').settle()
   assert.equal(incoming.paused, false)
-  assert.equal(incoming.startTime, 1500)
+  assert.equal(incoming.startTime, 500, 'late artwork must not restart the record')
   assert.equal(incoming.frames[0].transform, 'translateY(240px)')
   assert.equal(incoming.frames[1].transform, 'translateY(158.4px)')
   incoming.finish()
@@ -330,16 +340,20 @@ test('a cached last mobile cover enters immediately without waiting for another 
   app.clearStack(motions)
 })
 
-test('failed mobile artwork cancels its entrance instead of leaving a pending motion', async () => {
+test('failed mobile artwork does not cancel its record entrance', async () => {
   const app = await setup()
   const previous = app.stackSlots([['a', 0], ['b', 0.34]])
   const current = app.stackSlots([['b', 0], ['c', 0.34, false]])
   const motions = app.stack(previous, current)
   const incoming = current.get('c').node.animation
   current.get('c').settle(false)
+  assert.notEqual(incoming.cancelled, true)
+  assert.equal(incoming.paused, false)
+  incoming.finish()
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(incoming.cancelled, true)
   assert.equal(motions.size, 0)
-  assert.equal(app.observers.at(-1).disconnected, true)
+  assert.equal(app.observers.length, 0)
 })
 
 test('a cancelled mobile entrance cannot restart after a late cover decode', async () => {
@@ -351,9 +365,9 @@ test('a cancelled mobile entrance cannot restart after a late cover decode', asy
   app.clearStack(motions)
   current.get('c').settle()
   assert.equal(incoming.cancelled, true)
-  assert.equal(incoming.paused, true)
+  assert.equal(incoming.paused, false)
   assert.equal(motions.size, 0)
-  assert.equal(app.observers.at(-1).disconnected, true)
+  assert.equal(app.observers.length, 0)
 })
 
 test('skipping to a cold selected cover still moves the previous record immediately', async () => {
@@ -364,7 +378,7 @@ test('skipping to a cold selected cover still moves the previous record immediat
   assert.equal(motion.entries.get('a').animation.paused, false)
   assert.equal(motion.entries.get('a').animation.startTime, 500)
   assert.equal(motion.entries.get('b').animation.paused, false)
-  assert.equal(current.get('b').node.style.visibility, 'hidden')
+  assert.equal(current.get('b').node.style.visibility, '')
   current.get('b').settle()
   assert.equal(current.get('b').node.style.visibility, '')
   motion.cleanup()
@@ -396,7 +410,7 @@ test('a cancelled desktop skip cannot restart when pending artwork is decoded', 
   motion.cleanup()
   current.get('c').settle()
   assert.ok(animations.every((animation) => animation.cancelled))
-  assert.equal(app.observers.at(-1).disconnected, true)
+  assert.equal(app.observers.length, 0)
   assert.equal(current.get('c').node.style.visibility, '')
 })
 
@@ -502,11 +516,24 @@ test('desktop entrance finishes together and cancellation suppresses late comple
   assert.equal(completions, 1)
 })
 
-test('failed desktop artwork does not enter as an empty record', async () => {
+test('desktop entrance includes every record even when its artwork fails', async () => {
   const app = await setup()
   const slots = app.drumSlots([['a', 0], ['b', 32, false], ['c', -32]])
   const motion = app.entrance(slots)
-  assert.equal(motion.animations.length, 2)
-  assert.equal(slots.get('b').node.animation, undefined)
+  assert.equal(motion.animations.length, 3)
+  assert.equal(slots.get('b').node.animation.startTime, 500)
   motion.cleanup()
+})
+
+test('a desktop disc with failed artwork still departs through the lower arc', async () => {
+  const app = await setup()
+  const previous = app.drumSlots([['a', 0], ['b', 32], ['z', -32, false]])
+  const current = app.drumSlots([['b', 0], ['c', 32], ['a', -32]])
+  const motion = app.drum(previous, current)
+  const outgoing = motion.entries.get('z')
+  assert.equal(outgoing.animation.paused, false)
+  assert.equal(outgoing.animation.frames[0].transform, 'translate(-320px, 258px)')
+  assert.equal(outgoing.animation.frames.at(-1).transform, 'translate(0px, 418px)')
+  motion.cleanup()
+  assert.equal(app.ghosts[0].removed, true)
 })

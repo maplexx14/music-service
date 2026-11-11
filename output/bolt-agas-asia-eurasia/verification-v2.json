@@ -1,0 +1,17 @@
+{
+  "output": "bolt-agas-karaoke-v2.mp4",
+  "decodePassed": true,
+  "media": [
+    "Duration: 00:00:16.00, start: 0.000000, bitrate: 684 kb/s",
+    "Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt470bg/unknown/unknown, progressive), 1080x1920 [SAR 1:1 DAR 9:16], 495 kb/s, 30 fps, 30 tbr, 15360 tbn (default)",
+    "Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, mono, fltp, 179 kb/s (default)"
+  ],
+  "speed": 1.1,
+  "pitchPreserved": true,
+  "bytes": 1369674,
+  "audioEnvelopeComparison": {
+    "correlation": 0.9893950861944191,
+    "offsetMs": 0
+  },
+  "audioTimingVerified": true
+}

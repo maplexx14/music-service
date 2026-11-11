@@ -78,3 +78,37 @@ covered by the real Player-effect regressions in `androidPlayback.test.mjs`.
 An AOSP emulator does not establish how Samsung One UI battery restrictions behave.
 With `-no-audio`, these probes verify media progress and the Android audio track,
 not acoustic output. They also do not exercise the authenticated account layout.
+
+## Full account UI audit
+
+`uiAudit.mjs` serves `frontend/dist` inside the installed debug APK WebView.
+The API, Turnstile captcha, email verification, covers and audio use the live
+service. Build the frontend first, open the APK, then run from `frontend`:
+
+```powershell
+npm run build
+node tests/emulator/uiAudit.mjs serve
+```
+
+The server listens on localhost port 9234 and forwards CDP on 9223. From a
+second terminal, inspect the current screen or save an Android screenshot:
+
+```powershell
+node tests/emulator/uiAudit.mjs summary
+node tests/emulator/uiAudit.mjs screenshot home
+node tests/emulator/uiAudit.mjs navigate /playlists
+node tests/emulator/uiAudit.mjs eval --file expression.js
+```
+
+Use `eval --file` for expressions containing quotes in PowerShell. `tap` uses
+real ADB input at the element coordinates. Run scenarios sequentially against
+one emulator. Check that the keyboard is visible before sending native Back
+to dismiss it; otherwise Back navigates the app. Loading `/` in the APK restores
+the last tab, so use the Home navigation button to test the main screen.
+
+Commands also support JSON `rule` request failures/delays, `clear-rules`,
+`offline true/false`, `cdp`, `record` and `report`. Snapshots and network traces
+are saved under ignored `android/app/build/reports/ui-audit`. Inspect does not
+include input values, and token parameters in network URLs are redacted.
+Keep test account credentials in ignored files. Disconnect CDP before judging
+background playback and reset any screen-size or network overrides after tests.

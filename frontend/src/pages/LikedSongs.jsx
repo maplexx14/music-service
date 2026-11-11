@@ -15,6 +15,7 @@ import defaultCover from '../assets/default-cover.webp'
 import logoHeart from '../assets/liked-hero-heart.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
+import { plural } from '../utils/format'
 import { shareLink } from '../utils/shareLink'
 import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import { useScreen } from '../hooks/useScreen'
@@ -297,7 +298,7 @@ function LikedSongs() {
               <p className="playlist-hero-description">{playlist.description}</p>
             )}
             <ul className="artist-stats">
-              {totalTracks > 0 && <li>{totalTracks} треков</li>}
+              {totalTracks > 0 && <li>{totalTracks} {plural(totalTracks, 'трек', 'трека', 'треков')}</li>}
             </ul>
           </div>
         </div>

@@ -32,7 +32,7 @@
 }
 
 .playlist-type {
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 8px;
@@ -47,14 +47,12 @@
   margin-bottom: 16px;
   line-height: 1;
   overflow-wrap: anywhere;
-  /* Unbounded — широкий дисплейный гротеск: на 72px межбуквенные просветы
-     читаются рыхло, tightened по правилу «крупный кегль — отрицательный
-     трекинг». */
+  /* У крупного заголовка немного уплотняем межбуквенные интервалы. */
   letter-spacing: -0.02em;
 }
 
 .playlist-description {
-  font-size: 16px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   margin-bottom: 16px;
 }
@@ -63,7 +61,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   margin-bottom: 24px;
 }
@@ -212,7 +210,7 @@ html.power-save .liked-heart-beat {
 .tracks-table th {
   text-align: left;
   padding: 12px;
-  font-size: 12px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -246,7 +244,7 @@ html.power-save .liked-heart-beat {
 
 .track-row td {
   padding: 12px;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .track-number {
@@ -288,8 +286,8 @@ html.power-save .liked-heart-beat {
 }
 
 .track-name {
-  font-size: 16px;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
 }
@@ -303,7 +301,7 @@ html.power-save .liked-heart-beat {
 }
 
 .track-artist {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
@@ -454,10 +452,6 @@ html.power-save .liked-heart-beat {
     margin-bottom: 12px;
   }
 
-  .playlist-description {
-    font-size: 14px;
-  }
-
   .playlist-meta {
     justify-content: center;
     margin-bottom: 16px;
@@ -553,7 +547,7 @@ html.power-save .liked-heart-beat {
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 72px;
+    height: 80px;
     padding: 10px 4px;
     border-bottom: 1px solid var(--border-subtle);
     /* Фиксированная высота сохраняется и у пропущенных строк: уточнение
@@ -602,7 +596,7 @@ html.power-save .liked-heart-beat {
 
 @media (max-width: 768px) {
   .tracks-table tr.track-row--with-meta {
-    height: 88px;
+    height: 100px;
   }
 }
 

@@ -6,7 +6,7 @@
 }
 
 .playlists-header h1 {
-  font-size: 32px;
+  font-size: var(--text-2xl);
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -75,12 +75,12 @@
 }
 
 .empty-state p {
-  font-size: 18px;
+  font-size: var(--text-lg);
   margin-bottom: 8px;
 }
 
 .empty-state-subtitle {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-disabled);
 }
 
@@ -173,7 +173,7 @@
 }
 
 .playlist-name {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -187,7 +187,7 @@
 }
 
 .playlist-description {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   margin-bottom: 8px;
   line-height: 1.4;
@@ -199,7 +199,7 @@
 }
 
 .playlist-tracks-count {
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text-disabled);
 }
 
@@ -583,7 +583,7 @@
   }
 
   .playlists-header h1 {
-    font-size: 26px;
+    font-size: var(--text-2xl);
     text-align: center;
   }
 
@@ -671,10 +671,6 @@
 
   .playlist-card {
     padding: 10px;
-  }
-
-  .playlist-name {
-    font-size: 14px;
   }
 
   .playlist-delete-btn {

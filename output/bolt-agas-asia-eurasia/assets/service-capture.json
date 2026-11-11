@@ -1,0 +1,17 @@
+{
+  "source": "https://boltmusic.lat/track/6b3546a3-8ab0-47a6-8c5e-51735d6c79c1",
+  "recording": "Live browser recording; guest metadata request ID corrected in browser.",
+  "clipStart": 3.5928188000000003,
+  "clickAt": 3.8537227999999994,
+  "click": {
+    "x": 540,
+    "y": 1377.375
+  },
+  "playback": {
+    "paused": false,
+    "currentTime": 5.014548,
+    "duration": 203.232653,
+    "readyState": 4,
+    "error": null
+  }
+}

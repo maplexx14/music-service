@@ -9,7 +9,7 @@
   border: 1px solid var(--border-default);
   border-radius: 8px;
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: var(--text-lg);
   transition: border-color var(--duration-base) var(--ease-out),
               background-color var(--duration-base) var(--ease-out);
 }
@@ -59,8 +59,8 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-pill);
   color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   transition: background-color var(--duration-base) var(--ease-out),
@@ -90,8 +90,8 @@
 }
 
 .results-title {
-  font-size: 20px;
-  font-weight: bold;
+  font-size: var(--text-xl);
+  font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 16px;
 }
@@ -150,8 +150,8 @@
 }
 
 .track-item-title {
-  font-size: 16px;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
   overflow: hidden;
@@ -163,7 +163,7 @@
    и таблица треков на странице артиста. */
 
 .track-item-artist {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -180,7 +180,7 @@
 /* Длительность трека в строке выдачи. Табличные цифры — чтобы столбик
    значений не «дышал» по ширине от строки к строке. */
 .track-item-duration {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -259,7 +259,7 @@
 }
 
 .playlist-item-name {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -269,7 +269,7 @@
 }
 
 .playlist-item-description {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
   line-height: 1.4;
   /* Две строки максимум: иначе описание плейлиста растягивает всю ленту по
@@ -313,17 +313,17 @@
 }
 
 .search-link-card__kicker {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
 .search-link-card__title {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: var(--text-xl);
+  font-weight: 600;
 }
 
 .search-link-card__hint {
-  font-size: 14px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
@@ -340,7 +340,8 @@
 }
 
 .search-placeholder h2 {
-  font-size: 32px;
+  font-size: var(--text-2xl);
+  font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 16px;
   letter-spacing: -0.01em;
@@ -387,10 +388,6 @@
     height: 48px;
   }
 
-  .track-item-duration {
-    font-size: 12px;
-  }
-
   .playlist-item {
     padding: 10px;
   }
@@ -399,13 +396,6 @@
     margin-bottom: 8px;
   }
 
-  .playlist-item-name {
-    font-size: 14px;
-  }
-
-  .playlist-item-description {
-    font-size: 12px;
-  }
 }
 
 .playlist-item.importing {
@@ -451,7 +441,7 @@
 }
 
 .artist-card-name {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
@@ -469,9 +459,6 @@
     padding: 14px 12px;
   }
 
-  .artist-card-name {
-    font-size: 15px;
-  }
 }
 
 @media (max-width: 380px) {

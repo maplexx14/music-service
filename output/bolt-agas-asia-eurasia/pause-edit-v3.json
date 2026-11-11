@@ -1,0 +1,10 @@
+{
+  "input": "bolt-agas-karaoke-v2.mp4",
+  "output": "bolt-agas-karaoke-v3.mp4",
+  "cutFromSeconds": 3.3666666666666667,
+  "cutToSeconds": 4.066666666666666,
+  "removedSeconds": 0.7,
+  "duration": 15.3,
+  "frames": 459,
+  "note": "Video and audio cut together inside silence; existing karaoke sync and 1.1x speed preserved."
+}

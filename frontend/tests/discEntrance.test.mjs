@@ -12,7 +12,7 @@ const script = new vm.Script(code, { filename: 'FlowDiscArc.jsx' })
 
 function mount({ mobile = true, ready = [], failed = [], active = true, count = 3, reduced = false,
   currentIndex = null, isShuffle = false, shuffledOrder = [], currentShuffleIndex = 0, dislikedTrackIds = [],
-  holdEntrance = false,
+  holdEntrance = false, loaded = true,
 } = {}) {
   const hooks = [], observers = [], pinned = [], ribbons = []
   let hookIndex = 0, effects = [], tree, visibleDiscs = []
@@ -22,7 +22,7 @@ function mount({ mobile = true, ready = [], failed = [], active = true, count = 
     currentTrack: currentIndex === null ? null : tracks[currentIndex],
     queue: currentIndex === null ? [] : tracks,
     currentIndex, isShuffle, shuffledOrder, currentShuffleIndex, dislikedTrackIds,
-    flowPreload: { tracks }, flowPreview: null,
+    flowPreload: loaded ? { tracks } : null, flowPreview: null,
   }
   const animations = tracks.map(() => {
     let finish
@@ -126,35 +126,40 @@ function mount({ mobile = true, ready = [], failed = [], active = true, count = 
       discs[index].setAttribute('data-cover-settled')
       for (const observer of observers) if (!observer.disconnected) observer.callback()
     },
+    loadPreview() {
+      state.flowPreload = { tracks }
+      render()
+      for (const observer of observers) if (!observer.disconnected) observer.callback()
+    },
     activate(active) { screen.active = active; render() },
     async settle() { for (let i = 0; i < 5; i++) await Promise.resolve(); render() },
     unmount() { for (const hook of hooks) hook.cleanup?.() },
   }
 }
 
-test('a decoded mobile main disc enters while both preview downloads are still pending', async () => {
-  const app = mount({ ready: [0] })
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+test('mobile discs enter while every cover download is still pending', async () => {
+  const app = mount()
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   assert.equal(app.discs[0].hasAttribute('data-disc-enter'), true)
   assert.equal(app.discs[1].hasAttribute('data-cover-settled'), false)
   assert.equal(app.pinned.length, 1)
   await app.settle()
   app.ready(1)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   assert.equal(app.discs[1].hasAttribute('data-cover-ready'), true)
 })
 
-test('a ready mobile preview appears even when the main cover stalls', () => {
-  const app = mount()
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), false)
+test('mobile discs enter even when the main cover fails and previews stall', () => {
+  const app = mount({ failed: [0] })
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   app.ready(2)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
-  assert.equal(app.discs[0].hasAttribute('data-cover-settled'), false)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+  assert.equal(app.discs[0].hasAttribute('data-cover-ready'), false)
   assert.equal(app.discs[2].hasAttribute('data-disc-enter'), true)
 })
 
-test('loading mobile records share the same entrance start time as decoded records', async () => {
-  const app = mount({ ready: [0], holdEntrance: true })
+test('loading mobile records share one entrance timeline that late decoding cannot restart', async () => {
+  const app = mount({ holdEntrance: true })
   assert.ok(app.discs.every((disc) => disc.hasAttribute('data-disc-enter')))
   assert.ok(app.animations.every((animation) => animation.startTime === 500))
   assert.equal(app.arc.hasAttribute('data-entrance-running'), true)
@@ -184,9 +189,9 @@ test('returning to Home keeps the mobile stack revealed without replaying its en
   const app = mount({ ready: [0] })
   await app.settle()
   app.activate(false)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   app.activate(true)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   assert.equal(app.arc.hasAttribute('data-entrance-running'), false)
   assert.ok(app.discs.every((disc) => !disc.hasAttribute('data-disc-enter')))
   assert.equal(app.pinned.length, 1)
@@ -200,15 +205,16 @@ test('the mobile main preview has high fetch priority before playback starts', (
   assert.equal(records[1].props.coverPriority, undefined)
 })
 
-test('desktop entrance waits for its existing records and runs once', async () => {
+test('desktop entrance starts before all covers load and runs once', async () => {
   const app = mount({ mobile: false, currentIndex: 1, ready: [0, 1] })
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), false)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+  assert.equal(app.ribbons.length, 1)
   app.ready(2)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   assert.equal(app.ribbons.length, 1)
   app.activate(false)
   app.activate(true)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
   assert.equal(app.ribbons.length, 1)
 })
 
@@ -253,14 +259,42 @@ test('queue previews do not wrap to an earlier track at the end', () => {
   assert.ok(desktop.tree.props.children.filter(Boolean).every((slot) => slot.props.style['--slot-x'] !== '32%'))
 })
 
-test('hidden mobile screens wait for activation and failed covers stay hidden', async () => {
+test('hidden mobile screens wait for activation and then include discs with failed covers', async () => {
   const app = mount({ active: false, ready: [0], failed: [1] })
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), false)
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), false)
   app.activate(true)
-  assert.equal(app.arc.hasAttribute('data-covers-ready'), true)
-  assert.equal(app.discs[1].hasAttribute('data-disc-enter'), true, 'the failed record moves on the shared timeline while hidden')
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+  assert.equal(app.discs[1].hasAttribute('data-disc-enter'), true, 'the record enters even without artwork')
   assert.equal(app.discs[1].hasAttribute('data-cover-ready'), false)
   await app.settle()
   app.unmount()
   assert.ok(app.observers.every((observer) => observer.disconnected))
+})
+
+test('discs enter after preview tracks arrive without waiting for cover readiness', () => {
+  const app = mount({ loaded: false })
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), false)
+  app.loadPreview()
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+  assert.ok(app.discs.every((disc) => disc.hasAttribute('data-disc-enter')))
+  assert.equal(app.pinned.length, 1)
+  app.unmount()
+})
+
+test('desktop discs enter when every cover fails', () => {
+  const app = mount({ mobile: false, currentIndex: 1, failed: [0, 1, 2] })
+  assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+  assert.equal(app.ribbons.length, 1)
+  app.unmount()
+})
+
+test('reduced motion reveals discs with pending covers in both layouts', async () => {
+  for (const mobile of [true, false]) {
+    const app = mount({ mobile, reduced: true })
+    assert.equal(app.arc.hasAttribute('data-discs-ready'), true)
+    assert.equal(app.ribbons.length, 0)
+    await app.settle()
+    assert.equal(app.arc.hasAttribute('data-entrance-running'), false)
+    app.unmount()
+  }
 })

@@ -38,7 +38,7 @@
 }
 
 .artist-kicker {
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -72,7 +72,7 @@
 }
 
 .artist-stats li {
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   padding: 5px 12px;
@@ -112,7 +112,7 @@
 /* Бейдж источника в строке трека: MP3/SC как в поиске, но приглушённее —
    в таблице он справочный, а не главный элемент. */
 .artist-track-source {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
@@ -126,7 +126,7 @@
   align-items: baseline;
   gap: 10px;
   font-size: var(--text-xl);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text-primary);
   margin: 32px 0 12px;
@@ -134,7 +134,7 @@
 
 .artist-section-count {
   font-size: var(--text-base);
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary);
 }
@@ -184,7 +184,7 @@
 }
 
 .album-name {
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -571,8 +571,8 @@ html.no-gpu .cover-backdrop-tint {
   .artist-compact-name {
     flex: 1;
     min-width: 0;
-    font-size: var(--text-md);
-    font-weight: 700;
+    font-size: var(--text-lg);
+    font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -606,14 +606,13 @@ html.no-gpu .cover-backdrop-tint {
     align-items: center;
     gap: 6px;
     margin-top: 2px;
-    font-size: var(--text-sm);
+    font-size: var(--text-base);
     color: var(--text-tertiary);
     white-space: nowrap;
     overflow: hidden;
   }
 
   .artist-section-title {
-    font-size: 18px;
     margin: 24px 0 8px;
   }
 
@@ -625,13 +624,6 @@ html.no-gpu .cover-backdrop-tint {
     margin-bottom: 8px;
   }
 
-  .album-name {
-    font-size: var(--text-sm);
-  }
-
-  .album-meta {
-    font-size: var(--text-xs);
-  }
 }
 
 @media (max-width: 380px) {

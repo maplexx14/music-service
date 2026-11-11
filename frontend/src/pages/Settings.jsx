@@ -13,6 +13,7 @@ import EmailTwoFactorSettings from '../components/EmailTwoFactorSettings'
 import TrustedDevices from '../components/TrustedDevices'
 import PushSettings from '../components/PushSettings'
 import AndroidDownload from '../components/AndroidDownload'
+import { canConfigureAndroidBackgroundPlayback, openAndroidBackgroundPlaybackSettings } from '../services/androidApp'
 import ContactDeveloper from '../components/ContactDeveloper'
 import RateService from '../components/RateService'
 import TasteAvatar from '../components/TasteAvatar'
@@ -625,6 +626,21 @@ function Settings() {
               <AndroidDownload />
               <div className="settings-card">
                 <div className="settings-section-title">Звук</div>
+                {canConfigureAndroidBackgroundPlayback() && (
+                  <div className="settings-row">
+                    <div>
+                      <div className="settings-label">Музыка в фоне</div>
+                      <div className="settings-hint">
+                        Если музыка останавливается при выключенном экране, разрешите
+                        работу без ограничений батареи. На Samsung также уберите bolt
+                        из спящих приложений
+                      </div>
+                    </div>
+                    <button type="button" className="btn btn--ghost" onClick={openAndroidBackgroundPlaybackSettings}>
+                      Настроить
+                    </button>
+                  </div>
+                )}
                 <div className="settings-row settings-row-quality">
                   <div>
                     <div className="settings-label">Качество звука</div>

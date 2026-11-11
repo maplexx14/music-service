@@ -1,0 +1,13 @@
+{
+  "duration": 15.3,
+  "fps": 30,
+  "voice": "Microsoft Irina Desktop",
+  "segments": [
+    {"text": "На горе стоит верблюд.", "start": 0.04, "end": 1.65, "karaoke": true},
+    {"text": "Он встречает рассвет.", "start": 1.77, "end": 3.29, "karaoke": true},
+    {"text": "Шаг за шагом он идёт вперёд.", "start": 3.40, "end": 5.51, "karaoke": true},
+    {"text": "Вдыхает кислород.", "start": 5.63, "end": 7.23, "karaoke": true},
+    {"text": "Агас. Азия — Евразия.", "start": 8.15, "end": 10.90, "karaoke": false},
+    {"text": "Слушай в Болт.", "start": 12.05, "end": 13.30, "karaoke": false}
+  ]
+}

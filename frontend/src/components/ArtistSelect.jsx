@@ -100,6 +100,8 @@ function ArtistSelect({
   const [query, setQuery] = useState('')
   const [suggestions, setSuggestions] = useState([])
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   // Артисты, которых нет в подсказках, но которые должны стоять в сетке:
   // уже выбранные раньше (настройки) и найденные поиском. Снятый выбор
   // артиста из сетки не убирает — плитка не должна прыгать из-под пальца.
@@ -128,15 +130,17 @@ function ArtistSelect({
     const generation = ++paging.current.generation
     paging.current.busy = false
     setLoading(true)
+    setLoadError(false)
     setLoadingMore(false)
     setHasMore(false)
     const timer = setTimeout(() => {
       const request = term
-        ? api.get('/users/artists/suggest', { params: { q: term, limit: 12 } })
+        ? api.get('/users/artists/suggest', { params: { q: term, limit: 12 }, skipErrorToast: true })
         : api.get('/users/artists/by-genres', {
             // Жанры одной строкой через запятую: axios сериализует массив как
             // genres[]=..., чего FastAPI в List[str] = Query() не разбирает.
             params: { genres: genresParam, limit: suggestionLimit, offset: 0 },
+            skipErrorToast: true,
           })
       request
         .then((res) => {
@@ -147,7 +151,10 @@ function ArtistSelect({
           setHasMore(!term && names.length >= suggestionLimit)
         })
         .catch(() => {
-          if (active) setSuggestions([])
+          if (active) {
+            setSuggestions([])
+            setLoadError(true)
+          }
         })
         .finally(() => {
           if (active) setLoading(false)
@@ -157,7 +164,7 @@ function ArtistSelect({
       active = false
       clearTimeout(timer)
     }
-  }, [term, genresParam, suggestionLimit])
+  }, [term, genresParam, suggestionLimit, attempt])
 
   const loadMore = () => {
     if (term || !hasMore || paging.current.busy) return
@@ -407,6 +414,15 @@ function ArtistSelect({
         )}
       </div>
 
+      {loadError && (
+        <div role="alert" className="pref-load-error">
+          <p className="pref-subtitle">Не удалось загрузить артистов.</p>
+          <button type="button" className="btn btn--secondary" onClick={() => setAttempt((value) => value + 1)}>
+            Повторить
+          </button>
+        </div>
+      )}
+
       {!term && genres.length > 0 && (
         <p className="pref-subtitle pref-hint">
           Популярное в выбранных жанрах. Отметьте артиста — рядом появятся похожие.
@@ -436,7 +452,7 @@ function ArtistSelect({
         </div>
       ) : loading ? (
         <p className="pref-subtitle">Подбираем артистов…</p>
-      ) : (
+      ) : !loadError && (
         <p className="pref-subtitle">
           {term
             ? 'Никого не нашли — нажмите «Добавить», чтобы сохранить имя как есть.'

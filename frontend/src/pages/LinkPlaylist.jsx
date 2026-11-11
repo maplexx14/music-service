@@ -13,6 +13,7 @@ import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
 import { handleCoverError, resolveCoverUrl } from '../utils/media'
 import { titleFitStyle } from '../utils/titleFit'
+import { plural } from '../utils/format'
 import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 import './Artist.css'
@@ -233,7 +234,7 @@ function LinkPlaylist() {
             <div className="artist-kicker">{KIND_LABELS[info.kind] || 'Подборка'} · {sourceLabel}</div>
             <h1 className="artist-name" style={titleFitStyle(title)}>{title}</h1>
             <ul className="artist-stats">
-              <li>{info.total} треков</li>
+              <li>{info.total} {plural(info.total, 'трек', 'трека', 'треков')}</li>
               {skipped > 0 && <li>{skipped} не нашлось</li>}
             </ul>
           </div>

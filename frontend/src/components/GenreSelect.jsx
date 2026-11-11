@@ -46,25 +46,29 @@ function hueFor(group, index) {
 function GenreSelect({ selected = [], detected = [], onChange }) {
   const [options, setOptions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   // Жанров под сотню — без поиска нужный приходится выискивать по группам.
   const [query, setQuery] = useState('')
   const term = query.trim().toLowerCase()
 
   useEffect(() => {
     let active = true
+    setLoading(true)
+    setLoadError(false)
     api
-      .get('/users/genres')
+      .get('/users/genres', { skipErrorToast: true })
       .then((res) => {
         if (active) setOptions(res.data || [])
       })
-      .catch(() => {})
+      .catch(() => { if (active) setLoadError(true) })
       .finally(() => {
         if (active) setLoading(false)
       })
     return () => {
       active = false
     }
-  }, [])
+  }, [attempt])
 
   // Раскладка списка: сначала жанры, у которых своей ветки нет (Поп, Джаз,
   // Классика, Фонк...) — одним блоком БЕЗ заголовка, потому что заголовок над
@@ -118,6 +122,14 @@ function GenreSelect({ selected = [], detected = [], onChange }) {
 
   return (
     <div className="pref-section">
+      {loadError && (
+        <div role="alert" className="pref-load-error">
+          <p className="pref-subtitle">Не удалось загрузить жанры.</p>
+          <button type="button" className="btn btn--secondary" onClick={() => setAttempt((value) => value + 1)}>
+            Повторить
+          </button>
+        </div>
+      )}
       <div className="pref-artist-input">
         <Search size={18} className="pref-artist-icon" />
         <input
@@ -129,7 +141,7 @@ function GenreSelect({ selected = [], detected = [], onChange }) {
         />
       </div>
 
-      {term && !groups.length && (
+      {term && !loadError && !groups.length && (
         <p className="pref-subtitle pref-hint">Такого жанра нет в списке.</p>
       )}
 

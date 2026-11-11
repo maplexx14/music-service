@@ -27,10 +27,8 @@
   outline: none;
   overflow: hidden;
   isolation: isolate;
-}
-
-.hero-disc:not([data-cover-ready]) {
-  visibility: hidden;
+  /* Keep the record visible while its artwork loads or if it fails. */
+  background: #0d0d0d;
 }
 
 .hero-disc::after {
@@ -40,10 +38,6 @@
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.18);
   pointer-events: none;
-}
-
-.hero-disc.is-vinyl {
-  background: #0d0d0d;
 }
 
 .hero-disc.is-vinyl::after {

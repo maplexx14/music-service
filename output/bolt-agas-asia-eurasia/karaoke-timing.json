@@ -1,0 +1,35 @@
+{
+  "audio": "ozv.mp3",
+  "audioDuration": 16.72,
+  "duration": 17.6,
+  "fps": 30,
+  "playbackRate": 1.1,
+  "transitionStart": 8.9,
+  "transitionDuration": 0.4,
+  "alignment": "Whisper base DTW token positions, with word boundaries adjusted to measured pauses in ozv.mp3.",
+  "lines": [
+    {"text":"На горе стоит верблюд,","words":[
+      {"text":"На","start":0.04,"end":0.28},
+      {"text":"горе","start":0.28,"end":0.8},
+      {"text":"стоит","start":0.8,"end":1.03},
+      {"text":"верблюд,","start":1.03,"end":1.65}
+    ]},
+    {"text":"его четверо ебут","words":[
+      {"text":"его","start":2.01,"end":2.46},
+      {"text":"четверо","start":2.46,"end":3.1},
+      {"text":"ебут","start":3.1,"end":3.55}
+    ]},
+    {"text":"Двое в жопу двое в рот —","words":[
+      {"text":"Двое","start":4.61,"end":5.2},
+      {"text":"в","start":5.2,"end":5.31},
+      {"text":"жопу","start":5.31,"end":5.88},
+      {"text":"двое","start":5.88,"end":6.38},
+      {"text":"в","start":6.38,"end":6.52},
+      {"text":"рот —","start":6.52,"end":6.77}
+    ]},
+    {"text":"добывают кислород","words":[
+      {"text":"добывают","start":7.05,"end":7.82},
+      {"text":"кислород","start":7.82,"end":8.51}
+    ]}
+  ]
+}

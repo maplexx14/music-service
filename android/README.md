@@ -26,6 +26,16 @@
 В APK загрузка нового трека и повтор зависшего запроса разрешены при выключенном
 экране: ограничения фонового старта браузеров к Android WebView не применяются.
 
+Foreground service и wake lock не исключают приложение из Doze: система всё ещё
+может приостановить сеть и CPU при выключенном экране. Начиная с оболочки 1.9,
+при первом воспроизведении в видимом окне появляется предложение «Музыка в фоне».
+«Настроить» открывает системный запрос исключения из оптимизации батареи;
+«Позже» закрывает предложение без изменения воспроизведения. Повторный вход —
+«Настройки → Приложение → Звук → Музыка в фоне». На старой оболочке кнопки нет.
+При уже выданном исключении или отсутствии системного запроса открываются
+настройки приложения. На Samsung дополнительно проверить режим «Без ограничений»
+и отсутствие bolt в списках спящих/глубоко спящих приложений One UI.
+
 Системный «Назад» сначала вызывает `window.__boltHandleBack`: страница
 закрывает диалог, полноэкранный плеер или караоке, затем возвращается по
 маршрутам. Только главная без открытых окон позволяет свернуть приложение.
@@ -65,12 +75,67 @@ APK: `app/build/outputs/apk/release/app-release.apk`.
 
 Debug-сборка включает удалённую отладку WebView (`chrome://inspect`).
 
+Исправление зависания потока посреди трека работает и в оболочке 1.8 после
+обновления фронтенда. Сравнение старого и исправленного Player при реальном
+зависшем HTTPS-ответе: [результаты проверки](BACKGROUND_PLAYBACK_TEST.md).
+
 На Windows с настроенными JDK 17 и Android SDK: `.\gradlew.bat assembleRelease`
 (из папки `android`).
+
+Для локальных проверок на Windows JDK и SDK установлены в `%USERPROFILE%\android-dev`.
+`JAVA_HOME`, `ANDROID_HOME` и пути к `java`, `adb`, `sdkmanager`, `avdmanager`,
+`emulator` сохранены в переменных пользователя. Если терминал был открыт до
+установки, подхватить пути для текущего PowerShell можно так:
+
+```powershell
+$env:JAVA_HOME = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'User')
+$env:ANDROID_HOME = [Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')
+```
+
+Отладочный APK: `app/build/outputs/apk/debug/app-debug.apk`. Он подписан
+отладочным ключом и предназначен для эмулятора или отдельной тестовой установки;
+обновление опубликованного приложения требует прежнего release-ключа.
 
 Проверка веб-обработчика и моста без устройства: `npm run test:android` из `frontend`.
 Проверка нативных кнопок, сессии и обеих компоновок на Android 15:
 `.\gradlew.bat testDebugUnitTest lintDebug assembleDebug` из `android`.
+
+Локально создан эмулятор `bolt_api35` (Pixel 7, Android 15 / API 35, Google APIs).
+Запуск и установка отладочной сборки из папки `android`:
+
+```powershell
+& "$env:ANDROID_HOME\emulator\emulator.exe" -avd bolt_api35 -gpu software
+# После загрузки эмулятора, в другом терминале:
+& "$env:ANDROID_HOME\platform-tools\adb.exe" -s emulator-5554 install -r .\app\build\outputs\apk\debug\app-debug.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" -s emulator-5554 shell am start -n lat.boltmusic.app/.MainActivity
+```
+
+Эмулятор проверяет стандартный Android; ограничения батареи One UI необходимо
+дополнительно проверять на самом Samsung.
+
+Для проверки фонового плеера без аккаунта есть `frontend/tests/emulator/probe.mjs`.
+Он загружает через CDP настоящий `Player`, store и audio engine из текущих исходников
+в WebView отладочного APK и запускает публичные треки с сервера. Авторизация и
+остальной Layout не участвуют, запросы записи телеметрии заглушены. Перед повторным
+`start` перезапустить APK. Поддерживаются только эмуляторы без выполненного входа.
+Из папки `frontend`, при открытом экране входа APK:
+
+```powershell
+node tests/emulator/probe.mjs start
+# Закрыть предложение «Музыка в фоне» кнопкой «Позже» для проверки без исключения.
+& "$env:ANDROID_HOME\platform-tools\adb.exe" -s emulator-5554 shell dumpsys battery unplug
+& "$env:ANDROID_HOME\platform-tools\adb.exe" -s emulator-5554 shell input keyevent 223
+node tests/emulator/probe.mjs observe screen-off-optimized 600
+node tests/emulator/probe.mjs analyze screen-off-optimized
+```
+
+На протяжении `observe` CDP отключён и запросы adb не выполняются: отладчик не
+должен удерживать WebView активным. Прогресс записывается по событиям настоящего
+`audio`, без дополнительного таймера. Снимки, журналы и сводки сохраняются в
+`android/app/build/reports/background-playback`. После проверки вернуть питание
+командой `adb -s emulator-5554 shell dumpsys battery reset`, а принудительный Doze —
+командой `adb -s emulator-5554 shell cmd deviceidle unforce`.
+
 Тесты уведомления также запускаются на Android 10 и 11: кнопки используют
 `setImageAlpha`, поскольку `View.setAlpha` недоступен через `RemoteViews`
 на старых версиях Android и может вызвать вылет при запуске трека.
@@ -85,8 +150,10 @@ Debug-сборка включает удалённую отладку WebView (`
 возобновление из уведомления. При недоступном следующем треке защита должна
 сниматься через минуту; при явной паузе — сразу.
 
-Версия исходников — 1.8 (`versionCode = 9`), с исправлением фоновых переходов
-между треками в APK. Для полного исправления нужны новый фронт и новая оболочка.
+Версия исходников — 1.9 (`versionCode = 10`), с настройкой исключения из
+оптимизации батареи для фонового воспроизведения. Нужна новая оболочка;
+для повторного входа в настройку из приложения нужен также новый фронт.
+Опубликованный APK и `bolt-version.json` остаются на 1.8 до сборки и проверки.
 Готовый `frontend/public/bolt.apk`
 и `bolt-version.json` обновлять вместе только после сборки с прежним ключом
 и проверки на устройстве.

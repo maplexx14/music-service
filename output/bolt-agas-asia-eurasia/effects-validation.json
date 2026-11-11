@@ -1,0 +1,29 @@
+{
+  "file": "bolt-agas-karaoke-neutral-v2.mp4",
+  "duration": 15.3,
+  "width": 1080,
+  "height": 1920,
+  "fps": 30,
+  "frames": 459,
+  "bytes": 4948411,
+  "full_decode": "passed",
+  "audio_unchanged": true,
+  "audio_hash": "SHA256=4a40c007e75cbd51b7780f265332109e0264cf168be55a5fd574c14e38d43b4f",
+  "karaoke_clear": [
+    0.2,
+    1.86,
+    3.5,
+    4.67,
+    5.76,
+    7.15
+  ],
+  "cta_clear": [
+    13.1,
+    13.22,
+    13.32,
+    13.45,
+    13.65,
+    13.9,
+    15.2666667
+  ]
+}

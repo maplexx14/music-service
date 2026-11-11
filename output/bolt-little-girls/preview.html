@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bolt · Little Girls · превью ролика</title>
+<style>
+@font-face{font-family:Unbounded;src:url(assets/unbounded-cyrillic.woff2);font-weight:400 800;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:Unbounded;src:url(assets/unbounded-latin.woff2);font-weight:400 800}
+*{box-sizing:border-box}body{margin:0;background:#0d0718;color:#fff;font:14px system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;gap:32px;padding:20px}canvas{height:min(88vh,960px);width:auto;max-width:90vw;aspect-ratio:9/16;box-shadow:0 20px 100px #0008}aside{width:240px;line-height:1.6}button{background:#a259ff;color:#fff;border:0;border-radius:10px;padding:12px 20px;cursor:pointer;font:inherit}input{width:100%;accent-color:#a259ff}p{color:#bcaecc}.muted{font-size:12px}a{color:#d2afff}@media(max-width:700px){body{flex-direction:column}canvas{height:70vh}aside{width:min(90vw,360px)}}
+</style>
+<canvas id="film" width="1080" height="1920"></canvas>
+<aside><b>Bolt / Little Girls</b><p>12 секунд · 1080 × 1920 · 30 fps</p><button id="play">Смотреть</button><p><input id="seek" type="range" min="0" max="11.9667" value="0" step="0.033333"><span id="time">0.0 / 12.0</span></p><p class="muted">Превью графики. В MP4 добавлены оригинальные звуковые эффекты; фонограммы Oingo Boingo нет.</p><a href="bolt-little-girls.mp4">Открыть MP4</a></aside>
+<script src="renderer.js"></script>
+</html>

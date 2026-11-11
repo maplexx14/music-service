@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bolt — Агас / Азия — Евразия</title>
+<style>
+@font-face{font-family:Unbounded;src:url(assets/unbounded-latin.woff2);font-weight:400 900}
+@font-face{font-family:Unbounded;src:url(assets/unbounded-cyrillic.woff2);font-weight:400 900;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+*{box-sizing:border-box}body{margin:0;padding:24px;min-height:100vh;background:#100d18;color:#f6f3ff;display:flex;align-items:center;justify-content:center;gap:32px;font:15px/1.6 system-ui}canvas{height:min(90vh,960px);max-width:92vw;width:auto;aspect-ratio:9/16;box-shadow:0 20px 70px #0008}aside{max-width:260px}button{font:inherit;padding:11px 20px;color:white;background:#8e4bea;border:0;border-radius:10px;cursor:pointer}input{width:100%;accent-color:#aa78ff}p{color:#b2a9c5}a{color:#d3b4ff}small{display:block;color:#9a90aa}@media(max-width:700px){body{flex-direction:column}canvas{height:72vh}aside{max-width:90vw;width:360px}}
+</style>
+<canvas id="film" width="1080" height="1920"></canvas>
+<aside><b>Агас — «Азия — Евразия»</b><p id="spec">1080 × 1920 · 30 fps</p><button id="play">Смотреть</button><p><input id="seek" type="range" min="0" step="0.033333" value="0"><span id="time"></span></p><a href="bolt-agas-asia-eurasia.mp4">Открыть MP4</a><p><small>Синтезированная озвучка цитаты и переход. Оригинальной фонограммы песни нет.</small></p></aside>
+<script src="timeline.js"></script>
+<script src="renderer.js"></script>
+</html>

@@ -137,7 +137,7 @@
 
 .track-row td {
   padding: 12px;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 .track-number {
@@ -155,8 +155,8 @@
 }
 
 .track-name {
-  font-size: var(--text-md);
-  font-weight: 500;
+  font-size: var(--text-lg);
+  font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
 }

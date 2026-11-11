@@ -620,8 +620,8 @@
   min-width: 0;
 }
 
-.track-title {
-  font-size: var(--text-md);
+.home-page .track-title {
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -632,7 +632,7 @@
   text-overflow: ellipsis;
 }
 
-.track-artist {
+.home-page .track-artist {
   font-size: var(--text-base);
   color: var(--text-secondary);
   white-space: nowrap;
@@ -694,8 +694,8 @@
   color: var(--text-disabled);
 }
 
-.playlist-name {
-  font-size: var(--text-md);
+.home-page .playlist-name {
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
@@ -709,7 +709,7 @@
   text-overflow: ellipsis;
 }
 
-.playlist-description {
+.home-page .playlist-description {
   font-size: var(--text-base);
   color: var(--text-secondary);
   line-height: 1.4;
@@ -937,16 +937,6 @@
   .track-cover,
   .playlist-cover {
     margin-bottom: 8px;
-  }
-
-  .track-title,
-  .playlist-name {
-    font-size: var(--text-sm);
-  }
-
-  .track-artist,
-  .playlist-description {
-    font-size: var(--text-xs);
   }
 
   .mobile-player {
