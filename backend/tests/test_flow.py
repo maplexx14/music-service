@@ -2225,12 +2225,17 @@ def test_unproven_artist_contributes_only_his_popular_tracks(client, db, monkeyp
     assert delivered == top_five, delivered
 
 
-def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkeypatch):
+@pytest.mark.parametrize("catalog_index", [10, 19])
+def test_proven_artist_contributes_any_track_from_his_catalog(
+    client, db, monkeypatch, catalog_index
+):
     """Доказавший «любимость» артист отдаёт любой трек, а не свой хит-парад.
 
     Три импортированных трека — вес выше порога _ARTIST_PROVEN_WEIGHT, поэтому
     выбор идёт по всей глубине каталога: иначе волна крутит одну и ту же
     верхушку, сколько бы артист ни был любим.
+
+    Хиты выбираются чаще, поэтому глубокий трек не обязан быть в каждой порции.
     """
     user = create_user(db, username="proven-artist-user")
     _imported_playlist(
@@ -2248,6 +2253,17 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     async def _favorite(request, artist):
         return catalog
 
+    # UUID пользователя меняет контекст перемешивания. Фиксируем случайные
+    # ключи каталога, чтобы выбранный глубокий трек выиграл при любом UUID.
+    original_jitter = flow_router.stable_jitter
+    selected_key = f"favorite-any:ProvenArtist:ytmusic:cat{catalog_index}"
+
+    def _catalog_jitter(context, key):
+        if key.startswith("favorite-any:ProvenArtist:"):
+            return 0.999999 if key == selected_key else 0.5
+        return original_jitter(context, key)
+
+    monkeypatch.setattr(flow_router, "stable_jitter", _catalog_jitter)
     monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _favorite)
     monkeypatch.setattr("app.routers.flow.score_track", lambda item, **kwargs: 1.0)
 
@@ -2261,10 +2277,7 @@ def test_proven_artist_contributes_any_track_from_his_catalog(client, db, monkey
     assert set(delivered) <= {track.external_id for track in catalog}, delivered
     top_five = [track.external_id for track in catalog[:5]]
     assert set(delivered) != set(top_five), delivered
-    # Хотя бы один трек — из глубины каталога, а не из его популярной половины.
-    assert any(
-        int(external_id.removeprefix("cat")) >= 10 for external_id in delivered
-    ), delivered
+    assert f"cat{catalog_index}" in delivered, delivered
 
 
 def test_artist_page_order_counts_as_popularity_without_views(client, db, monkeypatch):
