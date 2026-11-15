@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import case, false, func, insert, or_
 from sqlalchemy.orm import Session
 
-from app import censorship
+from app import catalog_releases, censorship
 from app.artist_utils import (
     query_names_artist,
     same_artist,
@@ -158,10 +158,11 @@ async def _collect_tracks(
     # запросы на время внешних вызовов. Уходит в тредпул и бежит ПАРАЛЛЕЛЬНО
     # с ytmusic/soundcloud (те не трогают эту сессию, так что конфликтов нет):
     # страница артиста раньше ждала сек External API + запрос последовательно.
-    local, profile, sc = await asyncio.gather(
+    local, profile, sc, releases = await asyncio.gather(
         asyncio.to_thread(_local_tracks, db, name, limit),
         ytdlp.ytmusic_artist_profile(request, name, limit=limit),
         soundcloud.search_soundcloud(request, name, limit=limit),
+        catalog_releases.yandex_artist_albums(name),
         return_exceptions=True,
     )
     # Ошибка БД — фатальна для страницы (в отличие от ошибок провайдеров):
@@ -175,6 +176,16 @@ async def _collect_tracks(
     if isinstance(sc, Exception):
         logger.warning("soundcloud artist search failed for %s: %s", name, sc)
         sc = []
+    if isinstance(releases, Exception):
+        logger.warning("Artist release catalogue failed for %s: %s", name, releases)
+        releases = []
+
+    albums = catalog_releases.merge_artist_albums(profile.get("albums") or [], releases)
+    recent = await catalog_releases.recent_artist_tracks(
+        request, [a for a in albums if a.source == "yandex"],
+        [*local, *(profile.get("tracks") or []), *sc],
+    )
+    profile = {**profile, "albums": albums, "tracks": [*recent, *(profile.get("tracks") or [])]}
 
     # Библиотека занимает ключи первой — внешний дубль уже сохранённого трека
     # в список не попадёт.
@@ -261,7 +272,7 @@ async def artist_page(
         cover_url=cover,
         tracks=tracks,
         external=external,
-        # Дискография с YouTube Music: карусель релизов над списком треков.
+        # Дискография из каталогов: карусель релизов над списком треков.
         # Пустой список — норма (провайдер мог не ответить, у артиста может не
         # быть релизов), поэтому на неё страница не завязана.
         albums=profile.get("albums") or [],

@@ -597,9 +597,8 @@ def _normalize_album(
 def _albums_from_info(info: dict, artist: str) -> List[ExternalAlbumResponse]:
     """Дискография со страницы артиста: сначала альбомы, затем синглы и EP.
 
-    Это витрина со страницы артиста (у провайдера в каждой секции ~10 релизов),
-    а не полная дискография: за ней пришлось бы идти ещё одним запросом, а
-    карусели столько и не нужно.
+    Секции содержат полные списки релизов или превью, если запрос полного
+    списка не удался. Один и тот же разбор подходит обоим форматам.
 
     Внутри группы — от новых к старым: порядок провайдера не обещан ничем, а
     карусель читают слева направо.
@@ -632,6 +631,9 @@ def _query_names_artist(q: str, artist: str) -> bool:
 
 
 _ARTIST_CATALOG_TTL = 6 * 3600
+_ARTIST_PROFILE_TTL = 15 * 60
+_ARTIST_PROFILE_RETRY_TTL = 60
+_ARTIST_PROFILE_LAST_GOOD_TTL = 7 * 24 * 3600
 
 
 async def ytmusic_artist_catalog(
@@ -715,7 +717,7 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
     # транслитерированный — обе страницы артиста делят один профиль. Версия в
     # ключе: у записей прошлой версии нет альбомов, и без неё карусель ждала бы
     # истечения кэша.
-    cache_key = f"ytmusic:artist_profile:v2:{translit_key(display)}:{limit}"
+    cache_key = f"ytmusic:artist_profile:v3:{translit_key(display)}:{limit}"
     cached = await get_cache_async(cache_key)
     if cached is not None:
         profile = {
@@ -726,17 +728,28 @@ async def ytmusic_artist_profile(request: Request, name: str, limit: int = 60) -
         }
     else:
         profile = await _fetch_artist_profile(display, limit)
+        complete = bool(profile["albums"])
+        if not complete:
+            previous = await get_cache_async(f"{cache_key}:last_good")
+            if previous:
+                profile["albums"] = [ExternalAlbumResponse(**a) for a in previous.get("albums") or []]
+                if not profile["tracks"]:
+                    profile["tracks"] = [ExternalTrackResponse(**t) for t in previous.get("tracks") or []]
+                profile["cover_url"] = profile["cover_url"] or previous.get("cover_url")
+                profile["name"] = previous.get("name") or profile["name"]
+        payload = {
+            **profile,
+            "tracks": [t.model_dump() for t in profile["tracks"]],
+            "albums": [a.model_dump() for a in profile["albums"]],
+        }
         await set_cache_async(
             cache_key,
-            {
-                **profile,
-                "tracks": [t.model_dump() for t in profile["tracks"]],
-                "albums": [a.model_dump() for a in profile["albums"]],
-            },
-            # Негативный кэш короткий: артиста могли не найти из-за разовой
-            # ошибки провайдера, держать его пустым полдня незачем.
-            expire=_ARTIST_CATALOG_TTL if profile["tracks"] else 600,
+            payload,
+            # Треки без дискографии — частичный ответ, перепроверяем через минуту.
+            expire=_ARTIST_PROFILE_TTL if complete else _ARTIST_PROFILE_RETRY_TTL,
         )
+        if complete:
+            await set_cache_async(f"{cache_key}:last_good", payload, expire=_ARTIST_PROFILE_LAST_GOOD_TTL)
 
     base_url = str(request.base_url).rstrip("/")
     for t in profile["tracks"]:
@@ -764,11 +777,29 @@ async def _fetch_artist_profile(name: str, limit: int) -> dict:
     # Один get_artist на треки и на релизы: обе секции лежат в одном ответе.
     info = await _artist_info(browse_id)
     display = canonical or name
+
+    async def releases(section: str) -> dict:
+        preview = info.get(section) or {}
+        if not (preview.get("browseId") and preview.get("params")):
+            return preview
+        try:
+            full = await provider_call(
+                _ytmusic.get_artist_albums, preview["browseId"], preview["params"],
+                limit=100, order="Recency",
+            )
+            return {**preview, "results": full or preview.get("results") or []}
+        except Exception:
+            logger.warning("YouTube Music artist %s failed for %s", section, browse_id, exc_info=True)
+            return preview
+
+    tracks, albums, singles = await asyncio.gather(
+        _songs_from_info(info, limit), releases("albums"), releases("singles")
+    )
     return {
         "name": display,
         "cover_url": _thumb(top.get("thumbnails")),
-        "tracks": await _songs_from_info(info, limit),
-        "albums": _albums_from_info(info, display),
+        "tracks": tracks,
+        "albums": _albums_from_info({"albums": albums, "singles": singles}, display),
     }
 
 

@@ -31,6 +31,7 @@ const TYPE_LABEL = {
 const SOURCE_LABEL = {
   ytmusic: 'YouTube Music',
   soundcloud: 'SoundCloud',
+  yandex: 'Яндекс Музыка',
 }
 
 // Страница альбома: релиз внешнего источника как плейлист. Открывается из

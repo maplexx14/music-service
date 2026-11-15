@@ -282,6 +282,7 @@ async def _api(
     path: str,
     params: Optional[Dict[str, Any]] = None,
     data: Optional[Dict[str, Any]] = None,
+    timeout: Optional[httpx.Timeout] = None,
 ) -> Optional[Any]:
     """Анонимный запрос к api.music.yandex.net. Возвращает `result` или None.
 
@@ -298,7 +299,7 @@ async def _api(
         via = f" через {_mask_proxy(proxy)}" if proxy else ""
         try:
             async with httpx.AsyncClient(
-                timeout=_API_TIMEOUT, follow_redirects=True, proxy=proxy
+                timeout=timeout or _API_TIMEOUT, follow_redirects=True, proxy=proxy
             ) as client:
                 if data is None:
                     resp = await client.get(url, params=params, headers=headers)

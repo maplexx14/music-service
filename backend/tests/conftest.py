@@ -286,6 +286,9 @@ def _no_external_pool_network(request, monkeypatch):
         monkeypatch.setattr("app.routers.flow._favorite_artist_pool", _empty)
         monkeypatch.setattr("app.routers.flow._similar_pool", _empty)
         monkeypatch.setattr("app.routers.flow._tag_pool", _empty)
+        # Artist pages supplement YouTube with a metadata catalogue. Tests of
+        # the catalogue patch its HTTP layer explicitly; other tests stay offline.
+        monkeypatch.setattr("app.catalog_releases.yandex_artist_albums", _empty)
 
     # Фоновой матчинг ytmusic→SoundCloud (порция потока/поиск) тоже не должен
     # ходить в сеть из юнит-тестов: стабим сам поиск эквивалента, а не

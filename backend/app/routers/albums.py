@@ -5,10 +5,8 @@
 выдача; в БД они попадают только по явному действию пользователя — «Добавить в
 медиатеку» здесь или лайк/добавление отдельного трека на самой странице.
 
-Провайдер пока один — YouTube Music (source="ytmusic"), но источник приходит
-параметром пути: у SoundCloud альбомы отдаются как плейлисты (см.
-routers/soundcloud.py), и когда появится второй провайдер альбомов, добавится
-ветка, а не второй эндпоинт.
+YouTube Music отдаёт релизы и записи. Yandex Music дополняет дискографию
+метаданными недостающих релизов; их аудио подбирается в YouTube и SoundCloud.
 """
 import asyncio
 import logging
@@ -18,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, insert
 from sqlalchemy.orm import Session
 
-from app import censorship
+from app import catalog_releases, censorship
 from app.database import get_db
 from app.dependencies import get_current_active_user
 from app.models import Playlist, User, playlist_tracks
@@ -39,10 +37,13 @@ router = APIRouter()
 
 async def _album(request: Request, source: str, external_id: str) -> ExternalAlbumDetail:
     """Альбом у провайдера или 404. Общая часть просмотра и сохранения."""
-    if source != "ytmusic":
+    if source not in ("ytmusic", "yandex"):
         raise HTTPException(status_code=404, detail="Неизвестный источник альбома")
 
-    detail = await ytdlp.ytmusic_album(request, external_id)
+    detail = await (
+        ytdlp.ytmusic_album(request, external_id) if source == "ytmusic"
+        else catalog_releases.yandex_album(request, external_id)
+    )
     if detail is None:
         raise HTTPException(status_code=404, detail="Альбом не найден")
     return detail
