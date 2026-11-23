@@ -10,7 +10,7 @@ module.exports = {
     'plugin:react/recommended',
     'plugin:react-hooks/recommended',
   ],
-  ignorePatterns: ['dist', 'node_modules'],
+  ignorePatterns: ['dist', 'node_modules', 'tmp'],
   parserOptions: {
     ecmaVersion: 'latest',
     sourceType: 'module',
@@ -27,4 +27,13 @@ module.exports = {
   settings: {
     react: { version: 'detect' },
   },
+  overrides: [
+    {
+      // Service worker: отдельное окружение и скрипт, который он подгружает
+      // через importScripts (public/offline-response.js).
+      files: ['public/*.js'],
+      env: { serviceworker: true },
+      globals: { offlineResponse: 'readonly' },
+    },
+  ],
 }

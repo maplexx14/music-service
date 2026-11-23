@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { createStore } from 'zustand/vanilla'
+import { icons } from './helpers/icons.mjs'
 
 const compile = async (path, loader) => {
   const source = await readFile(new URL(`../src/${path}`, import.meta.url), 'utf8')
@@ -38,6 +39,16 @@ async function mountSearch(initial = {}, props = {}) {
       }]
     },
     useMemo: (factory) => factory(),
+    useRef(initialValue) {
+      const hook = hooks[index++] ??= { current: initialValue }
+      return hook
+    },
+    useCallback: (callback, deps) => {
+      const i = index++, previous = hooks[i]
+      if (sameDeps(previous?.deps, deps)) return previous.callback
+      hooks[i] = { deps, callback }
+      return callback
+    },
     useEffect(callback, deps) {
       const i = index++, previous = hooks[i]
       if (sameDeps(previous?.deps, deps)) return
@@ -49,6 +60,18 @@ async function mountSearch(initial = {}, props = {}) {
   const noop = () => {}
   const modules = {
     react,
+    '@/components/icons': icons,
+    '../hooks/useOffline': { useOffline: () => false },
+    '../services/offlineTracks': {
+      useOfflineTracks: Object.assign(
+        () => ({ tracks: [], library: { playlists: [], likedKeys: [] }, jobs: {}, playlistJobs: {}, ready: true }),
+        { getState: () => ({ tracks: [], library: { playlists: [], likedKeys: [] }, jobs: {}, playlistJobs: {}, ready: true }) },
+      ),
+      offlineTrackKey: () => null,
+      offlineAudioUrl: () => null,
+      OFFLINE_CACHE: 'bolt-offline-v1',
+    },
+    '../services/offlineLibrary': { offlineCollections: () => ({ tracks: [], playlists: [], liked: { tracks: [] } }) },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     zustand: { create(init) {
       const store = createStore(init)
@@ -87,6 +110,7 @@ async function mountSearch(initial = {}, props = {}) {
   modules['./Search.css'] = {}
   const context = vm.createContext({
     AbortController, console: { error: noop },
+    navigator: { onLine: true, connection: { effectiveType: '4g', saveData: false } },
     window: { addEventListener: noop, setTimeout(callback) {
       const id = ++timerId; timers.set(id, callback); return id
     }, clearTimeout: (id) => timers.delete(id) },

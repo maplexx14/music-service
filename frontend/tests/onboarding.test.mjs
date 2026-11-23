@@ -5,6 +5,7 @@ import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { create } from 'zustand'
 import * as jsxRuntime from 'react/jsx-runtime'
+import { icons } from './helpers/icons.mjs'
 
 const scripts = new Map()
 for (const path of ['services/onboarding.js', 'services/playerSetup.js', 'store/authStore.js', 'pages/PreferencesOnboarding.jsx', 'pages/PlayerSetup.jsx', 'components/PlayerSetupScreen.jsx']) {
@@ -102,6 +103,7 @@ function browser(server = { user: newUser() }) {
     const { default: PlayerSetupScreen } = module('components/PlayerSetupScreen.jsx', {
       react, 'react/jsx-runtime': jsxRuntime,
       'lucide-react': { ArrowRight: 'arrow' },
+  '@/components/icons': icons,
       './CdPlayerAppearance': { default: 'cd-appearance' },
       './UnboxPlayer': { default: 'unbox-player' },
       '../assets/bolt-wordmark.webp': { default: '' },
@@ -112,6 +114,7 @@ function browser(server = { user: newUser() }) {
       react, 'react/jsx-runtime': jsxRuntime,
       'react-router-dom': { useNavigate: () => (path) => navigations.push(path) },
       'lucide-react': { Check: 'check', Download: 'download', Link2: 'link', ArrowRight: 'arrow', PackageOpen: 'package' },
+  '@/components/icons': icons,
       '../store/authStore': { useAuthStore },
       '../utils/media': { resolveCoverUrl() {}, handleCoverError() {} },
       '../assets/default-cover.webp': { default: '' },
@@ -322,17 +325,16 @@ test('music onboarding precedes unboxing; old profiles see the box exactly once'
   assert.equal(app.onboarding.needsPlayerSetup(newUser()), false)
   assert.equal(app.onboarding.onboardingDestination(newUser({ onboarding_completed: true })), '/onboarding/player')
 
-  // Старый аккаунт уже «настроен» миграцией, но коробку не видел: один раз
-  // попадает в распаковку, после отметки — больше нет.
-  const oldUser = newUser({ onboarding_completed: true, player_setup_completed: true })
+  // Старый аккаунт (заведён до выката коробки) уже «настроен» миграцией, но
+  // коробку не видел: один раз попадает в распаковку, после отметки — больше нет.
+  const oldUser = newUser({ created_at: '2026-01-01T00:00:00Z', onboarding_completed: true, player_setup_completed: true })
   assert.equal(app.onboarding.onboardingDestination(oldUser), '/onboarding/player')
   app.setupProgress.markPlayerSetupSeen(oldUser.id)
   assert.equal(app.onboarding.onboardingDestination(oldUser), null)
   assert.equal(app.onboarding.needsPlayerSetupReplay(oldUser), false)
 
-  // Старый кэш профиля без поля player_setup_completed — тоже старый аккаунт:
-  // ведём в коробку один раз, если метки ещё нет.
-  const unknownFieldUser = newUser({ id: 2, onboarding_completed: true, player_setup_completed: undefined })
+  // Старый кэш профиля без поля player_setup_completed — тоже старый аккаунт.
+  const unknownFieldUser = newUser({ id: 2, created_at: '2026-01-01T00:00:00Z', onboarding_completed: true, player_setup_completed: undefined })
   assert.equal(app.onboarding.onboardingDestination(unknownFieldUser), '/onboarding/player')
   app.setupProgress.markPlayerSetupSeen(unknownFieldUser.id)
   assert.equal(app.onboarding.onboardingDestination(unknownFieldUser), null)

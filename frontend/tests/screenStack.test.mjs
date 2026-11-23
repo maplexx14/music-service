@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
 import { transform } from 'esbuild'
+import { icons } from './helpers/icons.mjs'
 
 const source = await readFile(new URL('../src/components/ScreenStack.jsx', import.meta.url), 'utf8')
 const { code } = await transform(source, { format: 'cjs', loader: 'jsx', jsx: 'automatic', target: 'es2020' })
@@ -59,6 +60,7 @@ function mountStack({ warmTabs = true, nativeIdle = true, savedTop = 0, restoreP
       useNavigationType: () => 'POP',
     },
     'lucide-react': { ArrowLeft: 'ArrowLeft' },
+  '@/components/icons': icons,
     './Spinner': { default: 'Spinner' },
     './MeterProfiler': { default: 'MeterProfiler' },
     '../hooks/useScreen': { ScreenContext: { Provider: 'ScreenProvider' } },
