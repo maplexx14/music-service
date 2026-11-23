@@ -5,10 +5,33 @@
   width: 100%;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  /* The fullscreen player owns vertical swipes (drag to close) and sets
+     touch-action: none on its surface; the text still has to scroll under the
+     finger, so the panel re-enables panning for itself. */
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .lyrics-panel.is-synced {
   overflow: hidden;
+}
+
+.lyrics-synced {
+  --lyrics-context-scale: 0.72;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  justify-items: center;
+  gap: clamp(18px, 3vh, 32px);
+  height: 100%;
+  padding: 24px 16px;
+  /* Текст листается колесом и пальцем: окно из трёх строк сдвигается по
+     списку, раскладка при этом не меняется. */
+  touch-action: pan-y;
+  cursor: ns-resize;
+  user-select: none;
 }
 
 .lyrics-panel::-webkit-scrollbar {
@@ -62,18 +85,6 @@
   gap: 6px;
 }
 
-.lyrics-synced {
-  --lyrics-context-scale: 0.72;
-  box-sizing: border-box;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
-  justify-items: center;
-  gap: clamp(18px, 3vh, 32px);
-  height: 100%;
-  padding: 24px 16px;
-}
-
 .lyrics-line {
   max-width: 100%;
   font-size: clamp(36px, 4vw, 54px);
@@ -90,6 +101,8 @@
 }
 
 .lyrics-synced .lyrics-line {
+  grid-column: 1;
+  grid-row: 3;
   align-self: start;
   /* Один кегль сохраняет переносы, размер соседних строк меняется масштабом. */
   transform: scale(var(--lyrics-context-scale));
@@ -101,11 +114,13 @@
 }
 
 .lyrics-line.sung {
+  grid-row: 1;
   align-self: end;
   color: rgba(255, 255, 255, 0.5);
 }
 
 .lyrics-line.active {
+  grid-row: 2;
   align-self: center;
   transform: scale(1);
   color: var(--text-primary);

@@ -49,6 +49,21 @@ def complete_onboarding(
     return current_user
 
 
+@router.post("/me/player-setup/complete", response_model=UserResponse)
+def complete_player_setup(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Распаковка и оформление идут после музыкального онбординга, один раз на аккаунт."""
+    if not current_user.onboarding_completed:
+        raise HTTPException(status_code=409, detail="Сначала завершите выбор музыкальных предпочтений")
+    if not current_user.player_setup_completed:
+        current_user.player_setup_completed = True
+        db.commit()
+        db.refresh(current_user)
+    return current_user
+
+
 # --- Музыкальные предпочтения (онбординг / настройки) ---
 # NB: эти GET-маршруты обязаны идти ДО /{user_id}, иначе "genres"
 # будет попадать в параметр user_id: UUIDString и давать 422.

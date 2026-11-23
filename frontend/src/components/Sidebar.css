@@ -35,7 +35,7 @@
 }
 
 .sidebar-header {
-  margin-bottom: 32px;
+  margin-bottom: 70px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -111,8 +111,8 @@
 }
 
 .sidebar-logo-heart {
-  width: 32px;
-  height: 32px;
+  width: 42px;
+  height: 42px;
   object-fit: contain;
 }
 
@@ -122,7 +122,7 @@
 }
 
 .collapse-btn:active {
-  transform: scale(0.97);
+  transform: none;
 }
 
 .sidebar-nav {
@@ -134,8 +134,8 @@
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: 14px;
+  padding: 12px 14px;
   color: var(--text-secondary);
   text-decoration: none;
   border-radius: 8px;
@@ -143,6 +143,10 @@
               background-color var(--duration-base) var(--ease-out);
   font-size: var(--text-base);
   font-weight: 600;
+}
+
+.sidebar .nav-item svg {
+  flex-shrink: 0;
 }
 
 .nav-item:hover {
@@ -201,7 +205,7 @@
 }
 
 /* Строка выровнена по вкладкам выше: центр обложки — на оси иконок,
-   название — на линии подписей (8 + 40 + 8 = 56, как 16 + 24 + 16).
+   название — на линии подписей (8 + 40 + 8 = 56, как 14 + 28 + 14).
    Радиус концентричен обложке: 4 + отступ 4 = 8. */
 .sidebar-playlist {
   display: flex;

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown } from '@/components/icons'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import Spinner from '../components/Spinner'

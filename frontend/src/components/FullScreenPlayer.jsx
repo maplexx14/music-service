@@ -1,8 +1,9 @@
 import { getTrackDbId } from '../utils/identifiers'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2, ListPlus } from 'lucide-react'
+import { ChevronDown, Download, SkipBack, SkipForward, Play, Pause, Shuffle, Repeat1, ThumbsDown, AlignLeft, Share, Clapperboard, Maximize2, Minimize2, ListPlus } from '@/components/icons'
 import LikeHeart from './LikeHeart'
+import OfflineDownloadButton from './OfflineDownloadButton'
 import {
   invalidateFlowPreload,
   postRecommendationEvent,
@@ -10,10 +11,12 @@ import {
   usePlayerStore,
 } from '../store/playerStore'
 import { useLyrics } from '../hooks/useLyrics'
+import { useAuthStore } from '../store/authStore'
 import { useThemeColor } from '../hooks/useThemeColor'
 import { toast } from '../store/toastStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
 import defaultCover from '../assets/default-cover.webp'
+import brandWordmark from '../assets/bolt-wordmark-wide.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady } from '../utils/media'
 import { rememberCoverImage } from '../utils/coverCache'
 import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
@@ -234,6 +237,7 @@ function FullScreenProgress() {
 }
 
 function FullScreenPlayer() {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
@@ -301,7 +305,7 @@ function FullScreenPlayer() {
     setLyricsMode(Boolean(karaokeMode))
   }, [karaokeMode])
 
-  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(isAuthenticated ? currentTrack : null)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
 
   const coverUrl = useMemo(
@@ -627,6 +631,7 @@ function FullScreenPlayer() {
   if (!currentTrack) return null
 
   const handleLike = async () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract || loadingLike) return
 
     if (!isLiked) setBurst((n) => n + 1)
@@ -648,6 +653,7 @@ function FullScreenPlayer() {
   // Дизлайк: помечаем и уходим на следующий трек (как в Player.jsx). Повторное
   // нажатие только снимает метку — пользователь мог передумать.
   const handleDislike = async () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
@@ -706,6 +712,7 @@ function FullScreenPlayer() {
   // фиксируем на момент нажатия: если за время выбора заиграет следующий,
   // добавиться должен тот, что был на экране.
   const handleAddToPlaylist = () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract) return
     haptic(HAPTIC.selection)
     const track = currentTrack
@@ -729,6 +736,7 @@ function FullScreenPlayer() {
   // откажет (NotAllowedError). Тогда просим нажать ещё раз — db_id уже
   // вшит в currentTrack, и второй тап пройдёт без сети.
   const handleShare = async () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     const track = currentTrack
     let id = dbTrackId
     const waited = !id
@@ -813,7 +821,7 @@ function FullScreenPlayer() {
         <button className="fullscreen-icon" onClick={startClose} aria-label="Закрыть">
           <ChevronDown size={22} />
         </button>
-        <img className="fullscreen-logo" src="/logoBoltwo.webp" alt="Логотип" />
+        <img className="fullscreen-logo" src={brandWordmark} alt="bolt" />
         <button type="button" className="fullscreen-icon" onClick={handleShare} aria-label="Поделиться">
           <Share size={20} />
         </button>
@@ -890,7 +898,7 @@ function FullScreenPlayer() {
             {heroUrl && (
               <div className="fullscreen-info-side">
                 {lyricsMode && hasLyrics && !expanded && expandButton}
-                <img className="fullscreen-info-logo" src="/logoBoltwo.webp" alt="" aria-hidden="true" />
+                <img className="fullscreen-info-logo" src={brandWordmark} alt="" aria-hidden="true" />
               </div>
             )}
           </div>
@@ -1010,13 +1018,20 @@ function FullScreenPlayer() {
         >
           <Clapperboard size={22} />
         </button>
+        <OfflineDownloadButton track={currentTrack} className="fullscreen-tool" />
         {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
           <a
             className="fullscreen-tool"
             href={currentTrack.download_url}
             target="_blank"
             rel="noreferrer"
-            aria-label="Скачать"
+            aria-label="Скачать файл"
+            onClick={(event) => {
+              if (navigator.onLine === false) {
+                event.preventDefault()
+                toast.info('Для скачивания файла нужен интернет')
+              }
+            }}
           >
             <Download size={22} />
           </a>

@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, Music, X } from 'lucide-react'
+import { Upload, Music, X } from '@/components/icons'
 import api from '../services/api'
 import { ChunkedUpload, shouldUseChunkedUpload } from '../services/chunkedUpload'
 import { toast } from '../store/toastStore'

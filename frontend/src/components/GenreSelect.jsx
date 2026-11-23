@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Search, Sparkles } from 'lucide-react'
+import { Check, Search, Sparkles } from '@/components/icons'
 import api from '../services/api'
 import './PreferencePicker.css'
 

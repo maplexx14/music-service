@@ -1,33 +1,24 @@
-/* Диск-пластинка: чёрный винил с бороздками и обложкой вместо наклейки.
-   Размер приходит через --disc-size, расположение дисков — из FlowDiscArc. */
+/* Компакт-диск с обложкой. Размер и расположение задаёт FlowDiscArc. */
 
 .hero-disc {
   position: absolute;
   inset: 0;
   margin: auto;
   width: var(--disc-size);
-  /* Высота явно: при inset: 0 Chromium на Android растягивал диск по
-     высоте контейнера, не глядя на aspect-ratio. */
+  /* Явная высота предотвращает растягивание диска на Android при inset: 0. */
   height: var(--disc-size);
   aspect-ratio: 1;
   border-radius: 50%;
   z-index: 1;
-  /* Жест поворота: браузер не должен увести его в скролл страницы, иначе
-     pointermove оборвётся на pointercancel и диск «залипнет». */
   touch-action: none;
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
-  /* Долгое нажатие на iOS иначе открывает системное меню картинки поверх
-     жеста поворота. */
   -webkit-touch-callout: none;
-  /* Тень и кант живут на некрутящемся корне: вращать их незачем, а при
-     быстром повороте тень на вращающемся слое читалась бы как артефакт. */
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   outline: none;
   overflow: hidden;
   isolation: isolate;
-  /* Keep the record visible while its artwork loads or if it fails. */
   background: #0d0d0d;
 }
 
@@ -40,13 +31,20 @@
   pointer-events: none;
 }
 
-.hero-disc.is-vinyl::after {
-  border-color: rgba(0, 0, 0, 0.5);
+.hero-disc.is-cd {
+  /* Обложка заполняет диск до небольшого отверстия под шпиндель. */
+  --cd-hub-inset: 35%;
+  --cd-hole-mask: radial-gradient(circle closest-side, transparent 12%, #000 12.5%);
+  --cd-surface-mask: radial-gradient(circle closest-side, transparent 13%, #000 13.5%);
+  --cd-hub-mask: var(--cd-hole-mask);
+  background: transparent;
 }
 
-.hero-disc.is-dragging {
-  cursor: grabbing;
+.hero-disc.is-cd::after {
+  content: none;
 }
+
+.hero-disc.is-dragging { cursor: grabbing; }
 
 .hero-disc:focus-visible {
   box-shadow:
@@ -55,36 +53,159 @@
 }
 
 .hero-disc-spin {
-  /* Винил — бороздки, снятые с фото пластинки по радиусу, плюс пылинки и
-     пара царапин (assets/vinyl-disc.webp). Без единого блика: свет с фото
-     вынесен в .hero-disc-light, иначе он крутился бы вместе с пластинкой. */
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  /* Вращение — Web Animation на композиторе (см. HeroDisc.jsx): слой
-     промотирован заранее, поворот не трогает ни раскладку, ни главный поток. */
+  /* Вращение на композиторе; жесты обрабатывает корневой элемент. */
   will-change: transform;
-  /* События указателя слушает корень. */
   pointer-events: none;
 }
 
-.is-vinyl .hero-disc-spin {
-  background: url('../assets/vinyl-disc.webp') center / cover no-repeat;
+/* Software compositing turns a full-size rotating disc into continuous CPU
+   rasterization. In no-GPU mode it is a static, decorative cover instead. */
+html.lite-mode .hero-disc {
+  pointer-events: none;
+  cursor: default;
+  touch-action: auto;
 }
 
-/* Свет лампы с фото: белый слой с альфой, стоит на месте, пока пластинка
-   крутится. На наклейку не ложится — маска открывает только винил. */
+html.lite-mode .hero-disc-spin {
+  transform: none !important;
+  will-change: auto;
+}
+
+/* The static no-GPU variant does not need blur to hide motion seams. Keep
+   artwork at native edges so software rasterization stays visibly sharper. */
+html.lite-mode .hero-disc-cover {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: none;
+}
+
+html.lite-mode .hero-disc-light::before,
+html.lite-mode .hero-disc-light::after {
+  filter: none;
+}
+
+.is-cd .hero-disc-spin {
+  -webkit-mask: var(--cd-hole-mask);
+  mask: var(--cd-hole-mask);
+}
+
+/* Непрозрачная металлическая подложка видна до загрузки обложки. */
+.is-cd .hero-disc-spin::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -45deg,
+    #fafcff,
+    #c0c9d5 36deg,
+    #e8edf5 72deg,
+    #aab7c9 108deg,
+    #e4eaf2 145deg,
+    #fafcff 180deg,
+    #c4cedd 215deg,
+    #e9eef5 250deg,
+    #b0bed0 290deg,
+    #e0e8f2 325deg,
+    #fafcff
+  );
+  -webkit-mask: var(--cd-hub-mask);
+  mask: var(--cd-hub-mask);
+}
+
+/* Тонкий серебристый край у отверстия лежит поверх непрозрачной обложки. */
+.hero-disc-hub {
+  position: absolute;
+  inset: var(--cd-hub-inset);
+  z-index: 2;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle closest-side,
+    transparent 40%,
+    rgba(75, 83, 95, 0.65) 40.5%,
+    #f3f7fc 41.3%,
+    #c2cdd8 42.5%,
+    rgba(137, 155, 169, 0.5) 43.5%,
+    transparent 44.5%
+  );
+  pointer-events: none;
+}
+
+/* Отражения неподвижны относительно лампы; обложка вращается под ними. */
 .hero-disc-light {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: url('../assets/vinyl-light.webp') center / cover no-repeat;
-  -webkit-mask: radial-gradient(circle closest-side, transparent 60.5%, #000 62%);
-  mask: radial-gradient(circle closest-side, transparent 60.5%, #000 62%);
+  opacity: 0.8;
+  background: conic-gradient(
+    from -45deg,
+    rgba(255, 255, 255, 0.24),
+    transparent 32deg,
+    transparent 148deg,
+    rgba(255, 255, 255, 0.22) 180deg,
+    transparent 214deg,
+    transparent 328deg,
+    rgba(255, 255, 255, 0.24)
+  );
+  -webkit-mask: var(--cd-surface-mask);
+  mask: var(--cd-surface-mask);
   pointer-events: none;
 }
 
-/* A mounted layer fades in late artwork; cached covers paint immediately. */
+/* Дифракция даёт две радужные полосы рядом с отражениями света. */
+.hero-disc-light::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -45deg,
+    transparent 7deg,
+    rgba(138, 159, 255, 0.25) 14deg,
+    rgba(187, 125, 255, 0.32) 22deg,
+    rgba(255, 137, 204, 0.34) 30deg,
+    rgba(255, 214, 119, 0.34) 38deg,
+    rgba(177, 247, 157, 0.3) 46deg,
+    rgba(139, 242, 255, 0.28) 54deg,
+    rgba(140, 174, 255, 0.15) 62deg,
+    transparent 72deg,
+    transparent 182deg,
+    rgba(174, 143, 255, 0.26) 193deg,
+    rgba(255, 154, 207, 0.32) 201deg,
+    rgba(255, 228, 142, 0.32) 209deg,
+    rgba(181, 255, 184, 0.28) 217deg,
+    rgba(147, 244, 255, 0.26) 225deg,
+    rgba(156, 184, 255, 0.15) 233deg,
+    transparent 243deg,
+    transparent 360deg
+  );
+  filter: blur(2px);
+  mix-blend-mode: screen;
+}
+
+.hero-disc-light::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -45deg,
+    rgba(255, 255, 255, 0.65),
+    transparent 5deg,
+    transparent 175deg,
+    rgba(255, 255, 255, 0.5) 180deg,
+    transparent 185deg,
+    transparent 355deg,
+    rgba(255, 255, 255, 0.65)
+  );
+  filter: blur(1.5px);
+}
+
+/* Кэшированная обложка видна сразу; поздняя появляется после декодирования. */
 .hero-disc-artwork {
   position: absolute;
   inset: 0;
@@ -92,15 +213,9 @@
   transition: opacity 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-.hero-disc[data-cover-ready] .hero-disc-artwork {
-  opacity: 1;
-}
+.hero-disc[data-cover-ready] .hero-disc-artwork { opacity: 1; }
 
 .hero-disc-cover {
-  /* Без пластинки обложка — размытый фон под заголовком и кнопкой потока: на
-     чёткой картинке белый текст терялся. Размытие на краях подмешивает
-     прозрачность, поэтому картинка на 8% шире диска — блеклый ободок уходит
-     за обрезку корня. */
   position: absolute;
   inset: -4%;
   width: 108%;
@@ -110,27 +225,36 @@
   border-radius: 50%;
   object-fit: cover;
   -webkit-user-drag: none;
-  /* Её собственный drag-and-drop в браузере перебивал бы поворот. */
   pointer-events: none;
 }
 
-/* Пластинка: обложка — чёткая наклейка в центре, 61% диаметра (замер с
-   макета). Заголовок стоит над диском, размывать незачем. */
-.is-vinyl .hero-disc-cover {
-  inset: 19.5%;
-  width: 61%;
-  height: 61%;
-  filter: none;
+/* A changed cover crossfades instead of blanking the record while the new
+   artwork decodes. The outgoing layer sits under the incoming one. */
+.hero-disc-cover.is-outgoing {
+  animation: hero-cover-out 220ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes hero-cover-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-disc-cover.is-outgoing { animation: none; opacity: 0; }
+}
+
+html.lite-mode .hero-disc-cover.is-outgoing { animation: none; opacity: 0; }
+
+.is-cd .hero-disc-cover {  /* Запас под блюр предотвращает светлый шов от подложки у внешнего края. */
+  inset: -1%;
+  width: 102%;
+  height: 102%;
+  filter: blur(0.5px);
 }
 
 @media (max-width: 768px) {
   .hero-disc {
-    /* Нижний паддинг hero больше верхнего — под нижнюю навигацию (Home.css).
-       Кнопка потока центрирована без него, диск — тоже, иначе они
-       разъезжаются. */
     bottom: calc(72px + var(--safe-bottom));
-    /* Сверху hero заходит под шапку (safe-area + 68, Home.css) — диск
-       центрируется ниже неё, как и кнопка, иначе он уезжал вверх. */
     top: calc(var(--safe-top) + 68px);
   }
 }

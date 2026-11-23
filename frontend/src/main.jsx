@@ -5,28 +5,34 @@ import ErrorBoundary from './components/ErrorBoundary'
 import MeterProfiler from './components/MeterProfiler'
 import './index.css'
 import './styles/controls.css'
+import './styles/iconMotion.css'
 // Стиль промо-ролика — пока выключен.
 // import './styles/promo.css'
 import { installImageFade } from './services/imageFade'
 import { installFrameMeter } from './utils/frameMeter'
 import { installPressFeedback } from './services/pressFeedback'
+import { installIconMotion } from './services/iconMotion'
 import { installTouchGuard } from './services/touchGuard'
 import { installFastTap } from './services/fastTap'
 import { applyGpuClass } from './utils/gpu'
 import { installPowerSaveWatch } from './utils/powerSave'
 import { diag } from './utils/playerDiag'
 import { installInstallPromptCapture } from './services/installPrompt'
+import { finishAppBoot, preloadInitialScreen } from './services/appBoot'
+import { registerAppServiceWorker } from './services/serviceWorker'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
 applyGpuClass()
 diag('app:start', { build: import.meta.env.VITE_BUILD_TIME })
 installPowerSaveWatch()
 installPressFeedback()
+installIconMotion()
 installImageFade()
 installFrameMeter()
 installTouchGuard()
 installFastTap()
 installInstallPromptCapture()
+preloadInitialScreen()
 
 // WebKit на iOS решает, ждать ли главный поток перед прокруткой, по
 // слушателям touch- и pointer-событий под пальцем: если среди них есть
@@ -76,8 +82,8 @@ createRootWithPassiveTouch(document.getElementById('root')).render(
 )
 // Сторож в index.html: бандл исполнился, восстанавливать нечего.
 window.__boltBooted = true
-// Заставка из index.html: снимаем, когда React успел отрисовать первый кадр.
-requestAnimationFrame(() => window.__bootSplashHide?.())
+// Keep the launch splash until the visible screen and CD player are ready.
+finishAppBoot()
 
 // Service worker: app-shell (см. public/sw.js). Он кэширует только каркас
 // (HTML, /assets, шрифты, иконки) для мгновенного старта PWA; аудио, API и
@@ -86,8 +92,4 @@ requestAnimationFrame(() => window.__bootSplashHide?.())
 // плюс WebKit bug 189337), и iOS Safari ждал последний байт вместо старта
 // с первых килобайт. register() сам вытесняет чужие/старые SW на своей
 // scope; отдельного unregister-прохода больше не нужно.
-if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
-  })
-}
+registerAppServiceWorker()

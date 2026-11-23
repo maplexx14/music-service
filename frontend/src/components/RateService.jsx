@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Star } from 'lucide-react'
+import { Star } from '@/components/icons'
 import api from '../services/api'
 import { toast } from '../store/toastStore'
 import './TwoFactorSettings.css'

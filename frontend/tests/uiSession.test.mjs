@@ -5,6 +5,7 @@ import vm from 'node:vm'
 import { transform } from 'esbuild'
 import { create } from 'zustand'
 import { createBrowserHistory } from '@remix-run/router'
+import * as cdPlayerAppearance from '../src/utils/cdPlayerAppearance.js'
 
 // Keep fresh module scope in each mocked browser with ordinary scripts. The
 // previous experimental VM module loader was active when Node 20 CI hit SIGSEGV.
@@ -20,7 +21,12 @@ const scrollSource = await source('services/scrollRestoration.js')
 const navigationSource = await source('services/navigation.js')
 const settingsSource = await source('store/uiSettingsStore.js')
 
-async function environment(storage = new Map(), { path = '/', android = false, transitions = false } = {}) {
+async function environment(storage = new Map(), {
+  path = '/',
+  android = false,
+  transitions = false,
+  softwareRendering = false,
+} = {}) {
   const timers = new Map()
   let timerId = 0
   const window = new EventTarget()
@@ -104,7 +110,11 @@ async function environment(storage = new Map(), { path = '/', android = false, t
     './uiSession': session, './pageCache': { prefetchInFlight: () => false },
     '@remix-run/router': { createBrowserHistory: (options) => createBrowserHistory({ ...options, window }) },
   })
-  const settings = async () => (await module(settingsSource, { zustand: { create } })).useUiSettingsStore
+  const settings = async () => (await module(settingsSource, {
+    zustand: { create },
+    '../utils/gpu': { isSoftwareRendering: () => softwareRendering },
+    '../utils/cdPlayerAppearance': cdPlayerAppearance,
+  })).useUiSettingsStore
   return { session, search, cache, scroll, navigation, settings, localStorage, storage, window, document, timers, observers, mutations, viewTransitions }
 }
 
@@ -414,5 +424,102 @@ test('remembering the player defaults on and respects an explicit opt out', asyn
     const app = await environment(authStorage())
     if (stored) app.localStorage.setItem('ui-settings', JSON.stringify(stored))
     assert.equal((await app.settings()).getState().rememberPlayer, expected)
+  }
+})
+
+test('software rendering enables lite mode by default and preserves a manual opt out', async () => {
+  const storage = authStorage()
+  storage.set('ui-settings', JSON.stringify({ liteMode: false }))
+  const app = await environment(storage, { softwareRendering: true })
+  const settings = await app.settings()
+
+  assert.equal(settings.getState().liteMode, true)
+  assert.equal(settings.getState().liteModeAuto, true)
+  assert.equal(settings.getState().liteModePreference, null)
+
+  settings.getState().toggleLiteMode()
+  assert.equal(settings.getState().liteMode, false)
+  assert.equal(settings.getState().liteModePreference, false)
+  assert.equal(JSON.parse(storage.get('ui-settings')).liteModeOverride, false)
+
+  const reopened = await environment(storage, { softwareRendering: true })
+  const restored = await reopened.settings()
+  assert.equal(restored.getState().liteModeAuto, true)
+  assert.equal(restored.getState().liteMode, false)
+})
+
+test('hardware rendering keeps lite mode under manual control', async () => {
+  const storage = authStorage()
+  const app = await environment(storage)
+  const settings = await app.settings()
+
+  assert.equal(settings.getState().liteMode, false)
+  assert.equal(settings.getState().liteModeAuto, false)
+
+  settings.getState().toggleLiteMode()
+  assert.equal(settings.getState().liteMode, true)
+  assert.equal(settings.getState().liteModePreference, true)
+  assert.equal(JSON.parse(storage.get('ui-settings')).liteModeOverride, true)
+})
+
+test('CD appearance persists partial edits and resetting leaves other preferences intact', async () => {
+  const storage = authStorage()
+  const settings = await (await environment(storage)).settings()
+  settings.getState().setStreamQuality('low')
+  settings.getState().toggleRememberPlayer()
+  settings.getState().setCdPlayerAppearance({ bodyColor: '#AEB7C2', finish: 'matte' })
+  settings.getState().setCdPlayerAppearance({ accentColor: '#70bdff', lid: 'smoked' })
+
+  const restored = await (await environment(storage, { softwareRendering: true })).settings()
+  assert.deepEqual({ ...restored.getState().cdPlayerAppearance }, {
+    bodyColor: '#aeb7c2', finish: 'matte', accentColor: '#70bdff', lid: 'smoked',
+  })
+  restored.getState().resetCdPlayerAppearance()
+  const reset = await (await environment(storage)).settings()
+  assert.deepEqual({ ...reset.getState().cdPlayerAppearance }, cdPlayerAppearance.DEFAULT_CD_APPEARANCE)
+  assert.equal(reset.getState().rememberPlayer, false)
+  assert.equal(reset.getState().streamQuality, 'low')
+})
+
+test('CD appearance tolerates old and corrupted storage while preserving valid fields', async () => {
+  for (const appearance of [undefined, null, 'invalid', { bodyColor: 'red', accentColor: '#abcd', finish: 'invalid', lid: false }]) {
+    const storage = authStorage()
+    storage.set('ui-settings', JSON.stringify({ cdPlayerAppearance: appearance, rememberPlayer: false }))
+    const settings = await (await environment(storage)).settings()
+    assert.deepEqual({ ...settings.getState().cdPlayerAppearance }, cdPlayerAppearance.DEFAULT_CD_APPEARANCE)
+    assert.equal(settings.getState().rememberPlayer, false)
+  }
+  const storage = authStorage()
+  storage.set('ui-settings', JSON.stringify({ cdPlayerAppearance: { bodyColor: '#708777', accentColor: 'bad', finish: 'glossy', lid: 'smoked' } }))
+  const settings = await (await environment(storage)).settings()
+  assert.deepEqual({ ...settings.getState().cdPlayerAppearance }, {
+    ...cdPlayerAppearance.DEFAULT_CD_APPEARANCE, bodyColor: '#708777', finish: 'glossy', lid: 'smoked',
+  })
+})
+
+test('the previous untouched player appearance upgrades once and keeps other preferences', async () => {
+  const storage = authStorage()
+  storage.set('ui-settings', JSON.stringify({
+    cdPlayerAppearance: { bodyColor: '#aeb7c2', accentColor: '#c84940', finish: 'brushed', lid: 'clear' },
+    cdPlayerAppearanceVersion: 2,
+    streamQuality: 'low', rememberPlayer: false,
+  }))
+  const settings = await (await environment(storage)).settings()
+  assert.deepEqual({ ...settings.getState().cdPlayerAppearance }, cdPlayerAppearance.DEFAULT_CD_APPEARANCE)
+  assert.equal(settings.getState().streamQuality, 'low')
+  assert.equal(settings.getState().rememberPlayer, false)
+  settings.getState().setCdPlayerAppearance({ bodyColor: '#aeb7c2', accentColor: '#c84940' })
+  const restored = await (await environment(storage)).settings()
+  assert.equal(restored.getState().cdPlayerAppearance.bodyColor, '#aeb7c2')
+  assert.equal(restored.getState().cdPlayerAppearance.accentColor, '#c84940')
+})
+
+test('upgrading the player preserves a customized legacy appearance', async () => {
+  for (const patch of [{ bodyColor: '#708777' }, { accentColor: '#ffc272' }, { finish: 'matte' }, { lid: 'smoked' }]) {
+    const appearance = { bodyColor: '#aeb7c2', accentColor: '#c84940', finish: 'brushed', lid: 'clear', ...patch }
+    const storage = authStorage()
+    storage.set('ui-settings', JSON.stringify({ cdPlayerAppearance: appearance }))
+    const settings = await (await environment(storage)).settings()
+    assert.deepEqual({ ...settings.getState().cdPlayerAppearance }, appearance)
   }
 })

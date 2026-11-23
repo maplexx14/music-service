@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Download, Link2 } from 'lucide-react'
+import { Check, Download, Link2 } from '@/components/icons'
 import { useAuthStore } from '../store/authStore'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import defaultCover from '../assets/default-cover.webp'
@@ -87,7 +87,7 @@ function PreferencesOnboarding() {
     }
   }, [importsCompleted])
 
-  const finish = () => navigate('/')
+  const finish = () => navigate('/onboarding/player', { replace: true })
 
   /** Сохраняет выбор перед уходом с онбординга. Пустой первый выбор не сохраняем:
    *  PUT со пустыми списками затёр бы предпочтения, если юзер уже что-то
@@ -169,7 +169,7 @@ function PreferencesOnboarding() {
     if (step === GENRE_STEP) return genres.length ? `Далее (${genres.length})` : 'Далее'
     if (step === ARTIST_STEP) {
       if (saving) return 'Сохранение...'
-      return artists.length ? `Готово (${artists.length})` : 'Готово'
+      return 'К проигрывателю'
     }
     return 'Далее'
   }

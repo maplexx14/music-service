@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Download, Trash2, Upload, Link2, X, ChevronDown, ArrowRight, Loader2 } from 'lucide-react'
+import { Plus, Download, Trash2, Upload, Link2, X, ChevronDown, ArrowRight, Loader2 } from '@/components/icons'
 import api from '../services/api'
 import {
   peekCache,
@@ -27,6 +27,9 @@ import soundcloudLogo from '../assets/service-logos/soundcloud.png'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { plural } from '../utils/format'
 import './Playlists.css'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 const IMPORT_SERVICES = [
   { source: 'spotify', name: 'Spotify', logo: spotifyLogo, examples: ['open.spotify.com/playlist/…', 'open.spotify.com/album/…', 'open.spotify.com/track/…'] },
@@ -35,11 +38,15 @@ const IMPORT_SERVICES = [
   { source: 'soundcloud', name: 'SoundCloud', logo: soundcloudLogo, examples: ['soundcloud.com/user/sets/playlist', 'soundcloud.com/user/track'] },
 ]
 
-function Playlists() {
+function Playlists({ guest = false } = {}) {
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
   // Список из прошлого захода рисуется сразу, свежий приезжает фоном: вкладка
   // «Медиатека» открывается без спиннера.
-  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? [])
-  const [loading, setLoading] = useState(() => !peekCache(LIBRARY_CACHE_KEY))
+  const [onlinePlaylists, setPlaylists] = useState(() => guest ? [] : peekCache(LIBRARY_CACHE_KEY) ?? [])
+  const playlists = offline ? offlineCollections(offlineState).playlists : onlinePlaylists
+  const [onlineLoading, setLoading] = useState(() => !guest && !peekCache(LIBRARY_CACHE_KEY))
+  const loading = offline ? !offlineState.ready : onlineLoading
   const [loadError, setLoadError] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
@@ -71,15 +78,16 @@ function Playlists() {
 
   useEffect(() => {
     fetchPlaylists()
-  }, [importsCompleted])
+  }, [importsCompleted, offline])
 
   // Создание и удаление правят список на месте — кэш следует за ним, иначе
   // возврат на вкладку на миг показал бы прошлую версию.
   useEffect(() => {
-    if (!loading && !loadError) writeCache(LIBRARY_CACHE_KEY, playlists)
-  }, [playlists, loading, loadError])
+    if (!offline && !guest && !loading && !loadError) writeCache(LIBRARY_CACHE_KEY, playlists)
+  }, [playlists, loading, loadError, guest, offline])
 
   const fetchPlaylists = async () => {
+    if (guest || offline) { setLoading(false); return }
     setLoadError(false)
     try {
       const response = await api.get('/playlists/me', { skipErrorToast: playlists.length === 0 })
@@ -203,7 +211,8 @@ function Playlists() {
     )
   }
 
-  if (loadError && playlists.length === 0) {
+  if (!offline && loadError && playlists.length === 0) {
+    if (navigator.onLine === false) return <div className="page-container"><h1>Медиатека</h1><Link to="/downloads" className="btn btn--secondary"><Download size={20} />Скачанные треки</Link><p>Плейлисты будут доступны после подключения к интернету.</p></div>
     return <PageLoadError title="Не удалось загрузить медиатеку" onRetry={() => {
       setLoading(true)
       fetchPlaylists()
@@ -214,10 +223,17 @@ function Playlists() {
     <div className="page-container">
       <div className="playlists-header">
         <h1>Медиатека</h1>
+        {offline && <p>Плейлисты со скачанными треками</p>}
         <div className="playlists-header-actions">
+          <Link to="/downloads" className="btn btn--secondary import-playlist-btn"><Download size={20} />Скачанные</Link>
           {/* Загрузка своего трека: отдельного пункта меню под неё нет ни
               на мобильном, ни в сайдбаре — ссылка на /upload живёт здесь. */}
-          <Link to="/upload" className="btn btn--secondary import-playlist-btn">
+          <Link to="/upload" className="btn btn--secondary import-playlist-btn" onClick={(event) => {
+            if (navigator.onLine === false) {
+              event.preventDefault()
+              toast.info('Для загрузки трека нужен интернет')
+            }
+          }}>
             <Upload size={20} />
             Загрузить трек
           </Link>
@@ -434,15 +450,16 @@ function Playlists() {
               <div key={playlist.id} className="playlist-card">
                 <button
                   className="playlist-delete-btn"
+                  disabled={offline}
                   title="Удалить плейлист"
                   onClick={(e) => handleDeletePlaylist(e, playlist)}
                 >
                   <Trash2 size={18} />
                 </button>
                 <Link
-                  to={`/playlists/${playlist.id}`}
+                  to={playlist.page_url || `/playlists/${playlist.id}`}
                   className="playlist-card-link"
-                  {...intentPrefetchHandlers(() => prefetchPlaylist(playlist.id))}
+                  {...(!offline && intentPrefetchHandlers(() => prefetchPlaylist(playlist.id)))}
                 >
                   <img
                     src={resolveCoverUrl(playlist.cover_url) || defaultCover}

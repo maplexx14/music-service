@@ -401,3 +401,10 @@ def auth_headers(client, username="alice", password="password123"):
     from app.auth import create_access_token
 
     return {"Authorization": f"Bearer {create_access_token({'sub': username})}"}
+
+
+@pytest.fixture()
+def member_headers(client, db):
+    """Member access for catalog tests; guest access has its own checks."""
+    user = create_user(db, username="catalog_reader")
+    return auth_headers(client, username=user.username)

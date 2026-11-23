@@ -1,4 +1,6 @@
-import { isUuid, getTrackDbId } from '../utils/identifiers'
+import { getTrackDbId } from '../utils/identifiers'
+import { onlineTrackUrl } from '../services/trackSource'
+import { offlineAudioUrl, useOfflineTracks } from '../services/offlineTracks'
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
@@ -8,8 +10,9 @@ import {
   trackLikeKey,
   usePlayerStore,
 } from '../store/playerStore'
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, ThumbsDown, ListPlus, Download, AlignLeft, ShieldCheck } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat1, Volume2, ThumbsDown, ListPlus, Download, AlignLeft, ShieldCheck, MoreHorizontal } from '@/components/icons'
 import LikeHeart from './LikeHeart'
+import OfflineDownloadButton from './OfflineDownloadButton'
 import api from '../services/api'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError, isCoverReady, preloadCover } from '../utils/media'
@@ -28,7 +31,6 @@ import ArtistLink from './ArtistLink'
 import { splitArtists } from '../utils/artists'
 import BoltLoader from './BoltLoader'
 import { toast } from '../store/toastStore'
-import { API_URL, SERVER_URL } from '../config'
 import './Player.css'
 import { useLyrics } from '../hooks/useLyrics'
 import { warmThemeColor } from '../hooks/useThemeColor'
@@ -134,10 +136,6 @@ const HEAVY_COVER_DELAY_MS = 3000
 // /tracks/{id}/stream давал ровно те же байты, но ценой лишнего 307 на
 // каждом старте — полный round-trip через туннель.
 // soulseek в MinIO не архивируется (P2P), но его прокси-эндпоинт прямой.
-const DIRECT_STREAM_PREFIX = {
-  soulseek: '/soulseek/stream/',
-  ytmusic: '/ytdlp/stream/',
-}
 
 // Собирает "сырой" src для <audio> из объекта трека — используется и для
 // текущего трека, и для ленивой подгрузки следующего.
@@ -145,30 +143,11 @@ const DIRECT_STREAM_PREFIX = {
 // дописывает ?quality=low (см. utils/streamQuality). Точка сборки на весь плеер
 // одна, поэтому текущий трек и прогрев следующего всегда получают одно и то же
 // качество — иначе прогрев качал бы не то, что заиграет.
-function resolveRawUrl(track, isExternal) {
+function resolveRawUrl(track) {
   if (!track) return undefined
-  // Материализованный в БД трек (UUID) — всегда через свой бэкенд-эндпоинт
-  // стрима: он реконструирует URL провайдера против ТЕКУЩЕГО хоста. Сохранённый
-  // в track.stream_url хост зашит на момент сохранения и умирает при переносе
-  // деплоя/смене туннеля. У результатов поиска id строковый ("ytmusic:...") —
-  // они не в БД, для них stream_url свежий, с текущим хостом.
-  if (isUuid(track.id)) {
-    // Внешний источник с известным external_id — минуем /tracks/{id}/stream
-    // и его 307-редирект, идём сразу на эндпоинт провайдера (тот же путь,
-    // куда редиректит бэк). Фолбэк на старый путь, если external_id нет.
-    const directPrefix = DIRECT_STREAM_PREFIX[track.source]
-    if (directPrefix && track.external_id) {
-      return withQuality(`${API_URL}${directPrefix}${track.external_id}`)
-    }
-    return withQuality(`${API_URL}/tracks/${track.id}/stream`)
-  }
-  if (isExternal) return withQuality(track.stream_url)
-  if (track.id) return withQuality(`${API_URL}/tracks/${track.id}/stream`)
-  if (track.file_path?.startsWith('http')) return track.file_path
-  if (track.file_path) {
-    return `${SERVER_URL}${track.file_path.startsWith('/') ? '' : '/'}${track.file_path}`
-  }
-  return undefined
+  const saved = offlineAudioUrl(track)
+  if (navigator.onLine === false) return saved
+  return saved || withQuality(onlineTrackUrl(track))
 }
 
 // Источники, чей поток резолвится на бэке лениво (в отличие от локальных
@@ -296,7 +275,7 @@ function PlayerProgress({ audioRef, seekable }) {
       { ref: fillRef, frame: progressShift },
       { ref: headRef, frame: progressShift },
     ],
-    { stepped: liteMode },
+    { stepped: liteMode, frameRate: 60, native: false },
   )
 
   const handleSeek = (e) => {
@@ -386,6 +365,7 @@ function MiniGhost({ track, slot }) {
 }
 
 function PlayerInner() {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   // Определяем платформу для iOS-специфичной логики
   const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
 
@@ -439,7 +419,7 @@ function PlayerInner() {
   const materializeCurrentTrack = usePlayerStore((s) => s.materializeCurrentTrack)
   const prefetchNext = usePlayerStore((s) => s.prefetchNext)
 
-  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading: lyricsLoading, error: lyricsError } = useLyrics(isAuthenticated ? currentTrack : null)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const seekRequest = usePlayerStore((s) => s.seekRequest)
   const clearSeekRequest = usePlayerStore((s) => s.clearSeekRequest)
@@ -564,6 +544,49 @@ function PlayerInner() {
   const [isBuffering, setIsBuffering] = useState(false)
   const [loadingLike, setLoadingLike] = useState(false)
   const [loadingDislike, setLoadingDislike] = useState(false)
+  const [volumeOpen, setVolumeOpen] = useState(false)
+  const volumeControlRef = useRef(null)
+  // Secondary track actions live behind one "⋯" button: the mini player had a
+  // row of five icons competing with playback controls.
+  const [trackMenuOpen, setTrackMenuOpen] = useState(false)
+  const trackActionsRef = useRef(null)
+
+  useEffect(() => {
+    if (!trackMenuOpen) return undefined
+    const closeOutside = (event) => {
+      if (!trackActionsRef.current?.contains(event.target)) setTrackMenuOpen(false)
+    }
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return
+      setTrackMenuOpen(false)
+      trackActionsRef.current?.querySelector('.player-track-more')?.focus()
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [trackMenuOpen])
+
+
+  useEffect(() => {
+    if (!volumeOpen) return undefined
+    const closeOutside = (event) => {
+      if (!volumeControlRef.current?.contains(event.target)) setVolumeOpen(false)
+    }
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return
+      setVolumeOpen(false)
+      volumeControlRef.current?.querySelector('button')?.focus()
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [volumeOpen])
   const isAdmin = useAuthStore((s) => Boolean(s.user?.is_admin))
   const userId = useAuthStore((s) => s.user?.id ?? null)
   // Очередь и позиция с прошлого запуска (iOS выгружает PWA из памяти).
@@ -664,6 +687,7 @@ function PlayerInner() {
   // если она уже прогрета и декодирована, иначе — с мини-обложкой, а в
   // плеере под картинкой лежит та же маленькая.
   const openFullScreenWithTransition = async (karaoke) => {
+    if (karaoke && !usePlayerStore.getState().requireAccount()) return
     if (usePlayerStore.getState().isFullScreen) return
     try {
       await import('./FullScreenPlayer')
@@ -1372,6 +1396,7 @@ function PlayerInner() {
     }
   }, [dbTrackId, fetchLikedTracks, fetchDislikedTracks])
 
+  const offlineReady = useOfflineTracks((state) => state.ready)
   // Всегда отдаём URL непосредственно постоянному <audio>. Blob-источник не
   // имеет HTTP Range/Content-Range, поэтому iOS считает его неперематываемым и
   // отключает системную шкалу времени и часть remote-команд.
@@ -1381,7 +1406,7 @@ function PlayerInner() {
       trackId: currentTrack?.id ?? null,
       url: resolveRawUrl(currentTrack, isExternalTrack),
     })
-  }, [currentTrack, isExternalTrack])
+  }, [currentTrack, isExternalTrack, offlineReady])
 
   // src на <audio> ставим императивно и ТОЛЬКО при реальном изменении, а не
   // JSX-атрибутом. Причина: handleEnded и хендлеры системного виджета
@@ -2020,6 +2045,7 @@ function PlayerInner() {
   // гарантирует одну запись на трек.
   const maybeRecordPlay = (audio) => {
     const state = usePlayerStore.getState()
+    if (state.guestMode) return
     const track = state.currentTrack
     if (!state.isPlaying || !track) return
     const dbId = getTrackDbId(track)
@@ -2486,6 +2512,7 @@ function PlayerInner() {
   }
 
   const handleLike = async () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract || loadingLike) return
 
     setLoadingLike(true)
@@ -2514,6 +2541,7 @@ function PlayerInner() {
   // следующий. Повторное нажатие (трек уже дизлайкнут) только снимает метку,
   // не переключая: пользователь мог вернуться и передумать.
   const handleDislike = async () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract || loadingDislike) return
 
     setLoadingDislike(true)
@@ -2554,6 +2582,7 @@ function PlayerInner() {
   // нажатия: если за время выбора заиграет следующий, добавиться должен тот,
   // что был на экране, а не новый текущий.
   const handleOpenAddToPlaylist = () => {
+    if (!usePlayerStore.getState().requireAccount()) return
     if (!canInteract || !currentTrack) return
     haptic(HAPTIC.selection)
     const track = currentTrack
@@ -2619,7 +2648,7 @@ function PlayerInner() {
         const rawRetryUrl = resolveRawUrl(trackAtError, isExternalTrack)
         if (rawRetryUrl) {
           const retryUrl = new URL(rawRetryUrl, window.location.href)
-          retryUrl.searchParams.set('_media_retry', String(Date.now()))
+          if (!offlineAudioUrl(trackAtError)) retryUrl.searchParams.set('_media_retry', String(Date.now()))
           setAudioSource({ trackId: trackAtError?.id ?? null, url: retryUrl.href })
         } else {
           el.load()
@@ -2720,7 +2749,7 @@ function PlayerInner() {
           </div>
         </div>
         {canInteract && (
-          <div className="player-track-actions">
+          <div className="player-track-actions" ref={trackActionsRef}>
             <button
               className={`like-btn ${isLiked ? 'liked' : ''}`}
               onClick={(event) => {
@@ -2733,52 +2762,88 @@ function PlayerInner() {
               <LikeHeart size={18} liked={!!isLiked} />
             </button>
             <button
-              className={`dislike-btn ${isDisliked ? 'disliked' : ''}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                handleDislike()
-              }}
-              disabled={loadingDislike}
-              title={isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}
-              aria-pressed={isDisliked}
-            >
-              <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
-            </button>
-            <button
               type="button"
-              className="add-btn"
+              className={`add-btn player-track-more${trackMenuOpen ? ' is-open' : ''}`}
               onClick={(event) => {
                 event.stopPropagation()
-                handleOpenAddToPlaylist()
+                setTrackMenuOpen((open) => !open)
               }}
-              title="Добавить в плейлист"
+              aria-haspopup="menu"
+              aria-expanded={trackMenuOpen}
+              title="Ещё"
+              aria-label="Дополнительные действия с треком"
             >
-              <ListPlus size={18} />
+              <MoreHorizontal size={18} />
             </button>
-            {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
-              <button
-                type="button"
-                className="add-btn"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  openCensorDialog(currentTrack)
-                }}
-                title="Оригинал без цензуры"
-              >
-                <ShieldCheck size={18} />
-              </button>
-            )}
-            {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
-              <a
-                className="add-btn"
-                href={currentTrack.download_url}
-                target="_blank"
-                rel="noreferrer"
-                title="Скачать"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <Download size={18} />
-              </a>
+            {trackMenuOpen && (
+              <div className="player-track-menu" role="menu" aria-label="Действия с треком">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`player-track-menu-item${isDisliked ? ' is-active' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setTrackMenuOpen(false)
+                    handleDislike()
+                  }}
+                  disabled={loadingDislike}
+                >
+                  <ThumbsDown size={18} fill={isDisliked ? 'currentColor' : 'none'} />
+                  <span>{isDisliked ? 'Убрать отметку «не нравится»' : 'Не нравится'}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="player-track-menu-item"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setTrackMenuOpen(false)
+                    handleOpenAddToPlaylist()
+                  }}
+                >
+                  <ListPlus size={18} />
+                  <span>Добавить в плейлист</span>
+                </button>
+                {isAdmin && currentTrack.source === 'ytmusic' && currentTrack.external_id && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="player-track-menu-item"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setTrackMenuOpen(false)
+                      openCensorDialog(currentTrack)
+                    }}
+                  >
+                    <ShieldCheck size={18} />
+                    <span>Оригинал без цензуры</span>
+                  </button>
+                )}
+                <div className="player-track-menu-row">
+                  <Download size={18} aria-hidden="true" />
+                  <span>Скачивание</span>
+                  <OfflineDownloadButton track={currentTrack} size={18} className="player-track-menu-action" />
+                </div>
+                {isExternalTrack && currentTrack.download_allowed && currentTrack.download_url && (
+                  <a
+                    className="player-track-menu-row player-track-menu-link"
+                    href={currentTrack.download_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setTrackMenuOpen(false)
+                      if (navigator.onLine === false) {
+                        event.preventDefault()
+                        toast.info('Для скачивания файла нужен интернет')
+                      }
+                    }}
+                  >
+                    <Download size={18} aria-hidden="true" />
+                    <span>Скачать файл</span>
+                  </a>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -2853,18 +2918,30 @@ function PlayerInner() {
           >
             <AlignLeft size={18} />
           </button>
-          <div className="volume-control">
-            <Volume2 size={20} />
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="volume-slider"
+          <div ref={volumeControlRef} className={`volume-control${volumeOpen ? ' is-open' : ''}`}>
+            <Volume2 className="player-volume-icon" size={20} />
+            <button
+              type="button"
+              className="control-btn player-volume-toggle"
               aria-label="Громкость"
-            />
+              aria-expanded={volumeOpen}
+              aria-controls="mini-player-volume"
+              onClick={() => setVolumeOpen((open) => !open)}
+            >
+              <Volume2 size={20} />
+            </button>
+            <div className="player-volume-slider-wrap" id="mini-player-volume">
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={volume}
+                onChange={(e) => setVolume(parseFloat(e.target.value))}
+                className="volume-slider"
+                aria-label="Громкость"
+              />
+            </div>
           </div>
         </div>
       </div>

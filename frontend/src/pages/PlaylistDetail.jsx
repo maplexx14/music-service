@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Share, Shuffle } from 'lucide-react'
+import { Play, Share, Shuffle } from '@/components/icons'
 import api from '../services/api'
 import {
   peekCache,
@@ -13,6 +13,8 @@ import {
 import Spinner from '../components/Spinner'
 import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
@@ -24,17 +26,25 @@ import { shareLink } from '../utils/shareLink'
 import './PlaylistDetail.css'
 // Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
 import './Artist.css'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 
 function PlaylistDetail() {
   const { id } = useParams()
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
   const navigate = useNavigate()
   // Первая страница из кэша (прошлый заход или прогрев по наведению) рисуется
   // сразу, без спиннера; свежая версия приезжает фоном (см. fetchPlaylist).
-  const [playlist, setPlaylist] = useState(() => peekCache(playlistCacheKey(id))?.playlist ?? null)
-  const [loading, setLoading] = useState(() => !peekCache(playlistCacheKey(id)))
-  const [totalTracks, setTotalTracks] = useState(() => peekCache(playlistCacheKey(id))?.total ?? 0)
+  const [onlinePlaylist, setPlaylist] = useState(() => peekCache(playlistCacheKey(id))?.playlist ?? null)
+  const playlist = offline ? offlineCollections(offlineState).playlists.find((item) => String(item.id) === String(id)) : onlinePlaylist
+  const [onlineLoading, setLoading] = useState(() => !peekCache(playlistCacheKey(id)))
+  const loading = offline ? !offlineState.ready : onlineLoading
+  const [onlineTotal, setTotalTracks] = useState(() => peekCache(playlistCacheKey(id))?.total ?? 0)
+  const totalTracks = offline ? playlist?.tracks.length || 0 : onlineTotal
   const [loadingMore, setLoadingMore] = useState(false)
   // Упавший запрос гасит автоподгрузку и возвращает кнопку: иначе наблюдатель
   // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
@@ -69,17 +79,17 @@ function PlaylistDetail() {
     }
     fetchPlaylist()
     fetchLikedTracks()
-  }, [id])
+  }, [id, offline])
 
   // Кэш следует за списком, но хранит только первую страницу — остальное
   // догружается прокруткой.
   useEffect(() => {
-    if (loading || !playlist || String(playlist.id) !== String(id)) return
+    if (offline || loading || !playlist || String(playlist.id) !== String(id)) return
     writeCache(playlistCacheKey(id), {
       playlist: { ...playlist, tracks: playlist.tracks.slice(0, TRACKS_PAGE_SIZE) },
       total: totalTracks,
     })
-  }, [playlist, totalTracks, loading, id])
+  }, [playlist, totalTracks, loading, id, offline])
 
   const fetchPlaylist = async () => {
     if (!peekCache(playlistCacheKey(id))) setLoading(true)
@@ -142,7 +152,7 @@ function PlaylistDetail() {
   // постранично. Без пейджера воспроизведение вставало на последнем
   // загруженном треке: для плеера это выглядело как конец плейлиста. Пейджер
   // говорит плееру, откуда дотянуть хвост самому, не дожидаясь прокрутки.
-  const queuePager = () => ({ url: `/playlists/${id}`, total: totalTracks })
+  const queuePager = () => offline ? null : ({ url: `/playlists/${id}`, total: totalTracks })
   const playOptions = { context: { kind: 'playlist', title: playlist?.name } }
 
   const handlePlay = () => {
@@ -177,8 +187,10 @@ function PlaylistDetail() {
 
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
   }
@@ -221,14 +233,6 @@ function PlaylistDetail() {
       <div className="artist-toolbar">
         <div className="playlist-actions round-actions">
           <button
-            className="btn btn--primary btn--lg play-button-large round-actions__play"
-            onClick={handlePlay}
-            aria-label="Воспроизвести"
-          >
-            <Play size={24} fill="currentColor" />
-            <span className="round-actions__label">Воспроизвести</span>
-          </button>
-          <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
             onClick={handleShuffle}
             disabled={shuffling}
@@ -238,6 +242,15 @@ function PlaylistDetail() {
             <Shuffle size={20} />
             <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
           </button>
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <OfflinePlaylistDownloadButton playlist={playlist} totalTracks={totalTracks} />
           <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon"
             onClick={() =>
@@ -263,7 +276,8 @@ function PlaylistDetail() {
               <tr>
                 <th>#</th>
                 <th>Название</th>
-                <th>Альбом</th>
+                <th className="track-artist-heading">Артист</th>
+                <th className="track-album-heading">Альбом</th>
                 <th>Длительность</th>
                 <th></th>
               </tr>
@@ -309,6 +323,7 @@ function PlaylistDetail() {
           </div>
         )}
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

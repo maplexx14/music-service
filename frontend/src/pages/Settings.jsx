@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
-import { Sparkles, Disc3, Mic2, SlidersHorizontal, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from 'lucide-react'
+import { Sparkles, Disc3, Mic2, SlidersHorizontal, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from '@/components/icons'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { useAuthStore } from '../store/authStore'
@@ -18,6 +18,7 @@ import ContactDeveloper from '../components/ContactDeveloper'
 import RateService from '../components/RateService'
 import TasteAvatar from '../components/TasteAvatar'
 import HeroHearts from '../components/HeroHearts'
+import CdPlayerAppearance from '../components/CdPlayerAppearance'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
 import {
   clearFrameMeter,
@@ -141,10 +142,11 @@ function useIsMobile() {
 const sameList = (a = [], b = []) =>
   a.length === b.length && a.every((item, i) => item === b[i])
 
-function Settings() {
+function Settings({ guest = false } = {}) {
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
   const {
     liteMode,
+    liteModeAuto,
     toggleLiteMode,
     streamQuality,
     setStreamQuality,
@@ -152,10 +154,11 @@ function Settings() {
     toggleRememberPlayer,
     brushIcons,
     toggleBrushIcons,
-    vinylDisc,
-    toggleVinylDisc,
+    vinylDisc: cdDisc,
+    toggleVinylDisc: toggleCdDisc,
   } = useUiSettingsStore()
-  const { user, updatePreferences, logout } = useAuthStore()
+  const { user: accountUser, updatePreferences, logout } = useAuthStore()
+  const user = accountUser ?? (guest ? { username: 'Гость' } : null)
   const [gifError, setGifError] = useState('')
 
   // Музыкальные предпочтения (инициализируем из профиля пользователя).
@@ -232,6 +235,7 @@ function Settings() {
   // юзер видит, что сервис о нём понял, и может перенести это в свой выбор.
   const [detected, setDetected] = useState({ genres: [], artists: [] })
   useEffect(() => {
+    if (guest) return undefined
     let active = true
     api
       .get('/users/me/taste')
@@ -244,7 +248,7 @@ function Settings() {
     return () => {
       active = false
     }
-  }, [])
+  }, [guest])
 
   // Автосохранение вместо кнопки: сетка артистов подгружается при прокрутке
   // бесконечно, и кнопка под ней была недостижима. Сохраняем через паузу
@@ -447,7 +451,7 @@ function Settings() {
   )
 
   // Телефон, корень: только меню.
-  if (!active) {
+  if (!active || guest) {
     return (
       <div className="page-container">
         <div className="settings-header">
@@ -690,7 +694,11 @@ function Settings() {
                   <div>
                     <div className="settings-label">Облегчённый режим</div>
                     <div className="settings-hint">
-                      Отключает анимации и фоновые эффекты, снижая нагрузку на процессор
+                      {liteModeAuto && liteMode
+                        ? 'Включён автоматически: аппаратное ускорение недоступно. Можно отключить вручную'
+                        : liteModeAuto
+                          ? 'Аппаратное ускорение недоступно, но режим отключён вручную'
+                          : 'Отключает тяжёлые анимации и фоновые эффекты, снижая нагрузку на процессор'}
                     </div>
                   </div>
                   <label className="settings-toggle">
@@ -724,17 +732,17 @@ function Settings() {
 
                 <div className="settings-row">
                   <div>
-                    <div className="settings-label">Диск-пластинка</div>
+                    <div className="settings-label">Компакт-диски</div>
                     <div className="settings-hint">
-                      Обложка трека на виниле. Выключите — диск целиком из обложки, как раньше
+                      Обложки треков на CD с прозрачным центром и радужными бликами
                     </div>
                   </div>
                   <label className="settings-toggle">
                     <input
                       type="checkbox"
-                      checked={vinylDisc}
-                      onChange={toggleVinylDisc}
-                      aria-label="Диск-пластинка"
+                      checked={cdDisc}
+                      onChange={toggleCdDisc}
+                      aria-label="Компакт-диски"
                     />
                     <span className="settings-toggle-slider" />
                   </label>
@@ -759,6 +767,12 @@ function Settings() {
                     {gifError && <div className="settings-error">{gifError}</div>}
                   </div>
                 </div>
+              </div>
+
+              <div className="settings-card">
+                <div className="settings-section-title">CD-проигрыватель</div>
+                <p className="settings-hint settings-section-hint">Корпус, дисплей и крышка проигрывателя на главной странице компьютера. Настройки сохраняются на этом устройстве.</p>
+                <CdPlayerAppearance />
               </div>
 
               <PushSettings />

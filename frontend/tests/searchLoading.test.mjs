@@ -24,7 +24,8 @@ const responses = {
   '/search/external/playlists': [{ id: 6, title: 'External playlist' }],
 }
 
-async function mountSearch(initial = {}) {
+async function mountSearch(initial = {}, props = {}) {
+  const played = [], prefetched = [], queues = []
   const hooks = [], effects = [], timers = new Map(), requests = [], snapshots = []
   let index = 0, timerId = 0, dirty = true, tree
   const sameDeps = (a, b) => a && a.length === b.length && a.every((value, i) => Object.is(value, b[i]))
@@ -63,7 +64,11 @@ async function mountSearch(initial = {}) {
       return new Promise((resolve, reject) => requests.push({ url, options, resolve, reject, done: false }))
     } } },
     '../store/playerStore': {
-      usePlayerStore: { getState: () => ({ prefetchTracks: noop }) }, trackIntentHandlers: () => ({}),
+      usePlayerStore: { getState: () => ({
+        prefetchTracks: (...args) => prefetched.push(args),
+        playTrack: (track, queue, source) => { played.push(track); queues.push({ queue, source }) },
+        requireAccount: () => !props.guest,
+      }) }, trackIntentHandlers: () => ({}),
     },
     '../services/pageCache': { intentPrefetchHandlers: () => ({}), prefetchArtist: noop, prefetchCache: noop },
     '../components/TrackContextMenu': {
@@ -75,7 +80,7 @@ async function mountSearch(initial = {}) {
     '../utils/musicLinks': { parseMusicLink: () => null, linkPagePath: noop },
   }
   const searchParams = new URLSearchParams()
-  for (const component of ['Spinner', 'ArtistLink', 'Carousel', 'SourceIcon']) {
+  for (const component of ['Spinner', 'ArtistLink', 'Carousel', 'SourceIcon', 'SearchTrackTable']) {
     modules[`../components/${component}`] = { default: component }
   }
   modules['../assets/default-cover.webp'] = { default: 'cover.webp' }
@@ -106,7 +111,7 @@ async function mountSearch(initial = {}) {
   }
   const hasClass = (name) => nodes((node) => node.props?.className === name).length > 0
   function render() {
-    dirty = false; index = 0; tree = Search()
+    dirty = false; index = 0; tree = Search(props)
     snapshots.push({ loading: nodes((node) => node.type === 'Spinner').length, results: hasClass('search-results') })
     for (const effect of effects.splice(0)) effect()
   }
@@ -123,7 +128,7 @@ async function mountSearch(initial = {}) {
   }
   await settle()
   return {
-    state: useSearchStore.getState, requests, snapshots, settle, render, complete, hasClass,
+    state: useSearchStore.getState, requests, snapshots, settle, render, complete, hasClass, nodes, played, prefetched, queues,
     loading: () => nodes((node) => node.type === 'Spinner').length,
     titles: () => nodes((node) => node.type === 'h2').map((node) => node.props.children),
     async start() {
@@ -237,3 +242,39 @@ for (const filter of ['deezer', 'spotify']) {
     assert.equal(app.hasClass('no-results'), true)
   })
 }
+
+test('guests keep the same search results and use the regular player', async () => {
+  const app = await mountSearch({}, { guest: true })
+  await app.start()
+  for (const url of endpoints) await app.complete(url)
+  assert.equal(app.loading(), 0)
+  assert.deepEqual(app.titles(), ['Исполнители', 'Плейлисты', 'Плейлисты сервисов', 'Лучшие совпадения', 'YouTube Music', 'SoundCloud'])
+  assert.equal(app.nodes((node) => node.type === 'TrackContextMenu').length, 1)
+  app.nodes((node) => node.props?.className === 'track-item')[0].props.onClick()
+  assert.equal(app.played.length, 1)
+})
+
+test('desktop search tables keep playback within the selected section', async () => {
+  const app = await mountSearch()
+  await app.start()
+  await app.complete('/search/', {
+    tracks: [...responses['/search/'].tracks, { id: 8, title: 'Counterfeit', artist: 'Limp Bizkit' }],
+    playlists: [],
+  })
+  for (const url of endpoints.slice(1)) await app.complete(url)
+  const tables = app.nodes((node) => node.type === 'SearchTrackTable')
+  assert.equal(tables.length, 4)
+  for (const table of tables) table.props.onPlay(table.props.tracks[0])
+  assert.deepEqual(app.played.map((track) => track.id), [3, 8, 4, 5])
+  assert.deepEqual(app.queues.map(({ queue }) => Array.from(queue, (track) => track.id)), [[3, 1], [8], [4], [5]])
+  assert.deepEqual(app.queues.map(({ source }) => source), ['external', undefined, 'external', 'external'])
+})
+
+test('guests can listen to provider search results', async () => {
+  const app = await mountSearch({ filter: 'deezer' }, { guest: true })
+  await app.start()
+  await app.complete('/import/search/deezer', [{ id: 'ytmusic:1', title: 'Provider track', artist: 'Muse' }])
+  assert.equal(app.loading(), 0)
+  app.nodes((node) => node.props?.className === 'track-item')[0].props.onClick()
+  assert.equal(app.played[0].id, 'ytmusic:1')
+})

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Star, X } from 'lucide-react'
+import { Star, X } from '@/components/icons'
 import api from '../services/api'
 import { useAuthStore } from '../store/authStore'
 import './InstallPrompt.css'

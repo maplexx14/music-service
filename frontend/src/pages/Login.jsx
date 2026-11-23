@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
-import { Download, Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-react'
+import { Download, Eye, EyeOff, LockKeyhole, UserRound } from '@/components/icons'
 import { androidDownloadUrl, installedAndroidVersion } from '../services/androidRelease'
 import { safeNextPath } from '../services/navigation'
 import loginHeart from '../assets/liked-hero-heart.webp'
@@ -142,7 +142,7 @@ function Login() {
     <main className="auth-container login-page" data-scrollable>
       <div className="auth-card login-card">
         <div className="login-art" aria-hidden="true">
-          <img src={loginHeart} alt="" width="269" height="271" draggable="false" />
+          <img src={loginHeart} alt="" width="1024" height="1024" draggable="false" />
         </div>
 
         <section className="login-panel" aria-labelledby="login-title">
@@ -306,6 +306,9 @@ function Login() {
                 <div className="login-divider"><span>или</span></div>
                 <Link className="btn btn--secondary btn--lg btn--block" to="/register">
                   Создать аккаунт
+                </Link>
+                <Link className="btn btn--ghost btn--lg btn--block" to="/search">
+                  Слушать без регистрации
                 </Link>
                 {!native && (
                   <a className="btn btn--ghost btn--sm auth-apk-download" href={androidDownloadUrl()} download="bolt.apk">

@@ -43,6 +43,7 @@ async function mountStore(apiOverrides = {}, globals = {}) {
     '../services/pageCache': { invalidateCache: noop, patchCache: noop, peekCache: noop, LIKED_CACHE_KEY: 'liked' },
     '../utils/playerQueue': queueUtils,
     '../utils/identifiers': identifiers,
+    '../services/offlineTracks': globals.offlineTracks || { downloadedTracks: (tracks = []) => tracks, offlineTrackKey: (track) => track?.id },
   }
   const module = { exports: {} }
   storeScript.runInContext(context)(module, module.exports, (name) => {
@@ -51,6 +52,86 @@ async function mountStore(apiOverrides = {}, globals = {}) {
   })
   return module.exports.usePlayerStore
 }
+
+function offlineGlobals(saved) {
+  return { navigator: { onLine: false }, offlineTracks: {
+    downloadedTracks: (tracks = saved) => {
+      const allowed = new Set(saved.map((track) => track.id))
+      const seen = new Set()
+      return tracks.filter((track) => allowed.has(track.id) && !seen.has(track.id) && seen.add(track.id))
+    },
+    offlineTrackKey: (track) => track?.id,
+  } }
+}
+
+test('offline playback filters unavailable tracks and refuses an unavailable selection', async () => {
+  const saved = [track('saved-a'), track('saved-b')]
+  const unavailable = track('missing')
+  const store = await mountStore({}, offlineGlobals(saved))
+  store.getState().playPlaylist([unavailable, ...saved], 1, 'playlist')
+  assert.equal(store.getState().currentTrack.id, saved[0].id)
+  assert.deepEqual(Array.from(store.getState().queue, (track) => track.id), saved.map((track) => track.id))
+  store.getState().playTrack(unavailable)
+  assert.equal(store.getState().currentTrack.id, saved[0].id)
+})
+
+test('offline flow ignores online previews and starts from every downloaded category', async () => {
+  const saved = [track('liked'), track('playlist'), track('standalone')]
+  let requests = 0
+  const store = await mountStore({ get: async () => { requests++; return { data: [...saved].reverse() } }, post: () => { throw new Error('Offline must not prefetch') } }, offlineGlobals(saved))
+  store.setState({ flowPreload: { tracks: [track('not-downloaded')], ts: Date.now() }, flowPreview: { tracks: [track('not-downloaded')] } })
+  assert.equal(await store.getState().startFlow(), true)
+  assert.equal(requests, 1)
+  assert.equal(store.getState().flowActive, true)
+  assert.equal(store.getState().playContext.offline, true)
+  assert.deepEqual(Array.from(store.getState().queue, (track) => track.id).sort(), saved.map((track) => track.id).sort())
+})
+
+test('offline flow continues into another local cycle and avoids repeating the last queued track', async () => {
+  const saved = [track('a'), track('b')]
+  const store = await mountStore({ get: async (_, config) => ({ data: saved.filter((track) => track.id !== config?.params?.exclude) }) }, offlineGlobals(saved))
+  await store.getState().startFlow()
+  assert.equal(await store.getState().extendFlowIfNeeded(), true)
+  assert.deepEqual(Array.from(store.getState().queue, (track) => track.id), [saved[0].id, saved[1].id, saved[0].id])
+  assert.equal(store.getState().flowLoading, false)
+  store.getState().restrictToOfflineLibrary()
+  assert.ok(store.getState().queue.every((track) => saved.some((entry) => entry.id === track.id)))
+})
+
+test('an empty offline library cannot start flow; a single download remains playable on repeat', async () => {
+  const empty = await mountStore({}, offlineGlobals([]))
+  assert.equal(await empty.getState().startFlow(), false)
+  const saved = [track('only')]
+  const single = await mountStore({ get: async () => ({ data: saved }) }, offlineGlobals(saved))
+  await single.getState().startFlow()
+  assert.equal(await single.getState().extendFlowIfNeeded(), true)
+  assert.equal(single.getState().queue.length, 2)
+})
+
+test('guests use the regular player without recording account activity or importing tracks', async () => {
+  const calls = [], prompts = []
+  const store = await mountStore({ post: async (url) => { calls.push(url); return { data: {} } } }, {
+    Event, window: { location: { pathname: '/search' }, dispatchEvent: (event) => prompts.push(event.type) },
+  })
+  store.setState({ guestMode: true })
+  const queue = [
+    { id: uuid(1), source: 'local', title: 'First' },
+    { id: uuid(2), source: 'local', title: 'Second' },
+  ]
+  store.getState().playTrack(queue[0], queue)
+  assert.equal(store.getState().isPlaying, true)
+  store.getState().setCurrentTime(80)
+  store.getState().setDuration(100)
+  store.getState().nextTrack('button')
+  assert.equal(store.getState().currentTrack.id, queue[1].id)
+  assert.equal(await store.getState().materializeTrack(track('external')), null)
+  await store.getState().toggleLikeForTrack(queue[1])
+  await store.getState().startFlow()
+  assert.equal(store.getState().canContinueWithFlow(), false)
+  assert.equal(store.getState().likedTrackIds.length, 0)
+  assert.deepEqual(calls, [])
+  assert.equal(prompts.length, 3)
+})
 
 function setQueue(store, queue, extra = {}) {
   store.setState({ queue, currentTrack: queue[0], currentIndex: 0, isPlaying: true,

@@ -62,6 +62,7 @@
 
 .player-progress-top-fill,
 .player-progress-top-head {
+  will-change: transform;
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
@@ -277,7 +278,70 @@
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  position: relative;
 }
+
+/* Secondary track actions (dislike, playlist, download) live behind this one
+   button instead of a five-icon row fighting the playback controls. */
+.player-track-more.is-open { color: #fff; }
+
+.player-track-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 232px;
+  padding: 6px;
+  border: 1px solid #ffffff1f;
+  border-radius: 14px;
+  background: #1a1720f2;
+  box-shadow: 0 18px 48px #00000073;
+  backdrop-filter: blur(18px);
+  animation: player-track-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes player-track-menu-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.player-track-menu-item,
+.player-track-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #eae5f2;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.player-track-menu-item:hover,
+.player-track-menu-row:hover { background: #ffffff14; }
+.player-track-menu-item.is-active { color: var(--brand-accent, #a259ff); }
+.player-track-menu-item:disabled { opacity: 0.5; cursor: default; }
+.player-track-menu-item svg,
+.player-track-menu-row > svg { flex: 0 0 auto; color: #bdb4cc; }
+.player-track-menu-item.is-active svg { color: currentColor; }
+.player-track-menu-row > span { flex: 1 1 auto; }
+.player-track-menu-row .player-track-menu-action { width: 32px; height: 32px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .player-track-menu { animation: none; }
+}
+
+html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; background: #1a1720; }
 
 /* Secondary player actions use color, not a button surface, for state. */
 .like-btn {
@@ -302,13 +366,13 @@
 .like-btn.liked {
   color: var(--brand-accent);
   /* Поп при лайке: редкий «момент радости», разрешаем чуть заметный отскок. */
-  animation: likePop 0.3s var(--ease-out);
+  animation: likePop 0.375s var(--ease-out);
 }
 
 @keyframes likePop {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.18); }
-  100% { transform: scale(1); }
+  0% { transform: rotate(0deg); }
+  40% { transform: rotate(-12deg); }
+  100% { transform: rotate(0deg); }
 }
 
 .dislike-btn {
@@ -430,7 +494,7 @@
 }
 
 .player-actions-panel button:active:not(:disabled) {
-  transform: scale(0.97);
+  transform: none;
 }
 
 .player-actions-panel .control-btn,
@@ -581,6 +645,11 @@
   }
 }
 
+.player-volume-slider-wrap {
+  display: flex;
+  align-items: center;
+}
+
 /* Равные боковые колонки держат воспроизведение точно по центру,
    независимо от длины названия и количества действий с треком. */
 @media (min-width: 1001px) {
@@ -611,18 +680,32 @@
 /* Сжимаем отступы, сохраняя все кнопки на планшетах и узких мониторах. */
 @media (min-width: 769px) and (max-width: 1200px) {
   .player {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     padding: 12px;
-    gap: 12px;
+    gap: 8px;
   }
 
   .player-left {
-    gap: 10px;
+    gap: 8px;
+  }
+
+  .player-cover {
+    width: 48px;
+    height: 48px;
+  }
+
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
   }
 
   .player-track-actions .like-btn,
   .player-track-actions .dislike-btn,
   .player-track-actions .add-btn {
-    width: 32px;
+    width: 28px;
     height: 40px;
   }
 
@@ -635,78 +718,89 @@
     gap: 2px;
   }
 
+  .player-controls .control-btn {
+    width: 32px;
+  }
+
+  .play-pause-btn {
+    width: 44px;
+    height: 44px;
+  }
+
   .player-actions-panel {
     padding-inline: 6px;
-    gap: 8px;
+    gap: 2px;
   }
 
   .player-actions-panel .control-btn,
   .player-actions-panel .lyrics-btn {
-    width: 36px;
+    width: 28px;
   }
 
   .player-right {
     gap: 2px;
+    min-width: 0;
+    justify-self: end;
   }
 
-  .player-right .volume-slider {
-    width: 56px;
+  .player-center {
+    justify-self: center;
+  }
+
+  .player-volume-icon {
+    display: none;
+  }
+
+  .player-actions-panel .player-volume-toggle {
+    display: flex;
+  }
+
+  .player-volume-slider-wrap {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 32px);
+    right: 0;
+    padding: 18px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    background: #0a0a0e;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .volume-control.is-open .player-volume-slider-wrap {
+    display: flex;
+  }
+
+  .player-volume-slider-wrap .volume-slider {
+    width: 112px;
   }
 }
 
-/* Если ряд слишком узок рядом с сайдбаром, управление занимает второй ряд.
-   Высоту и отступ контента под плеер задаёт Layout.css. */
-@media (min-width: 769px) and (max-width: 1000px) {
-  .player {
-    flex-wrap: wrap;
-    gap: 8px 12px;
-    border-radius: 28px;
-  }
-
+@media (min-width: 769px) and (max-width: 900px) {
   .player-left {
-    flex: 1 0 100%;
+    gap: 4px;
   }
 
-  .player-right {
-    margin-left: auto;
+  .player-cover {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-track-actions .like-btn,
+  .player-track-actions .dislike-btn,
+  .player-track-actions .add-btn {
+    width: 24px;
+  }
+
+  .player-track-actions svg {
+    width: 20px;
+    height: 20px;
   }
 }
 
 @media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
   .player {
     transition: none;
-  }
-}
-
-/* Книжный монитор шириной от 1001px вмещает обычный ряд. Второй ряд
-   нужен только узким окнам; обе группы управления стоят рядом по центру. */
-@media (min-width: 769px) and (max-width: 1000px) and (orientation: portrait) {
-  .player {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
-    grid-template-rows: 60px 52px;
-    gap: 8px 12px;
-    height: var(--player-height, 140px);
-    padding: 10px 18px;
-    border-radius: 28px;
-  }
-
-  .player-left {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    gap: 10px;
-  }
-
-  .player-center {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: start;
-  }
-
-  .player-right {
-    grid-column: 3;
-    grid-row: 2;
-    justify-self: end;
   }
 }
 
@@ -776,15 +870,23 @@
 }
 
 .volume-control {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   color: rgba(255, 255, 255, 0.58);
 }
 
+.player-volume-toggle {
+  display: none;
+}
+
 .volume-slider {
+  display: block;
   width: 93px;
   height: 5px;
+  margin: 0;
+  padding: 0;
   -webkit-appearance: none;
   appearance: none;
   background: var(--surface-4);
@@ -846,6 +948,7 @@
 }
 
 .player-progress-surface-fill {
+  will-change: transform;
   position: absolute;
   inset: 0;
   background: var(--player-fill, rgba(255, 255, 255, 0.13));

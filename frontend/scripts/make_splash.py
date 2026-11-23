@@ -1,22 +1,23 @@
-"""Генератор iOS-сплэшинов: apple-touch-startup-image под актуальные iPhone.
+"""iOS launch images matching the HTML wordmark and equalizer in index.html.
 
-Иконка приложения (мастер favicon-64.png) в скруглённом квадрате ~24.5%
-ширины по центру чёрного фона — как системный экран запуска
-нативного приложения. Имена с суффиксом -vN: iOS запоминает сплэш по URL
-при добавлении на экран «Домой», при смене картинки суффикс поднимать
-(VERSION) и вставлять напечатанные <link> в index.html. Размеры —
-логические точки x 3 (Retina), список покрывает iPhone SE..16 Pro Max
-(устройства с вырезом/островом и без). Регенерация: python scripts/make_splash.py
+Regenerate with python scripts/make_splash.py. Bump VERSION when changing
+the design: iOS caches startup images by URL.
 """
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-BG = (0, 0, 0)  # как фон самой иконки: квадрат сливается, видно только сердце
-ICON_SHARE = 0.245  # ширина иконки от ширины экрана
-CORNER = 0.225  # радиус скругления от стороны иконки, как у iOS
-ICON_Y = 0.485  # центр иконки по высоте: чуть выше середины, как у системного сплэша
-VERSION = "v3"
+BG = (0, 0, 0)
+LOGO_SHARE = 0.46
+LOGO_MAX_WIDTH = 192  # CSS pixels
+CENTER_Y = 0.485
+LOGO_GAP = 28
+BAR_WIDTH = 5
+BAR_GAP = 6
+BAR_HEIGHT = 28
+BAR_COLOR = (157, 89, 255)
+BAR_LEVELS = (0.3, 0.55, 0.8, 1, 0.75, 0.5, 0.25)
+VERSION = "v8"
 
 # (width_px, height_px, scale)
 SIZES = [
@@ -36,33 +37,39 @@ SIZES = [
 ROOT = Path(__file__).resolve().parents[1] / "public"
 
 
-def make(width: int, height: int, scale: int, icon: Image.Image) -> Path:
+def make(width: int, height: int, scale: int, wordmark: Image.Image) -> Path:
     img = Image.new("RGB", (width, height), BG)
-    side = int(width * ICON_SHARE)
-    # Рисуем маску в 4x и сжимаем — иначе край скругления лесенкой.
-    mask = Image.new("L", (side * 4, side * 4), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, side * 4 - 1, side * 4 - 1), radius=int(side * 4 * CORNER), fill=255
-    )
-    mask = mask.resize((side, side), Image.LANCZOS)
-    img.paste(icon.resize((side, side), Image.LANCZOS), ((width - side) // 2, int(height * ICON_Y) - side // 2), mask)
+    logo_width = round(min(width * LOGO_SHARE, LOGO_MAX_WIDTH * scale))
+    logo_height = round(logo_width * wordmark.height / wordmark.width)
+    group_height = logo_height + (LOGO_GAP + BAR_HEIGHT) * scale
+    top = round(height * CENTER_Y - group_height / 2)
+    logo = wordmark.resize((logo_width, logo_height), Image.LANCZOS)
+    img.paste(logo, ((width - logo_width) // 2, top), logo)
+    eq_width = (len(BAR_LEVELS) * BAR_WIDTH + (len(BAR_LEVELS) - 1) * BAR_GAP) * scale
+    eq_left = (width - eq_width) / 2
+    eq_middle = top + logo_height + (LOGO_GAP + BAR_HEIGHT / 2) * scale
+    draw = ImageDraw.Draw(img)
+    for index, level in enumerate(BAR_LEVELS):
+        left = round(eq_left + index * (BAR_WIDTH + BAR_GAP) * scale)
+        half_height = BAR_HEIGHT * scale * level / 2
+        draw.rounded_rectangle(
+            (left, round(eq_middle - half_height), left + BAR_WIDTH * scale - 1, round(eq_middle + half_height) - 1),
+            radius=round(BAR_WIDTH * scale / 2), fill=BAR_COLOR,
+        )
     out = ROOT / f"apple-splash-{VERSION}-{width}-{height}.png"
     img.save(out, "PNG", optimize=True)
     return out
 
 
 def main() -> None:
-    master = Image.open(ROOT / "favicon-64.png").convert("RGBA")
-    icon = Image.new("RGBA", master.size, (0, 0, 0, 255))
-    icon.alpha_composite(master)
-    icon = icon.convert("RGB")
+    wordmark = Image.open(ROOT.parent / "src" / "assets" / "bolt-wordmark.webp").convert("RGBA")
     seen = set()
     lines = []
     for w, h, s in SIZES:
         if (w, h) in seen:
             continue
         seen.add((w, h))
-        path = make(w, h, s, icon)
+        path = make(w, h, s, wordmark)
         media = f"(device-width: {w // s}px) and (device-height: {h // s}px) and (-webkit-device-pixel-ratio: {s})"
         lines.append(f'    <link rel="apple-touch-startup-image" href="/{path.name}" media="{media}" />')
     print("\n".join(lines))

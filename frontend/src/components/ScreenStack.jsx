@@ -5,7 +5,7 @@ import {
   useLocation,
   useNavigationType,
 } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft } from '@/components/icons'
 import Spinner from './Spinner'
 import MeterProfiler from './MeterProfiler'
 import { ScreenContext } from '../hooks/useScreen'

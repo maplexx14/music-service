@@ -147,13 +147,13 @@ class TestArtistPageAlbums:
         monkeypatch.setattr(artists_router.ytdlp, "ytmusic_artist_profile", fake_profile)
         monkeypatch.setattr(artists_router.soundcloud, "search_soundcloud", fake_sc)
 
-    def test_page_returns_albums(self, client, db):
-        data = client.get("/api/artists", params={"name": "Linkin Park"}).json()
+    def test_page_returns_albums(self, client, db, member_headers):
+        data = client.get("/api/artists", params={"name": "Linkin Park"}, headers=member_headers).json()
 
         assert [a["title"] for a in data["albums"]] == ["Meteora"]
         assert data["albums"][0]["external_id"] == "MPREb_meteora"
 
-    def test_profile_without_albums_is_not_an_error(self, client, db, monkeypatch):
+    def test_profile_without_albums_is_not_an_error(self, client, db, monkeypatch, member_headers):
         from app.routers import artists as artists_router
 
         async def old_shape(request, name, limit=60):
@@ -162,7 +162,7 @@ class TestArtistPageAlbums:
 
         monkeypatch.setattr(artists_router.ytdlp, "ytmusic_artist_profile", old_shape)
 
-        r = client.get("/api/artists", params={"name": "Linkin Park"})
+        r = client.get("/api/artists", params={"name": "Linkin Park"}, headers=member_headers)
         assert r.status_code == 200
         assert r.json()["albums"] == []
 
@@ -177,20 +177,20 @@ class TestAlbumEndpoint:
 
         monkeypatch.setattr(albums_router.ytdlp, "ytmusic_album", fake_album)
 
-    def test_returns_album_with_tracks(self, client, db):
-        r = client.get("/api/albums/ytmusic/MPREb_meteora")
+    def test_returns_album_with_tracks(self, client, db, member_headers):
+        r = client.get("/api/albums/ytmusic/MPREb_meteora", headers=member_headers)
 
         assert r.status_code == 200
         data = r.json()
         assert data["album"]["title"] == "Meteora"
         assert [t["title"] for t in data["tracks"]] == ["Track 0", "Track 1"]
 
-    def test_unknown_album_is_404(self, client, db):
-        assert client.get("/api/albums/ytmusic/MPREb_nope").status_code == 404
+    def test_unknown_album_is_404(self, client, db, member_headers):
+        assert client.get("/api/albums/ytmusic/MPREb_nope", headers=member_headers).status_code == 404
 
-    def test_unknown_source_is_404(self, client, db):
+    def test_unknown_source_is_404(self, client, db, member_headers):
         # Альбомы пока умеет только YouTube Music — молча отдать пустоту хуже.
-        assert client.get("/api/albums/spotify/anything").status_code == 404
+        assert client.get("/api/albums/spotify/anything", headers=member_headers).status_code == 404
 
 
 class TestAlbumToLibrary:

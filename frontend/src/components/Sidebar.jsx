@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Home, Search, Library, Heart, ChevronLeft, Shield, Settings2, MessageCircle } from 'lucide-react'
+import { Home, Search, Library, Heart, ChevronLeft, Shield, Settings2, MessageCircle } from '@/components/icons'
 import { useAuthStore } from '../store/authStore'
 import { prefetchRouteChunk } from './Layout'
 import TasteAvatar from './TasteAvatar'
@@ -17,25 +17,35 @@ import { useImportStore } from '../store/importStore'
 import { isTabRoot, tabForLocation } from '../services/navigation'
 import defaultCover from '../assets/default-cover.webp'
 import logoHeart from '../assets/loader-heart.webp'
+import brandWordmark from '../assets/bolt-wordmark.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { plural } from '../utils/format'
 import './Sidebar.css'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 function Sidebar({ isCollapsed, onToggleCollapse }) {
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   // Плейлисты медиатеки — тот же список и кэш, что у вкладки «Медиатека»:
   // создание и удаление там сразу видны здесь. null — ещё не загрузили:
   // подсказку «пусто» не показываем, пока ответ не пришёл.
-  const [playlists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? null)
+  const [onlinePlaylists, setPlaylists] = useState(() => peekCache(LIBRARY_CACHE_KEY) ?? null)
+  const playlists = offline ? offlineCollections(offlineState).playlists : onlinePlaylists
   const importsCompleted = useImportStore((s) => s.completed)
   useEffect(() => subscribeCache(LIBRARY_CACHE_KEY, setPlaylists), [])
   useEffect(() => {
+    if (!isAuthenticated) { setPlaylists(null); return }
+    if (offline) return
     api
       .get('/playlists/me', { skipErrorToast: true })
       .then((response) => writeCache(LIBRARY_CACHE_KEY, response.data))
       .catch(() => {})
-  }, [importsCompleted])
+  }, [importsCompleted, isAuthenticated, offline])
 
   const navItems = [
     { path: '/', icon: Home, label: 'Главная' },
@@ -49,7 +59,7 @@ function Sidebar({ isCollapsed, onToggleCollapse }) {
     <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
         <Link to="/" className="logo" aria-label="На главную">
-          {!isCollapsed && <img src="/logoBolt1.webp" alt="" className="logo-img" />}
+          {!isCollapsed && <img src={brandWordmark} alt="bolt" className="logo-img" />}
         </Link>
         <button
           type="button"
@@ -76,7 +86,7 @@ function Sidebar({ isCollapsed, onToggleCollapse }) {
               onPointerEnter={() => prefetchRouteChunk(item.path)}
               onPointerDown={() => prefetchRouteChunk(item.path)}
             >
-              <Icon size={24} fill={isActive ? 'currentColor' : 'none'} />
+              <Icon size={28} fill={isActive ? 'currentColor' : 'none'} />
               {!isCollapsed && <span>{item.label}</span>}
             </Link>
           )
@@ -137,7 +147,7 @@ function Sidebar({ isCollapsed, onToggleCollapse }) {
         onPointerEnter={() => prefetchRouteChunk('/settings')}
         onPointerDown={() => prefetchRouteChunk('/settings')}
       >
-        <MessageCircle size={24} />
+        <MessageCircle size={28} />
         {!isCollapsed && <span>Связь с разработчиком</span>}
       </Link>
 
@@ -156,7 +166,7 @@ function Sidebar({ isCollapsed, onToggleCollapse }) {
             <div className="user-info">
               <TasteAvatar user={user} className="user-avatar" />
               <div className="user-details">
-                <div className="user-name">{user?.full_name || user?.username}</div>
+                <div className="user-name">{user?.full_name || user?.username || 'Гость'}</div>
               </div>
               <Settings2 size={16} className="profile-chevron" aria-hidden="true" />
             </div>

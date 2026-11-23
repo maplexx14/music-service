@@ -30,7 +30,7 @@ function ResetPassword() {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <div className="auth-header"><h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}<p>Новый пароль</p></div>
+        <div className="auth-header"><h1>bolt</h1><p>Новый пароль</p></div>
         {done ? (
           <div className="auth-form">
             <div className="success-message">Пароль изменён. Теперь можно войти.</div>

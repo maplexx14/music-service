@@ -372,10 +372,12 @@ def _sc_permalink_from_track(track: Track) -> Optional[str]:
     pad = "=" * (-len(token) % 4)
     try:
         raw = base64.urlsafe_b64decode(token + pad).decode("utf-8")
-        _track_id, permalink = raw.split("|", 1)
+        track_id, permalink = raw.split("|", 1)
     except (binascii.Error, ValueError, UnicodeDecodeError):
         return None
-    if not permalink.startswith("https://soundcloud.com/"):
+    from app.soundcloud_urls import is_soundcloud_track_url
+
+    if not is_soundcloud_track_url(track_id, permalink):
         return None
     return permalink
 

@@ -7,7 +7,7 @@ import { create } from 'zustand'
 import * as jsxRuntime from 'react/jsx-runtime'
 
 const scripts = new Map()
-for (const path of ['services/onboarding.js', 'store/authStore.js', 'pages/PreferencesOnboarding.jsx']) {
+for (const path of ['services/onboarding.js', 'services/playerSetup.js', 'store/authStore.js', 'pages/PreferencesOnboarding.jsx', 'pages/PlayerSetup.jsx', 'components/PlayerSetupScreen.jsx']) {
   const source = await readFile(new URL('../src/' + path, import.meta.url), 'utf8')
   const { code } = await transform(source, {
     format: 'cjs', loader: path.endsWith('.jsx') ? 'jsx' : 'js', jsx: 'automatic', target: 'es2020',
@@ -16,7 +16,7 @@ for (const path of ['services/onboarding.js', 'store/authStore.js', 'pages/Prefe
 }
 
 const newUser = (extra = {}) => ({
-  id: 1, created_at: new Date().toISOString(), onboarding_completed: false,
+  id: 1, created_at: new Date().toISOString(), onboarding_completed: false, player_setup_completed: false,
   preferred_genres: [], preferred_artists: [], excluded_artists: [], ...extra,
 })
 
@@ -52,13 +52,19 @@ function browser(server = { user: newUser() }) {
     async post(path) {
       requests.push({ path })
       if (path === '/auth/register') throw server.registrationError
+      if (path === '/users/me/player-setup/complete') {
+        if (server.setupComplete) await server.setupComplete()
+        server.user.player_setup_completed = true
+        return { data: structuredClone(server.user) }
+      }
       assert.equal(path, '/users/me/onboarding/complete')
       if (server.complete) await server.complete()
       server.user.onboarding_completed = true
       return { data: structuredClone(server.user) }
     },
   }
-  const onboarding = module('services/onboarding.js')
+  const setupProgress = module('services/playerSetup.js')
+  const onboarding = module('services/onboarding.js', { './playerSetup': setupProgress })
   const { useAuthStore: store } = module('store/authStore.js', {
     zustand: { create },
     '../services/api': { default: api, setApiAuthToken() {}, setDeviceToken() {} },
@@ -70,14 +76,18 @@ function browser(server = { user: newUser() }) {
     '../services/uiSession': { clearUiSession() {}, setUiSessionUser() {} },
   })
 
-  function mount() {
+  function mount(page = 'PreferencesOnboarding') {
     const hooks = [], effects = []
     let index = 0
     const react = {
       useState(initial) {
         const current = index++
-        const hook = hooks[current] ||= { value: initial }
+        const hook = hooks[current] ||= { value: typeof initial === 'function' ? initial() : initial }
         return [hook.value, (next) => { hook.value = typeof next === 'function' ? next(hook.value) : next }]
+      },
+      useRef(initial) {
+        const current = index++
+        return hooks[current] ||= { current: initial }
       },
       useEffect(effect, deps) {
         const current = index++
@@ -88,11 +98,20 @@ function browser(server = { user: newUser() }) {
         }
       },
     }
-    const useAuthStore = Object.assign(() => store.getState(), { getState: store.getState })
-    const { default: Page } = module('pages/PreferencesOnboarding.jsx', {
+    const useAuthStore = Object.assign((select) => select ? select(store.getState()) : store.getState(), { getState: store.getState })
+    const { default: PlayerSetupScreen } = module('components/PlayerSetupScreen.jsx', {
+      react, 'react/jsx-runtime': jsxRuntime,
+      'lucide-react': { ArrowRight: 'arrow' },
+      './CdPlayerAppearance': { default: 'cd-appearance' },
+      './UnboxPlayer': { default: 'unbox-player' },
+      '../assets/bolt-wordmark.webp': { default: '' },
+      '../styles/controls.css': {},
+      '../pages/PlayerSetup.css': {},
+    })
+    const { default: Page } = module(`pages/${page}.jsx`, {
       react, 'react/jsx-runtime': jsxRuntime,
       'react-router-dom': { useNavigate: () => (path) => navigations.push(path) },
-      'lucide-react': { Check: 'check', Download: 'download', Link2: 'link' },
+      'lucide-react': { Check: 'check', Download: 'download', Link2: 'link', ArrowRight: 'arrow', PackageOpen: 'package' },
       '../store/authStore': { useAuthStore },
       '../utils/media': { resolveCoverUrl() {}, handleCoverError() {} },
       '../assets/default-cover.webp': { default: '' },
@@ -104,6 +123,13 @@ function browser(server = { user: newUser() }) {
       '../services/api': { default: api },
       '../store/toastStore': { toast: { error: (message) => errors.push(message) } },
       './PreferencesOnboarding.css': {},
+      './PlayerSetup.css': {},
+      '../services/playerSetup': setupProgress,
+      '../store/uiSettingsStore': { useUiSettingsStore: { setState() {} } },
+      '../components/CdPlayerAppearance': { default: 'cd-appearance' },
+      '../components/UnboxPlayer': { default: 'unbox-player' },
+      '../components/PlayerSetupScreen': { default: PlayerSetupScreen },
+      '../assets/bolt-wordmark.webp': { default: '' },
     })
     function find(node, predicate) {
       if (!node || typeof node !== 'object') return null
@@ -116,11 +142,28 @@ function browser(server = { user: newUser() }) {
     }
     function render() {
       index = 0
-      const tree = Page()
+      const root = Page()
+      const tree = root.type === PlayerSetupScreen ? PlayerSetupScreen(root.props) : root
       for (const effect of effects.splice(0)) effect()
       return tree
     }
     return {
+      render,
+      unbox() {
+        const box = find(render(), (node) => node.type === 'unbox-player')
+        assert.ok(box)
+        box.props.onUnboxed()
+      },
+      customize() {
+        const box = find(render(), (node) => node.type === 'unbox-player')
+        assert.ok(box)
+        box.props.onReady()
+      },
+      async finishSetup() {
+        const button = find(render(), (node) => node.props?.className?.includes('player-setup-finish'))
+        assert.ok(button)
+        await button.props.onClick()
+      },
       back() {
         const button = find(render(), (node) => node.props?.className?.includes('onboarding-back'))
         assert.ok(button)
@@ -138,7 +181,7 @@ function browser(server = { user: newUser() }) {
       },
     }
   }
-  return { store, onboarding, storage, requests, navigations, errors, mount }
+  return { store, onboarding, setupProgress, storage, requests, navigations, errors, mount }
 }
 
 test('completed onboarding stays closed in a browser with empty storage and no preferences', () => {
@@ -192,7 +235,7 @@ test('skipping every step persists completion and the next browser does not repe
   await page.skip()
   assert.equal(server.user.onboarding_completed, true)
   assert.deepEqual(first.requests.map((request) => request.path), ['/users/me/onboarding/complete'])
-  assert.deepEqual(first.navigations, ['/'])
+  assert.deepEqual(first.navigations, ['/onboarding/player'])
 
   const second = browser(server)
   await second.store.getState().finalizeLogin('second-browser')
@@ -216,7 +259,7 @@ test('a failed completion stays on the final step and can be retried without cle
   assert.equal(app.store.getState().user.onboarding_completed, false)
   delete server.complete
   await page.skip()
-  assert.deepEqual(app.navigations, ['/'])
+  assert.deepEqual(app.navigations, ['/onboarding/player'])
   assert.deepEqual(server.user.preferred_genres, ['rock'])
 })
 
@@ -234,7 +277,7 @@ test('skipping artists saves the chosen genres before explicitly completing onbo
   assert.deepEqual(app.requests.map((request) => request.path), [
     '/users/me/preferences', '/users/me/onboarding/complete',
   ])
-  assert.deepEqual(app.navigations, ['/'])
+  assert.deepEqual(app.navigations, ['/onboarding/player'])
 })
 
 test('a failed completion allows clearing saved genres before retrying the final step', async () => {
@@ -257,7 +300,7 @@ test('a failed completion allows clearing saved genres before retrying the final
   await page.skip()
   assert.deepEqual(server.user.preferred_genres, [])
   assert.equal(app.onboarding.needsOnboarding(app.store.getState().user), false)
-  assert.deepEqual(app.navigations, ['/'])
+  assert.deepEqual(app.navigations, ['/onboarding/player'])
 })
 
 test('a completion response cannot mark another signed-in account as completed', async () => {
@@ -271,6 +314,83 @@ test('a completion response cannot mark another signed-in account as completed',
   await pending
   assert.equal(app.store.getState().user.id, 2)
   assert.equal(app.store.getState().user.onboarding_completed, false)
+})
+
+test('music onboarding precedes unboxing; old profiles see the box exactly once', () => {
+  const app = browser()
+  assert.equal(app.onboarding.onboardingDestination(newUser()), '/onboarding')
+  assert.equal(app.onboarding.needsPlayerSetup(newUser()), false)
+  assert.equal(app.onboarding.onboardingDestination(newUser({ onboarding_completed: true })), '/onboarding/player')
+
+  // Старый аккаунт уже «настроен» миграцией, но коробку не видел: один раз
+  // попадает в распаковку, после отметки — больше нет.
+  const oldUser = newUser({ onboarding_completed: true, player_setup_completed: true })
+  assert.equal(app.onboarding.onboardingDestination(oldUser), '/onboarding/player')
+  app.setupProgress.markPlayerSetupSeen(oldUser.id)
+  assert.equal(app.onboarding.onboardingDestination(oldUser), null)
+  assert.equal(app.onboarding.needsPlayerSetupReplay(oldUser), false)
+
+  // Старый кэш профиля без поля player_setup_completed — тоже старый аккаунт:
+  // ведём в коробку один раз, если метки ещё нет.
+  const unknownFieldUser = newUser({ id: 2, onboarding_completed: true, player_setup_completed: undefined })
+  assert.equal(app.onboarding.onboardingDestination(unknownFieldUser), '/onboarding/player')
+  app.setupProgress.markPlayerSetupSeen(unknownFieldUser.id)
+  assert.equal(app.onboarding.onboardingDestination(unknownFieldUser), null)
+
+  for (const user of [null, {}]) {
+    assert.equal(app.onboarding.onboardingDestination(user), null)
+  }
+})
+
+test('customization follows extraction, reload resumes the stage, completion survives another browser', async () => {
+  const server = { user: newUser({ onboarding_completed: true }) }
+  const app = browser(server)
+  await app.store.getState().finalizeLogin('first-browser')
+  const page = app.mount('PlayerSetup')
+  page.unbox()
+  assert.equal(app.setupProgress.readPlayerSetupStage(1), 'unboxed')
+  assert.equal(app.setupProgress.readPlayerSetupStage(2), 'boxed')
+  assert.equal(app.requests.length, 0)
+  page.customize()
+  assert.equal(app.setupProgress.readPlayerSetupStage(1), 'customize')
+  const reopened = app.mount('PlayerSetup')
+  await reopened.finishSetup()
+  assert.equal(app.store.getState().user.player_setup_completed, true)
+  assert.equal(app.setupProgress.readPlayerSetupStage(1), 'boxed')
+  assert.deepEqual(app.requests.map((request) => request.path), ['/users/me/player-setup/complete'])
+  assert.deepEqual(app.navigations, ['/'])
+  const other = browser(server)
+  await other.store.getState().finalizeLogin('other-browser')
+  assert.equal(other.onboarding.onboardingDestination(other.store.getState().user), null)
+})
+
+test('failed setup completion keeps the unpacked player available and retries successfully', async () => {
+  const server = { user: newUser({ onboarding_completed: true }), setupComplete: async () => { throw new Error('offline') } }
+  const app = browser(server)
+  await app.store.getState().finalizeLogin('browser')
+  const page = app.mount('PlayerSetup')
+  page.unbox()
+  page.customize()
+  await page.finishSetup()
+  assert.equal(app.store.getState().user.player_setup_completed, false)
+  assert.equal(app.setupProgress.readPlayerSetupStage(1), 'customize')
+  assert.equal(app.navigations.length, 0)
+  delete server.setupComplete
+  await page.finishSetup()
+  assert.equal(app.store.getState().user.player_setup_completed, true)
+  assert.deepEqual(app.navigations, ['/'])
+})
+
+test('a delayed player setup response cannot complete a different signed-in account', async () => {
+  let resolve
+  const app = browser({ user: newUser({ onboarding_completed: true }), setupComplete: () => new Promise((done) => { resolve = done }) })
+  await app.store.getState().finalizeLogin('first')
+  const pending = app.store.getState().completePlayerSetup()
+  app.store.setState({ token: 'second', user: newUser({ id: 2, onboarding_completed: true }) })
+  resolve()
+  const result = await pending
+  assert.equal(result.success, false)
+  assert.equal(app.store.getState().user.player_setup_completed, false)
 })
 
 test('registration translates FastAPI email validation into a renderable message', async () => {

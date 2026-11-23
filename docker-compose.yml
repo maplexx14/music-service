@@ -341,6 +341,7 @@ services:
     restart: unless-stopped
     environment:
       VITE_API_URL: ${VITE_API_URL:-}
+      API_PROXY_TARGET: http://backend:8000
     ports:
       - "3000:3000"
     volumes:

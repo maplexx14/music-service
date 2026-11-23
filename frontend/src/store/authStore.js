@@ -529,6 +529,25 @@ const useAuthStore = create((set, get) => ({
         }
       },
 
+      completePlayerSetup: async () => {
+        const { user, token } = get()
+        if (!user || !token) return { success: false, error: 'Войдите в аккаунт заново' }
+        if (user.player_setup_completed) return { success: true }
+        try {
+          await api.post('/users/me/player-setup/complete', null, { skipErrorToast: true })
+          if (get().token !== token || get().user?.id !== user.id) {
+            return { success: false, error: 'Сессия входа изменилась — попробуйте ещё раз' }
+          }
+          set((state) => ({ user: { ...state.user, player_setup_completed: true } }))
+          return { success: true }
+        } catch (error) {
+          return {
+            success: false,
+            error: error.response?.data?.detail || 'Не удалось сохранить настройку. Попробуйте ещё раз',
+          }
+        }
+      },
+
       // discoveryRatio (мягкий prior на новые имена, 0..1) необязателен:
       // онбординг ползунок не показывает, а отсутствие поля бэкенд трактует как
       // «не менять» — иначе экран регистрации сбрасывал бы настройку в дефолт.

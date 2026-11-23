@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { BadgeCheck, ExternalLink, Music, X } from 'lucide-react'
+import { BadgeCheck, ExternalLink, Music, X } from '@/components/icons'
 import api from '../services/api'
 import { useCensorDialogStore } from '../store/censorDialogStore'
 import { toast } from '../store/toastStore'

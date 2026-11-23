@@ -1,9 +1,10 @@
 import { memo } from 'react'
-import { Plus } from 'lucide-react'
+import { Download, MoreHorizontal, Plus } from '@/components/icons'
 import LikeHeart from './LikeHeart'
-import { trackIntentHandlers } from '../store/playerStore'
 import { openAddToPlaylist } from '../store/addToPlaylistStore'
+import { trackIntentHandlers } from '../store/playerStore'
 import ArtistLink from './ArtistLink'
+import SourceIcon from './SourceIcon'
 import defaultCover from '../assets/default-cover.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import { formatDuration } from '../utils/format'
@@ -27,7 +28,7 @@ const EAGER_ROWS = 12
 //
 // isPlaying страница передаёт уже умноженным на isCurrent — иначе пауза
 // задевала бы все строки, хотя эквалайзер нарисован только в текущей.
-// «В плейлист» открывает общее окно (AddToPlaylistDialog); excludePlaylistId —
+// Пункт «В плейлист» открывает общее окно (AddToPlaylistDialog); excludePlaylistId —
 // плейлист, который в нём не предлагать (страница самого плейлиста).
 function TrackTableRow({
   track,
@@ -36,63 +37,74 @@ function TrackTableRow({
   isPlaying,
   isLiked,
   excludePlaylistId,
+  showNumber = true,
   showAlbum = true,
   sourceLabel,
   showBadges = false,
   showInlineMeta = false,
+  showSource = false,
+  showDownload = false,
+  contextProps,
   actionsRef,
 }) {
   const duration = formatDuration(track.duration)
+  const cover = (
+    <img
+      src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
+      alt={track.title}
+      className="track-table-cover"
+      loading={index < EAGER_ROWS ? 'eager' : 'lazy'}
+      decoding="async"
+      onError={handleCoverError}
+    />
+  )
   return (
     <tr
-      className={`track-row${showInlineMeta ? ' track-row--with-meta' : ''}${isCurrent ? ' playing' : ''}`}
+      className={`track-row${showInlineMeta && sourceLabel ? ' track-row--with-meta' : ''}${isCurrent ? ' playing' : ''}`}
       // Тап на таче срабатывает на отпускании, без задержки клика WebKit
       // (services/fastTap).
       data-fast-tap=""
       onClick={() => actionsRef.current.play(track, index)}
       {...trackIntentHandlers(track)}
+      {...contextProps}
     >
-      <td className="track-number">
-        {isCurrent ? (
-          <span className={`now-playing-bars${isPlaying ? '' : ' paused'}`}>
-            <span /><span /><span />
-          </span>
-        ) : (
-          index + 1
-        )}
-      </td>
+      {showNumber && (
+        <td className="track-number">
+          {isCurrent ? (
+            <span className={`now-playing-bars${isPlaying ? '' : ' paused'}`}>
+              <span /><span /><span />
+            </span>
+          ) : (
+            index + 1
+          )}
+        </td>
+      )}
       <td className="track-name-cell">
         <div className="track-name-content">
-          <img
-            src={resolveCoverUrl(track.cover_url, 'thumb') || defaultCover}
-            alt={track.title}
-            className="track-table-cover"
-            // Первый экран строк — сразу: ленивую загрузку WebKit запускает
-            // только у самой кромки вьюпорта, и верх списка на iOS открывался
-            // с пустыми квадратами.
-            loading={index < EAGER_ROWS ? 'eager' : 'lazy'}
-            decoding="async"
-            onError={handleCoverError}
-          />
+          {showSource ? (
+            <span className="source-cover">
+              {cover}
+              <SourceIcon source={track.provider || track.source} />
+            </span>
+          ) : cover}
           <div>
             <div className="track-name" title={track.title}>
               {track.title}
               {showBadges && track.is_explicit && <span className="track-badge track-badge-e">E</span>}
               {showBadges && track.is_clean && <span className="track-badge track-badge-clean">CLEAN</span>}
             </div>
-            <ArtistLink artist={track.artist} className="track-artist" />
-            {/* Колонки «Альбом» и «Длительность» на узких экранах скрыты —
-                источник и хронометраж возвращаем сюда строкой, иначе на
-                мобильном о треке не видно ничего, кроме названия. */}
-            {showInlineMeta && (
+            <ArtistLink artist={track.artist} className="track-artist track-artist--inline" />
+            {/* Источник возвращаем под название на узких экранах. */}
+            {showInlineMeta && sourceLabel && (
               <div className="track-inline-meta">
-                {sourceLabel && <span>{sourceLabel}</span>}
-                {sourceLabel && duration && <span>·</span>}
-                {duration && <span>{duration}</span>}
+                <span>{sourceLabel}</span>
               </div>
             )}
           </div>
         </div>
+      </td>
+      <td className="track-artist-cell">
+        <ArtistLink artist={track.artist} className="track-artist" />
       </td>
       {showAlbum && (
         <td className="track-album">
@@ -103,9 +115,21 @@ function TrackTableRow({
       )}
       <td className="track-duration">{duration}</td>
       <td className="track-actions-cell">
+        {showDownload && track.download_allowed && track.download_url && (
+          <a
+            className="track-action-btn track-action-btn--desktop"
+            href={track.download_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Скачать ${track.title}`}
+          >
+            <Download size={18} />
+          </a>
+        )}
         <button
           type="button"
-          className={`track-action-btn${isLiked ? ' liked' : ''}`}
+          className={`track-action-btn track-action-btn--desktop${isLiked ? ' liked' : ''}`}
           onClick={(e) => actionsRef.current.toggleLike(track, e)}
           title={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
           aria-label={isLiked ? 'Убрать из понравившихся' : 'В понравившиеся'}
@@ -114,12 +138,9 @@ function TrackTableRow({
         </button>
         <button
           type="button"
-          className="track-action-btn"
+          className="track-action-btn track-action-btn--desktop"
           onClick={(e) => {
-            // Строка целиком — «играть»; кнопка внутри её не запускает.
             e.stopPropagation()
-            // resolveId страницы — её ensureDbId: он заодно проставляет db_id
-            // в списке, чтобы лайк у той же строки не импортировал трек снова.
             const { resolveId } = actionsRef.current
             openAddToPlaylist(track, {
               excludePlaylistId,
@@ -131,6 +152,23 @@ function TrackTableRow({
           aria-haspopup="dialog"
         >
           <Plus size={18} />
+        </button>
+        <button
+          type="button"
+          className="track-action-btn track-action-btn--menu"
+          onClick={(e) => {
+            const { resolveId } = actionsRef.current
+            actionsRef.current.openMenu(track, e, {
+              onLike: (event) => actionsRef.current.toggleLike(track, event),
+              excludePlaylistId,
+              resolveId: resolveId ? () => resolveId(track) : undefined,
+            })
+          }}
+          title="Действия с треком"
+          aria-label={`Действия с треком ${track.title}`}
+          aria-haspopup="menu"
+        >
+          <MoreHorizontal size={18} />
         </button>
       </td>
     </tr>

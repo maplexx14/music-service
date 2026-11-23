@@ -32,14 +32,13 @@
   letter-spacing: -0.01em;
 }
 
-/* Логотип вместо текста — пока выключен.
 .auth-logo {
   display: block;
-  height: 80px;
-  width: auto;
+  height: 72px;
+  width: 72px;
+  object-fit: contain;
   margin: 0 auto;
 }
-*/
 
 .auth-header p {
   font-size: 14px;

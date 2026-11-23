@@ -102,11 +102,74 @@
   gap: 8px;
 }
 
+.search-desktop-tracks {
+  display: none;
+  container-type: inline-size;
+}
+
+@media (min-width: 1025px) {
+  .search-desktop-tracks {
+    display: block;
+  }
+
+  .search-mobile-tracks {
+    display: none;
+  }
+
+  .search-desktop-tracks .search-track-artist-column {
+    width: 20%;
+  }
+
+  .search-desktop-tracks .search-track-album-column {
+    width: 22%;
+  }
+
+  .search-desktop-tracks .search-track-duration-column {
+    width: 88px;
+  }
+
+  .search-desktop-tracks .search-track-actions-column {
+    width: 112px;
+  }
+
+  .search-desktop-tracks--downloads .search-track-actions-column {
+    width: 156px;
+  }
+
+  .search-desktop-tracks .track-row td {
+    padding: 16px 12px;
+    font-size: var(--text-md);
+  }
+
+  .search-desktop-tracks .track-table-cover {
+    width: 56px;
+    height: 56px;
+  }
+
+  .search-desktop-tracks .track-name-content {
+    gap: 16px;
+  }
+
+  .search-desktop-tracks .track-name {
+    font-size: 22px;
+  }
+
+  .search-desktop-tracks .track-artist {
+    font-size: var(--text-md);
+  }
+
+  @container (max-width: 680px) {
+    .search-desktop-tracks .search-track-album-column {
+      display: none;
+    }
+  }
+}
+
 .track-item {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px;
+  padding: 16px;
   background-color: var(--surface-1);
   border-radius: 8px;
   cursor: pointer;
@@ -129,8 +192,8 @@
 }
 
 .track-item-cover {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   object-fit: cover;
   border-radius: 4px;
   background-color: var(--surface-4);
@@ -380,12 +443,12 @@
 
   .track-item {
     gap: 12px;
-    padding: 10px;
+    padding: 14px 12px;
   }
 
   .track-item-cover {
-    width: 48px;
-    height: 48px;
+    width: 56px;
+    height: 56px;
   }
 
   .playlist-item {

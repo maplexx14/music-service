@@ -3,11 +3,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { useImportStore } from '../store/importStore'
-import { Play, Plus } from 'lucide-react'
+import { Play, Plus } from '@/components/icons'
 import api from '../services/api'
 import { peekCache, writeCache } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
@@ -43,13 +48,21 @@ const KIND_LABELS = {
 function LinkPlaylist() {
   const [searchParams] = useSearchParams()
   const url = searchParams.get('url') || ''
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
+  const savedPlaylist = offlineCollections(offlineState).playlists.find((item) => item.id === `link:${url}`)
   const navigate = useNavigate()
   const cacheKey = `link:${url}`
-  const [info, setInfo] = useState(() => peekCache(cacheKey)?.info ?? null)
-  const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
-  const [nextOffset, setNextOffset] = useState(() => peekCache(cacheKey)?.nextOffset ?? null)
-  const [skipped, setSkipped] = useState(() => peekCache(cacheKey)?.skipped ?? 0)
-  const [loading, setLoading] = useState(() => !peekCache(cacheKey))
+  const [onlineInfo, setInfo] = useState(() => peekCache(cacheKey)?.info ?? null)
+  const [onlineTracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const [onlineNextOffset, setNextOffset] = useState(() => peekCache(cacheKey)?.nextOffset ?? null)
+  const [onlineSkipped, setSkipped] = useState(() => peekCache(cacheKey)?.skipped ?? 0)
+  const [onlineLoading, setLoading] = useState(() => !peekCache(cacheKey))
+  const info = offline ? savedPlaylist && { ...savedPlaylist, total: savedPlaylist.tracks.length } : onlineInfo
+  const tracks = offline ? savedPlaylist?.tracks || [] : onlineTracks
+  const nextOffset = offline ? null : onlineNextOffset
+  const skipped = offline ? 0 : onlineSkipped
+  const loading = offline ? !offlineState.ready : onlineLoading
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState(null)
   const [importing, setImporting] = useState(false)
@@ -83,6 +96,7 @@ function LinkPlaylist() {
       navigate('/search', { replace: true })
       return
     }
+    if (offline) return
     fetchLikedTracks()
     if (peekCache(cacheKey)) return
     let cancelled = false
@@ -107,12 +121,12 @@ function LinkPlaylist() {
     return () => {
       cancelled = true
     }
-  }, [url])
+  }, [url, offline])
 
   // Кэш страницы: возврат назад не должен заново подбирать треки.
   useEffect(() => {
-    if (!loading && info) writeCache(cacheKey, { info, tracks, nextOffset, skipped })
-  }, [info, tracks, nextOffset, skipped, loading])
+    if (!offline && !loading && info) writeCache(cacheKey, { info, tracks, nextOffset, skipped })
+  }, [info, tracks, nextOffset, skipped, loading, offline])
 
   // Хвост коллекции — когда до конца отрисованного списка доскроллили.
   const [moreSentinel, setMoreSentinel] = useState(null)
@@ -193,8 +207,10 @@ function LinkPlaylist() {
     return dbId
   }
 
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
     resolveId: ensureDbId,
@@ -205,11 +221,11 @@ function LinkPlaylist() {
     return <Spinner page label="Подбираем треки..." />
   }
 
-  if (error || !info) {
+  if ((!offline && error) || !info) {
     return (
       <div className="page-container">
         <div className="empty-playlist">
-          <p>{error || 'Не удалось открыть ссылку'}</p>
+          <p>{offline ? 'В этой подборке нет скачанных треков' : error || 'Не удалось открыть ссылку'}</p>
         </div>
       </div>
     )
@@ -252,12 +268,17 @@ function LinkPlaylist() {
             <Play size={24} fill="currentColor" />
             <span className="round-actions__label">Воспроизвести</span>
           </button>
+          {info.kind !== 'track' && <OfflinePlaylistDownloadButton
+            playlist={{ ...info, id: `link:${url}`, name: title, tracks,
+              download_source: { type: 'link', url }, page_url: `/link?url=${encodeURIComponent(url)}` }}
+            totalTracks={info.total}
+          />}
           {/* Импорт ссылок YouTube Music бэк не умеет. */}
           {info.kind !== 'track' && info.source !== 'ytmusic' && (
             <button
               className="btn btn--secondary btn--lg play-button-large round-actions__icon"
               onClick={handleImport}
-              disabled={importing}
+              disabled={importing || offline}
               aria-label="Добавить в медиатеку"
             >
               <Plus size={20} />
@@ -274,7 +295,8 @@ function LinkPlaylist() {
               <tr>
                 <th>#</th>
                 <th>Название</th>
-                <th>Альбом</th>
+                <th className="track-artist-heading">Артист</th>
+                <th className="track-album-heading">Альбом</th>
                 <th>Длительность</th>
                 <th></th>
               </tr>
@@ -311,6 +333,7 @@ function LinkPlaylist() {
         <div ref={setMoreSentinel} aria-hidden="true" />
         {loadingMore && <Spinner label="Подбираем треки..." />}
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

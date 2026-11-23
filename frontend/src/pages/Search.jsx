@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Download } from 'lucide-react'
+import { Download } from '@/components/icons'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useSearchStore } from '../store/searchStore'
 import api from '../services/api'
@@ -15,7 +15,11 @@ import { artistPath } from '../utils/artists'
 import { formatDuration } from '../utils/format'
 import { parseMusicLink, linkPagePath } from '../utils/musicLinks'
 import SourceIcon from '../components/SourceIcon'
+import SearchTrackTable from '../components/SearchTrackTable'
 import './Search.css'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 // Пауза набора перед запросом. 600мс ощущались как «поиск думает»: локальная
 // выдача отвечает из кэша бэка за десятки мс, ждать дольше незачем.
@@ -43,6 +47,7 @@ const PROVIDER_LABELS = { deezer: 'Deezer', spotify: 'Spotify' }
 // Статус один на сессию.
 let spotifyStatusPromise = null
 const fetchSpotifyEnabled = () => {
+  if (navigator.onLine === false) return Promise.resolve(false)
   spotifyStatusPromise ??= api
     .get('/spotify/status', { skipErrorToast: true })
     .then(({ data }) => !!data?.configured)
@@ -120,22 +125,39 @@ const prefetchExternalPlaylist = (id) =>
     maxAgeMs: 10 * 60 * 1000,
   })
 
-function Search() {
+function Search({ guest = false } = {}) {
+  const offline = useOffline()
+  const previousOffline = useRef(offline)
+  useEffect(() => {
+    if (previousOffline.current && !offline) useSearchStore.setState({ cachedQuery: null })
+    previousOffline.current = offline
+  }, [offline])
+  const offlineState = useOfflineTracks()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   // Всё, что должно пережить уход на другую вкладку, — в сторе: роутер
   // размонтирует страницу, и локальный useState обнулял запрос вместе с выдачей.
   const query = useSearchStore((state) => state.query)
   const setQuery = useSearchStore((state) => state.setQuery)
-  const results = useSearchStore((state) => state.results)
-  const resultsQuery = useSearchStore((state) => state.resultsQuery)
+  const onlineResults = useSearchStore((state) => state.results)
+  const onlineResultsQuery = useSearchStore((state) => state.resultsQuery)
+  const offlineData = offlineCollections(offlineState)
+  const results = offline ? {
+    tracks: offlineData.tracks.filter((track) => normalizeText(`${track.title} ${track.artist}`).includes(normalizeText(query))),
+    playlists: offlineData.playlists.filter((playlist) => normalizeText(playlist.name).includes(normalizeText(query))),
+  } : onlineResults
+  const resultsQuery = offline ? query : onlineResultsQuery
   const cachedQuery = useSearchStore((state) => state.cachedQuery)
   // Внешние источники держим раздельно: выдача показывает их отдельными
   // секциями в фиксированном порядке (см. рендер ниже).
-  const externalTracks = useSearchStore((state) => state.externalTracks)
-  const externalPlaylists = useSearchStore((state) => state.externalPlaylists)
-  const artists = useSearchStore((state) => state.artists)
-  const searchError = useSearchStore((state) => state.searchError)
+  const onlineExternalTracks = useSearchStore((state) => state.externalTracks)
+  const externalTracks = offline ? { top: [], ytmusic: [], soundcloud: [] } : onlineExternalTracks
+  const onlineExternalPlaylists = useSearchStore((state) => state.externalPlaylists)
+  const externalPlaylists = offline ? [] : onlineExternalPlaylists
+  const onlineArtists = useSearchStore((state) => state.artists)
+  const artists = offline ? [] : onlineArtists
+  const onlineSearchError = useSearchStore((state) => state.searchError)
+  const searchError = offline ? null : onlineSearchError
   const filter = useSearchStore((state) => state.filter)
   const setFilter = useSearchStore((state) => state.setFilter)
   const providerTracks = useSearchStore((state) => state.providerTracks)
@@ -143,7 +165,8 @@ function Search() {
   const [spotifyEnabled, setSpotifyEnabled] = useState(false)
   // Готовность секций привязана к запросу: пока собирается верх выдачи,
   // показываем один спиннер вместо вставки блоков над уже видимыми треками.
-  const [searchLoading, setSearchLoading] = useState(null)
+  const [onlineSearchLoading, setSearchLoading] = useState(null)
+  const searchLoading = offline ? null : onlineSearchLoading
   // Long-press / правый клик на треке — контекстное меню (лайк и др.).
   const trackMenu = useTrackContextMenu()
 
@@ -156,13 +179,13 @@ function Search() {
   useEffect(() => {
     const shared = searchParams.get('q')
     if (shared == null) return
-    if (parseMusicLink(shared)) {
+    if (!guest && parseMusicLink(shared)) {
       navigate(linkPagePath(shared), { replace: true })
       return
     }
     setQuery(shared)
     navigate('/search', { replace: true })
-  }, [searchParams, navigate, setQuery])
+  }, [searchParams, navigate, setQuery, guest])
 
   useEffect(() => {
     let cancelled = false
@@ -176,7 +199,8 @@ function Search() {
       cancelled = true
     }
   }, [])
-  const filters = spotifyEnabled ? SEARCH_FILTERS : SEARCH_FILTERS.filter((f) => f.id !== 'spotify')
+  const filters = offline ? SEARCH_FILTERS.filter((f) => ['all', 'library'].includes(f.id)) : spotifyEnabled ? SEARCH_FILTERS : SEARCH_FILTERS.filter((f) => f.id !== 'spotify')
+  useEffect(() => { if (offline && !['all', 'library'].includes(filter)) setFilter('all') }, [offline, filter, setFilter])
 
   // Выдача Deezer/Spotify — под своим фильтром и только для текущего запроса.
   const providerQuery = query.trim()
@@ -246,7 +270,7 @@ function Search() {
 
     useSearchStore.getState().clearSearch()
     setSearchLoading(null)
-  }, [query])
+  }, [query, offline])
 
   const performSearch = async (searchQuery, signal) => {
     const {
@@ -258,6 +282,14 @@ function Search() {
       setSearchError,
       finishSearch,
     } = useSearchStore.getState()
+
+    if (offline) {
+      try {
+        const { data } = await api.get('/search/', { params: { q: searchQuery }, signal })
+        if (!signal.aborted) { setResults(data, searchQuery); finishSearch(searchQuery) }
+      } catch (error) { if (!signal.aborted) setSearchError(error.message) }
+      return
+    }
 
     setSearchLoading({ query: searchQuery, local: true, upper: true, external: true })
     const finishSection = (section) => {
@@ -462,7 +494,12 @@ function Search() {
     return (
       <div className="results-section">
         <h2 className="results-title">{title}</h2>
-        <div className="tracks-list">
+        <SearchTrackTable
+          tracks={tracks}
+          onPlay={(track) => handlePlayExternalTrack(track, tracks)}
+          trackMenu={trackMenu}
+        />
+        <div className="tracks-list search-mobile-tracks">
           {tracks.map((track) => (
             // intent-префетч: наведение/касание строки прогревает резолв на
             // бэке до клика — важно для результатов ниже топ-4 (их автопрогрев
@@ -604,7 +641,7 @@ function Search() {
                     to={artistPath(item.name)}
                     className="artist-card"
                     title={`Открыть страницу «${item.name}»`}
-                    {...intentPrefetchHandlers(() => prefetchArtist(item.name))}
+                    {...(!guest ? intentPrefetchHandlers(() => prefetchArtist(item.name)) : {})}
                   >
                     <img
                       src={resolveCoverUrl(item.cover_url) || defaultCover}
@@ -631,7 +668,7 @@ function Search() {
                   <div
                     key={playlist.id}
                     className="playlist-item"
-                    onClick={() => navigate(`/playlists/${playlist.id}`)}
+                    onClick={() => navigate(playlist.page_url || `/playlists/${playlist.id}`)}
                   >
                     <img
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
@@ -664,7 +701,7 @@ function Search() {
                     key={playlist.id}
                     className="playlist-item"
                     onClick={() => handleOpenExternalPlaylist(playlist)}
-                    {...(playlist.source === 'soundcloud'
+                    {...(!guest && playlist.source === 'soundcloud'
                       ? intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))
                       : {})}
                     title="Открыть плейлист"
@@ -701,7 +738,8 @@ function Search() {
           {shows('library') && libraryTracks.length > 0 && (
             <div className="results-section">
               <h2 className="results-title">Треки</h2>
-              <div className="tracks-list">
+              <SearchTrackTable tracks={libraryTracks} onPlay={handlePlayTrack} trackMenu={trackMenu} />
+              <div className="tracks-list search-mobile-tracks">
                 {libraryTracks.map((track) => (
                   <div
                     key={track.id}

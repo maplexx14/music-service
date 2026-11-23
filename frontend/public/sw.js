@@ -1,11 +1,13 @@
 // App-shell SW: кэширует только каркас (index.html, хэшированные ассеты,
 // шрифты, иконки, сплэши) для мгновенного старта PWA и офлайн-заглушки.
 //
-// ГЛАВНОЕ ПРАВИЛО: аудио и API не перехватываем ВООБЩЕ (единственное
+// Онлайн-аудио и API не перехватываем (единственное
 // исключение — обложки cover-proxy, см. COVER_CACHE). Прошлый аудио-SW
 // ломал Range-запросы (пересобранный в SW Request теряет forbidden header
 // names, плюс WebKit bug 189337) — см. комментарий в src/main.jsx. Любой
 // запрос, который не попал в кэш-кандидаты, проходит насквозь к сети.
+// Явно скачанные файлы обслуживаются отдельно по /__bolt_offline__/,
+// с поддержкой Range; оригинальные stream URL остаются прозрачными.
 //
 // Стратегии:
 //   * навигация (HTML) — network-first с таймаутом и кэш-фолбэком: свежий
@@ -19,8 +21,13 @@
 // (favicon-64.png и apple-touch-icon.png), которые index.html больше не
 // запрашивает: сами по себе они безвредны, но занимают квоту Cache Storage,
 // а на iOS она самая тесная из всех платформ. v4 — выселить каркасы,
-// закэшированные без своих ассетов (см. cacheShell).
-const CACHE_VERSION = 'bolt-shell-v4'
+// закэшированные без своих ассетов (см. cacheShell). v5 — принудительно
+// обновить мобильный каркас после смены фона CD-проигрывателя. v6 — новый
+// логотип и комплект PWA-иконок. v7 — новый контур сердца и иконки v5.
+// v8 — фиолетовая молния и восстановленная надпись BOLT.
+// v9 — заполнение лайка и белая внутренняя кромка молнии.
+importScripts('/offline-response.js')
+const CACHE_VERSION = 'bolt-shell-v13'
 const PRECACHE = ['/manifest.webmanifest']
 const NAV_TIMEOUT_MS = 1500
 
@@ -35,7 +42,8 @@ const NAV_TIMEOUT_MS = 1500
 const COVER_CACHE = 'bolt-covers-v1'
 const COVER_CACHE_LIMIT = 400
 const COVER_PATH = '/api/tracks/cover-proxy'
-const KEEP_CACHES = new Set([CACHE_VERSION, COVER_CACHE])
+const PLAYER_FRAME_CACHE = 'bolt-player-frames-v1'
+const KEEP_CACHES = new Set([CACHE_VERSION, COVER_CACHE, 'bolt-offline-v1', PLAYER_FRAME_CACHE])
 
 const ASSET_CACHE_RE = /^\/assets\//
 const STATIC_CACHE_RE = /^\/(fonts|apple-splash-|icon-|favicon-|apple-touch-icon|logoBolt|config\.js)/
@@ -106,8 +114,12 @@ function coverResponse(event, request) {
 const SHELL_ASSET_RE = /(?:src|href)="(\/assets\/[^"]+)"/g
 
 function cacheShell(response) {
-  return response.text().then((html) => {
-    const assets = [...new Set([...html.matchAll(SHELL_ASSET_RE)].map((m) => m[1]))]
+  return response.text().then(async (html) => {
+    const manifest = await fetch('/offline-ui.json', { cache: 'no-store' })
+    if (!manifest.ok) throw new Error('Offline player manifest unavailable')
+    const playerAssets = await manifest.json()
+    if (!Array.isArray(playerAssets)) throw new Error('Invalid offline player manifest')
+    const assets = [...new Set([...html.matchAll(SHELL_ASSET_RE)].map((m) => m[1]).concat(playerAssets))]
     return caches.open(CACHE_VERSION).then((cache) =>
       Promise.all(
         assets.map((path) =>
@@ -123,6 +135,24 @@ function cacheShell(response) {
   })
 }
 
+async function playerFrameResponse(request) {
+  const path = new URL(request.url).pathname
+  const cached = await caches.match(path, { ignoreSearch: true })
+  if (cached) return cached
+  const response = await fetch(request)
+  if (!response.ok) return response
+  const type = response.headers.get('content-type') || ''
+  if (path.endsWith('.webp') && !type.startsWith('image/')) return response
+  const cache = await caches.open(PLAYER_FRAME_CACHE)
+  try {
+    await cache.put(path, response.clone())
+    // Preserve only recently used appearances; entire atlas collection is large.
+    const atlases = (await cache.keys()).filter((key) => key.url.endsWith('.webp'))
+    await Promise.all(atlases.slice(0, Math.max(0, atlases.length - 4)).map((key) => cache.delete(key)))
+  } catch { /* Limited storage must not prevent rendering from the network. */ }
+  return response
+}
+
 // Web Push (см. backend/app/push.py): payload — {title, body, url, tag}.
 self.addEventListener('push', (event) => {
   let data = {}
@@ -134,7 +164,7 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'bolt', {
       body: data.body || '',
-      icon: '/apple-touch-icon-v3.png',
+      icon: '/apple-touch-icon-v4.png',
       tag: data.tag || undefined,
       data: { url: data.url || '/' },
     }),
@@ -164,6 +194,16 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return
 
   const url = new URL(request.url)
+
+  if (url.origin === self.location.origin && /^\/cd-player-frames\/(?:manifest\.json|[^/]+\.webp)$/.test(url.pathname)) {
+    event.respondWith(playerFrameResponse(request))
+    return
+  }
+
+  if (url.origin === self.location.origin && url.pathname.startsWith('/__bolt_offline__/')) {
+    event.respondWith(offlineResponse(request))
+    return
+  }
 
   if (url.origin === self.location.origin && url.pathname === COVER_PATH) {
     event.respondWith(coverResponse(event, request).catch(() => fetch(request)))

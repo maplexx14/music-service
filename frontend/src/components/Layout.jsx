@@ -1,7 +1,10 @@
 import { lazy, memo, Suspense, useCallback, useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Home, Search, Library, Heart } from 'lucide-react'
+import { Home, Search, Library, Heart } from '@/components/icons'
 import { usePlayerStore } from '../store/playerStore'
+import { useAuthStore } from '../store/authStore'
+import GuestAccessDialog from './GuestAccessDialog'
+import GuestPageLock from './GuestPageLock'
 import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
 import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
 import { useSidebarLayout } from '../hooks/useSidebarLayout'
@@ -99,6 +102,7 @@ const navIndexOf = (pathname) =>
   )
 
 function Layout({ renderRoutes }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   usePwaBackHandler()
   const { isCollapsed, sidebarWidth, toggleCollapse } = useSidebarLayout()
   const [isMobile, setIsMobile] = useState(() => {
@@ -118,9 +122,10 @@ function Layout({ renderRoutes }) {
 
   // Пуши: открытие из уведомления (?push=…) и сверка подписки устройства.
   useEffect(() => {
+    if (!isAuthenticated) return
     trackPushOpen()
     syncPushSubscription()
-  }, [])
+  }, [isAuthenticated])
 
   // Android-оболочка открывает ссылки, «Поделиться» и ярлыки внутри уже
   // запущенной страницы, без перезагрузки — иначе оборвалась бы музыка.
@@ -153,7 +158,7 @@ function Layout({ renderRoutes }) {
 
   // Одна очередь на приложение: параллельный прогрев из App раньше
   // запускал все эти страницы разом, обходя ограничения этой очереди.
-  useEffect(() => preloadInIdle([importFullScreenPlayer, ...IDLE_CHUNKS]), [])
+  useEffect(() => preloadInIdle(isAuthenticated ? [importFullScreenPlayer, ...IDLE_CHUNKS] : [importFullScreenPlayer, ROUTE_CHUNKS['/search']]), [isAuthenticated])
 
   // «Назад» — только у вложенных экранов, как в нативном стеке: у корней
   // вкладок его нет. Сама панель рисуется в экране (ScreenStack).
@@ -172,7 +177,7 @@ function Layout({ renderRoutes }) {
 
   // Свайпы — только в установленном PWA: во вкладке браузера горизонтальный
   // жест у края уже занят его собственным «Назад».
-  const swipeEnabled = isStandalone && isMobile
+  const swipeEnabled = isStandalone && isMobile && isAuthenticated
   const tabIndex = MOBILE_NAV.findIndex(({ to }) => to === location.pathname)
   const prevTab = tabIndex > 0 ? MOBILE_NAV[tabIndex - 1].to : null
   const nextTab = tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? MOBILE_NAV[tabIndex + 1].to : null
@@ -321,6 +326,7 @@ function Layout({ renderRoutes }) {
   }
 
   const handleNavPointerDown = (event) => {
+    if (!isAuthenticated) return
     if (event.pointerType === 'mouse' || !event.isPrimary) return
     // Геометрию читаем до движения: замеры после записи transform на каждом
     // pointermove заставляли браузер синхронно пересчитывать стили.
@@ -408,17 +414,30 @@ function Layout({ renderRoutes }) {
   }, [isMobile])
 
   return (
-    <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}>
+    <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}
+      onClickCapture={(event) => {
+        if (isAuthenticated) return
+        const link = event.target.closest('a[href]')
+        if (!link) return
+        const url = new URL(link.href, window.location.href)
+        const download = link.hasAttribute('download') || link.classList.contains('track-download') || (link.classList.contains('fullscreen-tool') && link.closest('.fullscreen-player'))
+        if (url.origin === window.location.origin && !download) return
+        event.preventDefault()
+        event.stopPropagation()
+        usePlayerStore.getState().requireAccount()
+      }}>
       <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />
       <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
         <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />
+        {!isAuthenticated && location.pathname !== '/search' && <GuestPageLock />}
       </main>
       <MeterProfiler id="мини-плеер">
         <Player />
       </MeterProfiler>
       <ToastContainer />
-      <PushPrompt />
-      <RatePrompt />
+      {isAuthenticated && <PushPrompt />}
+      {isAuthenticated && <RatePrompt />}
+      {!isAuthenticated && <GuestAccessDialog />}
       <AddToPlaylistDialog />
       <CensorOverrideDialog />
       {/* fallback пустой: полноэкранный плеер открывается поверх уже

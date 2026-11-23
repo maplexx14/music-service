@@ -6,6 +6,7 @@ import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { getActive } from '../services/audioEngine'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
 import defaultCover from '../assets/default-cover.webp'
+import brandWordmark from '../assets/bolt-wordmark-wide.webp'
 import './DemoMode.css'
 
 // Демо-режим: тот же караоке-текст, но как клип для записи экрана (TikTok,
@@ -378,7 +379,7 @@ function DemoMode({ onExit }) {
 
       <footer className="demo-footer">
         <DemoProgress />
-        <img className="demo-logo" src="/logoBoltwo.webp" alt="bolt" draggable={false} />
+        <img className="demo-logo" src={brandWordmark} alt="bolt" draggable={false} />
       </footer>
 
       <div className={`demo-hint${showHint ? '' : ' is-hidden'}`} aria-live="polite">

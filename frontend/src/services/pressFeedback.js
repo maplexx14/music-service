@@ -31,6 +31,8 @@ function pressedScale(el) {
 
 function canPress(el) {
   if (!el.isConnected || el.matches(':disabled, [aria-disabled="true"]')) return false
+  // Scaling the control also scales its icon; icon buttons keep a fixed size.
+  if (el.querySelector('svg')) return false
   // Облегчённый режим отключает анимации — и эту тоже.
   if (document.documentElement.classList.contains('lite-mode')) return false
   // Свой transform в нажатом состоянии (компонентные :active-правила,

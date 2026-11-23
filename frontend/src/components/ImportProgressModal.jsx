@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Check, Download, X } from 'lucide-react'
+import { AlertTriangle, Check, Download, X } from '@/components/icons'
 import { useImportStore, importIsFinal } from '../store/importStore'
 import './ImportProgressModal.css'
 

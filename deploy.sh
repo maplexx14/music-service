@@ -207,6 +207,24 @@ else
     fi
     sleep 5
   done
+
+  # Зелёный HTTPS healthcheck не гарантирует, что сертификат сможет
+  # продлиться: ACME http-01 всегда приходит на публичный порт 80. Кладём
+  # одноразовый файл в общий webroot certbot и читаем его через домен, чтобы
+  # деплой сразу обнаруживал закрытый :80 или сломанное проксирование.
+  acme_probe="music-service-deploy-${RANDOM}-$$"
+  compose exec -T certbot sh -c '
+    mkdir -p /var/www/certbot/.well-known/acme-challenge
+    printf "%s" "$1" > "/var/www/certbot/.well-known/acme-challenge/$1"
+  ' sh "$acme_probe"
+  acme_body="$(curl -fsS --max-time 10 "http://${domain}/.well-known/acme-challenge/${acme_probe}" 2>/dev/null || true)"
+  compose exec -T certbot rm -f "/var/www/certbot/.well-known/acme-challenge/${acme_probe}" >/dev/null 2>&1 || true
+  if [[ "$acme_body" != "$acme_probe" ]]; then
+    echo "ACME http-01 недоступен через http://${domain}:80 — сертификат не сможет продлиться." >&2
+    echo "Проверьте HTTP_PORT и проксирование /.well-known/acme-challenge/ на контейнер nginx." >&2
+    exit 1
+  fi
+  echo "ACME http-01 доступен через публичный порт 80"
 fi
 
 echo "Deployment completed."

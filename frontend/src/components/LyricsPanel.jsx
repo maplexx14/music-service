@@ -1,7 +1,7 @@
 import { createRef, PureComponent } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { useLyrics, useActiveLyricIndex } from '../hooks/useLyrics'
-import { AlignLeft } from 'lucide-react'
+import { AlignLeft } from '@/components/icons'
 import BoltLoader from './BoltLoader'
 import './LyricsPanel.css'
 
@@ -9,16 +9,28 @@ const LINE_TRANSITION = {
   duration: 360,
   easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
 }
+// Сколько держим ручной выбор строки, прежде чем вернуться к воспроизведению.
+const SCROLL_HOLD_MS = 3200
+// Один шаг прокрутки на колесо: нотики мыши прилетают пачками.
+const WHEEL_STEP_MS = 220
+const TOUCH_STEP_PX = 26
+
+const centerOf = (props, state) => state.focus ?? props.activeIndex
 
 class SyncedLyrics extends PureComponent {
   containerRef = createRef()
   animations = []
+  state = { focus: null }
+  holdTimer = 0
+  lastWheelAt = 0
+  touchY = null
 
-  // Снимок до изменения DOM сохраняет и промежуточные позиции при перемотке.
-  getSnapshotBeforeUpdate(previous) {
-    const { lines, activeIndex } = this.props
+  // Снимок до изменения DOM сохраняет промежуточные позиции при перемотке.
+  getSnapshotBeforeUpdate(previous, previousState) {
+    const { lines } = this.props
     const container = this.containerRef.current
-    if (previous.lines !== lines || previous.activeIndex === activeIndex || !container.getClientRects().length) return null
+    if (previous.lines !== lines || centerOf(previous, previousState) === centerOf(this.props, this.state) ||
+        !container?.getClientRects().length) return null
     return new Map(Array.from(container.children, (element) => {
       const style = getComputedStyle(element)
       return [element.dataset.lineIndex, {
@@ -34,9 +46,11 @@ class SyncedLyrics extends PureComponent {
     this.animations = []
   }
 
-  componentDidUpdate(previous, _state, snapshot) {
-    const { lines, activeIndex } = this.props
-    if (previous.lines === lines && previous.activeIndex === activeIndex) return
+  componentDidUpdate(previous, previousState, snapshot) {
+    const { lines } = this.props
+    const changed = previous.lines !== lines ||
+      centerOf(previous, previousState) !== centerOf(this.props, this.state)
+    if (!changed) return
     this.cancelAnimations()
     const container = this.containerRef.current
     if (
@@ -46,7 +60,7 @@ class SyncedLyrics extends PureComponent {
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     ) return
 
-    const direction = activeIndex > previous.activeIndex ? 1 : -1
+    const direction = centerOf(this.props, this.state) > centerOf(previous, previousState) ? 1 : -1
     const gap = parseFloat(getComputedStyle(container).rowGap) || 0
     // Сначала измеряем все строки, затем запускаем только transform/opacity.
     const positions = Array.from(container.children, (element) => {
@@ -75,22 +89,73 @@ class SyncedLyrics extends PureComponent {
 
   componentWillUnmount() {
     this.cancelAnimations()
+    clearTimeout(this.holdTimer)
+  }
+
+  // Ручная прокрутка двигает окно из трёх строк. Раскладка остаётся прежней,
+  // меняется только участок текста, а через паузу возвращается автоподстройка.
+  scrollBy = (step) => {
+    const { lines, activeIndex } = this.props
+    if (!lines.length || !step) return
+    const base = this.state.focus ?? activeIndex
+    const next = Math.max(0, Math.min(lines.length - 1, base + step))
+    clearTimeout(this.holdTimer)
+    this.holdTimer = setTimeout(() => this.setState({ focus: null }), SCROLL_HOLD_MS)
+    if (next !== base) this.setState({ focus: next })
+  }
+
+  onWheel = (event) => {
+    const step = Math.sign(event.deltaY)
+    if (!step) return
+    const now = performance.now()
+    if (now - this.lastWheelAt < WHEEL_STEP_MS) return
+    this.lastWheelAt = now
+    this.scrollBy(step)
+  }
+
+  onTouchStart = (event) => {
+    this.touchY = event.touches[0]?.clientY ?? null
+  }
+
+  onTouchMove = (event) => {
+    if (this.touchY == null) return
+    const y = event.touches[0]?.clientY
+    if (y == null) return
+    const delta = this.touchY - y
+    if (Math.abs(delta) < TOUCH_STEP_PX) return
+    this.touchY = y
+    this.scrollBy(Math.sign(delta))
+  }
+
+  onTouchEnd = () => { this.touchY = null }
+
+  select = (line) => {
+    clearTimeout(this.holdTimer)
+    if (this.state.focus !== null) this.setState({ focus: null })
+    this.props.seekTo(line.time, 'lyrics')
   }
 
   render() {
-    const { lines, activeIndex, seekTo } = this.props
-    const firstVisibleIndex = Math.max(0, activeIndex - 1)
+    const { lines } = this.props
+    const center = centerOf(this.props, this.state)
+    const firstVisibleIndex = Math.max(0, center - 1)
     return (
-      <div className="lyrics-synced" ref={this.containerRef}>
-        {lines.slice(firstVisibleIndex, activeIndex + 2).map((line, offset) => {
+      <div
+        className="lyrics-synced"
+        ref={this.containerRef}
+        onWheel={this.onWheel}
+        onTouchStart={this.onTouchStart}
+        onTouchMove={this.onTouchMove}
+        onTouchEnd={this.onTouchEnd}
+      >
+        {lines.slice(firstVisibleIndex, center + 2).map((line, offset) => {
           const index = firstVisibleIndex + offset
           return (
             <div
               key={`${index}-${line.time}`}
               data-line-index={index}
-              className={`lyrics-line ${index === activeIndex ? 'active' : ''} ${index < activeIndex ? 'sung' : ''}`}
-              style={{ gridRow: index - activeIndex + 2 }}
-              onClick={() => seekTo(line.time, 'lyrics')}
+              className={`lyrics-line ${index === center ? 'active' : ''} ${index < center ? 'sung' : ''}`}
+              onClick={() => this.select(line)}
               role="button"
               tabIndex={0}
             >
@@ -104,11 +169,12 @@ class SyncedLyrics extends PureComponent {
 }
 
 function LyricsPanel({ isolateTouches = false }) {
+  const guestMode = usePlayerStore((state) => state.guestMode)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const currentTime = usePlayerStore((s) => s.currentTime)
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const seekTo = usePlayerStore((s) => s.seekTo)
-  const { syncedLines, plainText, loading, error, retry } = useLyrics(currentTrack)
+  const { syncedLines, plainText, loading, error, retry } = useLyrics(guestMode ? null : currentTrack)
   const activeIndex = useActiveLyricIndex(syncedLines, currentTime, isPlaying)
   const hasLyrics = syncedLines.length > 0 || plainText.length > 0
   const isSynced = syncedLines.length > 0
@@ -161,4 +227,3 @@ function LyricsPanel({ isolateTouches = false }) {
 
 export { LyricsPanel }
 export default LyricsPanel
-

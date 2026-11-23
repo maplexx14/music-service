@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react'
+import { Download } from '@/components/icons'
 import useAndroidRelease from '../hooks/useAndroidRelease'
 import { androidDownloadUrl, installedAndroidVersion, isAndroidUpdateAvailable } from '../services/androidRelease'
 

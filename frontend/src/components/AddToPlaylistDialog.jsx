@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ListMusic, Plus, Search, X } from 'lucide-react'
+import { Check, ListMusic, Plus, Search, X } from '@/components/icons'
 import api from '../services/api'
 import { peekCache, writeCache, invalidateCache, playlistCacheKey, LIBRARY_CACHE_KEY } from '../services/pageCache'
 import { useAddToPlaylistStore } from '../store/addToPlaylistStore'

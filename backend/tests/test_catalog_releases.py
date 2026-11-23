@@ -208,7 +208,7 @@ def test_soundcloud_recording_keeps_its_stream_endpoint(monkeypatch):
     assert cached.tracks[0].stream_url == "https://two.example/api/soundcloud/stream/123"
 
 
-def test_artist_page_includes_new_single_and_its_playable_track(client, monkeypatch):
+def test_artist_page_includes_new_single_and_its_playable_track(client, monkeypatch, member_headers):
     async def api(path, params=None, **_kw):
         if path == "search":
             return {"artists": {"results": [{"id": 17324542, "name": ARTIST}]}}
@@ -224,16 +224,16 @@ def test_artist_page_includes_new_single_and_its_playable_track(client, monkeypa
     monkeypatch.setattr(ytdlp._ytmusic, "search", lambda _q, filter, limit: (
         [video_item()] if filter == "videos" else []
     ))
-    response = client.get("/api/artists", params={"name": ARTIST})
+    response = client.get("/api/artists", params={"name": ARTIST}, headers=member_headers)
     assert response.status_code == 200
     data = response.json()
     assert [a["title"] for a in data["albums"]] == ["Соколы", "Запальничка"]
     assert data["external"][0]["title"] == "Соколы"
     assert data["external"][0]["stream_url"].endswith("/api/ytdlp/stream/Ct4OHJ0veo8")
-    album = client.get("/api/albums/yandex/44853444")
+    album = client.get("/api/albums/yandex/44853444", headers=member_headers)
     assert album.status_code == 200
     assert album.json()["tracks"][0]["artist"] == ARTIST
-    assert client.get("/api/albums/yandex/not-an-id").status_code == 404
+    assert client.get("/api/albums/yandex/not-an-id", headers=member_headers).status_code == 404
 
 
 def test_partial_ytmusic_profile_keeps_albums_and_retries_soon(monkeypatch, offline):

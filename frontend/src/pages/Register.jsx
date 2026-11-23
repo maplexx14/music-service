@@ -200,7 +200,7 @@ function Register() {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>bolt</h1>{/* Логотип вместо текста — пока выключен: <h1><img className="auth-logo" src="/logoBoltwo.webp" alt="bolt" width="814" height="297" /></h1> */}
+          <h1>bolt</h1>
           <p>Создайте новый аккаунт</p>
         </div>
         
@@ -269,6 +269,7 @@ function Register() {
         </form>
 
         <div className="auth-footer">
+          <p><Link to="/search">Слушать без регистрации</Link></p>
           <p>
             Уже есть аккаунт? <Link to="/login">Войти</Link>
           </p>

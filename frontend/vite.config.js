@@ -1,14 +1,17 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { offlineUiManifest } from './scripts/offline-ui-manifest.mjs'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const apiUrl = env.VITE_API_URL || 'http://localhost:8000/api'
-  const serverUrl = apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:8000'
+  // The Docker preview reaches the API through the backend service name;
+  // browsers continue using their own origin + /api.
+  const serverUrl = env.API_PROXY_TARGET || apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:8000'
 
   return {
-    plugins: [react()],
+    plugins: [react(), offlineUiManifest()],
     // Время сборки — пишется в журнал диагностики плеера при старте, чтобы по
     // логу с телефона было видно, какая сборка на нём работает (PWA может
     // держать старую).

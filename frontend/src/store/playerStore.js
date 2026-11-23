@@ -3,6 +3,9 @@ import { create } from 'zustand'
 import api from '../services/api'
 import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
 import { isDislikedTrack, queueStep, trackKeys } from '../utils/playerQueue'
+import { downloadedTracks, offlineTrackKey } from '../services/offlineTracks'
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
 
 function shuffleArray(arr) {
   const result = [...arr]
@@ -173,6 +176,7 @@ function recommendationTrackPayload(track, eventType, value, metadata = null) {
 // is intentionally fire-and-forget; the server keeps external identity even
 // when materialisation is still pending.
 function postRecommendationEvent(track, eventType, value = null, metadata = null) {
+  if (usePlayerStore.getState().guestMode) return Promise.resolve()
   const payload = recommendationTrackPayload(track, eventType, value, metadata)
   if (!payload) return Promise.resolve()
   return api
@@ -306,6 +310,7 @@ function capturePlayContext(source, track, context = {}) {
     kind: context.kind || source || null,
     path: context.path ?? (typeof window !== 'undefined' ? window.location.pathname : null),
     title: context.title ?? (source === 'album' ? track?.album || null : null),
+    ...(context.offline ? { offline: true } : {}),
   }
 }
 
@@ -325,6 +330,12 @@ function queueTrackState(state, step) {
 const telemetryText = (value, limit) => value == null ? undefined : String(value).slice(0, limit)
 
 const usePlayerStore = create((set, get) => ({
+  guestMode: false,
+  requireAccount: () => {
+    if (!get().guestMode) return true
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('guest:registration-required'))
+    return false
+  },
   currentTrack: null,
   queue: [],
   currentIndex: -1,
@@ -378,6 +389,7 @@ const usePlayerStore = create((set, get) => ({
   // Намерение пользователя — до await, смены очереди и первого звука.
   // Этот журнал не участвует в счётчиках прослушиваний и рекомендациях.
   recordPlayClick: (action, { track = null, source = null, via = action, queueLength = null } = {}) => {
+    if (get().guestMode || isOffline()) return
     try {
       const state = get()
       const rawId = typeof track?.id === 'string' ? track.id : ''
@@ -409,6 +421,7 @@ const usePlayerStore = create((set, get) => ({
   // Возвращает UUID локальной записи. Идемпотентно на бэке.
   // Материализованные треки возвращаются как есть.
   materializeTrack: async (track) => {
+    if (!get().requireAccount()) return null
     if (!track) return null
     if (isUuid(track.id)) return track.id
     if (isUuid(track.db_id)) return track.db_id
@@ -430,6 +443,7 @@ const usePlayerStore = create((set, get) => ({
   // Материализует текущий внешний трек в БД (для лайков/плейлистов/истории).
   // Возвращает UUID локальной записи. Идемпотентно на бэке.
   materializeCurrentTrack: async () => {
+    if (!get().requireAccount()) return null
     const { currentTrack } = get()
     if (!currentTrack) return null
     if (isUuid(currentTrack.id)) return currentTrack.id
@@ -481,6 +495,7 @@ const usePlayerStore = create((set, get) => ({
   // страница успела записать его в свой локальный список ДО снятия
   // pending-ключа (иначе между ними проскакивал кадр с незалитым сердцем).
   toggleLikeForTrack: async (track, onMaterialized = null) => {
+    if (!get().requireAccount()) return null
     if (!track) return null
     const localId = isUuid(track.id) ? track.id : null
     const dbId = localId ?? (isUuid(track.db_id) ? track.db_id : null)
@@ -516,6 +531,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   fetchLikedTracks: async () => {
+    if (get().guestMode) return
     const { likedTracksLoaded, likedTracksLoading } = get()
     if (likedTracksLoaded || likedTracksLoading) return
 
@@ -532,6 +548,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   toggleTrackLike: async (trackId, trackContext = null) => {
+    if (!get().requireAccount()) return
     if (!trackId) return
 
     const { likedTrackIds } = get()
@@ -574,6 +591,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   fetchDislikedTracks: async () => {
+    if (get().guestMode) return
     const { dislikedTracksLoaded, dislikedTracksLoading } = get()
     if (dislikedTracksLoaded || dislikedTracksLoading) return
 
@@ -597,6 +615,7 @@ const usePlayerStore = create((set, get) => ({
   // этом снимается и на бэке (см. dislike_track), поэтому чистим его и в
   // локальном состоянии — иначе сердечко осталось бы залитым.
   toggleTrackDislike: async (trackId, trackContext = null) => {
+    if (!get().requireAccount()) return
     if (!trackId) return
     const { dislikedTrackIds, dislikedTrackKeys, likedTrackIds } = get()
     const wasDisliked = dislikedTrackIds.includes(trackId)
@@ -692,6 +711,7 @@ const usePlayerStore = create((set, get) => ({
   // GET /prefetch/{id}/ready — только он даёт настоящий сигнал готовности
   // (см. _pollPrefetchReady / isTrackResolved).
   prefetchTracks: (tracks, count = 1) => {
+    if (isOffline()) return
     const list = (tracks || []).filter(Boolean).slice(0, count)
     for (const track of list) {
       if (track.source === 'ytmusic') {
@@ -768,6 +788,12 @@ const usePlayerStore = create((set, get) => ({
   },
 
   playTrack: (track, queue = [], source = null) => {
+    if (isOffline()) {
+      const selected = downloadedTracks([track])[0]
+      if (!selected) return
+      track = selected
+      queue = downloadedTracks(queue.length ? queue : [track])
+    }
     get().recordPlayClick('track', { track, source, queueLength: queue.length || 1 })
     const list = queue.length > 0 ? queue : [track]
     const trackIndex = list.findIndex(t => t.id === track.id)
@@ -807,6 +833,7 @@ const usePlayerStore = create((set, get) => ({
   // при переходе на первый трек потока.
   flowStartIndex: null,
   canContinueWithFlow: () => {
+    if (get().guestMode || isOffline()) return false
     const { currentTrack, source, playContext } = get()
     if (!currentTrack) return false
     const kind = playContext?.kind || source
@@ -834,6 +861,7 @@ const usePlayerStore = create((set, get) => ({
   // Дедуп через flowPreloadPromise; TTL защищает от устаревшей выдачи
   // (лайки/скипы после предзагрузки меняют рекомендации).
   preloadFlow: () => {
+    if (get().guestMode) return Promise.resolve(null)
     const { flowActive, flowPreload } = get()
     if (flowActive) return
     if (flowPreload && Date.now() - flowPreload.ts < FLOW_PRELOAD_TTL_MS) return
@@ -865,6 +893,15 @@ const usePlayerStore = create((set, get) => ({
   },
 
   startFlow: async (via = 'flow') => {
+    if (!get().requireAccount()) return
+    if (isOffline()) {
+      const { data } = await api.get('/recommendations/flow')
+      const tracks = downloadedTracks(data).filter((track) => !isDislikedTrack(get(), track))
+      if (!tracks.length) return false
+      set({ flowPreload: null, flowPreview: null, flowLoading: false })
+      get().playPlaylist(tracks, 0, 'flow', null, { recordClick: false, context: { kind: 'flow', offline: true } })
+      return true
+    }
     get().recordPlayClick('flow', { source: 'flow', via })
     if (get().flowLoading) return false
     set({ flowLoading: true })
@@ -926,6 +963,24 @@ const usePlayerStore = create((set, get) => ({
     const { flowActive, flowLoading, queue, queuePager, playContext } = get()
     if (queuePager || (!flowActive && !get().canContinueWithFlow())) return false
     if (get().getNextTrack(FLOW_EXTEND_LEAD)) return false
+    if (isOffline()) {
+      if (flowLoading) return false
+      set({ flowLoading: true })
+      try {
+        const { data } = await api.get('/recommendations/flow', {
+          params: { exclude: downloadedTracks().length > 1 ? get().queue.at(-1)?.id : '' },
+        })
+        const state = get()
+        if (state.playContext !== playContext || !state.flowActive || !state.currentTrack) return false
+        const tracks = downloadedTracks(data).filter((track) => !isDislikedTrack(state, track))
+        if (!tracks.length) return false
+        set((state) => {
+          const indices = tracks.map((_, i) => state.queue.length + i)
+          return { queue: [...state.queue, ...tracks], shuffledOrder: [...state.shuffledOrder, ...indices] }
+        })
+        return true
+      } finally { set({ flowLoading: false }) }
+    }
     if (flowExtendRequest?.playContext === playContext) return flowExtendRequest.promise
     if (flowLoading && !flowExtendRequest?.ownsLoading) return false
 
@@ -1103,6 +1158,13 @@ const usePlayerStore = create((set, get) => ({
   playPlaylist: (tracks, startIndex = 0, source = null, pager = null, {
     recordClick = true, context, shufflePrefixLength = 0,
   } = {}) => {
+    if (isOffline()) {
+      const selected = tracks[startIndex]
+      tracks = downloadedTracks(tracks)
+      startIndex = tracks.findIndex((track) => offlineTrackKey(track) === offlineTrackKey(selected))
+      if (startIndex < 0) return
+      pager = null
+    }
     // startFlow/shufflePlaylist уже записали нажатие до своего запроса.
     if (recordClick) get().recordPlayClick('playlist', { track: tracks[startIndex], source, queueLength: tracks.length })
     if (tracks.length === 0) return
@@ -1220,6 +1282,7 @@ const usePlayerStore = create((set, get) => ({
   },
 
   openFullScreen: (karaoke = false) => {
+    if (karaoke && !get().requireAccount()) return
     set({ isFullScreen: true, karaokeMode: karaoke })
   },
 
@@ -1244,6 +1307,7 @@ const usePlayerStore = create((set, get) => ({
   // dislike, system, error, ended): уходит в метаданные скипа. offset — на
   // сколько треков вперёд уходит очередь (advanceBy).
   _recordSkipIfNeeded: (via = 'unknown', offset = 1) => {
+    if (get().guestMode) return
     const { currentTrack, currentTime, duration, isPlaying } = get()
     if (!currentTrack || !isPlaying) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
@@ -1278,6 +1342,7 @@ const usePlayerStore = create((set, get) => ({
   // бинарных /play (>=50%) и /skip (<25%) покрывает и «серую зону» 25-50%:
   // трек, регулярно бросаемый на трети, — мягкий негатив для рекомендаций.
   _recordListenProgress: () => {
+    if (get().guestMode) return
     const { currentTrack, currentTime, duration } = get()
     if (!currentTrack) return
     const durationKnown = duration && !isNaN(duration) && duration > 0
@@ -1515,6 +1580,18 @@ const usePlayerStore = create((set, get) => ({
     set({ duration })
   },
   
+  restrictToOfflineLibrary: () => {
+    const state = get()
+    if (!state.currentTrack) { set({ flowPreload: null, flowPreview: null, queuePager: null }); return }
+    const tracks = downloadedTracks(state.queue)
+    const index = tracks.findIndex((track) => offlineTrackKey(track) === offlineTrackKey(state.currentTrack))
+    if (index < 0) { get().clearQueue(); return }
+    const order = tracks.map((_, i) => i)
+    set({ queue: tracks, currentTrack: tracks[index], currentIndex: index, shuffledOrder: order,
+      currentShuffleIndex: state.isShuffle ? index : -1, queuePager: null, flowPreload: null, flowPreview: null,
+      flowLoading: false, playContext: state.playContext?.offline ? state.playContext : { ...state.playContext, offline: true } })
+  },
+
   clearQueue: () => {
     set({
       currentTrack: null,

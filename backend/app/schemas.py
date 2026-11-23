@@ -47,6 +47,7 @@ class UserResponse(UserBase):
     email_verified: bool = False
     email_2fa_enabled: bool = False
     onboarding_completed: bool = False
+    player_setup_completed: bool = False
     preferred_genres: List[str] = []
     preferred_artists: List[str] = []
     excluded_artists: List[str] = []
@@ -392,6 +393,17 @@ class PlaylistUpdate(BaseModel):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     is_public: Optional[bool] = None
+
+
+class OfflineTrackReference(BaseModel):
+    id: str = Field(max_length=512)
+    db_id: Optional[UUIDString] = None
+    source: Optional[str] = Field(None, max_length=40)
+    external_id: Optional[str] = Field(None, max_length=512)
+
+
+class OfflineLibraryRequest(BaseModel):
+    tracks: List[OfflineTrackReference] = Field(default_factory=list, max_length=10000)
 
 
 class SearchResponse(BaseModel):

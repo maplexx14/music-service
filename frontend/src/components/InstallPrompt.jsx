@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, Share, Plus, X } from 'lucide-react'
+import { Download, Share, Plus, X } from '@/components/icons'
 import { isIOS, isStandalone } from '../services/navigation'
 import { setInstallPromptVisible } from '../services/installPrompt'
 import useAndroidRelease from '../hooks/useAndroidRelease'

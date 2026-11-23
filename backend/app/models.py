@@ -220,6 +220,7 @@ class User(Base):
     email_2fa_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
     # Завершение или пропуск онбординга — на аккаунт, а не на браузер.
     onboarding_completed = Column(Boolean, default=False, nullable=False, server_default="false")
+    player_setup_completed = Column(Boolean, default=False, nullable=False, server_default="false")
     # Явные музыкальные предпочтения, выбранные при онбординге/в настройках.
     # Списки строк: ключи жанров (из GENRE_KEYWORDS) и имена артистов.
     preferred_genres = Column(JSON, nullable=False, default=list, server_default="[]")

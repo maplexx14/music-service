@@ -4,8 +4,8 @@ import heartImage from '../assets/loader-heart.webp'
 import './TasteAvatar.css'
 
 // Аватарка по музыкальному вкусу в стилистике логотипа: рисунок из жидкого
-// металла, как сердце на иконке приложения, поверх живой ауры — размытых
-// пятен цвета двух главных жанров, которые медленно кружат. Металл
+// металла, как сердце на иконке приложения, поверх статичной ауры — размытых
+// пятен цвета двух главных жанров. Металл
 // подкрашен бликом главного жанра. Имя выбирает рисунок, наклон, свет и
 // раскладку пятен, чтобы у двух фанатов фонка картинки не совпадали.
 // Жанры — ключи из backend/app/genre_keywords.py (GENRE_KEYWORDS).
@@ -181,16 +181,12 @@ function TasteAvatar({ user, className }) {
   const wobbleSeed = hash(name) % 97
   const [tr, tg, tb] = rgb01(colors[2])
 
-  // Четыре пятна кружат вокруг центра с разной скоростью и в разные стороны.
-  // Крутятся HTML-слои transform'ом — это композитор без перерисовки; blur
-  // внутри SVG пересчитывался бы на каждом кадре.
+  // Четыре статичных пятна с положением и размером, выбранными по имени.
   const blobs = [colors[1], colors[2], second[1], second[2]].map((color, i) => ({
     color,
     offset: Math.round(14 + rand() * 16),
     size: Math.round(100 + rand() * 40),
     start: Math.round(rand() * 360),
-    spin: (9 + rand() * 10).toFixed(1),
-    reverse: i % 2 === 1,
     opacity: i % 2 ? 0.75 : 0.95,
   }))
 
@@ -200,11 +196,7 @@ function TasteAvatar({ user, className }) {
         <span
           key={i}
           className="taste-avatar-orbit"
-          style={{
-            '--start': `${b.start}deg`,
-            animationDuration: `${b.spin}s`,
-            animationDirection: b.reverse ? 'reverse' : 'normal',
-          }}
+          style={{ '--start': `${b.start}deg` }}
         >
           <span
             className="taste-avatar-blob"
@@ -215,7 +207,6 @@ function TasteAvatar({ user, className }) {
               height: `${b.size}%`,
               opacity: b.opacity,
               background: `radial-gradient(circle closest-side, ${b.color} 25%, transparent)`,
-              animationDuration: `${(b.spin / 2).toFixed(1)}s`,
             }}
           />
         </span>

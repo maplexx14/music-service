@@ -7,6 +7,8 @@ import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { PLAYBACK_ANIMATION_ID } from '../utils/frameMeter'
 import { resolveCoverUrl } from '../utils/media'
 import { isLowQuality } from '../utils/streamQuality'
+import { isSoftwareRendering } from '../utils/gpu'
+import { SOFTWARE_DISC_FPS } from '../utils/discSpin'
 import './HeroDisc.css'
 
 const DEG = 180 / Math.PI
@@ -17,6 +19,8 @@ const DEG = 180 / Math.PI
 // успевает откликаться на палец, но поток не захлёбывается. Последняя позиция
 // доезжает отдельным seek на отпускании, так что точность не теряется.
 const SEEK_THROTTLE_MS = 120
+// Crossfade duration for a changed cover on a live record.
+const COVER_FADE_MS = 220
 // Поворот, с которого жест считается перемоткой, а не касанием: дрожь пальца
 // при тапе даёт пару градусов.
 const SEEK_MIN_DEG = 6
@@ -43,7 +47,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
 }
 
-// Диск-пластинка на фоне hero: обложка текущего трека, поворот завязан на
+// Компакт-диск на фоне hero: обложка текущего трека, поворот завязан на
 // позицию воспроизведения (полный оборот = весь трек), а сам диск можно
 // крутить пальцем/мышью — поворот перематывает трек.
 //
@@ -58,8 +62,11 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
   // duration — только для первичной отрисовки aria-атрибутов; в кадре
   // актуальное значение читается из getState(), чтобы не тащить подписку.
   const duration = usePlayerStore((s) => preview ? 0 : s.duration)
-  const vinyl = useUiSettingsStore((s) => s.vinylDisc)
+  const cd = useUiSettingsStore((s) => s.vinylDisc)
+  const liteMode = useUiSettingsStore((s) => s.liteMode)
+  const softwareRendering = isSoftwareRendering()
   const powerSave = usePowerSave()
+  const interactive = !preview && !liteMode
   const rootRef = useRef(null)
   // Главная скрыта (открыта другая вкладка) — вращение не крутим.
   const { active: screenActive } = useScreen()
@@ -77,6 +84,20 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
     alternateUpgradeUrl: upgrade ? resolveCoverUrl(currentTrack?.cover_url, 'hero') : null,
   })
 
+  // A new record must not blink: the outgoing artwork stays underneath while
+  // the decoded one fades in above it.
+  const [outgoingCover, setOutgoingCover] = useState(null)
+  const lastCoverRef = useRef(null)
+  useEffect(() => {
+    if (!shownCover || shownCover === lastCoverRef.current) return undefined
+    const previous = lastCoverRef.current
+    lastCoverRef.current = shownCover
+    if (!previous) return undefined
+    setOutgoingCover(previous)
+    const timer = window.setTimeout(() => setOutgoingCover(null), COVER_FADE_MS)
+    return () => window.clearTimeout(timer)
+  }, [shownCover])
+
   const total = readDuration({ duration }, currentTrack)
   // Вращение перезапускается только на смене трека: стор заменяет объект
   // трека и посреди игры (уточнённые данные), а перезапуск берёт позицию из
@@ -85,10 +106,13 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
 
   // Freeze the visible angle before React detaches the record, so a departure
   // snapshot keeps its rotation after the playback animation is cancelled.
-  useLayoutEffect(() => () => {
-    const platter = platterRef.current
-    if (platter) platter.style.transform = getComputedStyle(platter).transform
-  }, [])
+  useLayoutEffect(() => {
+    if (preview) return undefined
+    return () => {
+      const platter = platterRef.current
+      if (platter) platter.style.transform = getComputedStyle(platter).transform
+    }
+  }, [preview])
 
   // Вращение — Web Animation от текущего угла до полного оборота за остаток
   // трека. Её крутит композитор, а не главный поток: раньше угол писал
@@ -98,7 +122,7 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
   // сверяет анимацию с позицией звука, когда та приходит из стора (раз в
   // секунду), и переставляет её, если разошлись.
   useEffect(() => {
-    if (!trackKey || !screenActive) return undefined
+    if (!trackKey || !screenActive || (liteMode && !softwareRendering)) return undefined
     const el = platterRef.current
     if (!el || typeof el.animate !== 'function') return undefined
     // prefers-reduced-motion: постоянное вращение — декор, его убираем.
@@ -115,6 +139,7 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
     let lastTime = -1
     let lastTimeAt = performance.now()
     let stalled = false
+    let inViewport = true
 
     const start = (time, dur, playing) => {
       anim?.cancel()
@@ -126,7 +151,9 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
       if (!(remaining > 0)) return
       anim = el.animate(
         [{ transform: el.style.transform }, { transform: 'rotate(360deg)' }],
-        { duration: remaining * 1000, easing: 'linear', fill: 'forwards' },
+        { duration: remaining * 1000,
+          easing: softwareRendering ? `steps(${Math.max(1, Math.ceil(remaining * SOFTWARE_DISC_FPS))}, end)` : 'linear',
+          fill: 'forwards' },
       )
       anim.id = PLAYBACK_ANIMATION_ID
       if (!playing) anim.pause()
@@ -156,7 +183,7 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
       wasPlaying = state.isPlaying
       rootRef.current?.setAttribute('aria-valuenow', String(Math.floor(state.currentTime)))
       stalled = state.isPlaying && (now - lastTimeAt) / 1000 > STALL_SEC
-      const playing = state.isPlaying && !stalled
+      const playing = state.isPlaying && !stalled && inViewport && !document.hidden
       const implied = anchor.time + (Number(anim?.currentTime) || 0) / 1000
       if (force || (!anim && !reduced)) {
         start(state.currentTime, dur, playing)
@@ -193,7 +220,7 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
         lastTimeAt = performance.now()
         wasPlaying = state.isPlaying
         stalled = false
-        start(time, dur, state.isPlaying)
+        start(time, dur, state.isPlaying && inViewport && !document.hidden)
       },
     }
 
@@ -207,6 +234,13 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
         sync(state)
       }
     })
+    const syncVisibility = () => sync(usePlayerStore.getState())
+    const observer = new IntersectionObserver(([entry]) => {
+      inViewport = entry.isIntersecting
+      syncVisibility()
+    })
+    observer.observe(rootRef.current)
+    document.addEventListener('visibilitychange', syncVisibility)
     // Буферизация: позиция в сторе стоит, событий нет — проверяем по таймеру.
     // В скрытой вкладке диск не виден, а стор позицию не обновляет вовсе.
     const stallTimer = setInterval(() => {
@@ -214,11 +248,13 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
     }, 500)
     return () => {
       unsubscribe()
+      observer.disconnect()
+      document.removeEventListener('visibilitychange', syncVisibility)
       clearInterval(stallTimer)
       spinRef.current = null
       anim?.cancel()
     }
-  }, [trackKey, screenActive, powerSave])
+  }, [trackKey, screenActive, powerSave, liteMode, softwareRendering])
 
   // Угол указателя относительно центра диска. Центр берём у корня, а не у
   // картинки: картинка вращается, и её rect описывал бы повёрнутый квадрат.
@@ -328,34 +364,40 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
   return (
     <div
       ref={rootRef}
-      className={`hero-disc${vinyl ? ' is-vinyl' : ''}${preview ? ' is-preview' : ''}${isDragging ? ' is-dragging' : ''}`}
+      className={`hero-disc${cd ? ' is-cd' : ''}${preview ? ' is-preview' : ''}${isDragging ? ' is-dragging' : ''}`}
       data-cover-ready={Boolean(shownCover) || undefined}
       data-cover-settled={coverSettled || undefined}
       data-full-cover-settled={Boolean(fullCoverUrl) && upgradeSettled || undefined}
       // Поворот диска — не pull-to-refresh: жест не должен тянуть обновление
       // главной, когда страница проскроллена в самый верх.
       data-no-pull=""
-      role={preview ? undefined : 'slider'}
-      tabIndex={preview ? undefined : 0}
-      aria-hidden={preview || undefined}
-      aria-label={preview ? undefined : 'Перемотка трека'}
-      aria-valuemin={preview ? undefined : 0}
-      aria-valuemax={preview ? undefined : Math.floor(total)}
-      onPointerDown={preview ? undefined : handlePointerDown}
-      onPointerMove={preview ? undefined : handlePointerMove}
-      onPointerUp={preview ? undefined : finishDrag}
-      onPointerCancel={preview ? undefined : finishDrag}
-      onKeyDown={preview ? undefined : handleKeyDown}
+      role={interactive ? 'slider' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-hidden={!interactive || undefined}
+      aria-label={interactive ? 'Перемотка трека' : undefined}
+      aria-valuemin={interactive ? 0 : undefined}
+      aria-valuemax={interactive ? Math.floor(total) : undefined}
+      onPointerDown={interactive ? handlePointerDown : undefined}
+      onPointerMove={interactive ? handlePointerMove : undefined}
+      onPointerUp={interactive ? finishDrag : undefined}
+      onPointerCancel={interactive ? finishDrag : undefined}
+      onKeyDown={interactive ? handleKeyDown : undefined}
     >
-      {/* Вращается винил вместе с обложкой-наклейкой: пылинки на виниле
-          показывают, что пластинка крутится. Свет лампы — отдельный
-          неподвижный слой поверх. Без пластинки (настройка) крутится та же
-          обёртка, а обложка занимает весь круг. */}
+      {/* Обложка и тонкое кольцо у отверстия вращаются вместе. Отражения остаются
+          неподвижными относительно источника света. */}
       <div ref={platterRef} className="hero-disc-spin">
         <div className="hero-disc-artwork">
+          {outgoingCover && <img
+            className="hero-disc-cover is-outgoing"
+            src={outgoingCover}
+            data-no-fade=""
+            alt=""
+            draggable={false}
+            decoding="async"
+          />}
           {shownCover && <img
             className="hero-disc-cover"
-            // Add artwork once decoded; the record is already visible.
+            // Add artwork once decoded; the disc is already visible.
             src={shownCover}
             data-no-fade=""
             alt=""
@@ -363,8 +405,9 @@ function HeroDisc({ track, preview = false, upgrade = false, coverPriority }) {
             decoding="async"
           />}
         </div>
+        {cd && <div className="hero-disc-hub" />}
       </div>
-      {vinyl && <div className="hero-disc-light" />}
+      {cd && <div className="hero-disc-light" />}
     </div>
   )
 }

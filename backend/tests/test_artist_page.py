@@ -179,13 +179,13 @@ class TestArtistEndpoint:
         monkeypatch.setattr(artists_router.ytdlp, "ytmusic_artist_profile", fake_profile)
         monkeypatch.setattr(artists_router.soundcloud, "search_soundcloud", fake_sc)
 
-    def test_orders_library_then_ytmusic_then_soundcloud(self, client, db):
+    def test_orders_library_then_ytmusic_then_soundcloud(self, client, db, member_headers):
         from app.models import Track
 
         db.add(Track(title="Papercut", artist="Linkin Park", duration=185, source="local"))
         db.commit()
 
-        r = client.get("/api/artists", params={"name": "Linkin Park"})
+        r = client.get("/api/artists", params={"name": "Linkin Park"}, headers=member_headers)
         assert r.status_code == 200
         data = r.json()
 
@@ -196,18 +196,18 @@ class TestArtistEndpoint:
         # Внешние: сначала каталог YouTube Music, затем SoundCloud.
         assert [t["title"] for t in data["external"]] == ["Faint", "Numb", "In The End"]
 
-    def test_library_track_wins_over_external_duplicate(self, client, db):
+    def test_library_track_wins_over_external_duplicate(self, client, db, member_headers):
         from app.models import Track
 
         db.add(Track(title="Numb", artist="Linkin Park", duration=185, source="local"))
         db.commit()
 
-        data = client.get("/api/artists", params={"name": "Linkin Park"}).json()
+        data = client.get("/api/artists", params={"name": "Linkin Park"}, headers=member_headers).json()
         assert [t["title"] for t in data["tracks"]] == ["Numb"]
         # «Numb» уже есть в медиатеке — внешней копии в списке быть не должно.
         assert "Numb" not in [t["title"] for t in data["external"]]
 
-    def test_survives_provider_failure(self, client, db, monkeypatch):
+    def test_survives_provider_failure(self, client, db, monkeypatch, member_headers):
         from app.models import Track
         from app.routers import artists as artists_router
 
@@ -220,23 +220,23 @@ class TestArtistEndpoint:
         db.add(Track(title="Papercut", artist="Linkin Park", duration=185, source="local"))
         db.commit()
 
-        r = client.get("/api/artists", params={"name": "Linkin Park"})
+        r = client.get("/api/artists", params={"name": "Linkin Park"}, headers=member_headers)
         # Страница обязана открыться на одной библиотеке.
         assert r.status_code == 200
         assert [t["title"] for t in r.json()["tracks"]] == ["Papercut"]
         assert r.json()["external"] == []
 
-    def test_finds_artist_inside_collaboration_string(self, client, db):
+    def test_finds_artist_inside_collaboration_string(self, client, db, member_headers):
         from app.models import Track
 
         db.add(Track(title="Numb/Encore", artist="Linkin Park, Jay-Z", duration=200, source="local"))
         db.commit()
 
-        data = client.get("/api/artists", params={"name": "Jay-Z"}).json()
+        data = client.get("/api/artists", params={"name": "Jay-Z"}, headers=member_headers).json()
         # Трек записан склеенной строкой — на странице Jay-Z он тоже должен быть.
         assert [t["title"] for t in data["tracks"]] == ["Numb/Encore"]
 
-    def test_short_name_does_not_collect_substring_matches(self, client, db):
+    def test_short_name_does_not_collect_substring_matches(self, client, db, member_headers):
         # Регрессия «ST»: ilike '%st%' собирал на страницу чужие треки.
         from app.models import Track
 
@@ -250,17 +250,17 @@ class TestArtistEndpoint:
             db.add(Track(title=title, artist=artist, duration=200, source="local"))
         db.commit()
 
-        data = client.get("/api/artists", params={"name": "ST"}).json()
+        data = client.get("/api/artists", params={"name": "ST"}, headers=member_headers).json()
         assert [t["title"] for t in data["tracks"]] == ["Плохая", "Вместе"]
 
-    def test_finds_artist_in_string_without_separators(self, client, db):
+    def test_finds_artist_in_string_without_separators(self, client, db, member_headers):
         from app.models import Track
 
         db.add(Track(title="Хочешь", artist="Земфира и друзья", duration=200, source="local"))
         db.add(Track(title="Чужой", artist="Земфирыч", duration=200, source="local"))
         db.commit()
 
-        data = client.get("/api/artists", params={"name": "Земфира"}).json()
+        data = client.get("/api/artists", params={"name": "Земфира"}, headers=member_headers).json()
         # «и» не разделитель, но имя — целое слово строки; подстрока «Земфирыч» — нет.
         assert [t["title"] for t in data["tracks"]] == ["Хочешь"]
 
@@ -301,39 +301,39 @@ class TestArtistPageCensorship:
 
         return setup
 
-    def test_replaces_explicit_with_soundcloud_equivalent(self, client, db, providers):
+    def test_replaces_explicit_with_soundcloud_equivalent(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Клей", "CUPSIZE", explicit=True)],
             sc=[ext("Клей", "CUPSIZE", "soundcloud")],
         )
 
-        external = client.get("/api/artists", params={"name": "CUPSIZE"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "CUPSIZE"}, headers=member_headers).json()["external"]
 
         # На том же месте выдачи — источник сменился, бейдж E сохранён.
         assert [(t["title"], t["source"], t["is_explicit"]) for t in external] == [
             ("Клей", "soundcloud", True)
         ]
 
-    def test_replaces_clean_marker_with_soundcloud_equivalent(self, client, db, providers):
+    def test_replaces_clean_marker_with_soundcloud_equivalent(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Song (Clean)", "A"), ext("Other", "A")],
             sc=[ext("Song", "A", "soundcloud")],
         )
 
-        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "A"}, headers=member_headers).json()["external"]
 
         assert [(t["title"], t["source"]) for t in external] == [
             ("Song", "soundcloud"),
             ("Other", "ytmusic"),
         ]
 
-    def test_keeps_suspect_track_without_soundcloud_equivalent(self, client, db, providers):
+    def test_keeps_suspect_track_without_soundcloud_equivalent(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Loud", "A", explicit=True)],
             sc=[ext("Different", "A", "soundcloud")],
         )
 
-        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "A"}, headers=member_headers).json()["external"]
 
         # Лучше цензурный трек, чем дырка в дискографии.
         assert [(t["title"], t["source"]) for t in external] == [
@@ -341,24 +341,24 @@ class TestArtistPageCensorship:
             ("Different", "soundcloud"),
         ]
 
-    def test_collapses_two_editions_of_same_track(self, client, db, providers):
+    def test_collapses_two_editions_of_same_track(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Song (Clean)", "A"), ext("Song", "A", explicit=True)],
             sc=[],
         )
 
-        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "A"}, headers=member_headers).json()["external"]
 
         # «Song» и «Song (Clean)» — одна запись: explicit-версия побеждает.
         assert [t["title"] for t in external] == ["Song"]
 
-    def test_replacement_does_not_duplicate_in_soundcloud_tail(self, client, db, providers):
+    def test_replacement_does_not_duplicate_in_soundcloud_tail(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Song", "A", explicit=True)],
             sc=[ext("Song", "A", "soundcloud"), ext("Another", "A", "soundcloud")],
         )
 
-        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "A"}, headers=member_headers).json()["external"]
 
         # Замещённый трек влит в ytmusic-часть — вторым разом в SC-хвосте не был.
         assert [(t["title"], t["source"]) for t in external] == [
@@ -366,13 +366,13 @@ class TestArtistPageCensorship:
             ("Another", "soundcloud"),
         ]
 
-    def test_plain_track_stays_on_ytmusic(self, client, db, providers):
+    def test_plain_track_stays_on_ytmusic(self, client, db, providers, member_headers):
         providers(
             yt=[ext("Quiet", "A")],
             sc=[ext("Quiet", "A", "soundcloud")],
         )
 
-        external = client.get("/api/artists", params={"name": "A"}).json()["external"]
+        external = client.get("/api/artists", params={"name": "A"}, headers=member_headers).json()["external"]
 
         # Без признаков цензуры порядок источников прежний: ytmusic бьёт SC.
         assert [(t["title"], t["source"]) for t in external] == [("Quiet", "ytmusic")]
@@ -430,7 +430,7 @@ class TestCrossScriptArtist:
 
     def test_page_collects_library_tracks_under_both_spellings(
         self, client, db, monkeypatch, yt_cards
-    ):
+    , member_headers):
         from app.models import Track
         from app.routers import artists as artists_router
 
@@ -447,7 +447,7 @@ class TestCrossScriptArtist:
         db.add(Track(title="Ромашки", artist="Земфира", duration=210, source="local"))
         db.commit()
 
-        data = client.get("/api/artists", params={"name": "Земфира"}).json()
+        data = client.get("/api/artists", params={"name": "Земфира"}, headers=member_headers).json()
 
         # Каталог артиста не должен делиться между двумя написаниями.
         assert sorted(t["title"] for t in data["tracks"]) == ["Искала", "Ромашки"]

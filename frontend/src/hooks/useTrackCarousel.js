@@ -3,6 +3,7 @@ import { usePlayerStore } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip } from '../utils/settleStrip'
 import { holdHeavyAnimations } from '../services/navigation'
+import { trackCarouselMotion } from '../utils/trackCarouselMotion.js'
 
 // Скорость отпускания считаем по последним ~80 мс касания, а не по всему
 // жесту: медленно тянул, а в конце швырнул — это флик.
@@ -46,6 +47,7 @@ export function useTrackCarousel({
   const lastRef = useRef(null)
   const swipedRef = useRef(false)
   const motionRef = useRef({ release: null, timer: 0 })
+  useEffect(() => enabled ? trackCarouselMotion.connect() : undefined, [enabled])
 
   // Полоса начала двигаться: слой на композитор, тяжёлый декор на паузу.
   const beginMotion = (strip) => {
@@ -66,9 +68,11 @@ export function useTrackCarousel({
     }, duration + 50)
   }
 
-  const settle = (strip, from, velocity) => {
+  const settle = (strip, from, velocity, arrivalDirection = 0) => {
     beginMotion(strip)
-    endMotion(strip, settleStrip(strip, from, { velocity }))
+    const duration = settleStrip(strip, from, { velocity })
+    trackCarouselMotion.settle(strip, { from, span: strip.offsetWidth + gap, duration, arrivalDirection })
+    endMotion(strip, duration)
   }
 
   // Переключение свайпом — через доезд к соседу (см. CAROUSEL_SWITCH_DELAY_MS
@@ -97,9 +101,10 @@ export function useTrackCarousel({
     const dir = currentId === last.nextId ? 1 : currentId === last.prevId ? -1 : 0
     if (!dir) {
       settleStrip(strip, 0)
+      trackCarouselMotion.stop()
       return
     }
-    settle(strip, (swipe?.dx || 0) + dir * (strip.offsetWidth + gap), swipe?.velocity)
+    settle(strip, (swipe?.dx || 0) + dir * (strip.offsetWidth + gap), swipe?.velocity, dir)
   }, [currentId])
 
   // Соседи на момент последнего рендера — по ним эффект выше узнаёт
@@ -147,6 +152,7 @@ export function useTrackCarousel({
       strip.style.transition = 'none'
       strip.style.transform = `translateX(${x}px)`
       g.dx = x
+      trackCarouselMotion.drag(-x / (strip.offsetWidth + gap))
     }
   }
 
@@ -196,6 +202,7 @@ export function useTrackCarousel({
     const to = -dir * (strip.offsetWidth + gap)
     beginMotion(strip)
     const duration = settleStrip(strip, g.dx, { velocity, to })
+    trackCarouselMotion.settle(strip, { from: g.dx, to, span: strip.offsetWidth + gap, duration })
     const run = () => {
       switchRef.current = null
       const fromId = usePlayerStore.getState().currentTrack?.id

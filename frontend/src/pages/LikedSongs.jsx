@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
-import { Play, Share, Shuffle } from 'lucide-react'
+import { Play, Share, Shuffle } from '@/components/icons'
 import api from '../services/api'
 import { peekCache, writeCache, PLAYLIST_PAGE_SIZE, LIKED_CACHE_KEY } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
-// Сердце из логотипа (public/logoBoltwo.png), выровненное (в логотипе оно
-// наклонено на 19,5°), 271px: loader-heart всего 128px
+// Прозрачный фирменный знак в высоком разрешении для крупного сердца.
 // и на весь верх экрана мылился.
 import logoHeart from '../assets/liked-hero-heart.webp'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -22,6 +23,9 @@ import { useScreen } from '../hooks/useScreen'
 import './PlaylistDetail.css'
 // Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
 import './Artist.css'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 // Тёмный край градиента сердца (--hero-c3, Artist.css).
@@ -40,11 +44,16 @@ const LIKED_BOLTS = [
 
 // «Понравившиеся» — это обычный плейлист (is_liked=true на бэке), поэтому
 // интерфейс страницы полностью повторяет PlaylistDetail.
-function LikedSongs() {
+function LikedSongs({ guest = false } = {}) {
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
   // Неудавшуюся фоновую загрузку повторяем при открытии вкладки.
   const { active } = useScreen()
   // Первая страница из прошлого захода рисуется сразу, свежая — фоном.
-  const [playlist, setPlaylist] = useState(() => peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
+  const [onlinePlaylist, setPlaylist] = useState(() => guest
+    ? { id: 'guest-preview', name: 'Понравившиеся', tracks: [], cover_url: null, is_public: false }
+    : peekCache(LIKED_CACHE_KEY)?.playlist ?? null)
+  const playlist = offline ? offlineCollections(offlineState).liked : onlinePlaylist
   const coverBackdrop = useCoverBackdrop(playlist?.cover_url)
   // Своей обложки у «Понравившихся» обычно нет — тогда обложка во весь верх
   // это сердце логотипа на фирменном градиенте (как квадрат в шапке), а
@@ -70,8 +79,10 @@ function LikedSongs() {
           </div>
         ),
       }
-  const [loading, setLoading] = useState(() => !peekCache(LIKED_CACHE_KEY))
-  const [totalTracks, setTotalTracks] = useState(() => peekCache(LIKED_CACHE_KEY)?.total ?? 0)
+  const [onlineLoading, setLoading] = useState(() => !guest && !peekCache(LIKED_CACHE_KEY))
+  const loading = offline ? !offlineState.ready : onlineLoading
+  const [onlineTotal, setTotalTracks] = useState(() => guest ? 0 : peekCache(LIKED_CACHE_KEY)?.total ?? 0)
+  const totalTracks = offline ? playlist.tracks.length : onlineTotal
   const [loadingMore, setLoadingMore] = useState(false)
   // Упавший запрос гасит автоподгрузку и возвращает кнопку: иначе наблюдатель
   // пересоберётся, снова упрётся в видимый маячок и страница уйдёт в цикл
@@ -97,7 +108,7 @@ function LikedSongs() {
   useEffect(() => {
     fetchPlaylist()
     fetchLikedTracks()
-  }, [])
+  }, [offline])
 
   // Лайки меняются и мимо этой страницы — сердцем в плеере, дизлайком. Снятый
   // убираем из списка сразу, а новый тянем свежей первой страницей, когда бэк
@@ -134,14 +145,15 @@ function LikedSongs() {
   // Кэш следует за списком (в том числе за снятыми здесь лайками), но хранит
   // только первую страницу — остальное догружается прокруткой.
   useEffect(() => {
-    if (loading || !playlist) return
+    if (offline || guest || loading || !playlist) return
     writeCache(LIKED_CACHE_KEY, {
       playlist: { ...playlist, tracks: playlist.tracks.slice(0, TRACKS_PAGE_SIZE) },
       total: totalTracks,
     })
-  }, [playlist, totalTracks, loading])
+  }, [playlist, totalTracks, loading, guest, offline])
 
   const fetchPlaylist = async () => {
+    if (guest) return
     try {
       const response = await api.get('/playlists/me/liked', {
         params: { skip: 0, limit: TRACKS_PAGE_SIZE },
@@ -195,7 +207,7 @@ function LikedSongs() {
   // постранично. Без пейджера воспроизведение вставало на последнем
   // загруженном треке: для плеера это выглядело как конец списка. Пейджер
   // говорит плееру, откуда дотянуть хвост самому, не дожидаясь прокрутки.
-  const queuePager = () => ({ url: '/playlists/me/liked', total: totalTracks })
+  const queuePager = () => offline ? null : ({ url: '/playlists/me/liked', total: totalTracks })
   const playOptions = { context: { kind: 'liked', title: 'Понравившиеся' } }
 
   const handlePlay = () => {
@@ -231,8 +243,10 @@ function LikedSongs() {
 
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
   }
@@ -307,14 +321,6 @@ function LikedSongs() {
       <div className="artist-toolbar">
         <div className="playlist-actions round-actions">
           <button
-            className="btn btn--primary btn--lg play-button-large round-actions__play"
-            onClick={handlePlay}
-            aria-label="Воспроизвести"
-          >
-            <Play size={24} fill="currentColor" />
-            <span className="round-actions__label">Воспроизвести</span>
-          </button>
-          <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
             onClick={handleShuffle}
             disabled={shuffling}
@@ -324,6 +330,15 @@ function LikedSongs() {
             <Shuffle size={20} />
             <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
           </button>
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          {!guest && <OfflinePlaylistDownloadButton playlist={{ ...playlist, is_liked: true }} totalTracks={totalTracks} />}
           <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon"
             onClick={handleShare}
@@ -343,7 +358,8 @@ function LikedSongs() {
               <tr>
                 <th>#</th>
                 <th>Название</th>
-                <th>Альбом</th>
+                <th className="track-artist-heading">Артист</th>
+                <th className="track-album-heading">Альбом</th>
                 <th>Длительность</th>
                 <th></th>
               </tr>
@@ -388,6 +404,7 @@ function LikedSongs() {
           </div>
         )}
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

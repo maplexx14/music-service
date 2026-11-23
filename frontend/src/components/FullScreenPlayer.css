@@ -327,11 +327,28 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
 }
 
 .fullscreen-header {
+  position: relative;
+  /* Кнопки — в углах окна, с заметным отступом от краёв: 18px по бокам и
+     safe-top + 14px сверху. Сдвиг относительный, поэтому высота шапки и
+     раскладка контента не меняются. */
+  --fs-corner-x: 18px;
+  --fs-corner-y: 14px;
+  top: calc(var(--fs-corner-y) - 22px);
+  left: calc(var(--fs-corner-x) - var(--fs-pad-x));
+  width: calc(100% + 2 * (var(--fs-pad-x) - var(--fs-corner-x)));
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+}
+
+/* На телефоне верхний отступ плеера меньше (safe-top + 14), поэтому сдвиг
+   другой — иначе кнопки уезжают под вырез. */
+@media (max-width: 768px) {
+  .fullscreen-header {
+    top: calc(var(--fs-corner-y) - 14px);
+  }
 }
 
 .fullscreen-logo {
@@ -383,7 +400,7 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
 }
 
 .fullscreen-like.active svg {
-  animation: fullscreenLikePop 0.3s var(--ease-out);
+  animation: fullscreenLikePop 0.375s var(--ease-out);
 }
 
 .fullscreen-player button:focus-visible,
@@ -393,9 +410,9 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
 }
 
 @keyframes fullscreenLikePop {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.18); }
-  100% { transform: scale(1); }
+  0% { transform: rotate(0deg); }
+  40% { transform: rotate(-12deg); }
+  100% { transform: rotate(0deg); }
 }
 
 /* --- Body: container for content area --- */
@@ -997,7 +1014,7 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
 
 @media (hover: hover) and (pointer: fine) {
   .fullscreen-play:hover {
-    transform: scale(1.04);
+    transform: none;
   }
 }
 
@@ -1430,43 +1447,165 @@ html[data-morph='lyrics']::view-transition-new(fs-info) {
   }
 }
 
-/* В книжной ориентации текст получает всю ширину под обложкой и названием. */
-@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
-  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-content {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(0, 1fr);
-    gap: 16px;
-    max-width: 880px;
-    padding: 16px 0 0;
+/* Desktop karaoke: center the cover, metadata and playback controls as one left column. */
+@media (min-width: 769px) {
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) {
+    display: grid;
+    grid-template-columns: minmax(280px, min(36vw, 420px)) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1.35fr) auto auto auto auto auto minmax(0, 0.65fr);
+    column-gap: clamp(28px, 5vw, 80px);
+    padding-inline: max(var(--fs-pad-x), calc((100vw - 1440px) / 2));
   }
 
-  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-art {
-    grid-column: 1;
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-header {
+    grid-column: 1 / -1;
     grid-row: 1;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-body,
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-content {
+    display: contents;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-art {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: center;
+    align-self: center;
     margin: 0;
   }
 
-  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-art img {
-    width: min(300px, 32vw, 22dvh);
-    height: min(300px, 32vw, 22dvh);
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-art img {
+    width: min(320px, 30vw, max(100px, calc(100dvh - 380px)));
+    height: min(320px, 30vw, max(100px, calc(100dvh - 380px)));
   }
 
-  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-info {
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-info {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 4;
     justify-self: center;
+    align-self: center;
     align-items: center;
-    max-width: 640px;
-    padding: 0;
+    max-width: 320px;
+    padding: 18px 0 0;
     text-align: center;
   }
 
-  .fullscreen-player:is(.has-lyrics, .karaoke-mode):not(.lyrics-expanded) .fullscreen-lyrics-desktop {
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-progress {
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 5;
+    justify-self: center;
+    width: 100%;
+    max-width: 360px;
+    margin: 20px 0 0;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-controls {
+    grid-column: 1;
+    grid-row: 6;
+    gap: clamp(8px, 1.2vw, 20px);
+    margin: 18px 0 0;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-controls .fullscreen-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-controls .fullscreen-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-play svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-transport {
+    gap: 10px;
+    padding: 8px;
+    background: rgba(10, 10, 14, 0.62);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-transport .fullscreen-play {
+    width: 48px;
+    height: 48px;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-tools {
+    grid-column: 1;
+    grid-row: 7;
+    justify-self: center;
+    width: 100%;
+    max-width: 360px;
+    justify-content: space-between;
+    gap: 0;
+    margin: 16px 0 0;
+    padding: 8px;
+    background: rgba(10, 10, 14, 0.42);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-tool {
+    width: 44px;
+    height: 40px;
+    flex-shrink: 0;
+    color: rgba(255, 255, 255, 0.82);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-tool svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-tool.active {
+    color: var(--text-primary);
+    background: rgba(124, 97, 168, 0.58);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-tool:disabled {
+    color: rgba(255, 255, 255, 0.25);
+  }
+
+  .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-lyrics-desktop {
+    grid-column: 2;
+    grid-row: 2 / -1;
     max-width: none;
     min-height: 0;
-    padding: 0;
+    height: auto;
+    padding: 12px 0;
+  }
+}
+
+/* The active lyric shares the cover's grid row through both panel wrappers. */
+@supports (grid-template-rows: subgrid) {
+  @media (min-width: 769px) {
+    .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-lyrics-desktop:has(.lyrics-panel.is-synced),
+    .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-lyrics-desktop .lyrics-panel.is-synced,
+    .fullscreen-player:is(.has-lyrics, .karaoke-mode) .fullscreen-lyrics-desktop .lyrics-synced {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: subgrid;
+      min-width: 0;
+      min-height: 0;
+      height: auto;
+      padding-block: 0;
+      row-gap: 0;
+    }
+
+    .fullscreen-lyrics-desktop .lyrics-panel.is-synced,
+    .fullscreen-lyrics-desktop .lyrics-synced {
+      grid-row: 1 / -1;
+    }
+
+    .fullscreen-lyrics-desktop .lyrics-synced .lyrics-line.sung {
+      transform: translateY(50%) scale(var(--lyrics-context-scale));
+    }
+
+    .fullscreen-lyrics-desktop .lyrics-synced .lyrics-line:not(.active):not(.sung) {
+      grid-row: 3 / -1;
+      transform: translateY(-50%) scale(var(--lyrics-context-scale));
+    }
   }
 }
 

@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, UploadFile, File
-from sqlalchemy import exists
+from sqlalchemy import exists, or_, tuple_
 from sqlalchemy.orm import Session
 from typing import List
 import os
 import uuid
 import aiofiles
 from pathlib import Path
-from app.identifiers import UUIDString
+from app.identifiers import UUIDString, uuid_or_none
 from app.database import get_db
 from app.models import Playlist, Track, User, playlist_tracks
 from app.schemas import PlaylistResponse, PlaylistSummaryResponse, PlaylistCreate, PlaylistUpdate, TrackResponse
+from app.schemas import OfflineLibraryRequest
 from app.dependencies import get_current_active_user
 from app.routers.tracks import get_or_create_liked_playlist
 from app.recommendation_cache import invalidate_recommendation_cache
@@ -128,6 +129,46 @@ def get_my_playlists(
         .all()
     )
     return playlists
+
+
+@router.post("/me/offline-library")
+def get_offline_library(
+    request: OfflineLibraryRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Membership metadata only for files the device has actually downloaded."""
+    ids = {value for track in request.tracks for value in (uuid_or_none(track.id), track.db_id) if value}
+    external = {(track.source, track.external_id) for track in request.tracks if track.source and track.external_id}
+    filters = []
+    if ids:
+        filters.append(Track.id.in_(ids))
+    if external:
+        filters.append(tuple_(Track.source, Track.external_id).in_(external))
+    if not filters:
+        return {"playlists": [], "likedKeys": []}
+    rows = (
+        db.query(Playlist, Track)
+        .join(playlist_tracks, playlist_tracks.c.playlist_id == Playlist.id)
+        .join(Track, Track.id == playlist_tracks.c.track_id)
+        .filter(Playlist.owner_id == current_user.id, or_(*filters))
+        .order_by(Playlist.id, playlist_tracks.c.position, Track.id)
+        .all()
+    )
+    playlists = {}
+    liked_keys = []
+    for playlist, track in rows:
+        key = f"{track.source}:{track.external_id}" if track.source and track.external_id else str(track.id)
+        if playlist.is_liked:
+            liked_keys.append(key)
+            continue
+        if playlist.id not in playlists:
+            playlists[playlist.id] = {
+                **PlaylistSummaryResponse.model_validate(playlist).model_dump(mode="json"),
+                "track_keys": [],
+            }
+        playlists[playlist.id]["track_keys"].append(key)
+    return {"playlists": list(playlists.values()), "likedKeys": list(dict.fromkeys(liked_keys))}
 
 
 @router.get("/me/liked", response_model=PlaylistResponse)

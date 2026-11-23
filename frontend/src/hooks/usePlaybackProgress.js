@@ -47,7 +47,7 @@ const MEDIA_EVENTS = [
 
 const clamp01 = (value) => Math.min(1, Math.max(0, value))
 
-export function usePlaybackProgress(targets, { stepped = false } = {}) {
+export function usePlaybackProgress(targets, { stepped = false, frameRate = 0, native = true } = {}) {
   const targetsRef = useRef(targets)
   targetsRef.current = targets
   const controlRef = useRef({ hold() {}, release() {} })
@@ -59,6 +59,7 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
     // С какой позиции (сек) и в каком темпе стартовала текущая анимация.
     let anchor = { time: 0, dur: 0, rate: 1, running: false }
     let held = false
+    let frameId = 0, lastFrameSlot = -1, shownTime = 0
 
     const place = (ratio) => {
       for (const { ref, frame } of targetsRef.current) {
@@ -66,13 +67,34 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
       }
     }
     const cancel = () => {
+      if (frameId) cancelAnimationFrame(frameId)
+      frameId = 0
       for (const anim of anims) anim.cancel()
       anims = []
     }
     // Позиция, которую полоса показывает сейчас.
     const shown = () => {
+      if (!native) return shownTime
       const elapsed = anims.length ? (Number(anims[0].currentTime) || 0) / 1000 : 0
       return anchor.time + elapsed * anchor.rate
+    }
+
+    const tick = (at) => {
+      frameId = 0
+      if (held || !anchor.running || document.hidden) return
+      const interval = frameRate > 0 ? 1000 / frameRate : 0
+      const slot = interval ? Math.floor((at + 0.001) / interval) : at
+      if (slot !== lastFrameSlot) {
+        lastFrameSlot = slot
+        const next = read()
+        if (!next.running || next.dur !== anchor.dur || next.rate !== anchor.rate || !Number.isFinite(next.time)) {
+          sync()
+          return
+        }
+        shownTime = next.time
+        place(clamp01(next.time / next.dur))
+      }
+      frameId = requestAnimationFrame(tick)
     }
 
     const start = (time, dur, running, rate) => {
@@ -81,19 +103,35 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
       // Инлайновая позиция — под анимацией: на ней полоса и останется, если
       // анимацию отменят или она не запустится.
       place(ratio)
+      shownTime = time
       anchor = { time, dur, rate, running }
       if (!running || stepped) return
       const remaining = (dur - time) / rate
       if (!(remaining > 0)) return
+      // Native animations can keep Firefox compositing at the monitor's full
+      // refresh rate even when easing uses steps. A shared 60Hz update grid
+      // keeps the mini-player and the GPU canvas on the same display frames.
+      if (!native) {
+        lastFrameSlot = -1
+        if (!document.hidden) frameId = requestAnimationFrame(tick)
+        return
+      }
+      const interval = frameRate > 0 ? 1000 / frameRate : 0
+      const steps = interval ? Math.max(1, Math.ceil(remaining * frameRate)) : 0
+      const timelineTime = document.timeline?.currentTime
+      // All capped progress surfaces share the GPU frame grid. Independent
+      // animation phases can otherwise keep a 144Hz window compositing twice.
+      const startedAt = interval && Number.isFinite(timelineTime) ? Math.floor(timelineTime / interval) * interval : null
       for (const { ref, frame } of targetsRef.current) {
         const el = ref.current
         if (!el || typeof el.animate !== 'function') continue
         const anim = el.animate([{ transform: frame(ratio) }, { transform: frame(1) }], {
-          duration: remaining * 1000,
-          easing: 'linear',
+          duration: steps ? steps * interval : remaining * 1000,
+          easing: steps ? `steps(${steps}, end)` : 'linear',
           fill: 'forwards',
         })
         anim.id = PLAYBACK_ANIMATION_ID
+        if (startedAt !== null) anim.startTime = startedAt
         anims.push(anim)
       }
     }
@@ -124,6 +162,7 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
       if (!(dur > 0) || !Number.isFinite(time)) {
         cancel()
         anchor = { time: 0, dur: 0, rate: 1, running: false }
+        shownTime = 0
         place(0)
         return
       }
@@ -182,6 +221,7 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
     // В фоне анимация и звук могли разойтись (iOS приостанавливает страницу).
     const onVisible = () => {
       if (!document.hidden) sync(true)
+      else if (!native) cancel()
     }
     document.addEventListener('visibilitychange', onVisible)
 
@@ -195,7 +235,7 @@ export function usePlaybackProgress(targets, { stepped = false } = {}) {
       cancel()
       controlRef.current = { hold() {}, release() {} }
     }
-  }, [stepped])
+  }, [stepped, frameRate, native])
 
   return controlRef
 }

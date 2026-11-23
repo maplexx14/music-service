@@ -1,7 +1,9 @@
 import { getTrackDbId } from '../utils/identifiers'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ListPlus, ShieldCheck, X } from 'lucide-react'
+import { ListPlus, ShieldCheck, X, Download, Trash2 } from '@/components/icons'
+import { useOfflineTracks, offlineTrackKey, downloadTrack, removeOfflineTrack, cancelDownload } from '../services/offlineTracks'
+import { toast } from '../store/toastStore'
 import LikeHeart from './LikeHeart'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import { haptic, HAPTIC } from '../utils/haptics'
@@ -29,8 +31,20 @@ export function useTrackContextMenu() {
   const pressTimer = useRef(null)
   const startPoint = useRef(null)
   const menuRef = useRef(null)
+  const triggerRef = useRef(null)
 
-  const close = useCallback(() => setMenu(null), [])
+  const close = useCallback(() => {
+    setMenu(null)
+    triggerRef.current?.focus({ preventScroll: true })
+    triggerRef.current = null
+  }, [])
+
+  const open = useCallback((track, event, options = {}) => {
+    event.stopPropagation()
+    triggerRef.current = event.currentTarget
+    const rect = event.currentTarget.getBoundingClientRect()
+    setMenu({ track, x: rect.right, y: rect.bottom, ...options })
+  }, [])
 
   const clearPress = useCallback(() => {
     if (pressTimer.current) {
@@ -116,7 +130,7 @@ export function useTrackContextMenu() {
     [clearPress],
   )
 
-  return { menu, menuRef, close, getProps }
+  return { menu, menuRef, close, getProps, open }
 }
 
 // Само меню: fixed через портал, координаты у пальца/курсора с клампом
@@ -130,6 +144,8 @@ const MENU_ITEM_H = 48
 const MENU_EXIT_MS = 160
 
 export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
+  const { tracks: downloads, jobs } = useOfflineTracks()
+  const authenticated = useAuthStore((s) => s.isAuthenticated)
   const [menu, leaving] = usePresence(openMenu, MENU_EXIT_MS)
   const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
   const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
@@ -142,8 +158,24 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
   // Шторку можно смахнуть вниз, как системную. Затемнение — как в CSS.
   useSheetDrag(menuRef, backdropRef, onClose, { backdropAlpha: 0.55, enabled: Boolean(menu) && isSheet })
 
+  useEffect(() => {
+    if (openMenu) menuRef.current?.querySelector('[role="menuitem"]')?.focus({ preventScroll: true })
+  }, [openMenu, menuRef])
+
   if (!menu) return null
   const { track } = menu
+  const downloadKey = offlineTrackKey(track)
+  const downloaded = downloads.some((entry) => entry.key === downloadKey)
+  const downloading = jobs[downloadKey]
+  const saveOffline = () => {
+    if (!usePlayerStore.getState().requireAccount()) return
+    onClose()
+    if (downloading) { cancelDownload(downloadKey); return }
+    const action = downloaded ? removeOfflineTrack(downloadKey) : downloadTrack(track, useAuthStore.getState().token)
+    action.then(() => toast.success(downloaded ? 'Скачанный трек удалён' : 'Трек доступен офлайн')).catch((error) => {
+      if (error.name !== 'AbortError') toast.error(error.message || 'Не удалось скачать трек')
+    })
+  }
   // Привязка оригинала вместо зацензуренной версии — у треков каталога
   // YouTube Music (см. CensorOverrideDialog).
   const canLinkOriginal = isAdmin && track.source === 'ytmusic' && Boolean(track.external_id)
@@ -156,7 +188,7 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
   const vw = window.innerWidth
   const vh = window.innerHeight
   const left = Math.min(Math.max(menu.x - MENU_W / 2, 12), vw - MENU_W - 12)
-  const menuH = MENU_H + (canLinkOriginal ? MENU_ITEM_H : 0)
+  const menuH = MENU_H + (canLinkOriginal ? MENU_ITEM_H : 0) + (authenticated ? MENU_ITEM_H : 0)
   const top = Math.min(Math.max(menu.y - 16, 12), vh - menuH - 12)
   // Меню раскрывается из точки касания/курсора, а не из своего центра.
   const origin = `${menu.x - left}px ${menu.y - top}px`
@@ -168,15 +200,23 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
     if (e.target === e.currentTarget) onClose()
   }
 
-  const like = () => {
+  const like = (event) => {
     onClose()
     haptic(HAPTIC.success)
+    if (menu.onLike) {
+      menu.onLike(event)
+      return
+    }
     toggleLikeForTrack(track).catch((error) => console.error('Context like failed:', error))
   }
 
   const addToPlaylist = () => {
     onClose()
-    openAddToPlaylist(track)
+    if (!usePlayerStore.getState().requireAccount()) return
+    openAddToPlaylist(track, {
+      excludePlaylistId: menu.excludePlaylistId,
+      resolveId: menu.resolveId,
+    })
   }
 
   const linkOriginal = () => {
@@ -218,6 +258,10 @@ export function TrackContextMenu({ menu: openMenu, menuRef, onClose }) {
             <span>Оригинал без цензуры…</span>
           </button>
         )}
+        {authenticated && <button type="button" className="track-ctx-item" role="menuitem" onClick={saveOffline}>
+          {downloaded ? <Trash2 size={18} /> : <Download size={18} />}
+          <span>{downloaded ? 'Удалить скачанный трек' : downloading ? `Отменить скачивание${downloading.progress == null ? '' : ` (${downloading.progress}%)`}` : 'Скачать для офлайн'}</span>
+        </button>}
       </div>
     </div>,
     document.body,

@@ -19,7 +19,7 @@ def _track(db, title="UUID track"):
     return track
 
 
-def test_uuid_ids_round_trip_through_api_and_relationships(client, db):
+def test_uuid_ids_round_trip_through_api_and_relationships(client, db, member_headers):
     user = create_user(db)
     track = _track(db)
     headers = auth_headers(client)
@@ -30,7 +30,7 @@ def test_uuid_ids_round_trip_through_api_and_relationships(client, db):
     assert len(set(ids)) == 3
     assert all(isinstance(value, str) and UUID(value).version == 4 for value in ids)
     assert playlist["owner_id"] == user.id
-    assert client.get(f"/api/tracks/{track.id.upper()}").json()["id"] == track.id
+    assert client.get(f"/api/tracks/{track.id.upper()}", headers=member_headers).json()["id"] == track.id
 
     added = client.post(f"/api/playlists/{playlist['id']}/tracks/{track.id}", headers=headers)
     assert added.status_code == 200, added.text

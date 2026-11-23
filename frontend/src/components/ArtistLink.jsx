@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useAuthStore } from '../store/authStore'
 import { Link } from 'react-router-dom'
 import { splitArtists, artistPath } from '../utils/artists'
 import { intentPrefetchHandlers, prefetchArtist } from '../services/pageCache'
@@ -14,6 +15,7 @@ import './ArtistLink.css'
 // onNavigate — для мест, которые нужно закрыть при переходе (полноэкранный
 // плеер: иначе страница артиста откроется под оверлеем).
 function ArtistLink({ artist, className = '', onNavigate }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const names = splitArtists(artist)
   if (names.length === 0) return null
 
@@ -37,7 +39,7 @@ function ArtistLink({ artist, className = '', onNavigate }) {
             title={`Открыть страницу «${name}»`}
             // Наведение/касание грузит страницу артиста заранее — к клику
             // она уже в кэше и открывается без спиннера.
-            {...intentPrefetchHandlers(() => prefetchArtist(name))}
+            {...(isAuthenticated ? intentPrefetchHandlers(() => prefetchArtist(name)) : {})}
           >
             {name}
           </Link>

@@ -105,6 +105,7 @@ const proxyExternalCover = (url) => `${API_URL}/tracks/cover-proxy?url=${encodeU
 // (загруженные) обложки лежат одним файлом — размер на них не влияет.
 export const resolveCoverUrl = (coverUrl, size = 'card') => {
   if (!coverUrl) return null
+  if (coverUrl.startsWith('/__bolt_offline__/')) return coverUrl
   const variant = size === true ? 'full' : size === false ? 'card' : size
   if (coverUrl.startsWith('http')) return proxyExternalCover(sizeCover(coverUrl, variant))
   if (coverUrl.startsWith('/')) return `${SERVER_URL}${coverUrl}`

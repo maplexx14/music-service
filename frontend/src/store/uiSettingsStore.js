@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { isSoftwareRendering } from '../utils/gpu'
+import { DEFAULT_CD_APPEARANCE, normalizeCdAppearance, restoreCdAppearance } from '../utils/cdPlayerAppearance'
 
 const STORAGE_KEY = 'ui-settings'
 
@@ -28,14 +30,17 @@ const defaultQualityMode = () => 'high'
 // rememberPlayer — запоминать очередь и позицию между запусками
 // (services/playerPersist). Включено по умолчанию; явный выбор сохраняется.
 // brushIcons — иконки кистью логотипа (фильтр #brush-icon в index.html).
-// vinylDisc — диск на главной в виде пластинки; выключено — прежний диск
-// из размытой обложки (HeroDisc).
+// По умолчанию обычные иконки; кисть включается в настройках.
+// vinylDisc — оформление компакт-дисков на главной; имя ключа сохраняет
+// совместимость с записанными настройками. Выключено — размытая обложка.
 const defaultSettings = () => ({
   liteMode: false,
+  liteModeOverride: null,
   streamQuality: defaultQualityMode(),
   rememberPlayer: true,
-  brushIcons: true,
+  brushIcons: false,
   vinylDisc: true,
+  cdPlayerAppearance: { ...DEFAULT_CD_APPEARANCE },
 })
 
 const loadSettings = () => {
@@ -45,8 +50,12 @@ const loadSettings = () => {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return fallback
     const parsed = JSON.parse(stored)
+    const liteModeOverride = typeof parsed.liteModeOverride === 'boolean'
+      ? parsed.liteModeOverride
+      : parsed.liteMode === true ? true : null
     return {
       liteMode: typeof parsed.liteMode === 'boolean' ? parsed.liteMode : false,
+      liteModeOverride,
       // Незнакомое значение (старая версия, правка вручную) не должно ломать
       // решение о качестве — откатываемся к умолчанию для этого устройства.
       streamQuality: QUALITY_MODES.includes(parsed.streamQuality)
@@ -55,6 +64,7 @@ const loadSettings = () => {
       rememberPlayer: typeof parsed.rememberPlayer === 'boolean' ? parsed.rememberPlayer : fallback.rememberPlayer,
       brushIcons: typeof parsed.brushIcons === 'boolean' ? parsed.brushIcons : fallback.brushIcons,
       vinylDisc: typeof parsed.vinylDisc === 'boolean' ? parsed.vinylDisc : fallback.vinylDisc,
+      cdPlayerAppearance: restoreCdAppearance(parsed.cdPlayerAppearance, parsed.cdPlayerAppearanceVersion),
     }
   } catch {
     return fallback
@@ -71,14 +81,27 @@ const applyBrushIconsClass = (brushIcons) => {
   document.documentElement.classList.toggle('brush-icons', brushIcons)
 }
 
-const initialState = loadSettings()
+const { liteModeOverride, ...storedState } = loadSettings()
+const liteModeAuto = typeof window !== 'undefined' && isSoftwareRendering()
+const initialState = {
+  ...storedState,
+  liteModePreference: liteModeOverride,
+  liteModeAuto,
+  liteMode: liteModeOverride ?? liteModeAuto,
+}
 applyLiteModeClass(initialState.liteMode)
 applyBrushIconsClass(initialState.brushIcons)
 
 const useUiSettingsStore = create((set) => ({
   ...initialState,
-  setLiteMode: (liteMode) => set({ liteMode }),
-  toggleLiteMode: () => set((state) => ({ liteMode: !state.liteMode })),
+  setLiteMode: (liteMode) => set({
+    liteModePreference: liteMode,
+    liteMode,
+  }),
+  toggleLiteMode: () => set((state) => ({
+    liteModePreference: !state.liteMode,
+    liteMode: !state.liteMode,
+  })),
   setStreamQuality: (streamQuality) => {
     if (!QUALITY_MODES.includes(streamQuality)) return
     set({ streamQuality })
@@ -86,6 +109,10 @@ const useUiSettingsStore = create((set) => ({
   toggleRememberPlayer: () => set((state) => ({ rememberPlayer: !state.rememberPlayer })),
   toggleBrushIcons: () => set((state) => ({ brushIcons: !state.brushIcons })),
   toggleVinylDisc: () => set((state) => ({ vinylDisc: !state.vinylDisc })),
+  setCdPlayerAppearance: (patch) => set((state) => ({
+    cdPlayerAppearance: normalizeCdAppearance({ ...state.cdPlayerAppearance, ...patch }),
+  })),
+  resetCdPlayerAppearance: () => set({ cdPlayerAppearance: { ...DEFAULT_CD_APPEARANCE } }),
 }))
 
 if (typeof window !== 'undefined') {
@@ -96,11 +123,14 @@ if (typeof window !== 'undefined') {
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
-          liteMode: state.liteMode,
+          liteMode: state.liteModePreference ?? false,
+          liteModeOverride: state.liteModePreference,
           streamQuality: state.streamQuality,
           rememberPlayer: state.rememberPlayer,
           brushIcons: state.brushIcons,
           vinylDisc: state.vinylDisc,
+          cdPlayerAppearance: state.cdPlayerAppearance,
+          cdPlayerAppearanceVersion: 3,
         })
       )
     } catch {

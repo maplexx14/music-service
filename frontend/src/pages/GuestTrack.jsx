@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Pause, Play, RotateCcw } from 'lucide-react'
+import { Pause, Play, RotateCcw } from '@/components/icons'
 import api from '../services/api'
 import { API_URL } from '../config'
 import Spinner from '../components/Spinner'

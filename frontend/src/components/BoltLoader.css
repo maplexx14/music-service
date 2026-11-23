@@ -1,97 +1,64 @@
-/* Цикл 1300ms на пять молний: вылет каждые 260ms. Отрицательная задержка —
-   с первого кадра веер уже в полёте, а не стартует с пустого места. */
 .bolt-loader {
-  --bl-cycle: 1300ms;
-  --bl-step: 260ms;
+  /* Scale the whole indicator to fit compact controls without clipping its bars. */
+  --bl-unit: min(var(--bl-size), calc(var(--bl-frame) / 3.16));
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
   width: var(--bl-frame);
   height: var(--bl-frame);
   overflow: hidden;
-  /* Пересчёт стилей и раскладки лоадера не выходит за его рамку. */
   contain: strict;
 }
 
 .bolt-loader-heart {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: var(--bl-size);
-  height: var(--bl-size);
+  flex: none;
+  width: var(--bl-unit);
+  height: var(--bl-unit);
   user-select: none;
-  will-change: transform;
-  /* Отдача: сердце чуть подпрыгивает на каждый вылет. */
-  animation: bolt-loader-recoil var(--bl-step) cubic-bezier(.165, .84, .44, 1) infinite;
 }
 
-.bolt-loader.is-idle .bolt-loader-heart {
-  animation: none;
+.bolt-loader-wave .bolt-loader-heart {
+  will-change: opacity;
+  animation: bolt-loader-heartbeat 1200ms cubic-bezier(.45, 0, .55, 1) infinite;
 }
 
-/* Молния стартует из центра, позади сердца, и летит острым концом наружу. */
-.bolt-loader-bolt {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: calc(var(--bl-size) * 0.42 * var(--k));
-  aspect-ratio: 76 / 136;
-  background: center / contain no-repeat;
-  opacity: 0;
-  pointer-events: none;
-  /* Свой слой у каждой молнии: замер на iPhone (utils/frameMeter) находил
-     анимацию лоадера почти в каждом кадре с рывком. В keyframes — CSS-
-     переменные, и если WebKit гоняет такую анимацию на главном потоке, без
-     слоя SVG-спрайт ещё и перерисовывался бы каждый кадр. */
+.bolt-loader-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--bl-unit) * 0.08);
+  width: calc(var(--bl-unit) * 3.16);
+  height: var(--bl-unit);
+}
+
+.bolt-loader-bar {
+  flex: none;
+  width: calc(var(--bl-unit) * 0.1);
+  height: 65%;
+  border-radius: 999px;
+  background: #9d59ff;
+  transform: scaleY(var(--level));
+  opacity: 0.85;
   will-change: transform, opacity;
-  animation: bolt-loader-fly var(--bl-cycle) calc(var(--i) * var(--bl-step) * -1) infinite;
+  animation: bolt-loader-wave 1200ms cubic-bezier(.45, 0, .55, 1) calc(var(--i) * 100ms - 1200ms) infinite;
 }
 
-.bolt-loader-bolt.v1 { background-image: url('../assets/loader-bolt-1.svg'); }
-.bolt-loader-bolt.v2 { background-image: url('../assets/loader-bolt-2.svg'); }
-.bolt-loader-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
-
-/* Полёт — 60% цикла: резкий старт и долгое торможение (ease-out-quart),
-   гаснет у края рамки (центр молнии на 0.42 рамки — хвост уже прозрачен,
-   когда его срезает overflow). Остаток цикла молния невидима и ждёт своей очереди. */
-@keyframes bolt-loader-fly {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-size) * -0.1)) rotate(180deg) scale(0.45);
-    animation-timing-function: cubic-bezier(.165, .84, .44, 1);
-  }
-  8% { opacity: 1; }
-  40% { opacity: 1; }
-  60% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-frame) * -0.42)) rotate(calc(180deg + var(--spin))) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateY(calc(var(--bl-frame) * -0.42)) rotate(calc(180deg + var(--spin))) scale(1);
-  }
+@keyframes bolt-loader-wave {
+  0%, 100% { transform: scaleY(0.25); opacity: 0.4; }
+  50% { transform: scaleY(var(--level)); opacity: 0.9; }
 }
 
-@keyframes bolt-loader-recoil {
-  0% { transform: scale(1); }
-  30% { transform: scale(1.05); }
-  100% { transform: scale(1); }
+@keyframes bolt-loader-heartbeat {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
-/* Без движения: молний нет, сердце мягко «дышит» прозрачностью — загрузка
-   всё ещё читается. */
 @media (prefers-reduced-motion: reduce) {
-  .bolt-loader-bolt {
-    display: none;
-  }
-  .bolt-loader-heart {
-    animation: bolt-loader-breathe 1.2s ease-in-out infinite alternate;
-  }
-  .bolt-loader.is-idle .bolt-loader-heart {
+  .bolt-loader-bar,
+  .bolt-loader-wave .bolt-loader-heart {
     animation: none;
+    will-change: auto;
   }
-}
-
-@keyframes bolt-loader-breathe {
-  to { opacity: 0.45; }
 }

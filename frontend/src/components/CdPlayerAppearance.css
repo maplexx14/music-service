@@ -1,0 +1,37 @@
+.cd-appearance-controls { display: grid; gap: 18px; color: var(--text-primary, #f2eff6); }
+.cd-appearance-field { min-width: 0; margin: 0; padding: 0; border: 0; }
+.cd-appearance-field legend { margin-bottom: 10px; padding: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary, #aaa0b5); }
+.cd-appearance-body-colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.cd-appearance-color, .cd-appearance-segments button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 6px; border: 1px solid #ffffff0d; border-radius: 8px; background: #ffffff04; color: inherit; font-size: 11px; cursor: pointer; }
+.cd-appearance-color[aria-pressed='true'], .cd-appearance-segments button[aria-pressed='true'] { border-color: #c7b8df80; background: #c7b8df16; }
+.cd-appearance-swatch { flex: 0 0 13px; width: 13px; height: 13px; border: 1px solid #ffffff30; border-radius: 50%; }
+.cd-appearance-custom-color { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 11px; color: var(--text-secondary, #aaa0b5); }
+.cd-appearance-custom-color input { width: 36px; height: 28px; padding: 2px; border: 1px solid #ffffff20; border-radius: 6px; background: transparent; cursor: pointer; }
+.cd-appearance-segments { display: flex; gap: 6px; }
+.cd-appearance-segments button { flex: 1; font-size: 12px; }
+.cd-appearance-accent-colors { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cd-appearance-accent { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 3px solid #18131e; border-radius: 50%; outline: 1px solid transparent; cursor: pointer; }
+.cd-appearance-accent[aria-pressed='true'] { outline-color: #e6daff; }
+.cd-appearance-accent-custom { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #ffffff20; border-radius: 50%; color: #cfc4de; cursor: pointer; }
+.cd-appearance-accent-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.cd-appearance-reset { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary, #aaa0b5); font-size: 12px; cursor: pointer; }
+.cd-appearance-reset:disabled { opacity: 0.4; cursor: default; }
+.cd-customizer { position: absolute; z-index: 5; right: 24px; bottom: -18px; pointer-events: auto; }
+.cd-customizer[hidden] { display: none; }
+.cd-customizer-trigger { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 13px; border: 1px solid #ffffff1f; border-radius: 12px; background: #18131ef2; color: #e1d6ec; font-size: 12px; cursor: pointer; }
+.cd-customizer-trigger[aria-expanded='true'] { border-color: #c7b8df80; }
+.cd-customizer-panel { position: absolute; right: 0; bottom: calc(100% + 10px); width: 300px; max-width: calc(100vw - 64px); max-height: min(480px, calc(100dvh - 180px)); overflow-y: auto; overscroll-behavior: contain; padding: 16px; border: 1px solid #ffffff1f; border-radius: 18px; background: #18131e; box-shadow: 0 16px 48px #0007; color: #f2eff6; outline: none; }
+.cd-customizer-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.cd-customizer-header h2 { margin: 0; font-size: 15px; font-weight: 650; }
+.cd-customizer-close { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #aaa0b5; cursor: pointer; }
+.cd-customizer-hint { margin: 8px 0 0; text-align: center; color: #8c8199; font-size: 10px; }
+.cd-customizer button:focus-visible, .cd-appearance-controls button:focus-visible, .cd-appearance-controls input:focus-visible { outline: 2px solid #ffc272; outline-offset: 3px; }
+.cd-appearance-accent-custom:focus-within { outline: 2px solid #ffc272; outline-offset: 3px; }
+.cd-customizer button:active:not(:disabled), .cd-appearance-controls button:active:not(:disabled) { transform: scale(0.97); }
+@media (hover: hover) and (pointer: fine) {
+  .cd-appearance-color:hover, .cd-appearance-segments button:hover, .cd-customizer-trigger:hover { border-color: #c7b8df80; }
+  .cd-appearance-reset:hover:not(:disabled), .cd-customizer-close:hover { background: #ffffff08; color: #f2eff6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cd-customizer button:active:not(:disabled), .cd-appearance-controls button:active:not(:disabled) { transform: none; }
+}

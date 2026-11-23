@@ -1002,7 +1002,6 @@ async def provider_search(
     provider: str,
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
-    current_user=Depends(get_current_active_user),
 ):
     """Поиск в Deezer/Spotify → играбельные треки с их названиями и обложками.
 

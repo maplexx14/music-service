@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_URL } from '../config'
 import { toast } from '../store/toastStore'
+import { hasOfflineData, offlineApiResponse, syncOfflineLibrary } from './offlineLibrary'
 
 let authToken = null
 
@@ -84,7 +85,14 @@ const isGatewayError = (error) =>
 
 // Response interceptor for error handling
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const method = (response.config?.method || 'get').toLowerCase()
+    const url = response.config?.url || ''
+    if (method !== 'get' && !url.includes('/offline-library') && (/\/playlists\//.test(url) || /\/tracks\/[^/]+\/(?:like|dislike)$/.test(url))) {
+      syncOfflineLibrary(api).catch(() => {})
+    }
+    return response
+  },
   (error) => {
     const config = error.config
     if (config && isGatewayError(error) && (config.method || 'get').toLowerCase() === 'get') {
@@ -100,13 +108,15 @@ api.interceptors.response.use(
     // skipAuthRedirect — для запросов, где 401 означает «неверные данные в
     // форме», а не «сессия умерла»: шаг 2FA при входе, подтверждение пароля.
     // Без флага опечатка в коде из письма выкидывала бы на экран входа.
-    if (status === 401 && error.config?.skipAuthRedirect !== true) {
+    if (status === 401 && authToken && error.config?.skipAuthRedirect !== true) {
       // Не делаем полный reload: он уничтожает <audio>, очередь и Media Session.
       // Store обработает событие и React Router покажет экран входа без перезагрузки.
       localStorage.removeItem('auth-storage')
       setApiAuthToken(null)
       window.dispatchEvent(new CustomEvent('auth:unauthorized'))
-    } else if (error.config?.skipErrorToast !== true) {
+    } else if (error.config?.skipErrorToast !== true && (status || navigator.onLine !== false)) {
+      // Offline playback is intentional; background requests must not cover
+      // the downloaded library with repeated "server unavailable" messages.
       const detail = error.response?.data?.detail
       const message =
         (typeof detail === 'string' && detail) ||
@@ -133,6 +143,7 @@ const pendingGets = new Map()
 const rawGet = api.get.bind(api)
 
 api.get = (url, config = {}) => {
+  if (navigator.onLine === false && hasOfflineData(url)) return offlineApiResponse(url, config)
   if (config.signal || config.dedupe === false) {
     const { dedupe: _dedupe, ...axiosConfig } = config
     return rawGet(url, axiosConfig)

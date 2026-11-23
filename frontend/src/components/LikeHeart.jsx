@@ -3,11 +3,12 @@ import heart from '../assets/loader-heart.webp'
 import heartLine from '../assets/like-heart-line.webp'
 import heartBolt from '../assets/like-heart-bolt.webp'
 import heartFill from '../assets/like-heart-fill.webp'
+import heartBoltEdge from '../assets/like-heart-bolt-edge.webp'
 
-// Сердце из логотипа — та же картинка, что у BoltLoader, с мазками кисти.
-// Лайкнуто — сердце целиком акцентного цвета (--brand-accent): и мазок, и
-// заливка; молния белая. Не лайкнуто — силуэт той же картинки цветом
-// кнопки (currentColor), как остальные иконки.
+// Прозрачный фирменный знак — та же картинка, что у BoltLoader.
+// Без лайка весь знак одноцветный, а середина сердца прозрачная.
+// После нажатия цвет заполняет сердце и контур снизу вверх; молния
+// становится фиолетовой с белой внутренней кромкой.
 // Обёртка — <svg>, чтобы работали правила размеров вида `.like-btn svg`.
 //
 // При лайке, как дуга в спиннере, по линии сердца пробегает белая
@@ -17,8 +18,8 @@ import heartFill from '../assets/like-heart-fill.webp'
 // мазок кисти, а не рисует поверх ровную линию. Для перехода картинка
 // разрезана на слои: like-heart-line (без заливки молнии) и like-heart-bolt.
 // Заодно сердце наливается акцентом снизу вверх. Маска заливки
-// like-heart-fill — внутренность мазка, вырезанная по пикселям картинки:
-// средняя линия LOOP для неё грубовата и у молнии вылезает за мазок.
+// like-heart-fill — вся замкнутая область внутри сердца, вырезанная
+// по пикселям картинки, включая пустую середину.
 
 // Замкнутый контур по средней линии мазка, кубические Безье в координатах
 // картинки 128×128. Начало и конец — нижний кончик; последние два сегмента
@@ -93,12 +94,15 @@ const CLICK_WINDOW = 3000
 
 // burst — проиграть анимацию лайка сразу при появлении, без кнопки: так
 // большое сердце вылетает поверх обложки в полноэкранном плеере.
-function LikeHeart({ liked = false, size = 24, className = '', burst = false }) {
+function BrandLikeHeart({ liked = false, size = 24, className = '', burst = false }) {
   const id = useId().replace(/:/g, '')
   const svgRef = useRef(null)
   const boltRef = useRef(null)
   const dashRef = useRef(null)
   const fillRef = useRef(null)
+  const revealRef = useRef(null)
+  const baseRef = useRef(null)
+  const neutralColorRef = useRef('#ffffff')
   const clickedAtRef = useRef(0)
   const prevLikedRef = useRef(burst ? false : liked)
 
@@ -107,6 +111,7 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
     if (!button) return undefined
     const onClick = () => {
       clickedAtRef.current = performance.now()
+      neutralColorRef.current = getComputedStyle(svgRef.current).color
     }
     button.addEventListener('click', onClick)
     return () => button.removeEventListener('click', onClick)
@@ -117,15 +122,24 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
   useLayoutEffect(() => {
     const wasLiked = prevLikedRef.current
     prevLikedRef.current = liked
+    const base = baseRef.current
+    if (!liked) {
+      base?.setAttribute('opacity', '1')
+      base?.setAttribute('fill', 'currentColor')
+      return undefined
+    }
     const bolt = boltRef.current
     const dash = dashRef.current
     const fill = fillRef.current
-    if (!liked || wasLiked || !bolt || !dash || !fill) return undefined
+    const reveal = revealRef.current
+    if (wasLiked || !bolt || !dash || !fill || !reveal) return undefined
     if (!burst && performance.now() - clickedAtRef.current > CLICK_WINDOW) return undefined
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
 
     let frame = 0
     const start = performance.now()
+    base?.setAttribute('fill', neutralColorRef.current)
+    base?.setAttribute('opacity', '1')
     dash.setAttribute('visibility', 'visible')
     const step = (now) => {
       const t = Math.min(1, (now - start) / DURATION)
@@ -139,11 +153,14 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
       // Уровень заливки: верх обрезающего прямоугольника идёт от низа
       // картинки к верху, с торможением в конце.
       const level = 1 - (1 - Math.min(1, t / FILL_UNTIL)) ** 3
-      fill.setAttribute('y', String(128 * (1 - level)))
+      const top = String(128 * (1 - level))
+      fill.setAttribute('y', top)
+      reveal.setAttribute('y', top)
       if (t < 1) {
         frame = requestAnimationFrame(step)
       } else {
         dash.setAttribute('visibility', 'hidden')
+        base?.setAttribute('opacity', '0')
       }
     }
     step(start)
@@ -152,6 +169,8 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
       bolt.setAttribute('opacity', '1')
       dash.setAttribute('visibility', 'hidden')
       fill.setAttribute('y', '0')
+      reveal.setAttribute('y', '0')
+      base?.setAttribute('opacity', '0')
     }
   }, [liked])
 
@@ -176,7 +195,21 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
       <mask id={`${id}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
         <image href={heart} width="128" height="128" filter={`url(#${id}-fill)`} />
       </mask>
-      {liked ? (
+      <mask id={`${id}-line`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+        <image href={heartLine} width="128" height="128" filter={`url(#${id}-fill)`} />
+      </mask>
+      <mask id={`${id}-bolt`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+        <image href={heartBolt} width="128" height="128" filter={`url(#${id}-fill)`} />
+      </mask>
+      <rect
+        ref={baseRef}
+        width="128"
+        height="128"
+        mask={`url(#${id}-mask)`}
+        fill={liked ? neutralColorRef.current : 'currentColor'}
+        opacity={liked ? 0 : 1}
+      />
+      {liked && (
         <>
           {/* Слои крашены прямоугольниками с fill по маскам из белых
               силуэтов картинок. Не feFlood с var(): переменные внутри
@@ -187,23 +220,26 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
           <mask id={`${id}-in`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
             <image href={heartFill} width="128" height="128" />
           </mask>
-          <mask id={`${id}-line`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
-            <image href={heartLine} width="128" height="128" filter={`url(#${id}-fill)`} />
+          <mask id={`${id}-bolt-edge`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+            <image href={heartBoltEdge} width="128" height="128" filter={`url(#${id}-fill)`} />
           </mask>
-          <mask id={`${id}-bolt`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
-            <image href={heartBolt} width="128" height="128" filter={`url(#${id}-fill)`} />
+          <mask id={`${id}-reveal`} maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+            <rect ref={revealRef} x="0" y="0" width="128" height="128" fill="#ffffff" />
           </mask>
-          <g mask={`url(#${id}-in)`}>
-            <rect ref={fillRef} x="0" y="0" width="128" height="128" fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+          <g mask={`url(#${id}-reveal)`}>
+            <g mask={`url(#${id}-in)`}>
+              <rect ref={fillRef} x="0" y="0" width="128" height="128" fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+            </g>
+            <rect width="128" height="128" mask={`url(#${id}-line)`} fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+            <rect
+              ref={boltRef}
+              width="128"
+              height="128"
+              mask={`url(#${id}-bolt)`}
+              fill="#8a5cf8"
+            />
+            <rect width="128" height="128" mask={`url(#${id}-bolt-edge)`} fill="#ffffff" />
           </g>
-          <rect width="128" height="128" mask={`url(#${id}-line)`} fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
-          <rect
-            ref={boltRef}
-            width="128"
-            height="128"
-            mask={`url(#${id}-bolt)`}
-            fill="#ffffff"
-          />
           <path
             ref={dashRef}
             d={LOOP_D}
@@ -217,11 +253,9 @@ function LikeHeart({ liked = false, size = 24, className = '', burst = false }) 
             visibility="hidden"
           />
         </>
-      ) : (
-        <rect width="128" height="128" mask={`url(#${id}-mask)`} fill="currentColor" />
       )}
     </svg>
   )
 }
 
-export default LikeHeart
+export default BrandLikeHeart

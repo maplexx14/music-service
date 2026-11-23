@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { AlertTriangle, Check, Download, X } from 'lucide-react'
+import { AlertTriangle, Check, Download, X } from '@/components/icons'
 import { useImportStore, importIsFinal } from '../store/importStore'
 import ImportProgressModal, { stageCounter } from './ImportProgressModal'
 import './ImportProgressModal.css'

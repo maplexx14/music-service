@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, X } from 'lucide-react'
+import { Bell, X } from '@/components/icons'
 import { enablePush, pushPermission } from '../services/push'
 import { toast } from '../store/toastStore'
 import { isInstallPromptVisible } from '../services/installPrompt'

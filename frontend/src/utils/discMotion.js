@@ -1,6 +1,10 @@
+// Shared timing keeps the orbit, mobile exchange and stack in sync.
+// A short acceleration and soft landing make the records feel weighted.
+// 340 ms keeps a cross-arc move readable; 220 ms read as a snap, especially
+// when a record travels from the centre to a side slot in one commit.
 export const DISC_MOTION = {
-  duration: 420,
-  easing: 'cubic-bezier(0.32, 0, 0.16, 1)',
+  duration: 340,
+  easing: 'cubic-bezier(0.32, 0.02, 0.24, 1)',
   fill: 'forwards',
 }
 
@@ -86,14 +90,20 @@ export function readDiscSlots(arc, desktop = false) {
   ]))
 }
 
-const DRUM_MOTION = { ...DISC_MOTION, duration: 350 }
+// Барабан на десктопе и стопка на мобильном — одно движение, одни тайминги.
+const DRUM_MOTION = DISC_MOTION
+// Первый вход на главную — отдельное движение (циферблат), у него своя
+// длительность и своя кривая: он открывает экран, а не меняет диск.
+const ENTRANCE_MOTION = {
+  duration: 560,
+  easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+  fill: 'both',
+}
 const translate = ({ x, y }) => `translate(${x}px, ${y}px)`
 
 const slotAngle = (x) => x === 0 ? -Math.PI / 2 : x > 0 ? Math.PI / 6 : Math.PI * 5 / 6
 const BOTTOM_ANGLE = Math.PI / 2
 
-// Complete the orbit below the clipped hero. A queued cover replaces the old
-// one only at the bottom, where the entire record is outside the viewport.
 function drumPoint(angle, width, height, size) {
   const radiusX = width * 0.32 / Math.sin(Math.PI / 3)
   const radiusY = height * 0.43 / 1.5
@@ -167,7 +177,7 @@ export function animateDiscDialEntrance(arc, slots, onFinish) {
     const animation = record.slot.node.animate([
       { transform: transform(record, rotation) },
       { transform: transform(record, 0) },
-    ], { ...DRUM_MOTION, duration: 400, fill: 'both' })
+    ], ENTRANCE_MOTION)
     animation.startTime = startTime
     return animation
   })

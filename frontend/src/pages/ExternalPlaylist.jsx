@@ -2,11 +2,16 @@ import { isUuid } from '../utils/identifiers'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
-import { Play, Plus } from 'lucide-react'
+import { Play, Plus } from '@/components/icons'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
 import Spinner from '../components/Spinner'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
@@ -24,13 +29,19 @@ const EXTERNAL_FRESH_MS = 10 * 60 * 1000
 
 function ExternalPlaylist() {
   const { id } = useParams()
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
+  const savedPlaylist = offlineCollections(offlineState).playlists.find((item) => item.id === `soundcloud:playlist:${id}`)
   const navigate = useNavigate()
   // Внешний плейлист меняется редко, а грузится через SoundCloud (секунды):
   // из кэша страница рисуется сразу, без спиннера.
   const cacheKey = `external-playlist:${id}`
-  const [playlist, setPlaylist] = useState(() => peekCache(cacheKey)?.playlist ?? null)
-  const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
-  const [loading, setLoading] = useState(() => !peekCache(cacheKey))
+  const [onlinePlaylist, setPlaylist] = useState(() => peekCache(cacheKey)?.playlist ?? null)
+  const [onlineTracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const [onlineLoading, setLoading] = useState(() => !peekCache(cacheKey))
+  const playlist = offline ? savedPlaylist : onlinePlaylist
+  const tracks = offline ? savedPlaylist?.tracks || [] : onlineTracks
+  const loading = offline ? !offlineState.ready : onlineLoading
   const [importing, setImporting] = useState(false)
   const backdrop = useCoverBackdrop(playlist?.cover_url)
   // Атомарные селекторы вместо подписки на весь store: страница со списком
@@ -60,14 +71,15 @@ function ExternalPlaylist() {
   useEffect(() => {
     fetchPlaylist()
     fetchLikedTracks()
-  }, [id])
+  }, [id, offline])
 
   // Материализация трека (db_id) правит список на месте — кэш следует за ним.
   useEffect(() => {
-    if (!loading) patchCache(cacheKey, { tracks })
-  }, [tracks, loading])
+    if (!offline && !loading) patchCache(cacheKey, { tracks })
+  }, [tracks, loading, offline])
 
   const fetchPlaylist = async () => {
+    if (offline) return
     const cached = peekCache(cacheKey)
     if (cached) {
       setPlaylist(cached.playlist)
@@ -152,8 +164,10 @@ function ExternalPlaylist() {
 
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: handlePlayTrack,
     toggleLike: handleToggleLike,
     resolveId: ensureDbId,
@@ -167,7 +181,7 @@ function ExternalPlaylist() {
   }
 
   if (!playlist) {
-    return null
+    return offline ? <div className="page-container"><p>В этом плейлисте нет скачанных треков</p></div> : null
   }
 
   return (
@@ -203,10 +217,15 @@ function ExternalPlaylist() {
             <Play size={24} fill="currentColor" />
             <span className="round-actions__label">Воспроизвести</span>
           </button>
+          <OfflinePlaylistDownloadButton
+            playlist={{ ...playlist, id: `soundcloud:playlist:${id}`, name: playlist.title || playlist.name, tracks,
+              download_source: { type: 'soundcloud', id }, page_url: `/external/soundcloud/playlists/${id}` }}
+            totalTracks={playlist.track_count || tracks.length}
+          />
           <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon"
             onClick={handleImport}
-            disabled={importing}
+            disabled={importing || offline}
             aria-label="Добавить в медиатеку"
           >
             <Plus size={20} />
@@ -222,7 +241,8 @@ function ExternalPlaylist() {
               <tr>
                 <th>#</th>
                 <th>Название</th>
-                <th>Альбом</th>
+                <th className="track-artist-heading">Артист</th>
+                <th className="track-album-heading">Альбом</th>
                 <th>Длительность</th>
                 <th></th>
               </tr>
@@ -257,6 +277,7 @@ function ExternalPlaylist() {
             строка, произвольный div туда браузер не пустит. */}
         <div ref={tracksSentinelRef} aria-hidden="true" />
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

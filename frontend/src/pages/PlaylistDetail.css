@@ -182,9 +182,12 @@ html.power-save .liked-heart-beat {
   table-layout: fixed;
 }
 
-/* Название шире альбома; колонка длительности — фиксированная. В таблице
-   альбома колонки «Альбом» нет, и название забирает всё оставшееся. */
-.tracks-table th:nth-child(3):nth-last-child(3) {
+/* Название забирает оставшуюся ширину; длительность — фиксированная. */
+.tracks-table .track-artist-heading {
+  width: 22%;
+}
+
+.tracks-table .track-album-heading {
   width: 24%;
 }
 
@@ -192,9 +195,7 @@ html.power-save .liked-heart-beat {
   width: 88px;
 }
 
-/* Колонка действий: при fixed min-width ячейки не работает, ширину держит
-   шапка. Селектор специфичнее, чем в LikedSongs.css (там 56px — кнопки
-   лайка и меню обрезались бы). */
+/* Колонка действий: две кнопки по 44px и отступы ячейки. */
 .tracks-table thead th:last-child {
   width: 112px;
 }
@@ -305,6 +306,14 @@ html.power-save .liked-heart-beat {
   color: var(--text-secondary);
 }
 
+.track-row .track-artist--inline {
+  display: none;
+}
+
+.track-row .track-name {
+  margin-bottom: 0;
+}
+
 .track-album {
   color: var(--text-secondary);
 }
@@ -312,6 +321,8 @@ html.power-save .liked-heart-beat {
 .track-duration {
   text-align: right;
   color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .empty-playlist {
@@ -366,7 +377,7 @@ html.power-save .liked-heart-beat {
 .track-actions-cell {
   text-align: right;
   white-space: nowrap;
-  min-width: 104px;
+  width: 112px;
 }
 
 .track-action-btn {
@@ -390,6 +401,10 @@ html.power-save .liked-heart-beat {
 .track-action-btn svg {
   width: 22px;
   height: 22px;
+}
+
+.track-action-btn--menu {
+  display: none;
 }
 
 .track-action-btn.liked {
@@ -493,7 +508,7 @@ html.power-save .liked-heart-beat {
   }
 
   /* Вторичное действие, которое относится к самой кнопке «Воспроизвести»
-     («Перемешать»), стоит вплотную к ней справа, а не в левой группе. */
+     («Перемешать»), стоит непосредственно слева от неё. */
   .round-actions .round-actions__near-play {
     order: 2;
     margin-left: auto;
@@ -532,6 +547,14 @@ html.power-save .liked-heart-beat {
 }
 
 @media (max-width: 1024px) {
+  .track-action-btn--desktop {
+    display: none;
+  }
+
+  .track-action-btn--menu {
+    display: inline-grid;
+  }
+
   /* Прячем шапку таблицы и превращаем строки во флекс-ряды. */
   .tracks-table thead {
     display: none;
@@ -559,15 +582,30 @@ html.power-save .liked-heart-beat {
     line-height: 1.35;
   }
 
+  .track-row .track-artist--inline {
+    display: block;
+  }
+
+  .track-row .track-name {
+    margin-bottom: 4px;
+  }
+
   .track-row td {
     padding: 0;
   }
 
   /* Второстепенные колонки скрываем на узких экранах. */
   .track-row .track-number,
-  .track-row .track-album,
-  .track-row .track-duration {
+  .track-row .track-artist-cell,
+  .track-row .track-album {
     display: none;
+  }
+
+  .track-row .track-duration {
+    display: block;
+    flex: none;
+    width: auto;
+    font-size: var(--text-sm);
   }
 
   .tracks-table .track-row .track-name-cell {
@@ -613,13 +651,9 @@ html.power-save .liked-heart-beat {
 /* Учитываем ширину списка, в том числе при развёрнутой боковой панели. */
 @media (min-width: 769px) {
   @container (max-width: 680px) {
-    .tracks-table th:nth-child(3):nth-last-child(3),
+    .tracks-table .track-album-heading,
     .track-row .track-album {
       display: none;
-    }
-
-    .tracks-table th:nth-child(2):nth-last-child(4) {
-      width: auto;
     }
 
     .tracks-table th:nth-last-child(2) {

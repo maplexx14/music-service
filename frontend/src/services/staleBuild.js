@@ -45,6 +45,7 @@ async function dropShellCache() {
 
 // true — перезагрузка запущена; false — уже пробовали, показываем ошибку.
 export async function reloadForStaleBuild() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
   if (recentlyReloaded()) return false
   markReload()
   await dropShellCache()

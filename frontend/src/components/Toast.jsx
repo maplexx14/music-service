@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Info, X } from '@/components/icons'
 import { useToastStore } from '../store/toastStore'
 import './Toast.css'
 

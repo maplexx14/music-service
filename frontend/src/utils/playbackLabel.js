@@ -4,6 +4,7 @@ export function playbackLabel(state) {
   const kind = context.kind || state.source
   const path = context.path || ''
   if (!state.currentTrack || kind === 'flow') return 'поток'
+  if (kind === 'offline' || path === '/downloads') return 'Скачанные'
   if (kind === 'liked' || context.liked || path === '/liked') return 'Понравившиеся'
   if (context.title?.trim()) return context.title.trim()
 

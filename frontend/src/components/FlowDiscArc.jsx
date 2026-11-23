@@ -284,14 +284,20 @@ export default function FlowDiscArc({ tracks = EMPTY_TRACKS, playing }) {
               '--slot-scale': 1,
               '--slot-distance': distance,
               '--slot-depth': depth,
-              '--disc-enter-x': depth % 2 === 0 ? '100vw' : '-100vw',
-              '--disc-enter-rotation': depth % 2 === 0 ? '18deg' : '-18deg',
+              '--disc-enter-x': depth % 2 === 0 ? '32vw' : '-32vw',
+              '--disc-enter-rotation': depth % 2 === 0 ? '6deg' : '-6deg',
               '--slot-mobile-y': MOBILE_Y[depth],
               '--slot-mobile-scale': MOBILE_SCALE[depth],
             }}
           >
             <div className="flow-disc-position">
-              <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} coverPriority={active && (offset === 0 || (!mobile && !upgradeCovers)) ? 'high' : undefined} />
+              <div className="flow-disc-volume" style={{
+                '--disc-tilt-y': `${-Math.sign(offset) * 22}deg`,
+                '--disc-tilt-x': '0deg',
+                '--disc-mobile-tilt-x': '0deg',
+              }}>
+                <HeroDisc track={track} preview={offset !== 0 || !state.currentTrack} upgrade={offset === 0 && active && upgradeCovers} coverPriority={active && (offset === 0 || (!mobile && !upgradeCovers)) ? 'high' : undefined} />
+              </div>
             </div>
           </div>
         )

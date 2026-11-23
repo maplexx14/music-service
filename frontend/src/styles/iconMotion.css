@@ -1,0 +1,8 @@
+.animate-icon {
+  display: contents;
+}
+
+.lucide-animated {
+  flex-shrink: 0;
+  overflow: visible;
+}

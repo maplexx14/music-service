@@ -23,7 +23,7 @@ function Spinner({ label, page = false }) {
   useLayoutEffect(() => (page && active ? markScreenLoading() : undefined), [page, active])
   return (
     <div className={`spinner-wrap${page ? ' spinner-wrap--page' : ''}`} role="status" aria-label={shownLabel}>
-      <BoltLoader size={40} frame={104} />
+      <BoltLoader size={page ? 80 : 40} frame={page ? 256 : 128} />
       <span className="spinner-label">{shownLabel}</span>
     </div>
   )

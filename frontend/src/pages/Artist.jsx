@@ -1,7 +1,7 @@
 import { isUuid } from '../utils/identifiers'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Play, Pause, ListPlus, ListChecks, Shuffle } from 'lucide-react'
+import { Play, Pause, ListPlus, ListChecks, Shuffle } from '@/components/icons'
 import LikeHeart from '../components/LikeHeart'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
@@ -9,6 +9,8 @@ import { peekCache, writeCache, patchCache, cacheAge, artistCacheKey } from '../
 import Spinner from '../components/Spinner'
 import PageLoadError from '../components/PageLoadError'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import Carousel from '../components/Carousel'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
@@ -20,6 +22,9 @@ import { titleFitStyle } from '../utils/titleFit'
 import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 import './Artist.css'
+import { useOffline } from '../hooks/useOffline'
+import { offlineArtistKey, useOfflineTracks } from '../services/offlineTracks'
+import { offlineArtist } from '../services/offlineLibrary'
 
 // Тип релиза от провайдера — по-русски, для подписи под обложкой.
 const ALBUM_TYPE_LABEL = {
@@ -94,10 +99,17 @@ function Artist() {
   const navigate = useNavigate()
   // Из кэша (прошлый заход или прогрев по наведению на имя) страница
   // рисуется сразу, без спиннера.
-  const [artist, setArtist] = useState(() => peekCache(artistCacheKey(name)) ?? null)
-  const [tracks, setTracks] = useState(() => artistTracks(peekCache(artistCacheKey(name))))
-  const [albums, setAlbums] = useState(() => peekCache(artistCacheKey(name))?.albums ?? [])
-  const [loading, setLoading] = useState(() => !peekCache(artistCacheKey(name)))
+  const [onlineArtist, setArtist] = useState(() => peekCache(artistCacheKey(name)) ?? null)
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
+  const savedArtist = offline ? offlineArtist(name, offlineState) : null
+  const artist = offline ? savedArtist : onlineArtist
+  const [onlineTracks, setTracks] = useState(() => artistTracks(peekCache(artistCacheKey(name))))
+  const tracks = offline ? savedArtist.tracks : onlineTracks
+  const [onlineAlbums, setAlbums] = useState(() => peekCache(artistCacheKey(name))?.albums ?? [])
+  const albums = offline ? savedArtist.albums : onlineAlbums
+  const [onlineLoading, setLoading] = useState(() => !peekCache(artistCacheKey(name)))
+  const loading = offline ? !offlineState.ready : onlineLoading
   const [liking, setLiking] = useState(false)
   const [saving, setSaving] = useState(false)
   const [shuffling, setShuffling] = useState(false)
@@ -159,17 +171,17 @@ function Artist() {
   useEffect(() => {
     fetchArtist()
     fetchLikedTracks()
-  }, [name])
+  }, [name, offline])
 
   // Лайк и сохранение в медиатеку правят шапку на месте — кэш следует за
   // ними, иначе возврат на страницу показал бы прошлое состояние кнопок.
   useEffect(() => {
-    if (!artist) return
+    if (offline || !artist) return
     patchCache(artistCacheKey(name), {
       is_liked: artist.is_liked,
       playlist_id: artist.playlist_id,
     })
-  }, [artist?.is_liked, artist?.playlist_id])
+  }, [artist?.is_liked, artist?.playlist_id, offline])
 
   const applyArtist = (data) => {
     setArtist(data)
@@ -182,8 +194,9 @@ function Artist() {
   }
 
   const fetchArtist = async () => {
+    if (offline) return
     const key = artistCacheKey(name)
-    const cached = peekCache(key)
+    const cached = offline ? null : peekCache(key)
     if (cached) {
       applyArtist(cached)
       setLoading(false)
@@ -193,7 +206,7 @@ function Artist() {
     }
     try {
       const { data } = await api.get('/artists', { params: { name }, skipErrorToast: true })
-      writeCache(key, data)
+      if (!offline) writeCache(key, data)
       applyArtist(data)
     } catch (error) {
       console.error('Error fetching artist:', error)
@@ -314,8 +327,10 @@ function Artist() {
 
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: (track, index) => handlePlayTrack(index),
     toggleLike: handleToggleLike,
     resolveId: ensureDbId,
@@ -394,6 +409,16 @@ function Artist() {
       <div className="artist-toolbar">
         <div className="playlist-actions round-actions">
           <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
+            onClick={handleShuffle}
+            disabled={shuffling || tracks.length === 0}
+            title="Перемешать и воспроизвести"
+            aria-label="Перемешать"
+          >
+            <Shuffle size={20} />
+            <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
+          </button>
+          <button
             className="btn btn--primary btn--lg play-button-large round-actions__play"
             onClick={handlePlayToggle}
             disabled={tracks.length === 0}
@@ -409,7 +434,7 @@ function Artist() {
           <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon"
             onClick={handleSaveToLibrary}
-            disabled={saving || tracks.length === 0}
+            disabled={saving || offline || tracks.length === 0}
             aria-label={saveLabel}
             title={
               artist.playlist_id
@@ -420,21 +445,16 @@ function Artist() {
             {artist.playlist_id ? <ListChecks size={20} /> : <ListPlus size={20} />}
             <span className="round-actions__label">{saveLabel}</span>
           </button>
-          <button
-            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
-            onClick={handleShuffle}
-            disabled={shuffling || tracks.length === 0}
-            title="Перемешать и воспроизвести"
-            aria-label="Перемешать"
-          >
-            <Shuffle size={20} />
-            <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
-          </button>
+          <OfflinePlaylistDownloadButton
+            playlist={{ ...artist, id: offlineArtistKey(name), is_liked: false, tracks,
+              download_source: { type: 'artist', name }, page_url: `/artists/${encodeURIComponent(name)}` }}
+            totalTracks={tracks.length}
+          />
           <button
             type="button"
             className={`action-button round-actions__icon${artist.is_liked ? ' liked' : ''}`}
             onClick={handleToggleArtistLike}
-            disabled={liking}
+            disabled={liking || offline}
             title={
               artist.is_liked
                 ? 'Убрать исполнителя из понравившихся'
@@ -469,7 +489,8 @@ function Artist() {
                 <tr>
                   <th>#</th>
                   <th>Название</th>
-                  <th>Альбом</th>
+                  <th className="track-artist-heading">Артист</th>
+                  <th className="track-album-heading">Альбом</th>
                   <th>Длительность</th>
                   <th></th>
                 </tr>
@@ -512,6 +533,7 @@ function Artist() {
           <div ref={tracksSentinelRef} aria-hidden="true" />
         </div>
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

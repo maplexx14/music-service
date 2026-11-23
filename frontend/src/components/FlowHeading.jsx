@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { playbackLabel } from '../utils/playbackLabel'
 import { useScreen } from '../hooks/useScreen'
+import { usePowerSave } from '../hooks/usePowerSave'
 import api from '../services/api'
 import { peekCache } from '../services/pageCache'
 
@@ -9,7 +10,9 @@ export default function FlowHeading() {
   const label = usePlayerStore(playbackLabel)
   const context = usePlayerStore((state) => state.currentTrack ? state.playContext : null)
   const headingRef = useRef(null)
+  const previousLabelRef = useRef(label)
   const { active } = useScreen()
+  const powerSave = usePowerSave()
 
   useEffect(() => {
     if (!active || !context || context.title || context.kind === 'flow') return undefined
@@ -45,15 +48,17 @@ export default function FlowHeading() {
     const fit = () => {
       if (cancelled || hero.clientWidth === 0) return
       heading.style.fontSize = ''
-      heading.style.maxWidth = ''
+      heading.style.maxWidth = 'none'
       const baseSize = parseFloat(getComputedStyle(heading).fontSize)
-      const width = heading.getBoundingClientRect().width
-      const available = Math.max(0, hero.clientWidth - 32)
+      const deck = hero.classList.contains('has-desktop-deck') || hero.classList.contains('has-mobile-deck')
+      const scale = 1.3
+      const width = Math.max(heading.getBoundingClientRect().width, heading.scrollWidth * scale)
+      const available = Math.max(0, deck ? heading.closest('.wave-widget')?.clientWidth || hero.clientWidth - 64 : hero.clientWidth - 32)
       if (width > available) {
         heading.style.fontSize = `${Math.max(20, baseSize * available / width)}px`
       }
-      // Учитываем горизонтальное растяжение фирменной надписи (scaleX 1.3).
-      heading.style.maxWidth = `${available / 1.3}px`
+      // Keep the horizontally stretched heading inside its available area.
+      heading.style.maxWidth = `${available / scale}px`
     }
     fit()
     const observer = new ResizeObserver(fit)
@@ -66,6 +71,24 @@ export default function FlowHeading() {
       document.fonts?.removeEventListener('loadingdone', fit)
     }
   }, [label, active])
+
+  useLayoutEffect(() => {
+    const previous = previousLabelRef.current
+    previousLabelRef.current = label
+    const heading = headingRef.current
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
+    if (previous === label || !active || powerSave || document.hidden || !heading?.closest('.has-desktop-deck') ||
+        reduced.matches || typeof heading.animate !== 'function') return undefined
+    const animation = heading.animate([
+      { opacity: 0, transform: 'translateY(6px) scale(1.3, 0.85)' },
+      { opacity: 1, transform: 'scale(1.3, 0.85)' },
+    ], { duration: 180, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
+    const cancel = () => animation.cancel()
+    const onVisibility = () => { if (document.hidden) cancel() }
+    reduced.addEventListener('change', cancel)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { animation.cancel(); reduced.removeEventListener('change', cancel); document.removeEventListener('visibilitychange', onVisibility) }
+  }, [label, active, powerSave])
 
   return <div ref={headingRef} className="wave-heading">{label}</div>
 }

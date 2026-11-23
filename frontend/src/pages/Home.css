@@ -1,6 +1,6 @@
 /* Pull-to-refresh: маленький системного вида индикатор под шапкой.
    Появляется по мере жеста (opacity/transform управляются инлайном из
-   usePullToRefresh), на освежении из сердца вылетают молнии (BoltLoader). */
+   usePullToRefresh), при обновлении появляется звуковая волна (BoltLoader). */
 .ptr-indicator {
   position: fixed;
   top: 0;
@@ -20,7 +20,7 @@
   overflow: hidden;
 }
 
-/* На десктопе поток и вкладки заполняют первый экран. На мобильных
+/* На десктопе поток занимает 75% высоты экрана. На мобильных
    высоту потока задаём отдельно, переключатель идёт сразу за ним. */
 .page-container.home-page {
   padding-top: var(--page-padding, 32px);
@@ -28,10 +28,9 @@
 
 .home-intro {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 75vh) auto;
+  grid-template-rows: minmax(0, 75dvh) auto;
   gap: 20px;
-  height: calc(100vh - var(--page-padding, 32px) - var(--main-pad-top, 0px));
-  height: calc(100dvh - var(--page-padding, 32px) - var(--main-pad-top, 0px));
   padding-bottom: 16px;
   margin-bottom: 28px;
 }
@@ -164,7 +163,7 @@
   .hero-section { transition: none; }
 }
 
-.hero-section.has-vinyl {
+.hero-section.has-cd {
   --disc-size: min(600px, 44vw, 54vh);
 }
 
@@ -180,7 +179,7 @@
 
 /* Нижний край потока — на 16px выше плеера, включая его вариант в два ряда. */
 @media (min-width: 769px) {
-  .layout[data-has-player] .home-intro .hero-section {
+  .layout[data-has-player] .home-intro .hero-section:not(.has-mobile-deck) {
     max-height: calc(100vh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
     max-height: calc(100dvh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
   }
@@ -220,7 +219,7 @@
      работает: объявление с var() не откатывается, — без color-mix см.
      @supports ниже. */
   background:
-    radial-gradient(30% 26% at 50% 50%, color-mix(in oklab, var(--hero-c1) 70%, white) 0%, transparent 100%),
+    radial-gradient(30% 26% at 50% 50%, var(--hero-c1) 0%, transparent 100%),
     radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
     radial-gradient(38% 50% at 80% 70%, var(--hero-c1) 0%, transparent 70%),
     linear-gradient(131deg, transparent 18%, var(--hero-c2) 38%, transparent 52%, transparent 58%, var(--hero-c2) 74%, transparent 92%),
@@ -301,7 +300,7 @@
   user-select: none;
 }
 
-.hero-section.has-vinyl .wave-heading {
+.hero-section.has-cd .wave-heading {
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
 
@@ -831,18 +830,29 @@
 
   /* Шапка — логотип слева, аватар справа, во всю ширину от самого верха
      экрана, со скруглёнными нижними углами: под ней виден градиент «потока».
-     Чёрный — в тон фона логотипа (logoBolt1.webp), его прямоугольник не
-     виден. Высота: safe-area + 12 + логотип 48 + 8. */
+     Знак на прозрачном фоне. Высота: safe-area + 12 + логотип 48 + 8. */
   .mobile-header {
+    --mobile-header-radius: 24px;
     position: relative;
     z-index: 2;
+    isolation: isolate;
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin: 0 -16px;
     padding: calc(var(--safe-top) + 12px) 16px 8px;
-    border-radius: 0 0 24px 24px;
+    background-color: var(--mobile-header-backdrop, #100d13);
+    transition: background-color 900ms ease-in-out;
+  }
+
+  .mobile-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 0 0 var(--mobile-header-radius) var(--mobile-header-radius);
     background: #000;
+    pointer-events: none;
   }
 
   .mobile-logo-btn {
@@ -903,18 +913,18 @@
   }
 
   .hero-section,
-  .hero-section.has-vinyl {
+  .hero-section.has-cd {
     /* Match the reference: the main record fills 90% of the phone's width. */
     --disc-size: min(600px, 90vw, 76svh);
   }
 
-  .hero-section.has-vinyl {
+  .hero-section.has-cd {
     --heading-gap: 24px;
   }
 
   @supports not (height: 1svh) {
     .hero-section,
-    .hero-section.has-vinyl {
+    .hero-section.has-cd {
       --disc-size: min(600px, 90vw, 76vh);
     }
   }
@@ -1106,7 +1116,7 @@
     --disc-size: min(640px, 52vw, 34dvh);
   }
 
-  .hero-section.has-vinyl {
+  .hero-section.has-cd {
     --disc-size: min(600px, 48vw, 32dvh);
   }
 
@@ -1128,7 +1138,7 @@
       --disc-size: min(640px, 48vw, 72cqh);
     }
 
-    .hero-section.has-vinyl {
+    .hero-section.has-cd {
       --disc-size: min(600px, 44vw, 60cqh);
     }
   }

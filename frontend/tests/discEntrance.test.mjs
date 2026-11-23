@@ -10,6 +10,14 @@ const source = await readFile(new URL('../src/components/FlowDiscArc.jsx', impor
 const { code } = await transform(source, { format: 'cjs', loader: 'jsx', jsx: 'automatic', target: 'es2020' })
 const script = new vm.Script(code, { filename: 'FlowDiscArc.jsx' })
 
+function discIn(node) {
+  if (node?.props?.track) return node
+  for (const child of [].concat(node?.props?.children || [])) {
+    const disc = discIn(child)
+    if (disc) return disc
+  }
+}
+
 function mount({ mobile = true, ready = [], failed = [], active = true, count = 3, reduced = false,
   currentIndex = null, isShuffle = false, shuffledOrder = [], currentShuffleIndex = 0, dislikedTrackIds = [],
   holdEntrance = false, loaded = true,
@@ -114,7 +122,7 @@ function mount({ mobile = true, ready = [], failed = [], active = true, count = 
     tree = module.exports.default({ playing: false })
     tree.props.ref.current = arc
     visibleDiscs = tree.props.children.filter(Boolean).map((slot) =>
-      discs[tracks.findIndex(track => track.id === slot.props.children.props.children.props.track.id)])
+      discs[tracks.findIndex(track => track.id === discIn(slot).props.track.id)])
     for (const run of effects.splice(0)) run()
   }
   render()
@@ -199,7 +207,7 @@ test('returning to Home keeps the mobile stack revealed without replaying its en
 
 test('the mobile main preview has high fetch priority before playback starts', () => {
   const app = mount()
-  const records = app.tree.props.children.map((slot) => slot.props.children.props.children)
+  const records = app.tree.props.children.map(discIn)
   assert.equal(records[0].props.preview, true)
   assert.equal(records[0].props.coverPriority, 'high')
   assert.equal(records[1].props.coverPriority, undefined)
@@ -222,7 +230,7 @@ test('desktop preview starts with the current and next records, without a previo
   const app = mount({ mobile: false })
   const slots = app.tree.props.children.filter(Boolean)
   assert.equal(slots.length, 2)
-  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [uuid(0), uuid(1)])
+  assert.deepEqual(Array.from(slots, (slot) => discIn(slot).props.track.id), [uuid(0), uuid(1)])
   assert.ok(slots.every((slot) => slot.props.style['--slot-x'] !== '-32%'))
 })
 
@@ -236,14 +244,14 @@ test('the first selected queue track has no previous record', () => {
 test('a previous record appears only at an eligible position before the current track', () => {
   const app = mount({ mobile: false, currentIndex: 1 })
   const previous = app.tree.props.children.find((slot) => slot?.props.style['--slot-x'] === '-32%')
-  assert.equal(previous.props.children.props.children.props.track.id, uuid(0))
+  assert.equal(discIn(previous).props.track.id, uuid(0))
 })
 
 test('shuffle has no previous record at its first position even when the queue index is nonzero', () => {
   const app = mount({ mobile: false, currentIndex: 2, isShuffle: true, shuffledOrder: [2, 0, 1] })
   const slots = app.tree.props.children.filter(Boolean)
   assert.ok(slots.every((slot) => slot.props.style['--slot-x'] !== '-32%'))
-  assert.deepEqual(Array.from(slots, (slot) => slot.props.children.props.children.props.track.id), [uuid(2), uuid(0)])
+  assert.deepEqual(Array.from(slots, (slot) => discIn(slot).props.track.id), [uuid(2), uuid(0)])
 })
 
 test('a disliked previous track is not replaced by an upcoming recommendation', () => {

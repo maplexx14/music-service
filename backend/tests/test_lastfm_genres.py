@@ -210,8 +210,8 @@ def test_artists_for_genres_sinks_mismatched(monkeypatch):
     assert names == ["Mayhem", "Darkthrone", "Justin Bieber"]
 
 
-def test_genres_endpoint(client, top_tags):
-    resp = client.get("/api/users/genres")
+def test_genres_endpoint(client, top_tags, member_headers):
+    resp = client.get("/api/users/genres", headers=member_headers)
     assert resp.status_code == 200, resp.text
     options = resp.json()
     keys = [o["key"] for o in options]

@@ -297,7 +297,8 @@
   min-width: 0;
 }
 
-.import-url-field > svg {
+.import-url-field > svg,
+.import-url-field > .animate-icon > svg {
   position: absolute;
   left: 15px;
   top: 50%;
@@ -392,11 +393,13 @@
   display: none;
 }
 
-.import-help > summary > svg {
+.import-help > summary > svg,
+.import-help > summary > .animate-icon > svg {
   flex-shrink: 0;
 }
 
-.import-help[open] > summary > svg {
+.import-help[open] > summary > svg,
+.import-help[open] > summary > .animate-icon > svg {
   transform: rotate(180deg);
 }
 

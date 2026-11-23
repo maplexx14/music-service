@@ -1,6 +1,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect } from 'react'
-import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, matchPath, useLocation, useSearchParams } from 'react-router-dom'
+import { unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
+import { usePlayerStore } from './store/playerStore'
 import Layout from './components/Layout'
 import InstallPrompt from './components/InstallPrompt'
 import ImportTracker from './components/ImportTracker'
@@ -9,11 +10,15 @@ import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted, safeNextPath } from './services/navigation'
 import { lazyWithReload } from './services/staleBuild'
-import { needsOnboarding } from './services/onboarding'
+import { needsOnboarding, needsPlayerFlow, onboardingDestination } from './services/onboarding'
 import { offerHandoff } from './services/sessionHandoff'
+import Downloads from './pages/Downloads'
+import { loadOfflineTracks, setOfflineLibrarySync, useOfflineTracks } from './services/offlineTracks'
+import { syncOfflineLibrary } from './services/offlineLibrary'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
 const appHistory = createAppHistory()
+if (navigator.onLine === false) appHistory.replace('/downloads')
 
 // Ярлыки иконки (manifest shortcuts) при уже открытом окне: launch_handler
 // focus-existing не перезагружает страницу — музыка не прерывается, — а
@@ -33,6 +38,7 @@ const VerifyEmail = lazyWithReload(() => import('./pages/VerifyEmail'))
 const ForgotPassword = lazyWithReload(() => import('./pages/ForgotPassword'))
 const ResetPassword = lazyWithReload(() => import('./pages/ResetPassword'))
 const PreferencesOnboarding = lazyWithReload(() => import('./pages/PreferencesOnboarding'))
+const PlayerSetup = lazyWithReload(() => import('./pages/PlayerSetup'))
 const Home = lazyWithReload(() => import('./pages/Home'))
 const Search = lazyWithReload(() => import('./pages/Search'))
 const Playlists = lazyWithReload(() => import('./pages/Playlists'))
@@ -42,11 +48,15 @@ const LinkPlaylist = lazyWithReload(() => import('./pages/LinkPlaylist'))
 const Album = lazyWithReload(() => import('./pages/Album'))
 const Artist = lazyWithReload(() => import('./pages/Artist'))
 const Track = lazyWithReload(() => import('./pages/Track'))
-const GuestTrack = lazyWithReload(() => import('./pages/GuestTrack'))
 const LikedSongs = lazyWithReload(() => import('./pages/LikedSongs'))
 const UploadTrack = lazyWithReload(() => import('./pages/UploadTrack'))
 const Settings = lazyWithReload(() => import('./pages/Settings'))
 const Admin = lazyWithReload(() => import('./pages/Admin'))
+
+function UploadScreen() {
+  if (navigator.onLine !== false) return <UploadTrack />
+  return <div className="page-container"><h1>Загрузить трек</h1><p role="status">Для загрузки трека нужен интернет.</p><Link to="/downloads" className="btn btn--secondary">Скачанные треки</Link></div>
+}
 
 // Залогиненного со страницы входа — туда, откуда его на неё отправили.
 function AfterLoginRedirect() {
@@ -56,29 +66,32 @@ function AfterLoginRedirect() {
 
 // Онбординг нужен до завершения последнего шага. Статус общий для всех устройств.
 function OnboardingGate({ user, children }) {
-  return needsOnboarding(user) ? <Navigate to="/onboarding" replace /> : children
+  const destination = onboardingDestination(user)
+  return destination ? <Navigate to={destination} replace /> : children
 }
 
-// Незалогиненного — на вход, запомнив адрес: ссылка на трек из «Поделиться»
-// после входа должна открыть трек, а не главную.
-function LoginRedirect() {
-  const location = useLocation()
-  const target = location.pathname + location.search
-  return <Navigate to={target === '/' ? '/login' : `/login?next=${encodeURIComponent(target)}`} replace />
-}
-
-// Незалогиненный по ссылке на трек — гостевая страница: послушать можно без
-// регистрации. Внутри маршрута /*, а не отдельным: иначе вход/выход на /track
-// пересоздавал бы Layout вместе с плеером.
-function GuestRoutes() {
-  const location = useLocation()
+// Guests use the same shell; locked pages are covered by Layout.
+function GuestRoutes({ renderRoutes }) {
   const handoffPending = useAuthStore((state) => state.handoffPending)
   if (handoffPending) return <Spinner page />
-  if (!matchPath('/track/:id', location.pathname)) return <LoginRedirect />
   return (
     <Suspense fallback={<Spinner page />}>
-      <GuestTrack />
+      <Layout renderRoutes={renderRoutes} />
     </Suspense>
+  )
+}
+
+function GuestScreenPreview({ location }) {
+  return (
+    <div className="guest-page-preview" inert="" aria-hidden="true">
+      <Routes location={location}>
+        <Route path="/" element={<Home guest />} />
+        <Route path="/liked" element={<LikedSongs guest />} />
+        <Route path="/playlists/*" element={<Playlists guest />} />
+        <Route path="/settings/*" element={<Settings guest />} />
+        <Route path="*" element={<Home guest />} />
+      </Routes>
+    </div>
   )
 }
 
@@ -122,6 +135,39 @@ function ActivityRouteSignal({ enabled }) {
 
 function App() {
   const { isAuthenticated, user } = useAuthStore()
+  const offlineReady = useOfflineTracks((state) => state.ready)
+  useLayoutEffect(() => {
+    const openDownloads = () => {
+      if (!isAuthenticated || navigator.onLine !== false) return
+      if (offlineReady) usePlayerStore.getState().restrictToOfflineLibrary()
+      usePlayerStore.getState().closeFullScreen()
+      if (appHistory.location.pathname !== '/downloads') appHistory.replace('/downloads')
+    }
+    const onVisible = () => { if (!document.hidden) openDownloads() }
+    openDownloads()
+    window.addEventListener('offline', openDownloads)
+    window.addEventListener('pageshow', openDownloads)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('offline', openDownloads)
+      window.removeEventListener('pageshow', openDownloads)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [isAuthenticated, offlineReady])
+  useEffect(() => {
+    const sync = () => syncOfflineLibrary(api).catch(() => {})
+    const stop = setOfflineLibrarySync(sync)
+    loadOfflineTracks(isAuthenticated ? user?.id : null).then(sync)
+    window.addEventListener('online', sync)
+    return () => { stop(); window.removeEventListener('online', sync) }
+  }, [isAuthenticated, user?.id])
+  useLayoutEffect(() => {
+    if (!isAuthenticated) {
+      usePlayerStore.getState().clearQueue()
+      usePlayerStore.setState({ likedTrackIds: [], dislikedTrackIds: [], dislikedTrackKeys: [], pendingLikeKeys: [], likedTracksLoaded: false, dislikedTracksLoaded: false, flowPreload: null, flowPreview: null })
+    }
+    usePlayerStore.setState({ guestMode: !isAuthenticated })
+  }, [isAuthenticated])
 
   useEffect(() => {
     if (!isAuthenticated) return undefined
@@ -163,11 +209,12 @@ function App() {
   // внутри экрана: при подгрузке чанка оболочка (меню, плеер) стоит на месте.
   const isAdmin = !!user?.is_admin
   const renderScreenRoutes = useCallback(
-    (location) => (
+    (location) => !isAuthenticated && location.pathname !== '/search' ? <GuestScreenPreview location={location} /> : (
       <Routes location={location}>
         <Route path="/" element={<Home />} />
-        <Route path="/search" element={<Search />} />
+        <Route path="/search" element={<Search guest={!isAuthenticated} />} />
         <Route path="/playlists" element={<Playlists />} />
+        <Route path="/downloads" element={<Downloads />} />
         <Route path="/playlists/:id" element={<PlaylistDetail />} />
         <Route path="/external/soundcloud/playlists/:id" element={<ExternalPlaylist />} />
         <Route path="/link" element={<LinkPlaylist />} />
@@ -175,14 +222,14 @@ function App() {
         <Route path="/artists/:name" element={<Artist />} />
         <Route path="/track/:id" element={<Track />} />
         <Route path="/liked" element={<LikedSongs />} />
-        <Route path="/upload" element={<UploadTrack />} />
+        <Route path="/upload" element={<UploadScreen />} />
         {/* Один маршрут на меню и разделы: страница не размонтируется при
             переходах, и несохранённые предпочтения не теряются. */}
         <Route path="/settings/:section?" element={<Settings />} />
         <Route path="/admin" element={isAdmin ? <Admin /> : <Navigate to="/" />} />
       </Routes>
     ),
-    [isAdmin],
+    [isAdmin, isAuthenticated],
   )
   return (
     // v7_startTransition: переход на вкладку, чей чанк ещё грузится, держит
@@ -243,7 +290,7 @@ function App() {
           element={
             isAuthenticated ? (
               !needsOnboarding(user) ? (
-                <Navigate to="/" replace />
+                <Navigate to={onboardingDestination(user) || '/'} replace />
               ) : (
                 <Suspense fallback={<Spinner page />}>
                   <PreferencesOnboarding />
@@ -255,6 +302,16 @@ function App() {
           }
         />
         <Route
+          path="/onboarding/player"
+          element={
+            !isAuthenticated ? <Navigate to="/login" replace />
+              : needsOnboarding(user) ? <Navigate to="/onboarding" replace />
+                : needsPlayerFlow(user) ? (
+                  <Suspense fallback={<Spinner page />}><PlayerSetup key={user.id} /></Suspense>
+                ) : <Navigate to="/" replace />
+          }
+        />
+        <Route
           path="/*"
           element={
             isAuthenticated ? (
@@ -262,15 +319,14 @@ function App() {
                 <Layout renderRoutes={renderScreenRoutes} />
               </OnboardingGate>
             ) : (
-              <GuestRoutes />
+              <GuestRoutes renderRoutes={renderScreenRoutes} />
             )
           }
         />
       </Routes>
       <RouteCommitSignal />
-      {/* Над роутами: подсказка видна и на входе, и в онбординге, и не
-          перезапускает таймер при смене экрана. */}
-      <InstallPrompt />
+      {/* Установка не перекрывает музыкальный онбординг и распаковку. */}
+      {!onboardingDestination(user) && <InstallPrompt />}
       <ActivityRouteSignal enabled={isAuthenticated} />
       <ImportTracker enabled={isAuthenticated} />
     </HistoryRouter>

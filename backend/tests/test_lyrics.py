@@ -23,7 +23,7 @@ def test_search_falls_back_to_plain_without_timestamps():
     assert lyrics._pick_from_search("garbage", 200) == {}
 
 
-def test_lyrics_endpoint_caches_result(client, monkeypatch):
+def test_lyrics_endpoint_caches_result(client, monkeypatch, member_headers):
     _clear("Artist", "Song", 200)
     calls = []
 
@@ -33,8 +33,8 @@ def test_lyrics_endpoint_caches_result(client, monkeypatch):
 
     monkeypatch.setattr(lyrics, "_lookup", fake_lookup)
     params = {"artist": "Artist", "title": "Song", "duration": 200}
-    first = client.get("/api/lyrics", params=params)
-    second = client.get("/api/lyrics", params=params)
+    first = client.get("/api/lyrics", params=params, headers=member_headers)
+    second = client.get("/api/lyrics", params=params, headers=member_headers)
     assert first.status_code == 200, first.text
     assert first.json() == {"synced": "[00:01.00] hi", "plain": None}
     assert second.json() == first.json()
@@ -42,7 +42,7 @@ def test_lyrics_endpoint_caches_result(client, monkeypatch):
     _clear("Artist", "Song", 200)
 
 
-def test_lyrics_provider_failure_is_not_cached(client, monkeypatch):
+def test_lyrics_provider_failure_is_not_cached(client, monkeypatch, member_headers):
     import httpx
 
     _clear("Down", "Song", 0)
@@ -51,7 +51,7 @@ def test_lyrics_provider_failure_is_not_cached(client, monkeypatch):
         raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(lyrics, "_lookup", failing_lookup)
-    response = client.get("/api/lyrics", params={"artist": "Down", "title": "Song"})
+    response = client.get("/api/lyrics", params={"artist": "Down", "title": "Song"}, headers=member_headers)
     assert response.status_code == 502
     assert redis_client.get("lyrics:v1:down|song|0") is None
 
@@ -84,7 +84,7 @@ def test_lrclib_429_is_retried_with_app_user_agent(monkeypatch):
     assert all(ua and ua.startswith("bolt-music/") for ua in seen)
 
 
-def test_provider_failure_has_short_cooldown_and_recovers(client, monkeypatch):
+def test_provider_failure_has_short_cooldown_and_recovers(client, monkeypatch, member_headers):
     import httpx
     _clear("Recover", "Song", 0)
     calls = []
@@ -97,16 +97,16 @@ def test_provider_failure_has_short_cooldown_and_recovers(client, monkeypatch):
 
     monkeypatch.setattr(lyrics, "_lookup", lookup)
     params = {"artist": "Recover", "title": "Song"}
-    assert client.get("/api/lyrics", params=params).status_code == 502
-    assert client.get("/api/lyrics", params=params).status_code == 502
+    assert client.get("/api/lyrics", params=params, headers=member_headers).status_code == 502
+    assert client.get("/api/lyrics", params=params, headers=member_headers).status_code == 502
     assert len(calls) == 1
     key = "lyrics:v1:recover|song|0"
     assert 0 < redis_client.ttl(key + ":failed") <= lyrics.FAILURE_TTL
     redis_client.delete(key + ":failed")
-    assert client.get("/api/lyrics", params=params).json() == {"synced": None, "plain": "recovered"}
+    assert client.get("/api/lyrics", params=params, headers=member_headers).json() == {"synced": None, "plain": "recovered"}
 
 
-def test_concurrent_lyrics_share_work_when_one_listener_disconnects(monkeypatch):
+def test_concurrent_lyrics_share_work_when_one_listener_disconnects(monkeypatch, member_headers):
     import asyncio
     from app.main import app
     import httpx
@@ -124,8 +124,8 @@ def test_concurrent_lyrics_share_work_when_one_listener_disconnects(monkeypatch)
         monkeypatch.setattr(lyrics, "_lookup", lookup)
         async with httpx.AsyncClient(app=app, base_url="http://testserver") as client:
             params = {"artist": "Concurrent", "title": "Song"}
-            first = asyncio.create_task(client.get("/api/lyrics", params=params))
-            second = asyncio.create_task(client.get("/api/lyrics", params=params))
+            first = asyncio.create_task(client.get("/api/lyrics", params=params, headers=member_headers))
+            second = asyncio.create_task(client.get("/api/lyrics", params=params, headers=member_headers))
             while not calls:
                 await asyncio.sleep(0)
             first.cancel()

@@ -1,7 +1,7 @@
 import { isUuid } from '../utils/identifiers'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Plus, Shuffle } from 'lucide-react'
+import { Play, Plus, Shuffle } from '@/components/icons'
 import { usePlayerStore, trackLikeKey } from '../store/playerStore'
 import api from '../services/api'
 import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
@@ -9,6 +9,8 @@ import Spinner from '../components/Spinner'
 import PageLoadError from '../components/PageLoadError'
 import ArtistLink from '../components/ArtistLink'
 import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
 import { useLazyBatch } from '../hooks/useLazyBatch'
 import { toast } from '../store/toastStore'
 import defaultCover from '../assets/default-cover.webp'
@@ -19,6 +21,9 @@ import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
 import './PlaylistDetail.css'
 // Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
 import './Artist.css'
+import { useOffline } from '../hooks/useOffline'
+import { downloadedTracks, useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
 
 // Тип релиза от провайдера — по-русски. Незнакомый оставляем как пришёл: это
 // лучше, чем звать сингл альбомом.
@@ -45,9 +50,15 @@ function Album() {
   const navigate = useNavigate()
   // Из кэша (прошлый заход) страница рисуется сразу, без спиннера.
   const cacheKey = `album:${source}:${id}`
-  const [album, setAlbum] = useState(() => peekCache(cacheKey)?.album ?? null)
-  const [tracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
-  const [loading, setLoading] = useState(() => !peekCache(cacheKey))
+  const [onlineAlbum, setAlbum] = useState(() => peekCache(cacheKey)?.album ?? null)
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
+  const savedAlbum = offlineCollections(offlineState).playlists.find((item) => item.id === cacheKey)
+  const album = offline ? savedAlbum || onlineAlbum : onlineAlbum
+  const [onlineTracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const tracks = offline ? savedAlbum?.tracks || downloadedTracks(onlineTracks) : onlineTracks
+  const [onlineLoading, setLoading] = useState(() => !peekCache(cacheKey))
+  const loading = offline ? !offlineState.ready : onlineLoading
   const [saving, setSaving] = useState(false)
   const [shuffling, setShuffling] = useState(false)
   const backdrop = useCoverBackdrop(album?.cover_url)
@@ -76,15 +87,16 @@ function Album() {
   useEffect(() => {
     fetchAlbum()
     fetchLikedTracks()
-  }, [source, id])
+  }, [source, id, offline])
 
   // Материализация трека (db_id) правит список на месте — кэш следует за ним.
   useEffect(() => {
-    if (!loading) patchCache(cacheKey, { tracks })
-  }, [tracks, loading])
+    if (!offline && !loading) patchCache(cacheKey, { tracks })
+  }, [tracks, loading, offline])
 
   const fetchAlbum = async () => {
-    const cached = peekCache(cacheKey)
+    if (offline) return
+    const cached = offline ? null : peekCache(cacheKey)
     if (cached) {
       setAlbum(cached.album)
       setTracks(cached.tracks)
@@ -96,7 +108,7 @@ function Album() {
     }
     try {
       const { data } = await api.get(`/albums/${source}/${id}`, { skipErrorToast: true })
-      writeCache(cacheKey, { album: data.album, tracks: data.tracks || [] })
+      if (!offline) writeCache(cacheKey, { album: data.album, tracks: data.tracks || [] })
       setAlbum(data.album)
       setTracks(data.tracks || [])
       // Прогреваем резолв верхушки — старт воспроизведения без паузы.
@@ -176,8 +188,10 @@ function Album() {
 
   // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
   // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
   const rowActions = useRef(null)
   rowActions.current = {
+    openMenu: trackMenu.open,
     play: (track, index) => handlePlayTrack(index),
     toggleLike: handleToggleLike,
     resolveId: ensureDbId,
@@ -229,15 +243,6 @@ function Album() {
       <div className="artist-toolbar">
         <div className="playlist-actions round-actions">
           <button
-            className="btn btn--primary btn--lg play-button-large round-actions__play"
-            onClick={handlePlay}
-            disabled={tracks.length === 0}
-            aria-label="Воспроизвести"
-          >
-            <Play size={24} fill="currentColor" />
-            <span className="round-actions__label">Воспроизвести</span>
-          </button>
-          <button
             className="btn btn--secondary btn--lg play-button-large round-actions__icon round-actions__near-play"
             onClick={handleShuffle}
             disabled={shuffling || tracks.length === 0}
@@ -248,9 +253,23 @@ function Album() {
             <span className="round-actions__label">{shuffling ? 'Загрузка…' : 'Перемешать'}</span>
           </button>
           <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            disabled={tracks.length === 0}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <OfflinePlaylistDownloadButton
+            playlist={{ ...album, id: cacheKey, name: album.title || album.name, tracks,
+              download_source: { type: 'album', source, id }, page_url: `/albums/${source}/${id}` }}
+            totalTracks={album.track_count || tracks.length}
+          />
+          <button
             className="btn btn--secondary btn--lg playlist-action-icon round-actions__icon"
             onClick={handleSaveToLibrary}
-            disabled={saving || tracks.length === 0}
+            disabled={saving || offline || tracks.length === 0}
             title="Добавить в медиатеку"
             aria-label="Добавить в медиатеку"
           >
@@ -266,6 +285,7 @@ function Album() {
               <tr>
                 <th>#</th>
                 <th>Название</th>
+                <th className="track-artist-heading">Артист</th>
                 <th>Длительность</th>
                 <th></th>
               </tr>
@@ -301,6 +321,7 @@ function Album() {
             строка, произвольный div туда браузер не пустит. */}
         <div ref={tracksSentinelRef} aria-hidden="true" />
       </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
     </div>
   )
 }

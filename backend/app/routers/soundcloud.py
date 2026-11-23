@@ -15,6 +15,7 @@ from app.cache import get_cache_async, set_cache_async
 from app.provider_work import audio_call, provider_call
 from app.artist_utils import is_derivative_title, names_whole_artist, resolve_track_artist
 from app.lang import is_cyrillic
+from app.soundcloud_urls import is_soundcloud_track_url
 from app.routers.ytdlp import (
     CACHE_DIR,
     MEDIA_TYPES,
@@ -195,7 +196,7 @@ def _decode_token(token: str) -> tuple[str, str]:
         track_id, permalink = raw.split("|", 1)
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="Некорректный id") from exc
-    if not track_id.isdigit() or not permalink.startswith("https://soundcloud.com/"):
+    if not is_soundcloud_track_url(track_id, permalink):
         raise HTTPException(status_code=400, detail="Некорректный id")
     return track_id, permalink
 
@@ -203,11 +204,9 @@ def _decode_token(token: str) -> tuple[str, str]:
 def _normalize(request: Request, entry: dict) -> Optional[ExternalTrackResponse]:
     track_id = entry.get("id")
     permalink = entry.get("webpage_url") or entry.get("url")
-    # Резолвим строго по permalink на soundcloud.com — только его yt-dlp
-    # надёжно отдаёт SoundcloudIE (api-ссылка уходит в generic extractor).
-    if not track_id or not permalink or "soundcloud.com/" not in permalink:
-        return None
-    if not str(track_id).isdigit():
+    # SoundcloudIE accepts both public permalinks and the numeric API track URLs
+    # supplied by flat playlist entries. Do not create a token the decoder rejects.
+    if not track_id or not permalink or not is_soundcloud_track_url(str(track_id), permalink):
         return None
 
     base_url = str(request.base_url).rstrip("/")
