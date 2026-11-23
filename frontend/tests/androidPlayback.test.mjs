@@ -193,6 +193,7 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   })
   vm.runInContext(bridgeSource, context)
   if (legacy) delete window.__boltSetPlaybackRequested
+  const offlineState = { tracks: [], ready: true }
   const overrides = {
     react: { default: react, ...react },
     '../store/playerStore': { usePlayerStore: store },
@@ -204,7 +205,20 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
     '../utils/playerDiag': { snapshotAudio: () => ({}), playWithDiag: (audio) => audio.play() },
     '../services/playerPersist': { takeRestorePosition: () => 0 },
     '../services/api': { default: { post: async () => ({ data: {} }) } },
-    '../config': { API_URL: '/api', SERVER_URL: window.location.origin },
+    '../config': { API_URL: '/api', SERVER_URL: window.location.origin },    // Прогрев резолвит адрес через эти два модуля: сначала скачанная копия,
+    // иначе онлайновый URL. Без заглушек priming получал undefined и молчал.
+    '../services/trackSource': {
+      onlineTrackUrl: (track) => {
+        if (!track) return undefined
+        if (track.stream_url) return track.stream_url
+        return track.id ? `/api/tracks/${track.id}/stream` : undefined
+      },
+    },
+    '../services/offlineTracks': {
+      offlineAudioUrl: () => null,
+      // Стабильный объект: новый на каждый вызов превращал эффекты в цикл.
+      useOfflineTracks: Object.assign(() => offlineState, { getState: () => offlineState }),
+    },
     '../assets/default-cover.webp': { default: '/cover.webp' },
   }
   const importNames = new Map()
