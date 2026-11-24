@@ -36,10 +36,8 @@ export default function OfflinePlaylistDownloadButton({ playlist, totalTracks })
     })
   }
   return <button type="button"
-    className={`btn btn--secondary btn--lg play-button-large round-actions__icon playlist-download-button${saved ? ' active' : ''}`}
+    className={`btn btn--ghost btn--lg playlist-action-icon round-actions__icon playlist-download-button${saved ? ' active' : ''}`}
     onClick={onClick} disabled={!job && (!ready || !totalTracks || offline)} title={label} aria-label={label}>
     {job ? <X size={20} /> : saved ? <Check size={20} /> : <Download size={20} />}
-    <span className="round-actions__label">{job ? progress : saved ? 'Скачано' : 'Скачать'}</span>
-    {job && <span className="playlist-download-progress" aria-hidden="true">{job.total == null ? '…' : progress}</span>}
   </button>
 }

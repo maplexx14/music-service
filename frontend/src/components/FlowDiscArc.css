@@ -5,7 +5,7 @@
   pointer-events: none;
   /* Те же тайминги, что в utils/discMotion.js (DISC_MOTION): CSS-переходы и
      Web Animations двигают диск с одним темпом на десктопе и мобильном. */
-  --disc-motion-duration: 340ms;
+  --disc-motion-duration: 440ms;
   --disc-motion-easing: cubic-bezier(0.32, 0.02, 0.24, 1);
 }
 

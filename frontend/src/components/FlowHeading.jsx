@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../store/playerStore'
 import { playbackLabel } from '../utils/playbackLabel'
 import { useScreen } from '../hooks/useScreen'
@@ -10,7 +10,10 @@ export default function FlowHeading() {
   const label = usePlayerStore(playbackLabel)
   const context = usePlayerStore((state) => state.currentTrack ? state.playContext : null)
   const headingRef = useRef(null)
-  const previousLabelRef = useRef(label)
+  // Текст, который сейчас виден. Новое название сначала уходит вверх и только
+  // потом подменяет старое, поэтому показанный текст может отставать от label.
+  const [shownLabel, setShownLabel] = useState(label)
+  const enteringRef = useRef(false)
   const { active } = useScreen()
   const powerSave = usePowerSave()
 
@@ -70,25 +73,40 @@ export default function FlowHeading() {
       observer.disconnect()
       document.fonts?.removeEventListener('loadingdone', fit)
     }
-  }, [label, active])
+  }, [shownLabel, active])
 
+  // Смена названия: старое уезжает вверх, новое приходит снизу. Движение идёт
+  // через свойство translate, а не transform: transform уже держит scale из CSS.
   useLayoutEffect(() => {
-    const previous = previousLabelRef.current
-    previousLabelRef.current = label
     const heading = headingRef.current
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
-    if (previous === label || !active || powerSave || document.hidden || !heading?.closest('.has-desktop-deck') ||
-        reduced.matches || typeof heading.animate !== 'function') return undefined
-    const animation = heading.animate([
-      { opacity: 0, transform: 'translateY(6px) scale(1.3, 0.85)' },
-      { opacity: 1, transform: 'scale(1.3, 0.85)' },
-    ], { duration: 180, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
-    const cancel = () => animation.cancel()
-    const onVisibility = () => { if (document.hidden) cancel() }
-    reduced.addEventListener('change', cancel)
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => { animation.cancel(); reduced.removeEventListener('change', cancel); document.removeEventListener('visibilitychange', onVisibility) }
-  }, [label, active, powerSave])
+    const canMove = Boolean(heading) && active && !powerSave && !document.hidden &&
+      !reduced.matches && typeof heading.animate === 'function'
+    if (label !== shownLabel) {
+      if (!canMove) {
+        setShownLabel(label)
+        return undefined
+      }
+      const leave = heading.animate([
+        { opacity: 1, translate: '0 0' },
+        { opacity: 0, translate: '0 -40px' },
+      ], { duration: 300, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' })
+      leave.finished.then(() => {
+        enteringRef.current = true
+        setShownLabel(label)
+      }, () => {})
+      // Если название сменилось ещё раз, уходящее движение отменяется здесь.
+      return () => leave.cancel()
+    }
+    if (!enteringRef.current) return undefined
+    enteringRef.current = false
+    if (!canMove) return undefined
+    const enter = heading.animate([
+      { opacity: 0, translate: '0 30px' },
+      { opacity: 1, translate: '0 0' },
+    ], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
+    return () => enter.cancel()
+  }, [label, shownLabel, active, powerSave])
 
-  return <div ref={headingRef} className="wave-heading">{label}</div>
+  return <div ref={headingRef} className="wave-heading">{shownLabel}</div>
 }

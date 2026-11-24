@@ -22,7 +22,7 @@
   position: relative;
   overflow: hidden;
   margin-left: 240px;
-  background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+  background: var(--bg-app);
   transition: margin-left 0.3s var(--ease-morph);
 }
 
@@ -44,15 +44,18 @@
 .main-content[data-swiping] :is(
   .liked-heart-beat,
   .liked-hero-bolt,
-  .bolt-loader-bar,
   .bolt-loader-heart
-) {
+),
+.main-content[data-swiping] .bolt-loader-wave::before,
+.main-content[data-swiping] .bolt-loader-wave::after {
   animation-play-state: paused;
 }
 
 /* Скрытые вкладки остаются смонтированными. Их лоадеры не
    должны продолжать декоративные циклы за видимым экраном. */
-.screen:not([data-active]) :is(.bolt-loader-bar, .bolt-loader-heart) {
+.screen:not([data-active]) :is(.bolt-loader-heart),
+.screen:not([data-active]) .bolt-loader-wave::before,
+.screen:not([data-active]) .bolt-loader-wave::after {
   animation-play-state: paused;
 }
 
@@ -267,8 +270,8 @@
     position: absolute;
     inset: 0 5px;
     border-radius: 999px;
-    /* Как подсветка переключателя Главная ⇄ История (.home-tabs в Home.css). */
-    background: #55308a;
+    /* Акцентная заливка — как активная вкладка в .home-tabs (Home.css). */
+    background: var(--brand-accent-fill);
   }
 
   .mobile-nav-global-item {
@@ -299,8 +302,11 @@
     transition: opacity 0.2s ease;
   }
 
-  /* Активный пункт: белая иконка поверх плавающей подсветки, как текст
-     активной вкладки в .home-tabs. */
+  /* Активный пункт: иконка в акцентном цвете поверх акцентной подсветки. */
+  .mobile-nav-global-item.active {
+    color: var(--brand-accent-text);
+  }
+
   .mobile-nav-global-item.active .mobile-nav-global-icon {
     opacity: 1;
   }

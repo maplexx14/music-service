@@ -58,21 +58,25 @@ test('perspective uses finger pixels for dragging and the same coordinates for a
   assert.ok(Math.abs(release.velocity * 1.08 + 1.2) < 1e-8)
 })
 
-test('release keeps the finger velocity and settles monotonically without bouncing', () => {
+test('release keeps the finger velocity and returns from a bounded overshoot', () => {
   for (const sign of [-1, 1]) {
     const from = sign * 80, to = sign * 260, velocity = sign * 1.2
     const options = cdDiscSwipeRelease(from, to, velocity)
     const [, y1, , y2] = options.easing.slice(13, -1).split(',').map(Number)
     assert.ok(Math.abs((to - from) * 3 * y1 / options.duration - velocity) < 1e-8)
-    assert.equal(y2, 1, 'The final velocity is zero')
-    let previous = 0
+    assert.ok(y2 > 1, 'The release has a soft overshoot')
+    let maximum = 0
+    let final = 0
     for (let frame = 0; frame <= 120; frame++) {
       const t = frame / 120
-      const progress = 3 * (1 - t) ** 2 * t * y1 + 3 * (1 - t) * t * t + t ** 3
-      assert.ok(progress >= previous && progress <= 1)
-      previous = progress
+      const progress = 3 * (1 - t) ** 2 * t * y1 + 3 * (1 - t) * t * t * y2 + t ** 3
+      assert.ok(progress >= 0 && progress <= 1.05, 'Overshoot stays subtle')
+      maximum = Math.max(maximum, progress)
+      final = progress
     }
-    assert.ok(options.duration <= 340)
+    assert.ok(maximum > 1, 'The disc returns from beyond its destination')
+    assert.equal(final, 1, 'The disc finishes at its destination')
+    assert.ok(options.duration <= 420)
   }
 })
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Sparkles, Disc3, Mic2, SlidersHorizontal, Shield, Bug, ChevronRight, LayoutDashboard, LogOut, MessageCircle } from '@/components/icons'
 import { useWaveSettingsStore } from '../store/waveSettingsStore'
 import { useUiSettingsStore } from '../store/uiSettingsStore'
@@ -20,6 +20,7 @@ import TasteAvatar from '../components/TasteAvatar'
 import HeroHearts from '../components/HeroHearts'
 import CdPlayerAppearance from '../components/CdPlayerAppearance'
 import { formatDiag, clearDiag } from '../utils/playerDiag'
+import { clearPlayerSetupStage } from '../services/playerSetup'
 import {
   clearFrameMeter,
   formatFrameMeter,
@@ -143,6 +144,7 @@ const sameList = (a = [], b = []) =>
   a.length === b.length && a.every((item, i) => item === b[i])
 
 function Settings({ guest = false } = {}) {
+  const navigate = useNavigate()
   const { color, animate, waveGif, setColor, setAnimation, setWaveGif } = useWaveSettingsStore()
   const {
     liteMode,
@@ -799,6 +801,25 @@ function Settings({ guest = false } = {}) {
 
           {activeTab === 'diag' && (
             <div {...panelProps('diag')}>
+              <div className="settings-card">
+                <div className="settings-section-title">Получение проигрывателя</div>
+                <p className="settings-hint settings-section-hint">
+                  Повторно запускает распаковку и настройку проигрывателя с самого
+                  начала. Завершение этапа в аккаунте не сбрасывается.
+                </p>
+                <div className="settings-prefs-actions">
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--sm settings-save-btn"
+                    onClick={() => {
+                      clearPlayerSetupStage(accountUser?.id)
+                      navigate('/onboarding/player?diagnostic=1')
+                    }}
+                  >
+                    Пройти этап заново
+                  </button>
+                </div>
+              </div>
               <div className="settings-card">
                 <div className="settings-section-title">Диагностика плеера</div>
                 <p className="settings-hint settings-section-hint">

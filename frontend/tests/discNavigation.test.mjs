@@ -214,7 +214,7 @@ test('desktop navigation moves both existing discs around the drum in one synchr
   assert.ok(outgoing.slice(12).every((frame) => Math.abs(point(frame)[0]) < 0.001 && point(frame)[1] === 418), 'old record exits before the replacement arrives')
   assert.ok(outgoing.slice(1, 12).every((frame) => point(frame)[0] < 0))
   assert.ok(incoming.slice(13, 24).every((frame) => point(frame)[0] > 0))
-  assert.ok([...motion.entries.values()].every(({ animation }) => animation.startTime === 500 && animation.options.duration === 340))
+  assert.ok([...motion.entries.values()].every(({ animation }) => animation.startTime === 500 && animation.options.duration === 440))
   motion.cleanup()
   assert.equal(app.ghosts[0].removed, true)
 })

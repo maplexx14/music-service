@@ -227,6 +227,11 @@ function Home({ guest = false } = {}) {
   // (со всеми списками карточек) на каждом тике currentTime — 4 раза/сек
   // всё время воспроизведения.
   const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const [playerRevealed, setPlayerRevealed] = useState(false)
+  const showHeroPlayer = playerRevealed || isPlaying
+  useEffect(() => {
+    if (isPlaying) setPlayerRevealed(true)
+  }, [isPlaying])
   const source = usePlayerStore((s) => s.source)
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
   // Текущий трек нужен главной только ради цвета фона под его обложку. Берём
@@ -241,7 +246,16 @@ function Home({ guest = false } = {}) {
   const heroRef = useRef(null)
   const mobileHero = mobileViewport || narrowHero
   const cdDisc = useUiSettingsStore((s) => s.vinylDisc)
-  const mobileDeck = mobileHero && cdDisc
+  // Сцена проигрывателя собирается заранее, в скрытом слое: к моменту показа
+  // она уже готова и не заставляет ждать после нажатия.
+  const [deckWarm, setDeckWarm] = useState(false)
+  useEffect(() => {
+    if (!cdDisc) return undefined
+    const timer = window.setTimeout(() => setDeckWarm(true), 600)
+    return () => window.clearTimeout(timer)
+  }, [cdDisc])
+  const showCdPlayer = cdDisc && showHeroPlayer
+  const mobileDeck = mobileHero && showCdPlayer
   // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
   // и они тоже красятся в тон трека. Разбор — один thumb на трек, дёшево.
   const coverColors = useCoverColors(currentCoverUrl)
@@ -507,6 +521,7 @@ function Home({ guest = false } = {}) {
       toast.info('Скачайте треки, чтобы слушать поток без интернета')
       return
     }
+    setPlayerRevealed(true)
     // Пауза потока — возобновляем, не пересоздавая очередь.
     const st = usePlayerStore.getState()
     if (st.source === 'flow' && st.currentTrack) {
@@ -530,11 +545,13 @@ function Home({ guest = false } = {}) {
     // это не ошибка, тост не показываем.
     const stAfter = usePlayerStore.getState()
     if (!stAfter.flowActive && !stAfter.flowLoading) {
+      if (!stAfter.currentTrack) setPlayerRevealed(false)
       toast.error('Поток пока недоступен, попробуйте ещё раз')
     }
   }
 
   const handleCurrentPlayback = () => {
+    if (usePlayerStore.getState().currentTrack) setPlayerRevealed(true)
     if (usePlayerStore.getState().currentTrack) togglePlayPause('home_player')
     else handleWaveClick()
   }
@@ -570,7 +587,7 @@ function Home({ guest = false } = {}) {
         reachTop={() => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0}
         root={() => scrollerRef?.current ?? null}
       />
-      <div className={`home-intro${!mobileHero && cdDisc ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}`}>
+      <div className={`home-intro${!mobileHero && showCdPlayer ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}`}>
         <div className="mobile-header" style={{ '--mobile-header-backdrop': heroColors[2] }}>
           {/* Тап по логотипу — то же, что pull-to-refresh: шапка не липкая, и
               логотип виден, только когда главная уже прокручена наверх. */}
@@ -583,7 +600,7 @@ function Home({ guest = false } = {}) {
         </div>
         <div
           ref={heroRef}
-          className={`hero-section${cdDisc ? ' has-cd' : ''}${!mobileHero ? ' has-solid-backdrop' : ''}${!mobileHero && cdDisc ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}${mobileDeck && isFlowSelected ? ' is-mobile-flow' : ''}`}
+          className={`hero-section${showHeroPlayer ? ' has-hero-player' : ''}${showCdPlayer ? ' has-cd' : ''}${!mobileHero && showHeroPlayer ? ' has-solid-backdrop' : ''}${!mobileHero && showCdPlayer ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}${mobileDeck && isFlowSelected ? ' is-mobile-flow' : ''}`}
           // Палитра обложки для фона потока.
           style={{
             '--hero-c1': heroColors[0],
@@ -592,14 +609,14 @@ function Home({ guest = false } = {}) {
           }}
         >
           <div className="hero-grainient">
-            {mobileDeck || !mobileHero ? (
+            {showHeroPlayer && (mobileDeck || !mobileHero) ? (
               <div className="hero-solid" />
             ) : liteMode ? (
               <HeroHearts />
             ) : isIOS && isStandalone ? (
               // The WebGL background can leave a magenta scanline in iOS PWA.
-              // Use the cover palette without that canvas; keep the disc UI.
-              <div className="hero-grainient-static" />
+              // Animate the cover palette in CSS without that canvas.
+              <div className="hero-grainient-static hero-grainient-animated" />
             ) : (
               <Suspense fallback={<div className="hero-grainient-static" />}>
                 <Grainient
@@ -625,7 +642,8 @@ function Home({ guest = false } = {}) {
                   centerX={0}
                   centerY={0}
                   zoom={0.9}
-                  rippleFrom=".flow-disc-slot.is-current .hero-disc"
+                  rippleFrom=".home-page .wave-center > button"
+                  rippleStrength={1.2}
                   rippleKey={currentTrackId != null ? 1 : 0}
                   active={isPlaying}
                 />
@@ -633,14 +651,22 @@ function Home({ guest = false } = {}) {
             )}
           </div>
           {cdDisc ? (
-            <DesktopCdPlayer
-              presentation={mobileDeck ? 'mobile' : 'default'}
-              onPlay={handleCurrentPlayback}
-              onStartFlow={handleWaveClick}
-              busy={flowStarting}
-              intentHandlers={!hasCurrentTrack ? waveIntentHandlers : undefined}
-            />
-          ) : (
+            <div
+              className={`hero-deck-reveal${showHeroPlayer ? ' is-revealed' : ''}`}
+              inert={showHeroPlayer ? undefined : ''}
+              aria-hidden={showHeroPlayer ? undefined : true}
+            >
+              {(deckWarm || showHeroPlayer) && (
+                <DesktopCdPlayer
+                  presentation={mobileHero ? 'mobile' : 'default'}
+                  onPlay={handleCurrentPlayback}
+                  onStartFlow={handleWaveClick}
+                  busy={flowStarting}
+                  intentHandlers={!hasCurrentTrack ? waveIntentHandlers : undefined}
+                />
+              )}
+            </div>
+          ) : showHeroPlayer && (
             <FlowDiscArc tracks={recommendations.tracks} playing={isPlaying} />
           )}
           <div className={`wave-widget ${isPlaying ? 'is-playing' : ''}`}>
@@ -657,6 +683,7 @@ function Home({ guest = false } = {}) {
                   {...(!hasCurrentTrack ? waveIntentHandlers : {})}
                 >
                   <img
+                    key={isPlaying ? 'playing' : 'paused'}
                     src={isPlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
                     alt=""
                   />

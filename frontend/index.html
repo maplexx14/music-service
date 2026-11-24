@@ -46,14 +46,33 @@
       #boot-splash { position: fixed; inset: 0; z-index: 9999; background: #000; pointer-events: none; transition: opacity 160ms cubic-bezier(.23, 1, .32, 1); }
       #boot-splash.is-hiding { opacity: 0; }
       #boot-splash .boot-logo { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; }
-      #boot-splash .boot-equalizer { display: flex; align-items: center; gap: 6.4px; height: 80px; }
-      #boot-splash .boot-heart { width: 80px; height: 80px; animation: boot-heartbeat 1200ms cubic-bezier(.45, 0, .55, 1) infinite; will-change: opacity; }
-      #boot-splash .boot-equalizer span { width: 8px; height: 52px; border-radius: 6px; background: #9d59ff; transform: scaleY(var(--level)); opacity: .85; animation: boot-equalizer 1200ms cubic-bezier(.45, 0, .55, 1) calc(var(--i) * 100ms - 1200ms) infinite; will-change: transform, opacity; }
-      @keyframes boot-equalizer { 0%, 100% { transform: scaleY(.25); opacity: .4; } 50% { transform: scaleY(var(--level)); opacity: .9; } }
-      @keyframes boot-heartbeat { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+      #boot-splash .boot-mark { position: relative; width: 80px; height: 80px; }
+      #boot-splash .boot-heart, #boot-splash .boot-echo { position: absolute; left: 0; top: 0; width: 80px; height: 80px; }
+      #boot-splash .boot-heart { animation: boot-heartbeat 1200ms ease-in-out infinite; will-change: transform, opacity; }
+      /* Эхо-слои логотипа: голубой и маджентовый сдвиг контура, вспыхивают разрядами. */
+      #boot-splash .boot-echo { mix-blend-mode: screen; opacity: 0; pointer-events: none; animation: boot-glitch 1200ms steps(1, end) infinite; }
+      #boot-splash .boot-echo--cyan { filter: hue-rotate(150deg) saturate(3) brightness(1.2); }
+      #boot-splash .boot-echo--magenta { filter: hue-rotate(-70deg) saturate(3) brightness(1.1); animation-delay: 180ms; }
+      @keyframes boot-heartbeat {
+        0%, 100% { transform: scale(.94); opacity: .6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+        12% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 16px rgba(157, 89, 255, .95)); }
+        24% { transform: scale(.98); opacity: .8; filter: drop-shadow(0 0 6px rgba(157, 89, 255, .5)); }
+        36% { transform: scale(1.06); opacity: 1; filter: drop-shadow(0 0 11px rgba(157, 89, 255, .75)); }
+        60% { transform: scale(.94); opacity: .6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+      }
+      @keyframes boot-glitch {
+        0%, 9%, 40%, 100% { opacity: 0; transform: translate(0, 0); }
+        10% { opacity: .85; transform: translate(-3px, 0); }
+        12% { opacity: 0; transform: translate(0, 0); }
+        14% { opacity: .6; transform: translate(-2px, 1px); }
+        16% { opacity: 0; transform: translate(0, 0); }
+        30% { opacity: .7; transform: translate(-1px, -1px); }
+        32% { opacity: 0; transform: translate(0, 0); }
+      }
       @media (prefers-reduced-motion: reduce) {
         #boot-splash { transition: none; }
-        #boot-splash .boot-equalizer span, #boot-splash .boot-heart { animation: none; will-change: auto; }
+        #boot-splash .boot-heart, #boot-splash .boot-echo { animation: none; will-change: auto; }
+        #boot-splash .boot-echo { display: none; }
       }
     </style>
     <!-- Сторож загрузки. SW на медленной сети отдаёт index.html из кэша, и
@@ -102,20 +121,10 @@
   <body>
     <div id="boot-splash" role="status" aria-label="Загрузка bolt">
       <div class="boot-logo">
-        <div class="boot-equalizer" aria-hidden="true">
-          <span style="--level:.45;--i:0"></span>
-          <span style="--level:.55;--i:1"></span>
-          <span style="--level:.65;--i:2"></span>
-          <span style="--level:.75;--i:3"></span>
-          <span style="--level:.85;--i:4"></span>
-          <span style="--level:1;--i:5"></span>
+        <div class="boot-mark" aria-hidden="true">
+          <img class="boot-echo boot-echo--cyan" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" />
+          <img class="boot-echo boot-echo--magenta" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" />
           <img class="boot-heart" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" fetchpriority="high" />
-          <span style="--level:1;--i:6"></span>
-          <span style="--level:.85;--i:7"></span>
-          <span style="--level:.75;--i:8"></span>
-          <span style="--level:.65;--i:9"></span>
-          <span style="--level:.55;--i:10"></span>
-          <span style="--level:.45;--i:11"></span>
         </div>
       </div>
     </div>

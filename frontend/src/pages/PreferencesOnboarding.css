@@ -70,11 +70,11 @@
 }
 
 .onboarding-step-dot.done {
-  background: rgba(162, 89, 255, 0.5);
+  background: rgba(196, 176, 240, 0.5);
 }
 
 .onboarding-step-dot.active {
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
 }
 
 .onboarding-step-counter {
@@ -165,8 +165,8 @@
   gap: 12px;
   padding: 14px;
   border-radius: 12px;
-  border: 1px solid rgba(162, 89, 255, 0.25);
-  background: rgba(162, 89, 255, 0.06);
+  border: 1px solid rgba(196, 176, 240, 0.25);
+  background: rgba(196, 176, 240, 0.06);
 }
 
 .onboarding-preview-head {

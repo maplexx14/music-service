@@ -31,6 +31,13 @@ export function needsPlayerFlow(user) {
   return needsPlayerSetup(user) || needsPlayerSetupReplay(user)
 }
 
+// Завершённую распаковку можно повторить из админской диагностики, не меняя
+// серверный статус онбординга. Обычным пользователям query-параметр маршрута
+// не открывает служебный сценарий.
+export function canReplayPlayerSetup(user) {
+  return Boolean(user?.is_admin) && user.onboarding_completed === true && !needsPlayerFlow(user)
+}
+
 export function onboardingDestination(user) {
   if (needsOnboarding(user)) return '/onboarding'
   if (needsPlayerFlow(user)) return '/onboarding/player'

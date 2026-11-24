@@ -1,8 +1,9 @@
 import { returnCdQueueRecord } from './cdQueueHandoff.js'
 import { cdDiscSwipeRelease } from './cdDiscSwipeMotion.js'
 
-export const CD_DISC_EXCHANGE_DURATION = 440
-const EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
+// Slower than the old 440 ms → 520 ms, with a soft overshoot at the end.
+export const CD_DISC_EXCHANGE_DURATION = 520
+const EASING = 'cubic-bezier(0.3, 1.12, 0.5, 1)'
 
 export function counterRotation(element) {
   if (typeof DOMMatrix !== 'function') return ''

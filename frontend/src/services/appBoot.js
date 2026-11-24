@@ -9,10 +9,15 @@ export function preloadInitialScreen(pathname = window.location.pathname) {
   }
 }
 
+// Проигрыватель, собранный заранее в скрытом слое, не держит заставку.
+function hasVisibleLoader(screen) {
+  return [...screen.querySelectorAll('.spinner-wrap--page, .cd-deck-loading')]
+    .some((node) => !node.closest('.hero-deck-reveal:not(.is-revealed)'))
+}
+
 export function initialScreenReady(root) {
   const screen = root.querySelector('.screen[data-active] .screen-scroll') || root
-  return Boolean(screen.firstElementChild) &&
-    !screen.querySelector('.spinner-wrap--page, .cd-deck-loading')
+  return Boolean(screen.firstElementChild) && !hasVisibleLoader(screen)
 }
 
 export function finishAppBoot(root = document.getElementById('root')) {

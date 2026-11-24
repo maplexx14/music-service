@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Download } from '@/components/icons'
+import { Download, MoreHorizontal } from '@/components/icons'
 import { usePlayerStore, trackIntentHandlers } from '../store/playerStore'
 import { useSearchStore } from '../store/searchStore'
 import api from '../services/api'
@@ -552,6 +552,21 @@ function Search({ guest = false } = {}) {
                     <Download size={18} />
                   </a>
                 )}
+                {/* Три точки — как в мобильных таблицах треков: открывают то же
+                    контекстное меню, что и долгое нажатие на строку. */}
+                <button
+                  type="button"
+                  className="track-item-menu"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    trackMenu.open(track, event)
+                  }}
+                  title="Действия с треком"
+                  aria-label={`Действия с треком ${track.title}`}
+                  aria-haspopup="menu"
+                >
+                  <MoreHorizontal size={18} />
+                </button>
               </div>
             </div>
           ))}
@@ -561,7 +576,7 @@ function Search({ guest = false } = {}) {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container search-page">
       <div className="search-header">
         {/* type=search + enterKeyHint: клавиатура телефона показывает «Найти»,
             а Enter её прячет — результаты ищутся по мере ввода, и нажатие
@@ -667,21 +682,21 @@ function Search({ guest = false } = {}) {
                 renderItem={(playlist) => (
                   <div
                     key={playlist.id}
-                    className="playlist-item"
+                    className="playlist-card"
                     onClick={() => navigate(playlist.page_url || `/playlists/${playlist.id}`)}
                   >
                     <img
                       src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                       alt={playlist.name}
-                      className="playlist-item-cover"
+                      className="playlist-cover"
                       loading="lazy"
                       decoding="async"
                       onError={handleCoverError}
                     />
-                    <div className="playlist-item-info">
-                      <div className="playlist-item-name">{playlist.name}</div>
+                    <div className="playlist-info">
+                      <div className="playlist-name" title={playlist.name}>{playlist.name}</div>
                       {playlist.description && (
-                        <div className="playlist-item-description">{playlist.description}</div>
+                        <div className="playlist-description">{playlist.description}</div>
                       )}
                     </div>
                   </div>
@@ -699,7 +714,7 @@ function Search({ guest = false } = {}) {
                 renderItem={(playlist) => (
                   <div
                     key={playlist.id}
-                    className="playlist-item"
+                    className="playlist-card"
                     onClick={() => handleOpenExternalPlaylist(playlist)}
                     {...(!guest && playlist.source === 'soundcloud'
                       ? intentPrefetchHandlers(() => prefetchExternalPlaylist(playlist.external_id))
@@ -710,16 +725,16 @@ function Search({ guest = false } = {}) {
                       <img
                         src={resolveCoverUrl(playlist.cover_url) || defaultCover}
                         alt={playlist.title}
-                        className="playlist-item-cover"
+                        className="playlist-cover"
                         loading="lazy"
                         decoding="async"
                         onError={handleCoverError}
                       />
                       <SourceIcon source={playlist.source} />
                     </span>
-                    <div className="playlist-item-info">
-                      <div className="playlist-item-name">{playlist.title}</div>
-                      <div className="playlist-item-description">
+                    <div className="playlist-info">
+                      <div className="playlist-name" title={playlist.title}>{playlist.title}</div>
+                      <div className="playlist-description">
                         {[playlist.owner, playlist.track_count > 0 && `${playlist.track_count} треков`]
                           .filter(Boolean)
                           .join(' · ')}
@@ -764,11 +779,24 @@ function Search({ guest = false } = {}) {
                       <div className="track-item-title">{track.title}</div>
                       <ArtistLink artist={track.artist} className="track-item-artist" />
                     </div>
-                    {formatDuration(track.duration) && (
-                      <div className="track-item-meta">
+                    <div className="track-item-meta">
+                      {formatDuration(track.duration) && (
                         <span className="track-item-duration">{formatDuration(track.duration)}</span>
-                      </div>
-                    )}
+                      )}
+                      <button
+                        type="button"
+                        className="track-item-menu"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          trackMenu.open(track, event)
+                        }}
+                        title="Действия с треком"
+                        aria-label={`Действия с треком ${track.title}`}
+                        aria-haspopup="menu"
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

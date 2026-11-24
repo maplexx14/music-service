@@ -1,12 +1,16 @@
 // Shared timing keeps the orbit, mobile exchange and stack in sync.
 // A short acceleration and soft landing make the records feel weighted.
-// 340 ms keeps a cross-arc move readable; 220 ms read as a snap, especially
-// when a record travels from the centre to a side slot in one commit.
+// 440 ms keeps a cross-arc move unhurried; 340 ms read as quick, and 220 ms as
+// a snap, especially when a record travels from the centre to a side slot.
 export const DISC_MOTION = {
-  duration: 340,
+  duration: 440,
   easing: 'cubic-bezier(0.32, 0.02, 0.24, 1)',
   fill: 'forwards',
 }
+// Two-point moves (stack, ghost record) settle with a slight overshoot, so a
+// record lands with weight instead of stopping dead. The drum keeps DISC_MOTION:
+// its per-point keyframes would wobble under an overshooting curve.
+const SETTLE_MOTION = { ...DISC_MOTION, easing: 'cubic-bezier(0.3, 1.12, 0.5, 1)' }
 
 export function cloneDiscRecord(source) {
   const record = source.cloneNode(true)
@@ -64,7 +68,7 @@ export function animateDiscNavigation(arc, liveRecord, { returning, key, interru
     animation = ghost.animate([
       { transform: from || (returning ? outside : 'translateX(0)') },
       { transform: returning ? 'translateX(0)' : outside },
-    ], DISC_MOTION)
+    ], SETTLE_MOTION)
     animation.finished.then(cleanup, cleanup)
   }
 
@@ -280,7 +284,7 @@ export function animateDiscDrum(arc, previous, current, { direction, interrupted
 
 function animateSlot(motions, key, node, from, to, remove = false) {
   motions.get(key)?.cleanup()
-  const animation = node.animate([from, to], { ...DISC_MOTION, fill: 'both' })
+  const animation = node.animate([from, to], { ...SETTLE_MOTION, fill: 'both' })
   let cleaned = false
   const cleanup = () => {
     if (cleaned) return

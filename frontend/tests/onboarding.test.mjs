@@ -77,7 +77,7 @@ function browser(server = { user: newUser() }) {
     '../services/uiSession': { clearUiSession() {}, setUiSessionUser() {} },
   })
 
-  function mount(page = 'PreferencesOnboarding') {
+  function mount(page = 'PreferencesOnboarding', pageProps = {}) {
     const hooks = [], effects = []
     let index = 0
     const react = {
@@ -145,7 +145,7 @@ function browser(server = { user: newUser() }) {
     }
     function render() {
       index = 0
-      const root = Page()
+      const root = Page(pageProps)
       const tree = root.type === PlayerSetupScreen ? PlayerSetupScreen(root.props) : root
       for (const effect of effects.splice(0)) effect()
       return tree
@@ -344,6 +344,15 @@ test('music onboarding precedes unboxing; old profiles see the box exactly once'
   }
 })
 
+test('only an admin with a finished flow can replay player setup from diagnostics', () => {
+  const app = browser()
+  const completed = newUser({ onboarding_completed: true, player_setup_completed: true })
+  assert.equal(app.onboarding.canReplayPlayerSetup(completed), false)
+  assert.equal(app.onboarding.canReplayPlayerSetup({ ...completed, is_admin: true }), true)
+  assert.equal(app.onboarding.canReplayPlayerSetup({ ...completed, is_admin: true, onboarding_completed: false }), false)
+  assert.equal(app.onboarding.canReplayPlayerSetup({ ...completed, is_admin: true, player_setup_completed: false }), false)
+})
+
 test('customization follows extraction, reload resumes the stage, completion survives another browser', async () => {
   const server = { user: newUser({ onboarding_completed: true }) }
   const app = browser(server)
@@ -381,6 +390,19 @@ test('failed setup completion keeps the unpacked player available and retries su
   await page.finishSetup()
   assert.equal(app.store.getState().user.player_setup_completed, true)
   assert.deepEqual(app.navigations, ['/'])
+})
+
+test('diagnostic player setup replay returns to diagnostics without completing the account again', async () => {
+  const server = { user: newUser({ is_admin: true, onboarding_completed: true, player_setup_completed: true }) }
+  const app = browser(server)
+  await app.store.getState().finalizeLogin('browser')
+  const page = app.mount('PlayerSetup', { diagnostic: true })
+  page.unbox()
+  page.customize()
+  await page.finishSetup()
+  assert.equal(app.setupProgress.readPlayerSetupStage(1), 'boxed')
+  assert.deepEqual(app.requests, [])
+  assert.deepEqual(app.navigations, ['/settings/diag'])
 })
 
 test('a delayed player setup response cannot complete a different signed-in account', async () => {

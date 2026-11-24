@@ -61,16 +61,16 @@
 
 /* Главное действие экрана: одно на экран. */
 .btn--primary {
-  background-color: var(--brand-accent);
+  background-color: var(--brand-accent-fill);
   color: var(--text-primary);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background-color: var(--brand-accent-hover);
+  background-color: var(--brand-accent-fill-hover);
 }
 
 .btn--primary:active:not(:disabled) {
-  background-color: var(--brand-accent-active);
+  background-color: var(--brand-accent-fill-active);
 }
 
 /* Второстепенное действие рядом с главным. Контур — тенью, а не border:

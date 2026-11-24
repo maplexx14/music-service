@@ -95,6 +95,7 @@ const CLICK_WINDOW = 3000
 // burst — проиграть анимацию лайка сразу при появлении, без кнопки: так
 // большое сердце вылетает поверх обложки в полноэкранном плеере.
 function BrandLikeHeart({ liked = false, size = 24, className = '', burst = false }) {
+  const iconSize = burst ? size : Math.round(size * 4 / 3)
   const id = useId().replace(/:/g, '')
   const svgRef = useRef(null)
   const boltRef = useRef(null)
@@ -178,8 +179,9 @@ function BrandLikeHeart({ liked = false, size = 24, className = '', burst = fals
     <svg
       ref={svgRef}
       className={className || undefined}
-      width={size}
-      height={size}
+      width={iconSize}
+      height={iconSize}
+      style={burst ? undefined : { width: iconSize, height: iconSize, flexShrink: 0 }}
       viewBox="0 0 128 128"
       aria-hidden="true"
     >
@@ -228,15 +230,15 @@ function BrandLikeHeart({ liked = false, size = 24, className = '', burst = fals
           </mask>
           <g mask={`url(#${id}-reveal)`}>
             <g mask={`url(#${id}-in)`}>
-              <rect ref={fillRef} x="0" y="0" width="128" height="128" fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+              <rect ref={fillRef} x="0" y="0" width="128" height="128" fill="#C4B0F0" style={{ fill: 'var(--brand-accent)' }} />
             </g>
-            <rect width="128" height="128" mask={`url(#${id}-line)`} fill="#a259ff" style={{ fill: 'var(--brand-accent)' }} />
+            <rect width="128" height="128" mask={`url(#${id}-line)`} fill="#C4B0F0" style={{ fill: 'var(--brand-accent)' }} />
             <rect
               ref={boltRef}
               width="128"
               height="128"
               mask={`url(#${id}-bolt)`}
-              fill="#8a5cf8"
+              fill="#A98BE6"
             />
             <rect width="128" height="128" mask={`url(#${id}-bolt-edge)`} fill="#ffffff" />
           </g>

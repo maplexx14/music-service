@@ -9,7 +9,7 @@ export const CD_BODY_COLORS = [
 
 export const CD_ACCENT_COLORS = [
   { color: '#c84940', label: 'Красный' },
-  { color: '#a259ff', label: 'Фиолетовый' },
+  { color: '#c4b0f0', label: 'Фиолетовый' },
   { color: '#6dd9c5', label: 'Мятный' },
   { color: '#70bdff', label: 'Голубой' },
   { color: '#ffc272', label: 'Янтарный' },
@@ -28,7 +28,8 @@ export const CD_LIDS = [
 ]
 
 export const DEFAULT_CD_APPEARANCE = Object.freeze({
-  bodyColor: CD_BODY_COLORS[0].color,
+  // Neutral graphite from the app's surface scale (--surface-2), not blue-gray.
+  bodyColor: '#2c2c2e',
   accentColor: CD_ACCENT_COLORS[1].color,
   finish: 'brushed',
   lid: 'clear',

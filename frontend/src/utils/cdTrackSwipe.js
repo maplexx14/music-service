@@ -1,6 +1,7 @@
 const SLOP = 10
-const DISTANCE = 60
-const FLICK_DISTANCE = 30
+// Lighter response: a shorter drag or a gentler flick is enough to change disc.
+const DISTANCE = 44
+const FLICK_DISTANCE = 20
 const VELOCITY_WINDOW = 80
 
 export function createCdTrackSwipe(event) {
@@ -36,6 +37,6 @@ export function cdTrackSwipeDirection(swipe, event) {
   const axis = swipe.axis || (Math.abs(dx) > Math.abs(dy) ? 'x' : 'y')
   if (axis !== 'x') return 0
   const velocity = cdTrackSwipeVelocity(swipe, event)
-  const flick = Math.abs(dx) > FLICK_DISTANCE && Math.abs(velocity) > 0.5 && Math.sign(velocity) === Math.sign(dx)
+  const flick = Math.abs(dx) > FLICK_DISTANCE && Math.abs(velocity) > 0.35 && Math.sign(velocity) === Math.sign(dx)
   return Math.abs(dx) >= DISTANCE || flick ? dx < 0 ? 1 : -1 : 0
 }

@@ -322,17 +322,19 @@ function FullScreenPlayer() {
     resolveCoverUrl(currentTrack?.cover_url, 'thumb') || coverUrl,
   )
 
-  const heroInfo = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
-  // Подложка hero — самая чёткая из готовых: full, если мини-плеер успел его
+  // Одна раскладка для всех обложек: полная обложка растянута на весь экран.
+  // Подложка — самая чёткая из готовых: full, если мини-плеер успел его
   // прогреть (см. прогрев обложки в Player), иначе миниатюра из кэша.
   const heroFull = resolveCoverUrl(currentTrack?.cover_url, true)
   const heroThumb = isCoverReady(heroFull)
     ? heroFull
     : resolveCoverUrl(currentTrack?.cover_url, 'thumb')
+  const heroInfo = useHeroCover(resolveCoverUrl(currentTrack?.cover_url, 'hero'))
   const hero = useMemo(
-    () => (heroInfo ? { ...heroInfo, thumb: heroThumb } : null),
-    [heroInfo, heroThumb],
+    () => (coverUrl ? { ...(heroInfo || { url: coverUrl }), thumb: heroThumb } : null),
+    [coverUrl, heroInfo, heroThumb],
   )
+
   const heroUrl = hero?.url
   // С текстом песни обложки на экране нет — и фоном тоже: строки читаются
   // по ровному цвету, а не по картинке. Подпись при этом остаётся на месте

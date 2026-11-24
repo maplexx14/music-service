@@ -103,15 +103,22 @@
      в WebView там часто 0 — оболочка ставит --safe-top на html сама. */
   --safe-top: env(safe-area-inset-top, 0px);
   /* Основной шрифт текста и заголовков (см. @font-face выше). */
-  --font-text: 'Geologica', system-ui, sans-serif;
+  /* Шрифт как в референсе — системный гротеск (SF на Apple, Segoe UI на Windows).
+     Geologica остаётся в @font-face и не грузится, пока не используется. */
+  --font-text: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-display: var(--font-text);
-  /* Service palette: purple is interactive; green is reserved for success. */
-  --brand-accent: #a259ff;
-  --brand-accent-hover: #b578ff;
-  --brand-accent-active: #8f46e8;
-  --brand-accent-text: #cfa6ff;
-  --brand-accent-soft: rgba(162, 89, 255, 0.14);
-  --brand-accent-soft-strong: rgba(162, 89, 255, 0.22);
+  /* Service palette: приглушённый фиолетовый — интерактив; зелёный — только успех.
+     Два оттенка: светлый для текста и иконок на чёрном (контраст ~11:1),
+     тёмный для заливок — пилюль, активных кнопок (белый текст ~8:1). */
+  --brand-accent: #c4b0f0;
+  --brand-accent-hover: #d6c6f5;
+  --brand-accent-active: #a98be6;
+  --brand-accent-text: #dccbf7;
+  --brand-accent-fill: #5b3a9e;
+  --brand-accent-fill-hover: #6b4ab4;
+  --brand-accent-fill-active: #4b2c86;
+  --brand-accent-soft: rgba(196, 176, 240, 0.14);
+  --brand-accent-soft-strong: rgba(196, 176, 240, 0.22);
   /* Промо-ролик: фиолетовый градиент, розовая жёсткая тень, глитч
      циан/розовый у заголовков. Применение — styles/promo.css. */
   --promo-violet-deep: #2f086d;
@@ -134,18 +141,18 @@
      поля и hover → активное. Нейтральные, без оттенка: обложки дают цвет. */
   --bg-app: #121212;
   --bg-app-mobile: #050505;
-  --surface-1: #181818;
-  --surface-2: #222222;
-  --surface-3: #2a2a2a;
-  --surface-4: #333333;
+  --surface-1: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --surface-3: #3a3a3c;
+  --surface-4: #48484a;
   --surface-inverse: #ffffff;
-  --surface-overlay: rgba(24, 24, 24, 0.92);
+  --surface-overlay: rgba(28, 28, 30, 0.92);
   --scrim: rgba(0, 0, 0, 0.6);
-  /* Текст: четыре ступени, без промежуточных серых. */
+  /* Текст: четыре ступени, как в референсе (серый вторичный, без лишнего). */
   --text-primary: #ffffff;
-  --text-secondary: #b3b3b3;
-  --text-tertiary: #8a8a8a;
-  --text-disabled: #5c5c5c;
+  --text-secondary: #8e8e93;
+  --text-tertiary: #6e6e73;
+  --text-disabled: #48484a;
   --text-inverse: #000000;
   /* Границы прозрачные — ложатся на любую поверхность одинаково. */
   --border-subtle: rgba(255, 255, 255, 0.08);

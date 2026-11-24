@@ -141,6 +141,24 @@ html.power-save .liked-heart-beat {
   gap: 16px;
 }
 
+@media (min-width: 769px) {
+  .round-actions > button {
+    order: 3;
+  }
+
+  .round-actions > .round-actions__play {
+    order: 1;
+  }
+
+  .round-actions > .round-actions__near-play {
+    order: 2;
+  }
+
+  .round-actions > .playlist-download-button {
+    order: 4;
+  }
+}
+
 /* Круглая кнопка в ряду действий шапки (альбом: «Добавить в медиатеку»). */
 .playlist-action-icon {
   width: var(--control-h-lg);
@@ -350,7 +368,7 @@ html.power-save .liked-heart-beat {
   display: block;
   width: 3px;
   height: 100%;
-  background-color: var(--brand-accent);
+  background-color: var(--brand-accent-fill);
   transform-origin: bottom;
   animation: nowPlayingBar 0.9s ease-in-out infinite;
 }

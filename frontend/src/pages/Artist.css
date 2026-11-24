@@ -7,9 +7,9 @@
    страница (.hero-page, CoverBackdrop). --hero-c* — фирменная палитра для
    сердца «Понравившихся» без обложки (.liked-hero-cover, PlaylistDetail.css). */
 .artist-hero {
-  --hero-c1: #b070ff;
-  --hero-c2: #8929ff;
-  --hero-c3: #440f85;
+  --hero-c1: #8A6FC4;
+  --hero-c2: #5B3A9E;
+  --hero-c3: #2A1A4F;
   position: relative;
   padding: 24px 32px 32px;
 }
@@ -429,9 +429,9 @@ html.no-gpu .cover-backdrop-tint {
   /* Сердце «Понравившихся» вместо обложки — квадрат шапки во весь верх.
      --hero-c* у фона свои: шапка, где они заданы, — не его предок. */
   .liked-hero-art {
-    --hero-c1: #b070ff;
-    --hero-c2: #8929ff;
-    --hero-c3: #440f85;
+    --hero-c1: #8A6FC4;
+    --hero-c2: #5B3A9E;
+    --hero-c3: #2A1A4F;
     position: absolute;
     inset: 0;
     /* Сердце по центру над названием, а не под ним: снизу место подписи. */
@@ -587,14 +587,14 @@ html.no-gpu .cover-backdrop-tint {
     place-items: center;
     border: none;
     border-radius: var(--radius-avatar);
-    background-color: var(--brand-accent);
+    background-color: var(--brand-accent-fill);
     color: var(--text-primary);
     cursor: pointer;
     touch-action: manipulation;
   }
 
   .artist-compact-play:active:not(:disabled) {
-    background-color: var(--brand-accent-active);
+    background-color: var(--brand-accent-fill-active);
   }
 
   .artist-compact-play:disabled {

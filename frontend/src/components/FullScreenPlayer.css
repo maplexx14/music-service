@@ -11,11 +11,11 @@
   /* Фирменный фиолетовый, приглушённый: тот же тон (OKLCH h≈300), но
      насыщенность вдвое ниже (C 0.11 против 0.235 у --brand-accent). Сплошной
      яркий акцент поверх обложки во весь экран перетягивал внимание с неё. */
-  --fs-accent: #7c61a8;
-  --fs-accent-hover: #886cb7;
-  --fs-accent-active: #6f5897;
-  --fs-accent-fill: #a28acd;
-  --fs-accent-soft: rgba(124, 97, 168, 0.32);
+  --fs-accent: #5b3a9e;
+  --fs-accent-hover: #6b4ab4;
+  --fs-accent-active: #4b2c86;
+  --fs-accent-fill: #c4b0f0;
+  --fs-accent-soft: rgba(91, 58, 158, 0.32);
   /* Цвет обложки — в слоях .fullscreen-backdrop под содержимым; здесь только
      подложка на кадр до них. */
   background-color: var(--surface-2);
@@ -314,6 +314,7 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
     transform: translateY(100%);
   }
 }
+
 /* Фолбэк-закрытие (нет View Transitions / reduced-motion): плеер уезжает
    вниз 300ms, но fixed inset:0 всё это время перекрывает страницу и глотает
    тапы. Пока едет — он уже «не существует» для ввода.
@@ -389,7 +390,7 @@ html.no-gpu .fullscreen-blur .fullscreen-hero-img.is-entering {
 }
 
 .fullscreen-icon.active {
-  border-color: rgba(162, 89, 255, 0.45);
+  border-color: rgba(196, 176, 240, 0.45);
   color: var(--brand-accent);
 }
 

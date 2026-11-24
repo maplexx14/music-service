@@ -10,7 +10,7 @@ import api from './services/api'
 import useNowPlayingReporter from './hooks/useNowPlayingReporter'
 import { createAppHistory, notifyRouteCommitted, safeNextPath } from './services/navigation'
 import { lazyWithReload } from './services/staleBuild'
-import { needsOnboarding, needsPlayerFlow, onboardingDestination } from './services/onboarding'
+import { canReplayPlayerSetup, needsOnboarding, needsPlayerFlow, onboardingDestination } from './services/onboarding'
 import { offerHandoff } from './services/sessionHandoff'
 import Downloads from './pages/Downloads'
 import { loadOfflineTracks, setOfflineLibrarySync, useOfflineTracks } from './services/offlineTracks'
@@ -62,6 +62,19 @@ function UploadScreen() {
 function AfterLoginRedirect() {
   const [searchParams] = useSearchParams()
   return <Navigate to={safeNextPath(searchParams)} replace />
+}
+
+function PlayerSetupRoute({ isAuthenticated, user }) {
+  const [searchParams] = useSearchParams()
+  const diagnosticReplay = searchParams.get('diagnostic') === '1' && canReplayPlayerSetup(user)
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (needsOnboarding(user)) return <Navigate to="/onboarding" replace />
+  if (!needsPlayerFlow(user) && !diagnosticReplay) return <Navigate to="/" replace />
+  return (
+    <Suspense fallback={<Spinner page />}>
+      <PlayerSetup key={`${user.id}:${diagnosticReplay ? 'diagnostic' : 'required'}`} diagnostic={diagnosticReplay} />
+    </Suspense>
+  )
 }
 
 // Онбординг нужен до завершения последнего шага. Статус общий для всех устройств.
@@ -303,13 +316,7 @@ function App() {
         />
         <Route
           path="/onboarding/player"
-          element={
-            !isAuthenticated ? <Navigate to="/login" replace />
-              : needsOnboarding(user) ? <Navigate to="/onboarding" replace />
-                : needsPlayerFlow(user) ? (
-                  <Suspense fallback={<Spinner page />}><PlayerSetup key={user.id} /></Suspense>
-                ) : <Navigate to="/" replace />
-          }
+          element={<PlayerSetupRoute isAuthenticated={isAuthenticated} user={user} />}
         />
         <Route
           path="/*"

@@ -1,7 +1,9 @@
+/* Corner, border and shadow follow the app's surface tokens (same as the
+   dialogs and panels elsewhere) instead of a one-off 28px frame. */
 .hero-section.has-desktop-deck {
-  border: 1px solid #ffffff12;
-  border-radius: 28px;
-  box-shadow: inset 0 1px 0 #ffffff05, 0 24px 64px #00000018;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 16px 40px rgba(0, 0, 0, 0.25);
 }
 
 .hero-section.has-desktop-deck::after,
@@ -112,8 +114,8 @@
 .cd-deck-scene.is-inactive,
 .cd-deck-scene.is-inactive * { visibility: hidden !important; }
 .cd-deck-scene.is-static { touch-action: auto; }
-.cd-deck-scene:focus-visible { outline: 2px solid #ffc272; outline-offset: -8px; }
-.cd-deck-motion.has-crop:has(.cd-deck-scene:focus-visible) { outline: 2px solid #ffc272; outline-offset: 4px; border-radius: 18px; }
+.cd-deck-scene:focus-visible { outline: 2px solid #ffffff; outline-offset: -8px; }
+.cd-deck-motion.has-crop:has(.cd-deck-scene:focus-visible) { outline: 2px solid #ffffff; outline-offset: 4px; border-radius: 18px; }
 .cd-deck-motion.has-crop .cd-deck-scene:focus-visible { outline: none; }
 .cd-deck-pointer-plane { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .cd-deck-seek-plane { inset: -20px 0 20px; }
@@ -122,7 +124,7 @@
 .cd-deck-pointer-plane > span:nth-child(2) { left: 100%; top: 0; }
 .cd-deck-pointer-plane > span:nth-child(3) { left: 100%; top: 100%; }
 .cd-deck-pointer-plane > span:nth-child(4) { left: 0; top: 100%; }
-.cd-deck-canvas { position: relative; z-index: 1; display: block; width: 100%; height: 100%; opacity: 0; }
+.cd-deck-canvas { position: relative; z-index: 1; display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 420ms cubic-bezier(0.22, 0.61, 0.36, 1); }
 .cd-deck-canvas.is-ready { opacity: 1; }
 .cd-deck-software-disc {
   position: absolute;
@@ -175,21 +177,21 @@
   width: 64px;
   height: 64px;
   padding: 0;
-  border: 1px solid #ffffff40;
+  border: 1px solid var(--border-default);
   border-radius: 50%;
-  background: #18151d66;
-  color: #fff;
+  background: color-mix(in srgb, var(--surface-1) 55%, transparent);
+  color: var(--text-primary);
   opacity: 0;
   pointer-events: none;
   cursor: pointer;
   touch-action: manipulation;
   transform: translate3d(-50%, -50%, var(--cd-playback-z, 0px));
-  transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1), background-color 320ms ease, border-color 320ms ease, box-shadow 320ms ease;
   -webkit-tap-highlight-color: transparent;
 }
 .cd-deck-playback .lucide-play { margin-left: 3px; }
 .cd-deck-playback.is-initial {
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
   border-color: var(--brand-accent);
   box-shadow: 0 8px 28px #0004;
 }
@@ -199,9 +201,25 @@
   opacity: 1;
   pointer-events: auto;
 }
-.cd-deck-playback:focus-visible { outline: 2px solid #ffc272; outline-offset: 4px; }
+.cd-deck-playback:focus-visible { outline: 2px solid #ffffff; outline-offset: 4px; }
 .cd-deck-playback:active:not(:disabled) { transform: translate3d(-50%, -50%, var(--cd-playback-z, 0px)) scale(0.97); }
 .cd-deck-playback:disabled { cursor: wait; }
+
+/* Элементы блока потока появляются плавно, а не щелчком: загрузка, fallback
+   диска, кнопка управления и её иконка (Play/Pause/Loader) при смене. */
+@media (prefers-reduced-motion: no-preference) {
+  .cd-deck-loading,
+  .cd-deck-fallback,
+  .cd-mobile-tilt-enable,
+  .cd-deck-playback { animation: cd-fade-in 280ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+  .cd-deck-playback > svg:not(.wave-loading-icon) { animation: cd-control-icon-in 240ms cubic-bezier(0.22, 1, 0.36, 1); }
+}
+@keyframes cd-fade-in {
+  from { opacity: 0; }
+}
+@keyframes cd-control-icon-in {
+  from { opacity: 0; transform: scale(0.72); }
+}
 
 @media (hover: hover) and (pointer: fine) {
   .cd-deck-stage:hover .cd-deck-playback { opacity: 1; pointer-events: auto; }
@@ -266,7 +284,7 @@
 /* Every slot uses the same pitch as the travelling belt. With a centered
    record the neighboring discs extend ten percent beyond the hero edges. */
 .cd-deck-queue-track:disabled { cursor: default; }
-.cd-deck-queue-track:focus-visible { outline: 2px solid #ffc272; outline-offset: 5px; }
+.cd-deck-queue-track:focus-visible { outline: 2px solid #ffffff; outline-offset: 5px; }
 .cd-deck-queue-disc { position: relative; display: block; width: 100%; height: 100%; }
 /* Preview records do not spin. Flatten their artwork and reflections into
    the moving record instead of compositing nested masks and blur surfaces. */
@@ -292,6 +310,7 @@
 .hero-section.has-desktop-deck .wave-center > button { display: none; }
 .hero-section.has-desktop-deck .wave-heading {
   position: static;
+  font-size: clamp(48px, 6.6vw, 92px);
   transform: scale(1.3, 0.85);
   transform-origin: 50% 50%;
   max-width: 100%;
@@ -349,7 +368,7 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
 .hero-section.has-mobile-deck .wave-center > button { display: none; }
 .hero-section.has-mobile-deck .wave-heading {
   position: static;
-  font-size: clamp(28px, 8vw, 42px);
+  font-size: clamp(32px, 9vw, 48px);
   transform: scale(1.3, 0.85);
   transform-origin: center;
   filter: none;
@@ -364,14 +383,8 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
   justify-content: center;
 }
 .hero-section.has-mobile-deck .flow-controls > * { min-height: 44px; }
-.hero-section.has-mobile-deck.is-mobile-flow .wave-widget { width: calc(100% - 112px); }
-.hero-section.has-mobile-deck.is-mobile-flow .flow-controls {
-  inset: 12px 12px auto auto;
-  width: 44px;
-  max-width: none;
-}
-.hero-section.has-mobile-deck.is-mobile-flow .wave-settings-link { width: 44px; padding: 0; }
-.hero-section.has-mobile-deck.is-mobile-flow .wave-settings-link > span { display: none; }
+/* "Настроить поток" takes the same bottom slot as "Включить поток", so the
+   wave can use the full width again. */
 .desktop-cd-player.is-mobile {
   --cd-stage-top: 72px;
   --cd-stage-bottom: 12px;
@@ -468,7 +481,7 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
   pointer-events: auto;
   touch-action: manipulation;
 }
-.cd-mobile-tilt-enable:focus-visible { outline: 2px solid #ffc272; outline-offset: 3px; }
+.cd-mobile-tilt-enable:focus-visible { outline: 2px solid #ffffff; outline-offset: 3px; }
 .cd-mobile-tilt-enable:disabled { color: #aaa2b4; cursor: default; }
 .cd-mobile-queue {
   grid-row: 2;
@@ -526,8 +539,7 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
 @media (max-height: 700px) and (max-width: 768px) {
   .desktop-cd-player.is-mobile { --cd-stage-top: 58px; --cd-stage-bottom: 8px; }
   .desktop-cd-player.is-mobile .cd-deck-queue { --queue-disc-size: 52px; --queue-step: 76px; }
-  .hero-section.has-mobile-deck .wave-heading { font-size: 28px; }
-  .hero-section.has-mobile-deck.is-mobile-flow .flow-controls { inset: 4px 12px auto auto; }
+  .hero-section.has-mobile-deck .wave-heading { font-size: 32px; }
 }
 
 @media (orientation: portrait), (min-height: 501px) {
@@ -554,7 +566,7 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
 }
 
 @media (max-height: 500px) and (orientation: landscape) {
-  .hero-section.has-mobile-deck .wave-heading { font-size: 28px; }
+  .hero-section.has-mobile-deck .wave-heading { font-size: 32px; }
   .desktop-cd-player.is-mobile { --cd-stage-top: 36px; --cd-stage-bottom: 8px; }
   /* Short landscape screens center within the space above playback controls. */
   .desktop-cd-player.is-mobile .cd-deck-stage { top: 50%; height: 100%; }
@@ -569,7 +581,6 @@ html.lite-mode .cd-deck-queue-action { transition: none; }
   .home-page .hero-section.has-mobile-deck {
     --cd-hero-offset: calc(var(--safe-top) + 44px);
   }
-  .hero-section.has-mobile-deck.is-mobile-flow .flow-controls { inset: 0 12px auto auto; }
 }
 
 

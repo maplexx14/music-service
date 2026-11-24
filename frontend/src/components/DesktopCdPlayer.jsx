@@ -8,6 +8,7 @@ import { useUiSettingsStore } from '../store/uiSettingsStore'
 import { queueStep } from '../utils/playerQueue'
 import { createCdTrackSwipe, updateCdTrackSwipe, cdTrackSwipeDirection, cdTrackSwipeVelocity } from '../utils/cdTrackSwipe'
 import { createCdDiscSwipe } from '../utils/cdDiscSwipe'
+import { haptic, HAPTIC } from '../utils/haptics'
 import { skipForward } from '../services/playerTransport'
 import { isSoftwareRendering } from '../utils/gpu'
 import { resolveCoverUrl } from '../utils/media'
@@ -635,7 +636,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     const scene = sceneRef.current
     if (powerSave || reduced.matches || typeof scene?.animate !== 'function') return undefined
     const animation = scene.animate([
-      { opacity: 0, transform: 'translate(20px, 12px) scale(0.97)' },
+      { opacity: 0, transform: setupPreview ? 'translate(20px, 12px) scale(0.97)' : 'translateY(100%)' },
       { opacity: 1, transform: 'none' },
     ], { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
     const cancel = () => animation.cancel()
@@ -643,7 +644,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     reduced.addEventListener('change', cancel)
     document.addEventListener('visibilitychange', onVisibility)
     return () => { animation.cancel(); reduced.removeEventListener('change', cancel); document.removeEventListener('visibilitychange', onVisibility) }
-  }, [screenActive, modelStatus, powerSave])
+  }, [screenActive, modelStatus, powerSave, setupPreview])
 
   useLayoutEffect(() => { sceneApiRef.current?.setPlaybackMotionEnabled(playbackMotionActive) }, [playbackMotionActive])
 
@@ -1158,6 +1159,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
       softwareDiscApiRef.current?.release()
     }
     if (event.type === 'pointerup' && drag.mode === 'volume') api?.reactToAction('volume')
+    if (swipeCommitted) haptic(HAPTIC.selection, { allowDomFallback: false })
     if (!swipeCommitted) resetSwipeMotion()
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     if (!swipeCommitted) restorePlaybackMotion()

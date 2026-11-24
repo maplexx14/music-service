@@ -29,7 +29,7 @@ import { offlineCollections } from '../services/offlineLibrary'
 
 const TRACKS_PAGE_SIZE = PLAYLIST_PAGE_SIZE
 // Тёмный край градиента сердца (--hero-c3, Artist.css).
-const LIKED_TINT = '#440f85'
+const LIKED_TINT = '#2A1A4F'
 // Молнии, что вылетают из сердца при открытии, — как у BoltLoader, но
 // веером только вверх и в стороны: вниз они летели бы по названию.
 // a — направление (0 — вверх), spin — доворот в полёте, v — форма спрайта,

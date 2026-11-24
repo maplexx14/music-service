@@ -142,9 +142,9 @@
    из логотипа (HeroHearts), как у потока на главной в облегчённом режиме;
    палитра фирменная, а не от обложки. */
 .settings-profile {
-  --hero-c1: #b070ff;
-  --hero-c2: #8929ff;
-  --hero-c3: #440f85;
+  --hero-c1: #8A6FC4;
+  --hero-c2: #5B3A9E;
+  --hero-c3: #2A1A4F;
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -365,7 +365,7 @@ button.settings-menu-item {
    навигации, а не серые плашки общего вида. */
 .page-container:has(> .settings-header) {
   --settings-surface: #0d0d12;
-  --settings-pill: #55308a;
+  --settings-pill: #5B3A9E;
   --settings-ring: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05));
 }
 
@@ -521,7 +521,7 @@ button.settings-menu-item {
 }
 
 .settings-toggle input:checked + .settings-toggle-slider {
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
 }
 
 .settings-toggle input:checked + .settings-toggle-slider::before {
@@ -777,7 +777,7 @@ button.settings-menu-item {
 }
 
 .settings-seg-btn.active {
-  background: var(--settings-pill, var(--brand-accent));
+  background: var(--settings-pill, var(--brand-accent-fill));
   color: var(--text-primary);
 }
 

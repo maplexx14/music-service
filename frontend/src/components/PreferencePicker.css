@@ -174,7 +174,7 @@
   margin-top: 12px;
   padding: 8px 14px;
   border-radius: 999px;
-  border: 1px dashed rgba(162, 89, 255, 0.6);
+  border: 1px dashed rgba(196, 176, 240, 0.6);
   background: transparent;
   color: var(--brand-accent-text);
   font-size: 13px;
@@ -184,7 +184,7 @@
 }
 
 .pref-apply-detected:hover {
-  background: rgba(162, 89, 255, 0.12);
+  background: rgba(196, 176, 240, 0.12);
   color: var(--text-primary);
 }
 
@@ -241,7 +241,7 @@
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
-  border: 1px solid rgba(162, 89, 255, 0.45);
+  border: 1px solid rgba(196, 176, 240, 0.45);
   border-radius: 999px;
   background: transparent;
   color: var(--brand-accent-text);
@@ -249,7 +249,7 @@
 }
 
 .pref-dismiss-detected:hover {
-  background: rgba(162, 89, 255, 0.14);
+  background: rgba(196, 176, 240, 0.14);
   color: var(--text-primary);
 }
 
@@ -288,8 +288,8 @@
   margin-top: 14px;
   padding: 12px 14px;
   border-radius: 12px;
-  border: 1px solid rgba(162, 89, 255, 0.25);
-  background: rgba(162, 89, 255, 0.06);
+  border: 1px solid rgba(196, 176, 240, 0.25);
+  background: rgba(196, 176, 240, 0.06);
 }
 
 .pref-detected-label {
@@ -308,7 +308,7 @@
 }
 
 .pref-suggestion.detected {
-  border-color: rgba(162, 89, 255, 0.45);
+  border-color: rgba(196, 176, 240, 0.45);
   color: var(--text-primary);
 }
 
@@ -411,7 +411,7 @@
 }
 
 .pref-artist-tile.active .pref-artist-photo {
-  box-shadow: 0 0 0 3px #181818, 0 0 0 6px var(--brand-accent);
+  box-shadow: 0 0 0 3px #181818, 0 0 0 6px var(--brand-accent-fill);
   animation: prefChipPop 0.3s var(--ease-out);
 }
 
@@ -424,7 +424,7 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
   color: var(--text-primary);
   border: 3px solid var(--border-subtle);
   opacity: 0;

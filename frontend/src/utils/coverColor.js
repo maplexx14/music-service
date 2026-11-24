@@ -303,4 +303,4 @@ export function paletteFromPixels(data) {
 // фиолетовый, что и прежний фон hero, сведённый к тем же пределам светлоты, что
 // и палитры из обложек (см. MID_LIGHTNESS/LIGHT_LIGHTNESS/DARK_LIGHTNESS), —
 // иначе фон мигал бы на дефолт другим по светлоте.
-export const DEFAULT_HERO_COLORS = ['#b070ff', '#8929ff', '#440f85']
+export const DEFAULT_HERO_COLORS = ['#8a6fc4', '#5b3a9e', '#2a1a4f']

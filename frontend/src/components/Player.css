@@ -78,7 +78,7 @@
 }
 
 .player-progress-top:hover .player-progress-top-fill {
-  background-color: var(--brand-accent);
+  background-color: var(--brand-accent-fill);
 }
 
 .player-progress-thumb {
@@ -88,7 +88,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
   /* Появление из scale(0.6) + прозрачность: ничто не возникает из ниоткуда. */
   transform: translateY(-50%) scale(0.6);
   opacity: 0;
@@ -329,7 +329,7 @@
 
 .player-track-menu-item:hover,
 .player-track-menu-row:hover { background: #ffffff14; }
-.player-track-menu-item.is-active { color: var(--brand-accent, #a259ff); }
+.player-track-menu-item.is-active { color: var(--brand-accent, #ffffff); }
 .player-track-menu-item:disabled { opacity: 0.5; cursor: default; }
 .player-track-menu-item svg,
 .player-track-menu-row > svg { flex: 0 0 auto; color: #bdb4cc; }
@@ -540,8 +540,8 @@ html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; back
 
 .control-btn.active {
   color: var(--brand-accent);
-  background: rgba(162, 89, 255, 0.1);
-  border-color: rgba(162, 89, 255, 0.16);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 /* Кнопка «следующий» заблокирована, пока следующий трек не подгрузился. */
@@ -556,9 +556,9 @@ html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; back
 }
 
 .play-pause-btn {
-  background: #55308a;
+  background: #ffffff;
   border: none;
-  color: var(--text-primary);
+  color: #000000;
   cursor: pointer;
   width: 44px;
   height: 44px;
@@ -818,6 +818,17 @@ html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; back
     background: var(--player-background, #0a0a0e);
   }
 
+  /* Play/pause on mobile: no white disc behind it. The icon sits directly on
+     the capsule, in the same text colour as the other controls. */
+  .play-pause-btn {
+    background: transparent;
+    color: var(--text-primary);
+  }
+
+  .play-pause-btn:hover {
+    filter: none;
+  }
+
   /* Горизонталь — карусель треков, вертикаль за фиксированным плеером
      скроллить нечего: жест целиком отдаём JS. */
   .player {
@@ -921,11 +932,11 @@ html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; back
 }
 
 .volume-slider:hover::-webkit-slider-thumb {
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
 }
 
 .volume-slider:hover::-moz-range-thumb {
-  background: var(--brand-accent);
+  background: var(--brand-accent-fill);
 }
 
 .volume-slider:focus-visible {
