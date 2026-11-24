@@ -14,9 +14,13 @@ test('offline player manifest includes transitive modules, styles and artwork wi
     'admin.js': chunk('admin.js', 'C:/app/src/pages/Admin.jsx'),
     'external.js': chunk('external.js', 'C:/app/src/pages/ExternalPlaylist.jsx', ['shared.js'], ['external.css']),
     'link.js': chunk('link.js', 'C:/app/src/pages/LinkPlaylist.jsx', ['shared.js'], ['link.css']),
+    'geometry.js': { type: 'asset', fileName: 'assets/cdGeometry.worker-test.js' },
+    'assets/fflate.module-test.js': chunk('assets/fflate.module-test.js', ''),
   })
   for (const name of ['home.js', 'deck.js', 'scene.js', 'shared.js', 'home.css', 'deck.css', 'cover.webp', 'external.js', 'external.css', 'link.js', 'link.css']) assert.ok(files.includes('/' + name), name)
   assert.equal(files.includes('/admin.js'), false)
+  assert.ok(files.includes('/assets/cdGeometry.worker-test.js'))
+  assert.ok(files.includes('/assets/fflate.module-test.js'))
 })
 
 const sw = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8')

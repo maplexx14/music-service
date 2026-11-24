@@ -1,13 +1,16 @@
 import {
   ACESFilmicToneMapping, AlwaysStencilFunc, BoxGeometry, CanvasTexture, Color,
-  CylinderGeometry, DepthStencilFormat, DepthTexture, DirectionalLight, DoubleSide, EqualStencilFunc, ExtrudeGeometry, Float32BufferAttribute, FramebufferTexture, Group, HalfFloatType,
-  HemisphereLight, InstancedBufferAttribute, InstancedMesh, KeepStencilOp, LatheGeometry, Matrix4, Mesh, MeshBasicMaterial, MeshPhysicalMaterial,
+  CylinderGeometry, DepthStencilFormat, DepthTexture, DirectionalLight, DoubleSide, EqualStencilFunc, ExtrudeGeometry, FramebufferTexture, Group, HalfFloatType,
+  HemisphereLight, InstancedBufferAttribute, InstancedMesh, KeepStencilOp, LatheGeometry, Matrix4, Mesh, MeshBasicMaterial, MeshDepthMaterial, MeshPhysicalMaterial,
   Object3D, Path, PCFShadowMap, PerspectiveCamera, Plane,
-  PlaneGeometry, PMREMGenerator, Raycaster, RepeatWrapping, ReplaceStencilOp, RingGeometry,
+  PlaneGeometry, Raycaster, RepeatWrapping, ReplaceStencilOp, RingGeometry,
   Scene, ShaderChunk, ShaderMaterial, Shape, SRGBColorSpace, UnsignedInt248Type, Vector2, Vector3, Vector4, WebGLRenderer, WebGLRenderTarget,
 } from 'three'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
-import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+import { createCdGeometryLoader } from './cdGeometryLoad.js'
+import { applyCdDrawingBufferSize, cdCanvasSize } from './cdCanvasSize.js'
+import { loadCdStudioEnvironment } from './cdStudioEnvironment.js'
 import { createDiscSpin, SOFTWARE_DISC_FPS } from './discSpin.js'
 import { createCdFrameCadence } from './cdFrameCadence.js'
 import { cdAnimationClock } from './cdAnimationClock.js'
@@ -23,6 +26,7 @@ import { centerCdCamera, cdMotionRegion, growCdMotionRegion } from './cdMotionRe
 import { squareToQuadTransform, cdQuadToQuadTransform } from './cdProjection.js'
 import { DEFAULT_CD_APPEARANCE, normalizeCdAppearance } from './cdPlayerAppearance.js'
 import { paintCdDiscPrint } from './cdDiscArtwork.js'
+import { createCdSceneLoadTask } from './cdSceneLoadTask.js'
 import logoHeart from '../assets/loader-heart.webp'
 import boltWordmark from '../assets/bolt-wordmark.webp'
 
@@ -41,17 +45,12 @@ const PLAYBACK_SURFACE_Z = 0.81
 const PLAYBACK_FPS = 60
 const DISC_PLAYBACK_LAYER = 1
 const GLASS_CACHE_LAYER = 2
-const MAX_RENDER_PIXELS = 1_750_000
-const MAX_CONSTRAINED_RENDER_PIXELS = 750_000
-const MAX_RENDER_PIXEL_RATIO = 2
 const MOTION_RENDER_SCALE = 0.85
 const MAX_ARTWORK_SIZE = 1024
 const SOFTWARE_PLAYBACK_FPS = 4
 const SOFTWARE_INTERACTION_FPS = 12
 // Software mode no longer redraws the rotating deck continuously, so the
 // saved frame budget can go into a sharper static image instead.
-const MAX_SOFTWARE_RENDER_PIXELS = 2_000_000
-const MAX_SOFTWARE_PIXEL_RATIO = 2
 const LID_CLOSED_ANGLE = 0
 const LID_DURATION_MS = 420
 const VIEW_SPRING_OMEGA = TAU / 0.4
@@ -172,12 +171,40 @@ function paintIcon(ctx, kind, size, color = '#ffffff') {
   }
 }
 
-export function createCdDeckScene(canvas, { onError, softwareRendering = false, onDiscOverlayChange, onFramingChange, onAction, onDiscChange, playbackElement, mapPointer, presentation = 'default' } = {}) {
+export async function createCdDeckScene(canvas, options = {}) {
+  const load = createCdSceneLoadTask(options.signal)
+  try {
+    const api = await buildCdDeckScene(canvas, options, load)
+    load.complete()
+    return api
+  } catch (error) {
+    load.dispose()
+    throw error
+  }
+}
+
+async function buildCdDeckScene(canvas, { onError, softwareRendering = false, onDiscOverlayChange, onFramingChange, onAction, onDiscChange, playbackElement, mapPointer, presentation = 'default', appearance = DEFAULT_CD_APPEARANCE, signal } = {}, load) {
+  let initializing = true
+  let disposed = false
+  const canvasStyle = canvas.style.cssText
+  load.onCleanup(() => { disposed = true; canvas.style.cssText = canvasStyle })
+  await load.checkpoint(true)
   const cachedRendering = presentation !== 'setup' || softwareRendering
   const stageElement = playbackElement?.parentElement || canvas.parentElement
+  const mobile = presentation === 'mobile'
+  const constrainedDevice = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4
+  const measureCanvas = (powerSave = false) => cdCanvasSize({ stageWidth: stageElement.clientWidth,
+    height: stageElement.clientHeight, mobile, cachedRendering, powerSave, constrainedDevice,
+    devicePixelRatio: window.devicePixelRatio || 1 })
+  const initialSize = measureCanvas()
+  // Allocate the final drawing buffer before creating a context or submitting
+  // any GPU work. Later layout setup reuses this allocation.
+  if (initialSize) { canvas.width = initialSize.pixelWidth; canvas.height = initialSize.pixelHeight }
   // Firefox resolves an antialiased canvas on every presentation, even when
   // only the disc changes. Keep MSAA in the render target instead.
   const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: cachedRendering, stencil: false, preserveDrawingBuffer: false, powerPreference: 'low-power' })
+  load.onCleanup(() => { renderer.dispose(); renderer.forceContextLoss() })
+  applyCdDrawingBufferSize(renderer, initialSize)
   renderer.setClearColor(0x000000, 0)
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = ACESFilmicToneMapping
@@ -188,7 +215,9 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   renderer.shadowMap.needsUpdate = true
 
   const resources = new Set()
+  load.onCleanup(() => resources.forEach(resource => resource.dispose()))
   const own = (resource) => { resources.add(resource); return resource }
+  await load.checkpoint()
   let staticFrame = null
   let playbackFrame = null
   let motionFrame = null
@@ -198,6 +227,14 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   let gpuVolume = null
   let projectionElement = playbackElement
   let gpuProjectionNode = null
+  load.onCleanup(() => {
+    softwareFrames?.dispose()
+    playbackMotion?.dispose()
+    playbackVolume?.dispose()
+    gpuVolume?.dispose()
+    gpuProjectionNode?.remove()
+    playbackElement?.classList.remove('has-crop', 'has-volume')
+  })
   let gpuDiscTransform
   let gpuEnvelopeKey = '', gpuEnvelope
   // Use the bounded multisampled presenter on desktop Chromium too. Separate
@@ -258,6 +295,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   let restingGlassReady = false
   let shadowVersion = 0
   const staticCanvas = document.createElement('canvas')
+  load.onCleanup(() => staticCanvas.remove())
   const staticContext = staticCanvas?.getContext('2d', { alpha: true })
   if (staticCanvas) {
     staticCanvas.className = 'cd-deck-canvas cd-deck-frame is-ready'
@@ -439,10 +477,10 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     return map
   }
   const scene = new Scene()
+  await load.checkpoint()
   const serviceStyles = getComputedStyle(canvas)
-  let accent = serviceStyles.getPropertyValue('--brand-accent').trim() || '#a259ff'
-  const activeAccent = serviceStyles.getPropertyValue('--brand-accent-hover').trim() || '#b578ff'
-  const mobile = presentation === 'mobile'
+  let accent = serviceStyles.getPropertyValue('--brand-accent').trim() || '#C4B0F0'
+  const activeAccent = serviceStyles.getPropertyValue('--brand-accent-hover').trim() || '#D6C6F5'
   const camera = new PerspectiveCamera(34, 1, 0.1, 60)
   const motionCamera = camera.clone()
   const framingCamera = mobile ? camera.clone() : null
@@ -455,36 +493,15 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   const deck = new Group()
   scene.add(deck)
 
-  // Neutral studio panels give the machined metal broad, readable reflections.
-  // Bake them once into the environment so playback keeps its cached lighting.
-  const environment = new Scene()
-  environment.background = new Color().setRGB(0.04, 0.045, 0.06)
-  const softboxGeometry = new PlaneGeometry(1, 1)
-  for (const [width, height, position, color, intensity] of [
-    [4.5, 5.5, [-4, 4.5, 7], '#fffaf2', 3.4],
-    [1.25, 6, [4, 1.5, 6], '#e9eef5', 2.1],
-    [5, 2, [0, 7, 1], '#ffffff', 2.4],
-    [2.5, 5, [4, 3, -5], '#e2e8ef', 2.5],
-  ]) {
-    const panel = new Mesh(softboxGeometry, new MeshBasicMaterial({
-      color: new Color(color).multiplyScalar(intensity), side: DoubleSide, toneMapped: false,
-    }))
-    panel.position.set(...position)
-    panel.scale.set(width, height, 1)
-    panel.lookAt(0, 0, 0)
-    environment.add(panel)
-  }
-  const generator = new PMREMGenerator(renderer)
-  const environmentTarget = own(generator.fromScene(environment, 0.06))
-  scene.environment = environmentTarget.texture
+  // This is the exact half-float output of the original four-panel studio.
+  // Loading it avoids rendering and filtering the studio during player startup.
+  scene.environment = own(await loadCdStudioEnvironment(signal))
   scene.environmentIntensity = 1
-  softboxGeometry.dispose()
-  environment.traverse((object) => { if (object.isMesh) object.material.dispose() })
-  environment.clear()
-  generator.dispose()
+  await load.checkpoint()
 
   scene.add(new HemisphereLight('#f1f3f5', '#24262a', 0.6))
-  const key = new DirectionalLight('#fffaf2', 1.7)
+  // Softer key and rim: the metal highlights were hot spots, not sheen.
+  const key = new DirectionalLight('#fffaf2', 1.35)
   key.position.set(-4, 7, 6.5)
   key.target.position.copy(target)
   key.castShadow = true
@@ -498,19 +515,21 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   fill.position.set(4, 3.5, 5)
   fill.target.position.copy(target)
   scene.add(fill, fill.target)
-  const rim = new DirectionalLight('#e2e8ef', 1.15)
+  const rim = new DirectionalLight('#e2e8ef', 0.75)
   rim.position.set(4.5, 5.5, -3)
   rim.target.position.copy(target)
   scene.add(rim, rim.target)
 
   const grain = texture(brushedSurface())
+  await load.checkpoint()
   grain.wrapS = grain.wrapT = RepeatWrapping
   grain.repeat.set(3, 3)
   const material = (options) => own(new MeshPhysicalMaterial(options))
-  const metal = material({ color: '#3b444d', metalness: 0.88, roughness: 0.29, bumpMap: grain, bumpScale: 0.0017 })
-  const edgeMetal = material({ color: '#a1adb7', metalness: 0.96, roughness: 0.2 })
-  const faceMetal = material({ color: '#59636d', metalness: 0.86, roughness: 0.29, bumpMap: grain, bumpScale: 0.0015 })
-  const lidMetal = material({ color: '#48525b', metalness: 0.88, roughness: 0.27, bumpMap: grain, bumpScale: 0.0012 })
+  // Rougher metal spreads each highlight over a wider area instead of a point.
+  const metal = material({ color: '#3b444d', metalness: 0.88, roughness: 0.38, bumpMap: grain, bumpScale: 0.0017 })
+  const edgeMetal = material({ color: '#a1adb7', metalness: 0.96, roughness: 0.3 })
+  const faceMetal = material({ color: '#59636d', metalness: 0.86, roughness: 0.38, bumpMap: grain, bumpScale: 0.0015 })
+  const lidMetal = material({ color: '#48525b', metalness: 0.88, roughness: 0.36, bumpMap: grain, bumpScale: 0.0012 })
   const plastic = material({ color: '#12161a', metalness: 0.08, roughness: 0.49 })
   const rubber = material({ color: '#080b0d', roughness: 0.9 })
   const chrome = material({ color: '#cbd5dd', metalness: 1, roughness: 0.19 })
@@ -539,6 +558,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     return object
   }
   const logoImages = []
+  load.onCleanup(() => { for (const image of logoImages) image.onload = null })
   const logoSurface = (url, width, height, { background, padding = 0 } = {}) => {
     const source = makeCanvas(width, height, (ctx) => {
       if (background) {
@@ -591,6 +611,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     for (let slot = 0; slot < 15; slot++) {
       box([0.012, 0.165, 0.06], [side * 2.403, 0.325, -1.63 + slot * 0.21], plastic, deck, 0.006)
       box([0.014, 0.006, 0.06], [side * 2.405, 0.408, -1.63 + slot * 0.21], edgeMetal, deck, 0.002)
+      await load.checkpoint()
     }
   }
   const topShape = roundedOutline(4.8, 5.25, 0.12)
@@ -599,6 +620,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   topShape.holes.push(opening)
   const top = mesh(new ExtrudeGeometry(topShape, { depth: 0.12, steps: 1, bevelEnabled: true, bevelSegments: 3, bevelSize: 0.016, bevelThickness: 0.014, curveSegments: 48 }), faceMetal, [0, 0.575, 0])
   top.rotation.x = -Math.PI / 2
+  await load.checkpoint()
   const tray = new Group()
   tray.position.z = DISC_CENTER_Z
   deck.add(tray)
@@ -640,6 +662,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     map: trayDetailMap, transparent: true, depthWrite: false, toneMapped: true,
   })), [0, 0.588, 0], tray, false)
   trayDetail.rotation.x = -Math.PI / 2
+  await load.checkpoint()
   // A recessed optical transport stays visible when the record leaves the
   // tray. Every part sits below the record plane, including its printed marks.
   const transportPlastic = material({ color: '#22262a', metalness: 0.15, roughness: 0.48 })
@@ -674,12 +697,9 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   }
   label('BOLT / OPTICAL TRANSPORT', 0.94, 0.06, [0.04, 0.619, -0.16], { top: true, color: '#969b9f' }, transport)
   label('CLASS 1 LASER', 0.52, 0.045, [0.58, 0.619, 0.16], { top: true, color: '#737b80' }, transport)
-  // The spindle clamp and its fasteners are separate from the moving CD.
+  // The spindle clamp is separate from the moving CD.
   cylinder(0.36, 0.034, [0, 0.597, 0], transportPlastic, tray)
   ring(0.27, 0.35, 0.616, blackChrome, tray)
-  for (const angle of [0, Math.PI * 2 / 3, Math.PI * 4 / 3]) {
-    cylinder(0.035, 0.015, [Math.cos(angle) * 0.3, 0.623, Math.sin(angle) * 0.3], chrome, tray, 16)
-  }
   for (const x of [-1.85, 1.85]) for (const z of [-2.08, 2.08]) {
     cylinder(0.19, 0.105, [x, 0.062, z], rubber)
     cylinder(0.2, 0.035, [x, 0.105, z], blackChrome)
@@ -688,6 +708,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   // The exposed data layer has thin-film iridescence and concentric grooves;
   // printed artwork is a separate coated layer with a real central aperture.
   const disc = new Group()
+  await load.checkpoint()
   disc.position.set(0, 0.619, DISC_CENTER_Z)
   disc.userData.action = 'seek'
   deck.add(disc)
@@ -755,6 +776,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   const glassLength = 4.52
   const glassOffsetZ = -0.245
   const lidPivot = new Group()
+  await load.checkpoint()
   lidPivot.position.set(0, 0.782, -lidLength / 2)
   lidPivot.rotation.x = LID_CLOSED_ANGLE
   lidPivot.userData.moving = true
@@ -784,9 +806,12 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   addOpening(glassWidth, glassLength, 0.125, glassOffsetZ)
   addOpening(4.67, 0.505, 0.045, 2.3475)
   lidPlate(capOutline, 0.042, lidMetal, -0.036)
+  await load.checkpoint()
   lidPlate(frameOutline(lidWidth, lidLength, 0.18, 0.055), 0.17, lidMetal, -0.164)
+  await load.checkpoint()
   // A narrow machined lip catches the light without brightening the shell.
   lidPlate(frameOutline(lidWidth - 0.025, lidLength - 0.025, 0.168, 0.014), 0.003, edgeMetal, 0.013)
+  await load.checkpoint()
   for (const x of [-2.375, 2.375]) for (const z of [0.15, lidLength - 0.15]) {
     cylinder(0.029, 0.004, [x, 0.011, z], blackChrome, lidPivot, 16)
     cylinder(0.02, 0.004, [x, 0.014, z], edgeMetal, lidPivot, 16)
@@ -797,13 +822,16 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     const x = -1.155 + slot * 0.21
     box([0.058, 0.004, 0.13], [x, 0.018, 0.115], plastic, lidPivot, 0.006)
     box([0.006, 0.005, 0.13], [x + 0.035, 0.019, 0.115], edgeMetal, lidPivot, 0.002)
+    await load.checkpoint()
   }
   // Alpha glass retains restrained reflections without transmission's extra
   // scene passes, including on the software renderer.
   const glass = material({ color: '#c4cfd8', metalness: 0, roughness: 0.12, clearcoat: 0.7, clearcoatRoughness: 0.12, envMapIntensity: 0.55, transparent: true, opacity: 0.115, depthWrite: false })
   lidPlate(roundedOutline(glassWidth, glassLength, 0.125), 0.028, glass, -0.028, glassOffsetZ)
+  await load.checkpoint()
   const glassEdge = own(new MeshBasicMaterial({ color: '#22282e', transparent: true, opacity: 0.55, depthWrite: false }))
   lidPlate(frameOutline(glassWidth + 0.024, glassLength + 0.024, 0.137, 0.012), 0.003, glassEdge, 0.008, glassOffsetZ)
+  await load.checkpoint()
   for (const x of [-1.43, 1.43]) {
     const hinge = cylinder(0.044, 0.36, [x, 0.751, -2.635], blackChrome)
     hinge.rotation.z = Math.PI / 2
@@ -833,6 +861,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     const iconMap = texture(iconCanvas, true)
     const icon = mesh(new PlaneGeometry(radius * 1.5, radius * 1.5), own(new MeshBasicMaterial({ map: iconMap, transparent: true, depthWrite: false })), [0, 0, 0.022], button, false)
     buttons[action] = { group: button, face, collar, radius, icon, restPosition: button.position.clone(), iconCanvas, iconMap, selected: false, kind: action }
+    await load.checkpoint()
   }
   const volume = new Group()
   volume.position.set(1.851, 0.363, 2.329)
@@ -881,14 +910,17 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   // outside the chassis poses makes volume/play/shuffle/repeat independent of
   // the expensive preparation. The body still uses its original 3D poses.
   const softwareControls = []
+  load.onCleanup(() => { for (const { patch } of softwareControls) { patch.width = patch.height = 0; patch.remove() } })
 
   // The five transports share just three GPU submissions. Keep their original
   // meshes as hit targets; instance matrices retain the physical press motion.
   const transportBatches = []
+  load.onCleanup(() => { for (const { batch } of transportBatches) batch.dispose() })
   const transportButtons = Object.values(buttons)
   const transportMatrix = new Matrix4()
   const transportScale = new Vector3()
   let iconBatch = null
+  load.onCleanup(() => iconBatch?.dispose())
   let iconAtlas = null
   let iconAtlasTexture = null
   const iconVersions = []
@@ -1000,6 +1032,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   rearHeart.rotation.set(-Math.PI / 2, Math.PI, 0)
 
   const surfaceBatches = []
+  const geometryLoader = createCdGeometryLoader(load, signal)
   for (const parent of cachedRendering ? [deck] : [deck, lidPivot, disc, volume]) {
     // Parameter attributes allow different opaque metals/plastics to share
     // draws. Each moving group keeps its own local geometry and hit target.
@@ -1019,21 +1052,12 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
       batches.get(key).push(object)
     })
     for (const objects of batches.values()) {
+      await load.checkpoint()
       if (objects.length < 2) continue
       const sources = [...new Set(objects.map(object => object.material))]
       const parameterized = sources.length > 1
-      const geometries = objects.map((object) => {
-        const geometry = object.geometry.index ? object.geometry.toNonIndexed() : object.geometry.clone()
-        if (parameterized) geometry.setAttribute('cdSurfaceIndex', new Float32BufferAttribute(
-          new Float32Array(geometry.attributes.position.count).fill(sources.indexOf(object.material)), 1,
-        ))
-        return geometry.applyMatrix4(new Matrix4().multiplyMatrices(inverse, object.matrixWorld))
-      })
-      const geometry = mergeGeometries(geometries)
-      geometries.forEach((part) => part.dispose())
-      if (!geometry) continue
-      const indexedGeometry = mergeVertices(geometry, 1e-6)
-      geometry.dispose()
+      const indexedGeometry = own(await geometryLoader.batch(objects, inverse, sources, parameterized))
+      await load.checkpoint()
       const first = objects[0]
       let surface = first.material
       if (parameterized) {
@@ -1052,12 +1076,14 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
       }
     }
   }
+  geometryLoader.dispose()
 
   // The player is built on the XZ plane. Stand the complete chassis upright
   // and lift its front edge just above the floor without changing its parts.
   deck.rotation.x = Math.PI / 2
   deck.position.y = DECK_STANDING_Y
   deck.updateMatrixWorld(true)
+  await load.checkpoint()
   const softwareFaceCorners = [[-2.5, -2.7], [2.5, -2.7], [2.5, 2.7], [-2.5, 2.7]]
     .map(([x, z]) => new Vector3(x, 0.7, z).applyMatrix4(deck.matrixWorld))
   const reactionCorners = []
@@ -1237,11 +1263,11 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   let carouselActive = false, carouselCamera = null
   let volumeCarouselActive = false
   let discExchanging = false, discExchangeSliding = false, discSwipeActive = false
-  let disposed = false
   let draggingDisc = false
   let dragProgress = 0
   let frame = 0
   let animationTimer = 0
+  load.onCleanup(cancelRender)
   let lastRenderAt = -Infinity
   const frameCadence = createCdFrameCadence()
   let immediateFrame = false
@@ -1271,7 +1297,6 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   const reaction = { theta: 0, phi: 0, roll: 0, zoom: 0, lift: 0 }
   const deviceTilt = { theta: 0, phi: 0 }
   const lidWaiters = new Set()
-  const constrainedDevice = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
   const controlMotions = new Map()
   let controlMotionEnabled = true
@@ -1671,6 +1696,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     frame = animationTimer = 0
   }
   function invalidate(immediate = true, fullScene = immediate) {
+    if (initializing || disposed) return
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
     syncPlaybackMotion()
     if (fullScene) needsFullRender = true
@@ -2146,29 +2172,20 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     if (!cachedRendering) updateDiscOverlay()
     invalidate()
   }
+  let resizeKey = ''
   function resize() {
     // Layout dimensions do not shrink during the entrance transform. Using
     // its animated bounds would leave the canvas permanently undersized.
-    const { clientWidth: stageWidth, clientHeight: height } = stageElement
-    if (stageWidth < 1 || height < 1) return
-    // Avoid presenting the transparent margins of a wide hero every frame.
-    // A camera view offset keeps the deck's size and perspective unchanged.
-    const width = mobile ? stageWidth : Math.min(stageWidth, height * 1.4)
+    const size = measureCanvas(powerSave)
+    if (!size || resizeKey === size.key) return
+    const { stageWidth, width, height, pixelRatio } = size
+    resizeKey = size.key
     canvas.style.width = `${width}px`
     canvas.style.marginLeft = `${(stageWidth - width) / 2}px`
     for (const { patch } of softwareControls) patch.style.left = canvas.style.marginLeft
-    const maxPixels = cachedRendering ? MAX_SOFTWARE_RENDER_PIXELS
-      : powerSave || constrainedDevice ? MAX_CONSTRAINED_RENDER_PIXELS : MAX_RENDER_PIXELS
-    const pixelRatioCap = cachedRendering
-      ? MAX_SOFTWARE_PIXEL_RATIO
-      : powerSave || constrainedDevice ? 1 : MAX_RENDER_PIXEL_RATIO
-    const pixelArea = width * height
-    const requestedRatio = cachedRendering ? Math.max(1.5, window.devicePixelRatio || 1) : window.devicePixelRatio || 1
-    const pixelRatio = Math.min(requestedRatio, pixelRatioCap, Math.sqrt(maxPixels / pixelArea))
-    if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio)
+    applyCdDrawingBufferSize(renderer, size)
     frameWidth = width
     frameHeight = height
-    renderer.setSize(width, height, false)
     framePixelWidth = canvas.width
     framePixelHeight = canvas.height
     if (staticCanvas) {
@@ -2186,7 +2203,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     updateCamera()
   }
   const observer = new ResizeObserver(resize)
-  observer.observe(stageElement)
+  load.onCleanup(() => observer.disconnect())
   const intersection = new IntersectionObserver(([entry]) => {
     inViewport = entry.isIntersecting
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
@@ -2194,6 +2211,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
     else { softwareFrames?.suspend(); finishControls(); holdDeviceTilt(); snapLid(); if (viewMotion) snapView(); cancelRender() }
     syncPlaybackMotion()
   })
+  load.onCleanup(() => intersection.disconnect())
   intersection.observe(staticCanvas || canvas)
   const onVisibility = () => {
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
@@ -2223,6 +2241,12 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   document.addEventListener('visibilitychange', onVisibility)
   reduced.addEventListener('change', onReducedMotion)
   canvas.addEventListener('webglcontextlost', onContextLost)
+  load.onCleanup(() => {
+    document.removeEventListener('visibilitychange', onVisibility)
+    reduced.removeEventListener('change', onReducedMotion)
+    canvas.removeEventListener('webglcontextlost', onContextLost)
+    onDiscOverlayChange?.(null)
+  })
   if (cachedRendering && presentation !== 'setup') {
     const restingButtons = Object.values(buttons).map(button => ({ button, position: new Vector3(), material: null, iconVisible: true }))
     let markerVisible, ridgeAngle, capturedDiscVisible
@@ -2412,19 +2436,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   }
   resize()
   const unsubscribeCarousel = mobile ? trackCarouselMotion.subscribe(setCarouselMotion) : null
-
-  if (!cachedRendering) {
-    // Start compiling the cached playback shaders before a skip returns to
-    // rest. Their first use must not stall a live animation for compilation.
-    // compile() submits the programs without async polling that could outlive
-    // this renderer during React's mount/unmount cycle.
-    const warmup = new Scene()
-    warmup.add(new Mesh(artwork.geometry, playbackArtwork), new Mesh(glassOverlay.geometry, glassSurface))
-    const target = renderer.getRenderTarget()
-    renderer.setRenderTarget(playbackFrame)
-    try { renderer.compile(warmup, camera, scene) }
-    finally { renderer.setRenderTarget(target) }
-  }
+  load.onCleanup(() => unsubscribeCarousel?.())
 
   function setState(next, loading = busy) {
     updateControls()
@@ -2581,6 +2593,7 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
   }
 
   const performanceHost = canvas.parentElement
+  load.onCleanup(() => { delete performanceHost.cdPerformance })
   performanceHost.cdPerformance = async () => {
     const began = performance.now(), before = gpuVolume?.status(), rendered = renderer.info.render.frame
     await new Promise(resolve => setTimeout(resolve, 2000))
@@ -2594,6 +2607,54 @@ export function createCdDeckScene(canvas, { onError, softwareRendering = false, 
       volume: playbackVolume?.status(), motion: playbackMotion?.status(),
     }
   }
+
+  // Compile the actual finish before exposing the scene. The first render
+  // otherwise waits synchronously for every physical material to link.
+  setAppearance(appearance)
+  await load.checkpoint(true)
+  const compileTarget = renderer.getRenderTarget()
+  try {
+    if (!cachedRendering) renderer.setRenderTarget(staticFrame)
+    await renderer.compileAsync(scene, camera)
+    load.check()
+    // compileAsync(scene) prepares visible materials but omits the depth
+    // programs that the shadow pass first requests during rendering.
+    const shadowWarmup = new Scene()
+    const shadowMaterials = new Map()
+    scene.traverse(object => {
+      if (!object.isMesh || !object.castShadow) return
+      const side = object.material.shadowSide ?? ({ 0: 1, 1: 0, 2: 2 })[object.material.side]
+      if (!shadowMaterials.has(side)) shadowMaterials.set(side, own(new MeshDepthMaterial({ side })))
+      const clone = object.clone(false)
+      clone.material = shadowMaterials.get(side)
+      shadowWarmup.add(clone)
+    })
+    await renderer.compileAsync(shadowWarmup, key.shadow.camera)
+    load.check()
+    if (!cachedRendering) {
+      const warmup = new Scene()
+      warmup.add(new Mesh(artwork.geometry, playbackArtwork), new Mesh(glassOverlay.geometry, glassSurface))
+      renderer.setRenderTarget(playbackFrame)
+      await renderer.compileAsync(warmup, camera, scene)
+      load.check()
+      await renderer.compileAsync(presentationScene, presentationCamera)
+    }
+  } finally { renderer.setRenderTarget(compileTarget) }
+  await load.waitForGpu(renderer)
+  await load.checkpoint(true)
+  initializing = false
+  if (presentation === 'setup' && !document.hidden) {
+    // Shader readiness is not first-frame readiness. Paint the player behind
+    // the sealed box before its onReady callback can start opening the lids.
+    // Otherwise the first texture uploads/readback and lid composition compete
+    // for the GPU immediately after the user finishes pulling the tape.
+    render()
+    await load.waitForGpu(renderer)
+    await load.waitForPaint()
+    await load.checkpoint(true)
+  }
+  observer.observe(stageElement)
+  invalidate()
 
   return {
     setState,

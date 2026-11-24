@@ -16,6 +16,10 @@ export function offlineUiAssets(bundle) {
   }
   for (const chunk of Object.values(bundle)) {
     if (chunk.type === 'chunk' && roots.some((root) => chunk.facadeModuleId?.replace(/\\/g, '/').endsWith(`/src/${root}`))) visit(chunk.fileName)
+    // Vite emits a self-contained worker as an asset rather than a chunk
+    // dependency. The gzip decoder is lazy and needed on older WebKit.
+    if (/^assets\/cdGeometry\.worker-.*\.js$/.test(chunk.fileName)) files.add(`/${chunk.fileName}`)
+    if (chunk.type === 'chunk' && /^assets\/fflate\.module-.*\.js$/.test(chunk.fileName)) visit(chunk.fileName)
   }
   return [...files].sort()
 }

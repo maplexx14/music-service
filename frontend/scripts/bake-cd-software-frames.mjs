@@ -59,7 +59,7 @@ for (const mobile of [false, true]) for (const shadows of [true, false]) {
               Object.defineProperty(navigator,'deviceMemory',{value:8});
               const {createCdDeckScene}=await import('/src/utils/cdDeckScene.js');
               const {DEFAULT_CD_APPEARANCE}=await import('/src/utils/cdPlayerAppearance.js');
-              window.api=createCdDeckScene(document.querySelector('#deck'),{softwareRendering:true,presentation:'${mobile ? 'mobile' : 'default'}'});
+              window.api=await createCdDeckScene(document.querySelector('#deck'),{softwareRendering:true,presentation:'${mobile ? 'mobile' : 'default'}'});
               window.api.setAppearance(DEFAULT_CD_APPEARANCE);
               window.api.setState({currentTrack:null,currentIndex:0,currentTime:0,duration:0,volume:1,isPlaying:false,isShuffle:false,isRepeatOne:false});
             </script></body></html>`

@@ -652,6 +652,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     let disposed = false
     let api = null
     let unsubscribe = null
+    const sceneLoad = new AbortController()
     const hero = sceneRef.current?.closest('.hero-section')
     const stage = sceneRef.current?.closest('.cd-deck-stage')
     const header = hero?.parentElement.querySelector('.mobile-header')
@@ -770,7 +771,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
       setModelStatus('fallback')
     }
     // Load Three.js only when the CD player is mounted.
-    import('../utils/cdDeckScene').then(({ createCdDeckScene }) => {
+    import('../utils/cdDeckScene').then(async ({ createCdDeckScene }) => {
       if (disposed) return
       const navigation = createCdDiscNavigation({
         initial: usePlayerStore.getState(),
@@ -860,7 +861,9 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         },
       })
       discNavigationRef.current = navigation
-      api = createCdDeckScene(canvasRef.current, {
+      api = await createCdDeckScene(canvasRef.current, {
+        signal: sceneLoad.signal,
+        appearance: latestRef.current.appearance,
         onError: fallback,
         softwareRendering: safeRendering,
         presentation,
@@ -881,6 +884,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         onAction: animateBody,
         onDiscChange: (_direction, _previous, next) => navigation.request(next),
       })
+      if (disposed) { api.dispose(); api = null; return }
       sceneApiRef.current = api
       const latest = latestRef.current
       api.setActive(latest.screenActive)
@@ -900,6 +904,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     return () => {
       mountedRef.current = false
       disposed = true
+      sceneLoad.abort()
       clearTimeout(dragRef.current?.holdTimer)
       cancelAnimationFrame(discOverlayFrameRef.current)
       discOverlayFrameRef.current = 0

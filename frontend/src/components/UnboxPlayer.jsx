@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { animate, motionValue } from 'motion'
-import { ArrowUp } from '@/components/icons'
+import { ArrowUp, Loader2 } from '@/components/icons'
 import DesktopCdPlayer from './DesktopCdPlayer'
 import boltWordmark from '../assets/bolt-wordmark.webp'
 
@@ -8,6 +8,7 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
   const [phase, setPhase] = useState(stage === 'customize' ? 'ready' : 'sealed')
   const [peel] = useState(() => motionValue(0))
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const [modelReady, setModelReady] = useState(false)
   const sceneRef = useRef(null)
   const sealRef = useRef(null)
   const tailRef = useRef(null)
@@ -37,6 +38,7 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
   const customize = stage === 'customize'
   const markModelReady = useCallback(() => {
     modelReadyRef.current = true
+    setModelReady(true)
     modelWaiterRef.current?.()
     modelWaiterRef.current = null
   }, [])
@@ -134,8 +136,8 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
     setPhase('lifting-top')
     // The top edge clears the insert first, then the player straightens as one continuous lift.
     if (!await play(deviceRef.current, [
-      { transform: 'translateY(0) translateZ(0) rotateX(0deg)', filter: 'drop-shadow(0 0 0 #0000)' },
-      { transform: 'translateY(-3%) translateZ(44px) rotateX(-17deg)', filter: 'drop-shadow(0 18px 16px #0004)', offset: 0.42 },
+      { transform: 'translateY(0) translateZ(0) rotateX(0deg)' },
+      { transform: 'translateY(-3%) translateZ(44px) rotateX(-17deg)', offset: 0.42 },
       { transform: 'translateY(-12%) translateZ(105px) rotateX(5deg)' },
     ], 620, 'cubic-bezier(0.65, 0, 0.35, 1)')) return
     setPhase('clearing-box')
@@ -157,9 +159,9 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
     setPhase('welcoming')
     const welcomed = await Promise.all([
       play(deviceRef.current, [
-        { transform: 'translateY(0) scale(1.035)', filter: 'drop-shadow(0 26px 24px #0006)' },
-        { transform: 'translateY(-0.5%) scale(1.045)', filter: 'drop-shadow(0 30px 26px #0005)', offset: 0.38 },
-        { transform: 'translateY(0) scale(1)', filter: 'drop-shadow(0 18px 22px #0005)' },
+      { transform: 'translateY(0) scale(1.035)' },
+      { transform: 'translateY(-0.5%) scale(1.045)', offset: 0.38 },
+      { transform: 'translateY(0) scale(1)' },
       ], 480),
       play(shineRef.current, [
         { opacity: 0, transform: 'translateX(-130%) rotate(-22deg)' },
@@ -184,7 +186,7 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
   }, [stage])
 
   const startDrag = (event) => {
-    if (event.button !== 0 || dragRef.current || runningRef.current || customize) return
+    if (event.button !== 0 || dragRef.current || runningRef.current || customize || !modelReadyRef.current) return
     peelAnimationRef.current?.stop()
     clearTimeout(clickResetRef.current)
     suppressClickRef.current = false
@@ -229,6 +231,7 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
       <div className="unboxing-foam" />
     </div>
     <div ref={deviceRef} className="unboxing-device" aria-hidden={phase === 'sealed' || phase === 'peeling'}>
+      <div className="unboxing-device-shadow" aria-hidden="true" />
       <DesktopCdPlayer presentation="setup" interactive={customize && phase === 'ready'} onReady={markModelReady} />
       <div className="unboxing-reflection" aria-hidden="true"><div ref={shineRef} className="unboxing-shine" /></div>
     </div>
@@ -246,14 +249,14 @@ export default function UnboxPlayer({ stage, onUnboxed, onReady }) {
       <div className="unboxing-carton-seam" aria-hidden="true" />
       <div ref={sealRef} className="unboxing-tape-seal" aria-hidden="true" />
       <div ref={tailRef} className="unboxing-tape-tail" aria-hidden="true" />
-      <button ref={tabRef} type="button" className="unboxing-pull-tab" disabled={runningRef.current || customize} aria-label="Потянуть скотч снизу вверх и открыть коробку" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag} onClick={() => {
+      <button ref={tabRef} type="button" className="unboxing-pull-tab" disabled={!modelReady || runningRef.current || customize} aria-busy={!modelReady || undefined} aria-label="Потянуть скотч снизу вверх и открыть коробку" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag} onClick={() => {
         if (suppressClickRef.current) { suppressClickRef.current = false; return }
         void reveal()
-      }}><ArrowUp size={20} aria-hidden="true" /></button>
+      }}>{modelReady ? <ArrowUp size={20} aria-hidden="true" /> : <Loader2 size={20} className="wave-loading-icon" aria-hidden="true" />}</button>
     </div>
     <div className="unboxing-instruction" aria-hidden="true">
-      <strong>Потяните вверх</strong>
-      <span>или нажмите, чтобы открыть</span>
+      <strong>{modelReady ? 'Потяните вверх' : 'Готовим проигрыватель…'}</strong>
+      <span>{modelReady ? 'или нажмите, чтобы открыть' : 'Коробку скоро можно будет открыть'}</span>
     </div>
     <span className="player-setup-sr-only" role="status">{phase === 'sealed' ? 'Потяните скотч снизу вверх. Также можно нажать Enter на язычке.' : phase === 'ready' ? 'Проигрыватель распакован. Можно выбрать оформление.' : phase === 'revealed' ? 'Коробка открыта. Проигрыватель лежит внутри.' : 'Достаём проигрыватель из коробки.'}</span>
   </div>
