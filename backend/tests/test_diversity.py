@@ -197,6 +197,19 @@ def test_spread_into_keeps_the_given_order_of_both_lists():
     assert [item["title"] for item in result if id(item) in extra_ids] == ["x0", "x1"]
 
 
+def test_spread_into_keeps_the_opening_track_when_only_slot_zero_fits():
+    # The first target is 2. Only slot 0 clears X's artist cooldown, but
+    # satisfying it must not move a liked track ahead of the fresh opener.
+    result, extra_ids = _spread(
+        ["A", "B", "X", "C", "D", "A", "B", "C", "D", "A", "B", "C"],
+        ["X", "Y", "Z"],
+        min_gap=3,
+    )
+    positions = [i for i, item in enumerate(result) if id(item) in extra_ids]
+    assert positions == [2, 7, 12], positions
+    assert result[0]["title"] == "o0"
+
+
 def test_spread_into_avoids_landing_next_to_the_same_artist():
     """Разнос по артистам, уже сделанный для ordered, вставка не ломает.
 

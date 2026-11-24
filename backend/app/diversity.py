@@ -146,9 +146,10 @@ def spread_into(
     Порядок ``ordered`` сохраняется: он уже разнесён по артистам
     (``interleave_artists``), и вставка не должна ломать этот разнос. Поэтому
     элемент садится не строго в свою позицию, а в ближайшую к ней, где не
-    встанет ближе ``min_gap`` к своему же артисту; если такой нет — в свою, как
-    и ``interleave_artists``, который тоже ослабляет кулдаун, когда выполнить его
-    нечем.
+    встанет ближе ``min_gap`` к своему же артисту. Если первая целевая позиция
+    не нулевая, начало остаётся за ``ordered``. Если подходящей позиции нет —
+    в свою, как и ``interleave_artists``, который тоже ослабляет кулдаун, когда
+    выполнить его нечем.
     """
     result = list(ordered)
     extra = list(extra)
@@ -157,7 +158,8 @@ def spread_into(
     if not result:
         return extra
     targets = _spread_targets(len(result) + len(extra), len(extra))
-    floor = 0
+    # Artist cooldown must not pull a sparse quota into the opening slot.
+    floor = 1 if targets[0] > 0 else 0
     for target, item in zip(targets, extra):
         key = primary_artist_key(artist_getter(item))
         position = max(target, floor)
