@@ -11,7 +11,7 @@
     radial-gradient(circle at 34% 48%, rgba(255, 255, 255, 0.025), transparent 30%),
     var(--bg-app, #121212);
   color: var(--text-primary, #ffffff);
-  font-family: var(--font-text, 'Geologica', system-ui, sans-serif);
+  font-family: var(--font-text, 'Arimo', system-ui, sans-serif);
   font-weight: 600;
 }
 .player-setup-content { position: relative; width: 100%; min-height: 100dvh; overflow: visible; }
@@ -83,7 +83,7 @@
 .player-setup-appearance::after { position: absolute; inset: 0; padding: 1px; border-radius: inherit; background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05)); content: ''; pointer-events: none; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
 .player-setup-header { margin-bottom: 24px; }
 .player-setup-appearance h1 { margin: 0; outline: none; font-family: var(--font-display, var(--font-text)); font-size: 28px; font-weight: 800; letter-spacing: -0.035em; line-height: 1.08; }
-.player-setup-appearance button { font-family: 'Geologica', system-ui, sans-serif; }
+.player-setup-appearance button { font-family: 'Arimo', system-ui, sans-serif; }
 .player-setup-appearance .cd-appearance-field legend { color: var(--text-secondary, #b3b3b3); }
 .player-setup-appearance .cd-appearance-color, .player-setup-appearance .cd-appearance-segments button { min-height: var(--control-h-md, 40px); }
 .player-setup-appearance .cd-appearance-accent { width: 32px; height: 32px; flex-basis: 32px; border-color: var(--setup-surface); }

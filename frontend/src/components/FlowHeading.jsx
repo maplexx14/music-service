@@ -10,6 +10,10 @@ export default function FlowHeading() {
   const label = usePlayerStore(playbackLabel)
   const context = usePlayerStore((state) => state.currentTrack ? state.playContext : null)
   const headingRef = useRef(null)
+  const textRef = useRef(null)
+  const lastDeckRef = useRef(false)
+  const lastRectRef = useRef(null)
+  const moveAnimationRef = useRef(null)
   // Текст, который сейчас виден. Новое название сначала уходит вверх и только
   // потом подменяет старое, поэтому показанный текст может отставать от label.
   const [shownLabel, setShownLabel] = useState(label)
@@ -62,6 +66,7 @@ export default function FlowHeading() {
       }
       // Keep the horizontally stretched heading inside its available area.
       heading.style.maxWidth = `${available / scale}px`
+      lastRectRef.current = heading.getBoundingClientRect()
     }
     fit()
     const observer = new ResizeObserver(fit)
@@ -78,16 +83,16 @@ export default function FlowHeading() {
   // Смена названия: старое уезжает вверх, новое приходит снизу. Движение идёт
   // через свойство translate, а не transform: transform уже держит scale из CSS.
   useLayoutEffect(() => {
-    const heading = headingRef.current
+    const text = textRef.current
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const canMove = Boolean(heading) && active && !powerSave && !document.hidden &&
-      !reduced.matches && typeof heading.animate === 'function'
+    const canMove = Boolean(text) && active && !powerSave && !document.hidden &&
+      !reduced.matches && typeof text.animate === 'function'
     if (label !== shownLabel) {
       if (!canMove) {
         setShownLabel(label)
         return undefined
       }
-      const leave = heading.animate([
+      const leave = text.animate([
         { opacity: 1, translate: '0 0' },
         { opacity: 0, translate: '0 -40px' },
       ], { duration: 300, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' })
@@ -101,12 +106,47 @@ export default function FlowHeading() {
     if (!enteringRef.current) return undefined
     enteringRef.current = false
     if (!canMove) return undefined
-    const enter = heading.animate([
+    const enter = text.animate([
       { opacity: 0, translate: '0 30px' },
       { opacity: 1, translate: '0 0' },
     ], { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
     return () => enter.cancel()
   }, [label, shownLabel, active, powerSave])
 
-  return <div ref={headingRef} className="wave-heading">{shownLabel}</div>
+  // После появления проигрывателя подпись уезжает наверх и уменьшается.
+  // Раньше класс плеера менял layout скачком; FLIP-анимация переносит
+  // элемент из старого визуального положения в новое.
+  useLayoutEffect(() => {
+    const heading = headingRef.current
+    const hero = heading?.closest('.hero-section')
+    if (!heading || !hero) return
+    const deck = hero.classList.contains('has-desktop-deck') || hero.classList.contains('has-mobile-deck')
+    const wasDeck = lastDeckRef.current
+    lastDeckRef.current = deck
+    const from = lastRectRef.current
+    const to = heading.getBoundingClientRect()
+    lastRectRef.current = to
+    if (!deck || wasDeck || !from?.width || !from?.height || !to.width || !to.height) return
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
+    if (!active || powerSave || document.hidden || reduced.matches || typeof heading.animate !== 'function') return
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2)
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2)
+    const sx = from.width / to.width
+    const sy = from.height / to.height
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return
+    const animation = heading.animate([
+      { translate: `${dx}px ${dy}px`, scale: `${sx} ${sy}` },
+      { translate: '0 0', scale: '1 1' },
+    ], { duration: 680, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
+    moveAnimationRef.current = animation
+    animation.finished.then(() => {
+      if (moveAnimationRef.current === animation) moveAnimationRef.current = null
+    }, () => {})
+  })
+
+  return (
+    <div ref={headingRef} className="wave-heading">
+      <span ref={textRef} className="wave-heading-text">{shownLabel}</span>
+    </div>
+  )
 }

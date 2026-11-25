@@ -369,6 +369,10 @@
   user-select: none;
 }
 
+.wave-heading-text {
+  display: inline-block;
+}
+
 .hero-section.has-cd .wave-heading {
   bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
 }
@@ -885,7 +889,7 @@
   padding: 0;
 }
 
-/* Название источника над потоком — прежний шрифт Geologica, не системный. */
+/* Название источника над потоком остаётся на прежнем шрифте Geologica. */
 .wave-heading {
   font-family: 'Geologica', system-ui, sans-serif;
 }
