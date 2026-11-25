@@ -1263,6 +1263,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
   let carouselActive = false, carouselCamera = null
   let volumeCarouselActive = false
   let discExchanging = false, discExchangeSliding = false, discSwipeActive = false
+  let discExchangeSettling = false, discExchangeSettleTimer = 0
   let draggingDisc = false
   let dragProgress = 0
   let frame = 0
@@ -1958,7 +1959,8 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       gpuDiscTransform = discOverlayGeometry(camera)?.transform
       gpuVolume.refresh()
       const motion = playbackMotion?.status()
-      const showGpu = playbackVolume?.visible && canRender() && !discExchangeSliding && !discSwipeActive
+      const showGpu = playbackVolume?.visible && canRender() && !discExchangeSliding && !discSwipeActive &&
+        !discExchangeSettling
       // The visible CSS shell must inherit the same paused animation as the
       // GPU projection. Leaving it on the hidden marker snaps the body flat.
       projectionElement = showGpu ? gpuProjectionNode : playbackElement
@@ -2662,6 +2664,9 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     refreshDiscArtwork: syncPlaybackMotion,
     beginDiscExchange() {
       discExchanging = true
+      clearTimeout(discExchangeSettleTimer)
+      discExchangeSettleTimer = 0
+      discExchangeSettling = false
       stopReaction()
       let viewAligned = Promise.resolve()
       if (!mobile) {
@@ -2686,12 +2691,32 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     setDiscExchangeSliding(value) {
       discExchangeSliding = Boolean(value)
       playbackElement?.classList.toggle('is-disc-exchanging', discExchangeSliding || discSwipeActive)
-      if (!value) discExchanging = false
+      clearTimeout(discExchangeSettleTimer)
+      discExchangeSettleTimer = 0
+      if (value) {
+        discExchangeSettling = false
+      } else {
+        discExchanging = false
+        // Keep the live CSS record on screen through the queue handoff and
+        // its seat animation. Switching to the GPU layer on the same frame
+        // briefly drops the disc while its texture uploads on phones.
+        discExchangeSettling = true
+        discExchangeSettleTimer = setTimeout(() => {
+          discExchangeSettleTimer = 0
+          discExchangeSettling = false
+          syncPlaybackMotion()
+        }, 240)
+      }
       syncPlaybackMotion()
     },
     setDiscSwipeActive(value) {
       if (discSwipeActive === Boolean(value)) return
       discSwipeActive = Boolean(value)
+      if (discSwipeActive) {
+        clearTimeout(discExchangeSettleTimer)
+        discExchangeSettleTimer = 0
+        discExchangeSettling = false
+      }
       playbackElement?.classList.toggle('is-disc-exchanging', discExchangeSliding || discSwipeActive)
       syncPlaybackMotion()
     },
@@ -2886,6 +2911,8 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     },
     dispose() {
       delete performanceHost.cdPerformance
+      clearTimeout(discExchangeSettleTimer)
+      discExchangeSettleTimer = 0
       playbackMotion?.dispose()
       gpuVolume?.dispose()
       gpuProjectionNode?.remove()

@@ -43,7 +43,8 @@ function copyQueueArtwork(source, target, width = target.width, height = target.
 
 // Keep the departing print intact until the chassis is neutral and the next
 // artwork is ready. Both records then travel on the same native timeline.
-export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, onHold, onSlide, onChange, onCanvas = () => {} }) {
+export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, onHold, onSlide, onChange, onCanvas = () => {},
+  animateFilter = true, animateOpacity = true }) {
   let exchange = null, disposed = false
   const pendingDepartures = new Set()
   const expedite = current => {
@@ -215,10 +216,14 @@ export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, 
         { translate: `${from}px 0px 2px` }, { translate: `${to}px 0px 2px` },
       ], options)
       belt.id = 'cd-disc-belt'
-      const arriving = current.transfer.incoming.animate([
-        { opacity: current.transfer.incomingOpacity ?? 0.72, filter: 'brightness(0.88)', ...(incomingFrom ? { transform: incomingFrom } : {}) },
-        { opacity: 1, filter: 'brightness(1)', ...(incomingTo ? { transform: incomingTo } : {}) },
-      ], options)
+      const arrivingFrames = [
+        { ...(animateOpacity ? { opacity: current.transfer.incomingOpacity ?? 0.72 } : {}),
+          ...(incomingFrom ? { transform: incomingFrom } : {}),
+          ...(animateFilter ? { filter: 'brightness(0.88)' } : {}) },
+        { ...(animateOpacity ? { opacity: 1 } : {}), ...(incomingTo ? { transform: incomingTo } : {}),
+          ...(animateFilter ? { filter: 'brightness(1)' } : {}) },
+      ]
+      const arriving = current.transfer.incoming.animate(arrivingFrames, options)
       arriving.id = 'cd-disc-enter'
       belt.startTime = arriving.startTime = document.timeline.currentTime
       current.animations = [belt, arriving]
@@ -332,13 +337,21 @@ export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, 
     current.outgoingTo = outgoingTo
     const distance = current.direction * 120
     const options = { duration: CD_DISC_EXCHANGE_DURATION, easing: EASING, fill: 'both' }
+    const outgoingEndFilter = outgoingTo ? transfer.outgoingFilter || 'brightness(1)' : 'brightness(1)'
+    const incomingStartFilter = incomingFrom ? transfer.incomingFilter || 'brightness(1)' : 'brightness(1)'
     let outgoingFrames = [
-      { transform: 'translateX(0%)', opacity: 1, filter: 'brightness(1) blur(0px)' },
-      { transform: outgoingTo || `translateX(${-distance}%)`, opacity: outgoingTo ? transfer.outgoingOpacity ?? 1 : 0, filter: outgoingTo ? transfer.outgoingFilter || 'brightness(1)' : 'brightness(1)' },
+      { transform: 'translateX(0%)', ...(animateOpacity ? { opacity: 1 } : {}),
+        ...(animateFilter ? { filter: 'brightness(1) blur(0px)' } : {}) },
+      { transform: outgoingTo || `translateX(${-distance}%)`,
+        ...(animateOpacity ? { opacity: outgoingTo ? transfer.outgoingOpacity ?? 1 : 0 } : {}),
+        ...(animateFilter ? { filter: outgoingEndFilter } : {}) },
     ]
     let incomingFrames = [
-      { transform: incomingFrom || `translateX(${distance}%)`, opacity: incomingFrom ? transfer.incomingOpacity ?? 1 : 0, filter: incomingFrom ? transfer.incomingFilter || 'brightness(1)' : 'brightness(1)' },
-      { transform: 'translateX(0%)', opacity: 1, filter: 'brightness(1) blur(0px)' },
+      { transform: incomingFrom || `translateX(${distance}%)`,
+        ...(animateOpacity ? { opacity: incomingFrom ? transfer.incomingOpacity ?? 1 : 0 } : {}),
+        ...(animateFilter ? { filter: incomingStartFilter } : {}) },
+      { transform: 'translateX(0%)', ...(animateOpacity ? { opacity: 1 } : {}),
+        ...(animateFilter ? { filter: 'brightness(1) blur(0px)' } : {}) },
     ]
     if (current.belt) {
       outgoingFrames = outgoingFrames.map(({ transform, ...frame }) => frame)

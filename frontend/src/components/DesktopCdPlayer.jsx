@@ -253,6 +253,12 @@ function SoftwareDiscOverlay({ geometry, geometryRef, coverSrc, coverSettled, tr
       },
       onSlide: value => sceneApiRef.current?.setDiscExchangeSliding(value),
       onChange: () => artworkChangeRef.current?.(),
+      // Blur/brightness are raster effects: on phones they keep the disc on
+      // the main thread and it freezes whenever React paints the next queue.
+      animateFilter: !mobile,
+      // The queue neighbors sit outside the phone viewport, so dimming the
+      // incoming record only makes the tray show through it.
+      animateOpacity: !mobile,
     })
     exchangeRef.current = exchange
     const sync = () => exchange.sync()
@@ -827,8 +833,9 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
               style: placement ? placement.style : incoming.style.cssText, outgoing, outgoingVisibility: outgoing?.style.visibility,
               prepare,
               swipe: mobile && swipe ? () => swipe.release(direction) : null,
-              incomingOpacity: Number(getComputedStyle(incoming).opacity), incomingFilter: getComputedStyle(incoming).filter,
-              outgoingOpacity: 0.72, outgoingFilter: 'brightness(0.88) blur(2px)',
+              incomingOpacity: mobile ? 1 : Number(getComputedStyle(incoming).opacity),
+              incomingFilter: mobile ? 'none' : getComputedStyle(incoming).filter,
+              outgoingOpacity: mobile ? 1 : 0.72, outgoingFilter: mobile ? 'none' : 'brightness(0.88) blur(2px)',
               horizontal: true,
               preservePrevious: true,
               extras: [...root.querySelectorAll('[data-queue-record]')]

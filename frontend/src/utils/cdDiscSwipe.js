@@ -58,7 +58,7 @@ export function createCdDiscSwipe(overlay, root) {
             nextSibling: node.nextSibling, style: node.style.cssText })
           Object.assign(node.style, {
             position: 'absolute', inset: '0', width: '100%', height: '100%', margin: '0',
-            opacity: '0.72', filter: 'brightness(0.88)', boxShadow: 'none',
+            opacity: '1', filter: 'none', boxShadow: 'none',
             overflow: 'visible', transform: `translateX(${pitch}px) ${orientation}`.trim(), transition: 'none',
           })
           overlay.append(node)
