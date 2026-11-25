@@ -197,6 +197,8 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   const overrides = {
     react: { default: react, ...react },
     '../store/playerStore': { usePlayerStore: store },
+    '../services/connectivity': { isOffline: () => navigator.onLine === false },
+    './connectivity': { isOffline: () => navigator.onLine === false },
     '../store/authStore': { useAuthStore: (selector) => selector({ user: null }) },
     '../hooks/useTrackCarousel': { useTrackCarousel: () => ({ handlers: {}, swipedRef: { current: false } }) },
     '../hooks/useLyrics': { useLyrics: () => ({ syncedLines: [], plainText: '' }) },
@@ -232,7 +234,8 @@ async function mountPlayer({ apk = true, ios = false, desktop = false, legacy = 
   async function link(name) {
     if (cached.has(name)) return cached.get(name)
     const source = name === '../services/audioEngine' ? engineSource : name === '../services/playbackRecovery' ? recoverySource : name === '../services/androidApp' ? androidSource : null
-    const exports = Object.fromEntries((importNames.get(name) || []).map((key) => [key, noop]))
+    const exportNames = new Set([...(importNames.get(name) || []), ...Object.keys(overrides[name] || {})])
+    const exports = Object.fromEntries([...exportNames].map((key) => [key, noop]))
     Object.assign(exports, overrides[name])
     const module = source ? new vm.SourceTextModule(source, { context }) : new vm.SyntheticModule(Object.keys(exports), function () {
       for (const [key, value] of Object.entries(exports)) this.setExport(key, value)

@@ -9,7 +9,7 @@
     "bake:cd-frames": "node scripts/bake-cd-software-frames.mjs",
     "bake:cd-studio": "node scripts/bake-cd-studio-environment.mjs",
     "preview": "vite preview",
-    "test:offline": "node --test tests/offlineTracks.test.mjs tests/offlineLibrary.test.mjs tests/staleBuild.test.mjs tests/offlineShell.test.mjs tests/serviceWorker.test.mjs",
+    "test:offline": "node --test tests/connectivity.test.mjs tests/offlineTracks.test.mjs tests/offlineLibrary.test.mjs tests/staleBuild.test.mjs tests/offlineShell.test.mjs tests/serviceWorker.test.mjs",
     "test:android": "node --experimental-vm-modules --test tests/androidNavigation.test.mjs tests/androidRelease.test.mjs tests/androidPlayback.test.mjs",
     "test:player": "node --experimental-vm-modules --test tests/playerQueue.test.mjs tests/playerStore.test.mjs tests/lyricsRetry.test.mjs",
     "test:touch": "node --experimental-vm-modules --test tests/fastTap.test.mjs tests/swipeNavigation.test.mjs tests/pullToRefresh.test.mjs tests/frameMeter.test.mjs tests/cdTrackSwipe.test.mjs tests/cdDiscSwipe.test.mjs",

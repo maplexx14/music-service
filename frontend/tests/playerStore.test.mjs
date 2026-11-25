@@ -43,6 +43,7 @@ async function mountStore(apiOverrides = {}, globals = {}) {
     '../services/pageCache': { invalidateCache: noop, patchCache: noop, peekCache: noop, LIKED_CACHE_KEY: 'liked' },
     '../utils/playerQueue': queueUtils,
     '../utils/identifiers': identifiers,
+    '../services/connectivity': { isOffline: () => globals.navigator?.onLine === false },
     '../services/offlineTracks': globals.offlineTracks || { downloadedTracks: (tracks = []) => tracks, offlineTrackKey: (track) => track?.id },
   }
   const module = { exports: {} }

@@ -20,6 +20,7 @@ import { diag } from './utils/playerDiag'
 import { installInstallPromptCapture } from './services/installPrompt'
 import { finishAppBoot, preloadInitialScreen } from './services/appBoot'
 import { registerAppServiceWorker } from './services/serviceWorker'
+import { startConnectivityMonitor } from './services/connectivity'
 
 // До первого рендера: облегчённые эффекты должны действовать с первого кадра.
 applyGpuClass()
@@ -32,6 +33,7 @@ installFrameMeter()
 installTouchGuard()
 installFastTap()
 installInstallPromptCapture()
+startConnectivityMonitor()
 preloadInitialScreen()
 
 // WebKit на iOS решает, ждать ли главный поток перед прокруткой, по

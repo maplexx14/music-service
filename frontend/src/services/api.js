@@ -2,6 +2,7 @@ import axios from 'axios'
 import { API_URL } from '../config'
 import { toast } from '../store/toastStore'
 import { hasOfflineData, offlineApiResponse, syncOfflineLibrary } from './offlineLibrary'
+import { isOffline, markOnline, reportNetworkFailure } from './connectivity'
 
 let authToken = null
 
@@ -86,6 +87,7 @@ const isGatewayError = (error) =>
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => {
+    markOnline()
     const method = (response.config?.method || 'get').toLowerCase()
     const url = response.config?.url || ''
     if (method !== 'get' && !url.includes('/offline-library') && (/\/playlists\//.test(url) || /\/tracks\/[^/]+\/(?:like|dislike)$/.test(url))) {
@@ -94,6 +96,7 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
+    if (!error.response) reportNetworkFailure(error)
     const config = error.config
     if (config && isGatewayError(error) && (config.method || 'get').toLowerCase() === 'get') {
       const attempt = config.gatewayRetry || 0
@@ -114,7 +117,7 @@ api.interceptors.response.use(
       localStorage.removeItem('auth-storage')
       setApiAuthToken(null)
       window.dispatchEvent(new CustomEvent('auth:unauthorized'))
-    } else if (error.config?.skipErrorToast !== true && (status || navigator.onLine !== false)) {
+    } else if (error.config?.skipErrorToast !== true && (status || !isOffline())) {
       // Offline playback is intentional; background requests must not cover
       // the downloaded library with repeated "server unavailable" messages.
       const detail = error.response?.data?.detail
@@ -143,7 +146,7 @@ const pendingGets = new Map()
 const rawGet = api.get.bind(api)
 
 api.get = (url, config = {}) => {
-  if (navigator.onLine === false && hasOfflineData(url)) return offlineApiResponse(url, config)
+  if (isOffline() && hasOfflineData(url)) return offlineApiResponse(url, config)
   if (config.signal || config.dedupe === false) {
     const { dedupe: _dedupe, ...axiosConfig } = config
     return rawGet(url, axiosConfig)

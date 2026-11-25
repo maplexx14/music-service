@@ -311,7 +311,7 @@ function Home({ guest = false } = {}) {
   // Каждая полка независима: упавшая или пустая просто не рисуется и не
   // держит остальные.
   const fetchShelves = async () => {
-    if (guest || navigator.onLine === false) return
+    if (guest || offline) return
     shelvesFetchedAtRef.current = Date.now()
     const opts = { skipErrorToast: true }
     const [releases, weekly, rediscover] = await Promise.allSettled([
@@ -347,7 +347,7 @@ function Home({ guest = false } = {}) {
   }, [user])
 
   const fetchData = (refresh = false) => {
-    if (guest || navigator.onLine === false) { setLoading(false); return }
+    if (guest || offline) { setLoading(false); return }
     fetchShelves()
     api
       // Локальный час клиента — для контекста времени суток в рекомендациях
@@ -377,7 +377,7 @@ function Home({ guest = false } = {}) {
   }
 
   const fetchSoundCloudPlaylists = async (tracks) => {
-    if (guest || navigator.onLine === false) return
+    if (guest || offline) return
     scFetchedAtRef.current = Date.now()
     const seeds = getSoundCloudPlaylistSeeds(user, tracks)
     if (seeds.length === 0) return
@@ -410,7 +410,7 @@ function Home({ guest = false } = {}) {
   }
 
   const fetchHistory = async () => {
-    if (guest || navigator.onLine === false) return
+    if (guest || offline) return
     historyRequestedRef.current = true
     // Спиннер только когда показать нечего: снимок прошлого захода остаётся
     // на экране, пока свежая история не придёт.
@@ -464,7 +464,7 @@ function Home({ guest = false } = {}) {
     const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
     const cancel = window.cancelIdleCallback ?? clearTimeout
     const preload = () => {
-      if (!document.hidden && navigator.onLine !== false) usePlayerStore.getState().preloadFlow()
+      if (!document.hidden && !offline) usePlayerStore.getState().preloadFlow()
     }
     const handle = hasCurrentTrack ? idle(preload) : null
     if (!hasCurrentTrack) preload()
@@ -475,7 +475,7 @@ function Home({ guest = false } = {}) {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', preload)
     }
-  }, [screenActive, hasCurrentTrack, guest])
+  }, [screenActive, hasCurrentTrack, guest, offline])
 
   // Полка плейлистов: при возврате на главную или в приложение, если с
   // прошлой загрузки прошло больше SOUNDCLOUD_PLAYLIST_REFRESH_MS, берём
@@ -511,9 +511,9 @@ function Home({ guest = false } = {}) {
     // Только мышь: синтетический mouseenter на тапе задерживал бы клик (см.
     // trackIntentHandlers в playerStore).
     onPointerEnter: (e) => {
-      if (e.pointerType === 'mouse' && navigator.onLine !== false) usePlayerStore.getState().preloadFlow()
+      if (e.pointerType === 'mouse' && !offline) usePlayerStore.getState().preloadFlow()
     },
-    onPointerDown: () => { if (navigator.onLine !== false) usePlayerStore.getState().preloadFlow() },
+    onPointerDown: () => { if (!offline) usePlayerStore.getState().preloadFlow() },
   }
 
   const handleWaveClick = async () => {

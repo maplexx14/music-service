@@ -212,7 +212,7 @@ function Playlists({ guest = false } = {}) {
   }
 
   if (!offline && loadError && playlists.length === 0) {
-    if (navigator.onLine === false) return <div className="page-container"><h1>Медиатека</h1><Link to="/downloads" className="btn btn--secondary"><Download size={20} />Скачанные треки</Link><p>Плейлисты будут доступны после подключения к интернету.</p></div>
+    if (offline) return <div className="page-container"><h1>Медиатека</h1><Link to="/downloads" className="btn btn--secondary"><Download size={20} />Скачанные треки</Link><p>Плейлисты будут доступны после подключения к интернету.</p></div>
     return <PageLoadError title="Не удалось загрузить медиатеку" onRetry={() => {
       setLoading(true)
       fetchPlaylists()
@@ -229,7 +229,7 @@ function Playlists({ guest = false } = {}) {
           {/* Загрузка своего трека: отдельного пункта меню под неё нет ни
               на мобильном, ни в сайдбаре — ссылка на /upload живёт здесь. */}
           <Link to="/upload" className="btn btn--secondary import-playlist-btn" onClick={(event) => {
-            if (navigator.onLine === false) {
+            if (offline) {
               event.preventDefault()
               toast.info('Для загрузки трека нужен интернет')
             }

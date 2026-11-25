@@ -12,6 +12,7 @@ function environment(online) {
   const caches = { keys: async () => [...names], delete: async (key) => names.delete(key) }
   const context = vm.createContext({
     navigator: { onLine: online }, caches, Date, console,
+    isOffline: () => !online,
     lazy: (factory) => ({ factory }),
     sessionStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     location: { reload: () => { reloads++ } },

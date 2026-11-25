@@ -1,4 +1,5 @@
 import { lazy } from 'react'
+import { isOffline } from './connectivity'
 
 // Восстановление после «устаревшей сборки». SW на медленной сети отдаёт
 // каркас (index.html) из Cache Storage, а тот может ссылаться на хэшированные
@@ -45,7 +46,7 @@ async function dropShellCache() {
 
 // true — перезагрузка запущена; false — уже пробовали, показываем ошибку.
 export async function reloadForStaleBuild() {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
+  if (isOffline()) return false
   if (recentlyReloaded()) return false
   markReload()
   await dropShellCache()

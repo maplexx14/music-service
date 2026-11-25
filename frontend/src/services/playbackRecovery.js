@@ -1,5 +1,7 @@
 // APK-only recovery of a stream that stopped advancing after playback began.
 // The existing Player watchdog calls tick(); no additional background timer.
+import { isOffline } from './connectivity'
+
 export function createPlaybackRecovery({ audio, isCurrent, wantsPlayback, play, onRecover }) {
   let position = audio.currentTime
   let advancedAt = Date.now()
@@ -60,7 +62,7 @@ export function createPlaybackRecovery({ audio, isCurrent, wantsPlayback, play, 
       const target = pending ? recoveryPosition : audio.currentTime
       if (!(target > 0)) return pending
       const now = Date.now()
-      if (navigator.onLine === false || attempts >= 3 ||
+      if (isOffline() || attempts >= 3 ||
           now - advancedAt < Math.min(12000 * 2 ** attempts, 24000) ||
           now - progressAt < 8000) return pending
 

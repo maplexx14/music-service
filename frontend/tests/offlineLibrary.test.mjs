@@ -12,8 +12,9 @@ const c = { id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', title: 'Saved C', artist
 function mount() {
   const entries = new Map()
   const cache = { match: async (path) => entries.get(path)?.clone(), put: async (path, value) => entries.set(path, value.clone()), keys: async () => [] }
+  const navigator = { onLine: false, serviceWorker: { controller: {} } }
   const context = vm.createContext({ create, isUuid, console, API_URL: '/api', SERVER_URL: '', URL, URLSearchParams, Response, Blob, DOMException, AbortController,
-    resolveCoverUrl: (url) => url, navigator: { onLine: false, serviceWorker: { controller: {} } }, window: { location: { href: 'https://bolt.test/' } }, caches: { open: async () => cache },
+    resolveCoverUrl: (url) => url, navigator, isOffline: () => navigator.onLine === false, window: { location: { href: 'https://bolt.test/' } }, caches: { open: async () => cache },
   })
   const code = sources.map((source) => source.replace(/\r\n/g, '\n').replace(/^import .+\n/gm, '').replace(/\bexport /g, '').replace("import('../components/FullScreenPlayer')", 'Promise.resolve()')).join('\n')
   vm.runInContext(code + '\nthis.api={useOfflineTracks,loadOfflineTracks,offlineArtist,offlineCollections,offlineApiResponse,randomOfflineTracks,syncOfflineLibrary};', context)

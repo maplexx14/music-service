@@ -3,6 +3,7 @@ import { onlineTrackUrl } from './trackSource'
 import { resolveCoverUrl } from '../utils/media'
 import { API_URL } from '../config'
 import { validateDownloadResponse } from './downloadResponse'
+import { isOffline } from './connectivity'
 
 export const OFFLINE_CACHE = 'bolt-offline-v1'
 const PREFIX = '/__bolt_offline__/'
@@ -93,7 +94,7 @@ export async function downloadTrack(track, token, { signal, sync = true } = {}) 
   if (!owner) throw new Error('Войдите, чтобы скачивать треки')
   if (!key || !onlineTrackUrl(track)) throw new Error('Этот трек недоступен для скачивания')
   if (active.has(key) || useOfflineTracks.getState().tracks.some((entry) => entry.key === key)) return
-  if (navigator.onLine === false) throw new Error('Для скачивания нужен интернет')
+  if (isOffline()) throw new Error('Для скачивания нужен интернет')
   if (!navigator.serviceWorker?.controller || typeof caches === 'undefined') throw new Error('Откройте приложение через HTTPS и перезапустите его для скачивания')
   const run = generation
   const savedOwner = owner
@@ -200,7 +201,7 @@ export async function downloadPlaylist(playlist, token, client) {
   if (!owner) throw new Error('Войдите, чтобы скачивать плейлисты')
   if (!key) throw new Error('Плейлист недоступен для скачивания')
   if (activePlaylists.has(key)) return
-  if (navigator.onLine === false) throw new Error('Для скачивания нужен интернет')
+  if (isOffline()) throw new Error('Для скачивания нужен интернет')
   if (!useOfflineTracks.getState().ready || !navigator.serviceWorker?.controller || typeof caches === 'undefined') {
     throw new Error('Перезапустите приложение для скачивания')
   }
@@ -306,7 +307,7 @@ export async function downloadPlaylist(playlist, token, client) {
         failures.push({ title: track.title, message: error.message })
         status.failed++
         // Stop when continuing cannot help, keeping files already downloaded.
-        if (navigator.onLine === false || /Недостаточно места/.test(error.message)) throw error
+        if (isOffline() || /Недостаточно места/.test(error.message)) throw error
       }
       status.completed++
       playlistJob(key, { ...status })

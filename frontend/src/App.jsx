@@ -15,10 +15,10 @@ import { offerHandoff } from './services/sessionHandoff'
 import Downloads from './pages/Downloads'
 import { loadOfflineTracks, setOfflineLibrarySync, useOfflineTracks } from './services/offlineTracks'
 import { syncOfflineLibrary } from './services/offlineLibrary'
+import { useOffline } from './hooks/useOffline'
 
 // История с анимированными переходами экранов (см. services/navigation.js).
 const appHistory = createAppHistory()
-if (navigator.onLine === false) appHistory.replace('/downloads')
 
 // Ярлыки иконки (manifest shortcuts) при уже открытом окне: launch_handler
 // focus-existing не перезагружает страницу — музыка не прерывается, — а
@@ -54,7 +54,8 @@ const Settings = lazyWithReload(() => import('./pages/Settings'))
 const Admin = lazyWithReload(() => import('./pages/Admin'))
 
 function UploadScreen() {
-  if (navigator.onLine !== false) return <UploadTrack />
+  const offline = useOffline()
+  if (!offline) return <UploadTrack />
   return <div className="page-container"><h1>Загрузить трек</h1><p role="status">Для загрузки трека нужен интернет.</p><Link to="/downloads" className="btn btn--secondary">Скачанные треки</Link></div>
 }
 
@@ -149,24 +150,12 @@ function ActivityRouteSignal({ enabled }) {
 function App() {
   const { isAuthenticated, user } = useAuthStore()
   const offlineReady = useOfflineTracks((state) => state.ready)
+  const offline = useOffline()
   useLayoutEffect(() => {
-    const openDownloads = () => {
-      if (!isAuthenticated || navigator.onLine !== false) return
-      if (offlineReady) usePlayerStore.getState().restrictToOfflineLibrary()
-      usePlayerStore.getState().closeFullScreen()
-      if (appHistory.location.pathname !== '/downloads') appHistory.replace('/downloads')
-    }
-    const onVisible = () => { if (!document.hidden) openDownloads() }
-    openDownloads()
-    window.addEventListener('offline', openDownloads)
-    window.addEventListener('pageshow', openDownloads)
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      window.removeEventListener('offline', openDownloads)
-      window.removeEventListener('pageshow', openDownloads)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [isAuthenticated, offlineReady])
+    if (!isAuthenticated || !offline) return
+    if (offlineReady) usePlayerStore.getState().restrictToOfflineLibrary()
+    usePlayerStore.getState().closeFullScreen()
+  }, [offline, isAuthenticated, offlineReady])
   useEffect(() => {
     const sync = () => syncOfflineLibrary(api).catch(() => {})
     const stop = setOfflineLibrarySync(sync)

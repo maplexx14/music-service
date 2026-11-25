@@ -23,6 +23,7 @@ import { heroImageStyle, useHeroCover } from '../hooks/useHeroCover'
 import { haptic, HAPTIC } from '../utils/haptics'
 import { CAROUSEL_SWITCH_DELAY_MS, settleStrip, SETTLE_MS } from '../utils/settleStrip'
 import { skipForward } from '../services/playerTransport'
+import { isOffline } from '../services/connectivity'
 import { beginCloseMorph, isCoverMorphActive, subscribeCoverMorph } from '../utils/coverMorph'
 import { usePlaybackProgress } from '../hooks/usePlaybackProgress'
 import { holdHeavyAnimations, morphTransition } from '../services/navigation'
@@ -1029,7 +1030,7 @@ function FullScreenPlayer() {
             rel="noreferrer"
             aria-label="Скачать файл"
             onClick={(event) => {
-              if (navigator.onLine === false) {
+              if (isOffline()) {
                 event.preventDefault()
                 toast.info('Для скачивания файла нужен интернет')
               }

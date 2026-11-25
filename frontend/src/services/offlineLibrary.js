@@ -1,5 +1,6 @@
 import { API_URL } from '../config'
 import { downloadedTracks, getOfflineOwner, offlineArtistKey, offlineTrackKey, updateOfflineLibrary, useOfflineTracks } from './offlineTracks'
+import { isOffline } from './connectivity'
 
 export function offlineCollections(state = useOfflineTracks.getState()) {
   const byKey = new Map(state.tracks.map((entry) => [offlineTrackKey(entry.track), entry.track]))
@@ -28,7 +29,7 @@ let pendingSync = null
 export async function syncOfflineLibrary(client) {
   const owner = getOfflineOwner()
   const state = useOfflineTracks.getState()
-  if (!owner || !state.ready || navigator.onLine === false || !state.tracks.length) return
+  if (!owner || !state.ready || isOffline() || !state.tracks.length) return
   if (pendingSync?.owner === owner) {
     await pendingSync.promise
     if (pendingSync?.owner === owner) return

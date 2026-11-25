@@ -4,8 +4,7 @@ import api from '../services/api'
 import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
 import { isDislikedTrack, queueStep, trackKeys } from '../utils/playerQueue'
 import { downloadedTracks, offlineTrackKey } from '../services/offlineTracks'
-
-const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
+import { isOffline } from '../services/connectivity'
 
 function shuffleArray(arr) {
   const result = [...arr]

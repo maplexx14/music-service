@@ -1,6 +1,7 @@
 import { getTrackDbId } from '../utils/identifiers'
 import { onlineTrackUrl } from '../services/trackSource'
 import { offlineAudioUrl, useOfflineTracks } from '../services/offlineTracks'
+import { isOffline } from '../services/connectivity'
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   invalidateFlowPreload,
@@ -146,7 +147,7 @@ const HEAVY_COVER_DELAY_MS = 3000
 function resolveRawUrl(track) {
   if (!track) return undefined
   const saved = offlineAudioUrl(track)
-  if (navigator.onLine === false) return saved
+  if (isOffline()) return saved
   return saved || withQuality(onlineTrackUrl(track))
 }
 
@@ -2833,7 +2834,7 @@ function PlayerInner() {
                     onClick={(event) => {
                       event.stopPropagation()
                       setTrackMenuOpen(false)
-                      if (navigator.onLine === false) {
+                      if (isOffline()) {
                         event.preventDefault()
                         toast.info('Для скачивания файла нужен интернет')
                       }

@@ -19,6 +19,7 @@ import SearchTrackTable from '../components/SearchTrackTable'
 import './Search.css'
 import { useOffline } from '../hooks/useOffline'
 import { useOfflineTracks } from '../services/offlineTracks'
+import { isOffline } from '../services/connectivity'
 import { offlineCollections } from '../services/offlineLibrary'
 
 // Пауза набора перед запросом. 600мс ощущались как «поиск думает»: локальная
@@ -47,7 +48,7 @@ const PROVIDER_LABELS = { deezer: 'Deezer', spotify: 'Spotify' }
 // Статус один на сессию.
 let spotifyStatusPromise = null
 const fetchSpotifyEnabled = () => {
-  if (navigator.onLine === false) return Promise.resolve(false)
+  if (isOffline()) return Promise.resolve(false)
   spotifyStatusPromise ??= api
     .get('/spotify/status', { skipErrorToast: true })
     .then(({ data }) => !!data?.configured)

@@ -14,6 +14,7 @@ const track = { id: 'ytmusic:abc', source: 'ytmusic', external_id: 'abc', stream
 function mount(fetchImpl = async () => new Response('0123456789', { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': '10' } })) {
   const entries = new Map()
   const absolute = (path) => new URL(typeof path === 'string' ? path : path.url, origin).href
+  const navigator = { onLine: true, serviceWorker: { controller: {} }, storage: { persist: async () => true } }
   const cache = {
     put: async (path, response) => entries.set(absolute(path), response.clone()),
     match: async (path) => entries.get(absolute(path))?.clone(),
@@ -23,7 +24,7 @@ function mount(fetchImpl = async () => new Response('0123456789', { headers: { '
   const context = vm.createContext({
     create, isUuid, validateDownloadResponse, API_URL: `${origin}/api`, SERVER_URL: origin,
     resolveCoverUrl: (path) => path, console, URL, Response, Request, Headers, Blob, DOMException, AbortController,
-    navigator: { onLine: true, serviceWorker: { controller: {} }, storage: { persist: async () => true } },
+    navigator, isOffline: () => navigator.onLine === false,
     window: { location: { href: origin } }, caches: { open: async () => cache }, fetch: fetchImpl,
   })
   const transform = (code) => code.replace(/^import .+\n/gm, '').replace(/\bexport /g, '').replace("import('../components/FullScreenPlayer')", 'Promise.resolve()')

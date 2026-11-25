@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, Play, Pause, Trash2, X } from '@/components/icons'
 import { useOfflineTracks, cancelDownload, cancelPlaylistDownload, removeOfflineTrack } from '../services/offlineTracks'
+import { isOffline } from '../services/connectivity'
 import { usePlayerStore } from '../store/playerStore'
 import { toast } from '../store/toastStore'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -14,7 +15,7 @@ export default function Downloads() {
   const isPlaying = usePlayerStore((state) => state.isPlaying)
   useEffect(() => {
     // Warm the player while online, so its controls can also open offline.
-    if (navigator.onLine) import('../components/FullScreenPlayer').catch(() => {})
+    if (!isOffline()) import('../components/FullScreenPlayer').catch(() => {})
   }, [])
   const queue = tracks.map((entry) => entry.track)
   const bytes = tracks.reduce((sum, entry) => sum + entry.bytes, 0)
