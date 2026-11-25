@@ -28,7 +28,6 @@ import { useDeviceTilt } from '../hooks/useDeviceTilt'
 import HeroDisc from './HeroDisc'
 import CdQueueMotion from './CdQueueMotion'
 import CdQueueDisc from './CdQueueDisc'
-import { CdPlayerCustomizer } from './CdPlayerAppearance'
 import './DesktopCdPlayer.css'
 
 const SOFTWARE_DISC_SIZE = 512
@@ -239,8 +238,10 @@ function SoftwareDiscOverlay({ geometry, geometryRef, coverSrc, coverSettled, tr
         }
         sceneApiRef.current?.seatDisc()
       },
-      canAnimate: () => environmentRef.current.active && !environmentRef.current.powerSave &&
-        visibleRef.current && inViewportRef.current && !reduced.matches && !document.hidden,
+      // A disc change is a one-off transition, not background animation:
+      // battery saving and a briefly turned-away disc must not cut it short.
+      canAnimate: () => environmentRef.current.active && inViewportRef.current &&
+        !reduced.matches && !document.hidden,
       align: () => sceneApiRef.current?.beginDiscExchange(),
       onHold(held) {
         exchangeHeldRef.current = held
@@ -1245,7 +1246,6 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
           disabled={deviceTilt.permission === 'requesting' || deviceTilt.permission === 'denied'}
           onClick={deviceTilt.requestPermission}
         ><Compass size={16} aria-hidden="true" />{deviceTilt.permission === 'denied' ? 'Наклон недоступен' : deviceTilt.permission === 'requesting' ? 'Подключаем…' : 'Включить наклон'}</button>}
-      {!setupPreview && !mobile && <CdPlayerCustomizer active={screenActive} />}
     </div>
   )
 }
