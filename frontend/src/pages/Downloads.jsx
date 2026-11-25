@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Download, Play, Pause, Trash2, X } from '@/components/icons'
 import { useOfflineTracks, cancelDownload, cancelPlaylistDownload, removeOfflineTrack } from '../services/offlineTracks'
 import { isOffline } from '../services/connectivity'
+import DownloadProgress from '../components/DownloadProgress'
 import { usePlayerStore } from '../store/playerStore'
 import { toast } from '../store/toastStore'
 import { resolveCoverUrl, handleCoverError } from '../utils/media'
@@ -37,14 +38,18 @@ export default function Downloads() {
         {Object.entries(playlistJobs).map(([key, item]) => (
           <div className="downloads-row" key={`playlist:${key}`}>
             <Download size={24} />
-            <div className="downloads-track"><strong>{item.title}</strong><span role="status">{item.total == null ? (item.kind === 'artist' ? 'Подготовка треков артиста…' : 'Подготовка плейлиста…') : `Скачивание ${item.kind === 'artist' ? 'треков артиста' : 'плейлиста'}: ${item.completed} из ${item.total}${item.failed ? ` · Ошибок: ${item.failed}` : ''}`}</span></div>
+            <div className="downloads-track"><strong>{item.title}</strong><span role="status">{item.total == null ? (item.kind === 'artist' ? 'Подготовка треков артиста…' : 'Подготовка плейлиста…') : `Скачивание ${item.kind === 'artist' ? 'треков артиста' : 'плейлиста'}: ${item.completed} из ${item.total}${item.failed ? ` · Ошибок: ${item.failed}` : ''}`}</span>
+              <DownloadProgress value={item.total == null ? null : item.completed / item.total * 100} className="download-progress--row" label={item.title} />
+            </div>
             <button className="downloads-action" onClick={() => cancelPlaylistDownload(key)} aria-label={`Отменить скачивание ${item.kind === 'artist' ? 'треков артиста' : 'плейлиста'} ${item.title}`}><X size={20} /></button>
           </div>
         ))}
         {Object.entries(jobs).map(([key, item]) => (
           <div className="downloads-row" key={key}>
             <Download size={24} />
-            <div className="downloads-track"><strong>{item.title}</strong><span role="status">Скачивание{item.progress == null ? '…' : `: ${item.progress}%`}</span></div>
+            <div className="downloads-track"><strong>{item.title}</strong><span role="status">Скачивание{item.progress == null ? '…' : `: ${item.progress}%`}</span>
+              <DownloadProgress value={item.progress} className="download-progress--row" label={item.title} />
+            </div>
             <button className="downloads-action" onClick={() => cancelDownload(key)} aria-label={`Отменить скачивание ${item.title}`}><X size={20} /></button>
           </div>
         ))}

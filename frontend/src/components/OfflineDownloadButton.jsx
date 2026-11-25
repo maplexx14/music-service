@@ -2,6 +2,7 @@ import { Download, Check, X } from '@/components/icons'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
 import { useOfflineTracks, offlineTrackKey, downloadTrack, removeOfflineTrack, cancelDownload } from '../services/offlineTracks'
+import DownloadProgress from './DownloadProgress'
 
 export default function OfflineDownloadButton({ track, className, size = 22 }) {
   const authenticated = useAuthStore((state) => state.isAuthenticated)
@@ -19,7 +20,8 @@ export default function OfflineDownloadButton({ track, className, size = 22 }) {
       if (error.name !== 'AbortError') toast.error(error.message || 'Не удалось скачать трек')
     })
   }
-  return <button type="button" className={`${className}${saved ? ' active' : ''}`} onClick={onClick} aria-label={label} title={label}>
+  return <button type="button" className={`offline-download-button ${className}${saved ? ' active' : ''}`} onClick={onClick} aria-label={label} title={label}>
     {saved ? <Check size={size} /> : downloading ? <X size={size} /> : <Download size={size} />}
+    {downloading && <DownloadProgress value={downloading.progress} className="download-progress--button" label={label} />}
   </button>
 }

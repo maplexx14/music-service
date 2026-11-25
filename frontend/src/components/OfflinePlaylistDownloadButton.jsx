@@ -4,6 +4,7 @@ import { toast } from '../store/toastStore'
 import api from '../services/api'
 import { useOffline } from '../hooks/useOffline'
 import { useOfflineTracks, offlineTrackKey, offlinePlaylistKey, downloadPlaylist, cancelPlaylistDownload } from '../services/offlineTracks'
+import DownloadProgress from './DownloadProgress'
 import './OfflinePlaylistDownloadButton.css'
 
 export default function OfflinePlaylistDownloadButton({ playlist, totalTracks }) {
@@ -20,6 +21,7 @@ export default function OfflinePlaylistDownloadButton({ playlist, totalTracks })
   const saved = totalTracks > 0 && keys.length + (collection?.skipped || 0) >= totalTracks && keys.every((trackKey) => savedKeys.has(trackKey))
     && (playlist.tracks || []).every((track) => savedKeys.has(offlineTrackKey(track)))
   const progress = job ? (job.total == null ? 'Подготовка…' : `${job.completed}/${job.total}`) : ''
+  const progressPercent = job && job.total ? job.completed / job.total * 100 : null
   const label = artist
     ? job ? `Отменить скачивание треков артиста (${progress})` : saved ? 'Обновить скачанные треки артиста' : 'Скачать треки артиста для офлайн'
     : job ? `Отменить скачивание плейлиста (${progress})` : saved ? 'Обновить скачанный плейлист' : 'Скачать плейлист для офлайн'
@@ -39,5 +41,6 @@ export default function OfflinePlaylistDownloadButton({ playlist, totalTracks })
     className={`btn btn--ghost btn--lg playlist-action-icon round-actions__icon playlist-download-button${saved ? ' active' : ''}`}
     onClick={onClick} disabled={!job && (!ready || !totalTracks || offline)} title={label} aria-label={label}>
     {job ? <X size={20} /> : saved ? <Check size={20} /> : <Download size={20} />}
+    {job && <DownloadProgress value={progressPercent} className="download-progress--button" label={label} />}
   </button>
 }
