@@ -1027,9 +1027,10 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     const angle = action === 'seek' ? api.discAngleAt(event.clientX, event.clientY) : null
     if (mobile && action === 'seek' && event.cancelable) event.preventDefault()
     event.stopPropagation()
-    const mode = setupPreview ? 'rotate' : action === 'volume' ? 'volume'
+    const mode = setupPreview ? 'tap' : action === 'volume' ? 'volume'
       : action === 'seek' || mobile && action === 'rotate' || (!action && canSwipe) ? 'disc'
-        : action === 'seek' || action === 'rotate' ? 'rotate' : 'button'
+        : action === 'seek' || action === 'rotate' ? 'tap' : 'button'
+    if (!setupPreview) event.currentTarget.style.cursor = mode === 'disc' ? 'grabbing' : mode === 'volume' ? 'ew-resize' : 'pointer'
     // Freeze the accepted pose immediately; a delayed React commit must not
     // let a moving control slip out from under a held pointer.
     api.setPlaybackMotionEnabled(false)
@@ -1077,9 +1078,9 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
       const action = api.hitTest(event.clientX, event.clientY)
       if (action === 'play' && hoverActionRef.current !== action) intentHandlers?.onPointerEnter?.(event)
       hoverActionRef.current = action
-      event.currentTarget.style.cursor = setupPreview ? safeRendering ? 'default' : 'grab' : action === 'volume' ? 'ew-resize'
-        : action && action !== 'seek' && action !== 'rotate' ? 'pointer'
-          : action ? 'grab' : 'default'
+      event.currentTarget.style.cursor = setupPreview ? 'default' : action === 'volume' ? 'ew-resize'
+        : action === 'seek' ? 'grab'
+          : action ? 'pointer' : 'default'
       return
     }
     if (!drag || event.pointerId !== drag.id) return
@@ -1101,10 +1102,8 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         }
       }
     }
-    if (drag.mode === 'rotate' && !mobile) {
-      api.rotateBy(event.clientX - drag.x, event.clientY - drag.y)
-    }
-    else if (drag.mode === 'volume') player.setVolume(Math.min(1, Math.max(0, drag.volume + (event.clientX - drag.startX - event.clientY + drag.startY) * 0.006)))
+    // The chassis is click-to-play only: dragging the body never changes the view.
+    if (drag.mode === 'volume') player.setVolume(Math.min(1, Math.max(0, drag.volume + (event.clientX - drag.startX - event.clientY + drag.startY) * 0.006)))
     else if (drag.mode === 'seek' && player.currentTrack?.id === drag.trackId) {
       if (mobile && event.cancelable) event.preventDefault()
       const angle = api.discAngleAt(event.clientX, event.clientY)
@@ -1150,7 +1149,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         player.previousTrack()
       }
       else if (event.type === 'pointerup' && drag.action && !drag.held && !drag.tapCancelled && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 10 && player.currentTrack?.id === drag.trackId) runAction('play')
-    } else if (drag.mode === 'rotate' && !setupPreview && event.type === 'pointerup' && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) {
+    } else if (drag.mode === 'tap' && !setupPreview && event.type === 'pointerup' && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) {
       runAction('play')
     } else if (drag.mode === 'seek') {
       const player = usePlayerStore.getState()
@@ -1161,6 +1160,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     if (event.type === 'pointerup' && drag.mode === 'volume') api?.reactToAction('volume')
     if (swipeCommitted) haptic(HAPTIC.selection, { allowDomFallback: false })
     if (!swipeCommitted) resetSwipeMotion()
+    event.currentTarget.style.cursor = ''
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     if (!swipeCommitted) restorePlaybackMotion()
   }
@@ -1190,7 +1190,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         <span ref={seekPointerPlaneRef} className="cd-deck-pointer-plane cd-deck-seek-plane" aria-hidden="true"><span /><span /><span /><span /></span>
         <div ref={motionRef} className="cd-deck-motion">
           <div ref={bodyRef} className="cd-deck-body">
-            <div ref={sceneRef} className={`cd-deck-scene${interacting ? ' is-interacting' : ''}${!screenActive ? ' is-inactive' : ''}${safeRendering ? ' is-static' : ''}`} role="group" data-swipe-ignore={mobile ? "" : undefined} aria-label={mobile ? 'Мобильный CD-проигрыватель. Свайп влево — следующий трек, вправо — предыдущий. Кнопки на корпусе управляют воспроизведением; удерживайте и вращайте диск для перемотки трека.' : setupPreview ? 'Предпросмотр вашего CD-проигрывателя. Перетащите корпус или используйте стрелки, чтобы повернуть. Home — исходный ракурс.' : safeRendering ? '3D-проигрыватель. Кнопка Play/Pause на корпусе, Enter или пробел — включить, приостановить или продолжить воспроизведение.' : '3D-проигрыватель. Кнопка Play/Pause на корпусе, Enter или пробел — включить, приостановить или продолжить воспроизведение. Перетащите корпус мышью или используйте стрелки, чтобы повернуть. Поворот диска перематывает трек. Home — исходный ракурс.'} aria-busy={deckBusy || undefined} tabIndex={!mobile && modelStatus === 'ready' && interactive ? 0 : -1} onPointerDownCapture={startInteraction} onPointerMove={moveInteraction} onPointerUp={finishInteraction} onPointerCancel={finishInteraction} onLostPointerCapture={finishInteraction} onKeyDown={keyRotation} onKeyUp={() => sceneApiRef.current?.setControlMotionEnabled(true)} onDoubleClick={safeRendering || !interactive || mobile ? undefined : resetRotation}>
+            <div ref={sceneRef} className={`cd-deck-scene${interacting ? ' is-interacting' : ''}${!screenActive ? ' is-inactive' : ''}${safeRendering ? ' is-static' : ''}`} role="group" data-swipe-ignore={mobile ? "" : undefined} aria-label={mobile ? 'Мобильный CD-проигрыватель. Свайп влево — следующий трек, вправо — предыдущий. Кнопки на корпусе управляют воспроизведением; удерживайте и вращайте диск для перемотки трека.' : setupPreview ? 'Предпросмотр вашего CD-проигрывателя. Используйте стрелки, чтобы повернуть. Home — исходный ракурс.' : safeRendering ? '3D-проигрыватель. Кнопка Play/Pause на корпусе, Enter или пробел — включить, приостановить или продолжить воспроизведение.' : '3D-проигрыватель. Кнопка Play/Pause на корпусе, Enter или пробел — включить, приостановить или продолжить воспроизведение. Используйте стрелки, чтобы повернуть. Поворот диска перематывает трек. Home — исходный ракурс.'} aria-busy={deckBusy || undefined} tabIndex={!mobile && modelStatus === 'ready' && interactive ? 0 : -1} onPointerDownCapture={startInteraction} onPointerMove={moveInteraction} onPointerUp={finishInteraction} onPointerCancel={finishInteraction} onLostPointerCapture={finishInteraction} onKeyDown={keyRotation} onKeyUp={() => sceneApiRef.current?.setControlMotionEnabled(true)} onDoubleClick={safeRendering || !interactive || mobile ? undefined : resetRotation}>
               {/* Disposing a scene releases its WebGL context. A layout change
                   must create a fresh canvas before initializing the next scene. */}
               <canvas key={`${presentation}:${safeRendering ? 'software' : 'hardware'}`} ref={canvasRef} className={`cd-deck-canvas${modelStatus === 'ready' ? ' is-ready' : ''}`} aria-hidden="true" />

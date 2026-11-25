@@ -41,7 +41,7 @@ const compiled = await transform(source, { loader: 'jsx', jsx: 'automatic', form
 
 function player({ mobile = true, action = 'seek', canNext = true, canPrev = true, queuePager = null } = {}) {
   const refNames = [...source.slice(source.indexOf('function DesktopCdPlayer(')).matchAll(/const (\w+Ref) = useRef\(/g)].map(match => match[1])
-  const refs = {}, timers = new Map(), captures = new Set(), calls = [], animations = []
+  const refs = {}, timers = new Map(), captures = new Set(), calls = [], animations = [], rotations = []
   let cursor = 0, sequence = 0
   const queue = [canPrev && 'prev', 'current', canNext && 'next'].filter(Boolean).map(id => ({ id, title: id, duration: 200 }))
   const currentIndex = canPrev ? 1 : 0
@@ -61,6 +61,7 @@ function player({ mobile = true, action = 'seek', canNext = true, canPrev = true
   const jsx = (type, props) => ({ type, props })
   const api = new Proxy({
     hitTest: () => action, discAngleAt: (x, y) => Math.atan2(y - 50, x - 150), progress: () => 0.5,
+    rotateBy: (...args) => rotations.push(args),
     setDiscSwipeActive: active => { disc.swiping = active },
   }, { get: (target, key) => target[key] || (() => {}) })
   const body = { style: {} }
@@ -115,7 +116,7 @@ function player({ mobile = true, action = 'seek', canNext = true, canPrev = true
     button: 0, isPrimary: pointerId === 1, pointerType: 'touch', pointerId, cancelable: true,
     preventDefault() {}, stopPropagation() {},
   })
-  return { calls, body, disc, scene, captures, animations,
+  return { calls, body, disc, scene, captures, animations, rotations,
     start: (id = 1) => scene.onPointerDownCapture(event(150, 50, 0, 'pointerdown', id)),
     move: (x, y = 50, time = 100) => scene.onPointerMove(event(x, y, time)),
     end: (x, type = 'pointerup') => scene.onPointerUp(event(x, 50, 110, type)),
@@ -198,5 +199,12 @@ test('3D buttons, volume drags, vertical gestures and desktop rotation cannot sk
   }
   const env = player()
   env.start(); env.move(150, 150); env.move(50, 150); env.end(50)
+  assert.deepEqual(env.calls, [])
+})
+
+test('dragging the chassis with the cursor never rotates the player', () => {
+  const env = player({ mobile: false, action: 'rotate' })
+  env.start(); env.move(80, 70); env.move(230, 140); env.end(230)
+  assert.deepEqual(env.rotations, [])
   assert.deepEqual(env.calls, [])
 })

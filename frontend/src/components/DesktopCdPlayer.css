@@ -108,7 +108,6 @@
   outline: none;
 }
 
-.cd-deck-scene.is-interacting { cursor: grabbing !important; }
 /* Projected artwork and controls set visibility inline. Hide every layer
    together when a mounted player belongs to an inactive tab. */
 .cd-deck-scene.is-inactive,
