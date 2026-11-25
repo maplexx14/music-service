@@ -62,6 +62,7 @@ async function mountSearch(initial = {}, props = {}) {
     react,
     '@/components/icons': icons,
     '../hooks/useOffline': { useOffline: () => false },
+    '../services/connectivity': { isOffline: () => false },
     '../services/offlineTracks': {
       useOfflineTracks: Object.assign(
         () => ({ tracks: [], library: { playlists: [], likedKeys: [] }, jobs: {}, playlistJobs: {}, ready: true }),
