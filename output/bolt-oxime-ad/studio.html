@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>Bolt — 3D studio</title>
+<style>
+@font-face{font-family:Arimo;src:url(assets/arimo-cyrillic.woff2);font-weight:400 700;unicode-range:U+0400-045F,U+0490-0491,U+2116}
+@font-face{font-family:Arimo;src:url(assets/arimo-latin.woff2);font-weight:400 700}
+html,body{margin:0;background:#100c19;color:#fafafa;font-family:Arimo,Arial,sans-serif;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh;object-fit:contain}
+</style>
+<script type="importmap">{"imports":{"three":"/frontend/node_modules/three/build/three.module.js","three/addons/":"/frontend/node_modules/three/examples/jsm/"}}</script>
+<canvas id="film"></canvas>
+<script type="module" src="scene.js"></script>
+</html>

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { shallow } from 'zustand/shallow'
-import { Compass, Loader2, Pause, Play, SkipBack, SkipForward } from '@/components/icons'
+import { Loader2, Pause, Play, SkipBack, SkipForward } from '@/components/icons'
 import { spring } from 'motion'
 import { animate } from 'motion/mini'
 import { usePlayerStore } from '../store/playerStore'
@@ -19,12 +19,11 @@ import { paintCdDiscArtwork, paintCdDiscReflection } from '../utils/cdDiscArtwor
 import { createCdBodyMotion, cdBodyKeyframes } from '../utils/cdBodyMotion'
 import { createCdDiscExchange } from '../utils/cdDiscExchange'
 import { createCdDiscNavigation } from '../utils/cdDiscNavigation'
-import { cdDiscRecordKey, parkCdDiscRecord } from '../utils/cdDiscRecords'
+import { cdDiscRecordKey, cdQueueRecords, parkCdDiscRecord } from '../utils/cdDiscRecords'
 import { isCdQueueFrameReady } from '../utils/cdQueueHandoff'
 import { useDiscCover } from '../hooks/useDiscCover'
 import { useScreen } from '../hooks/useScreen'
 import { usePowerSave } from '../hooks/usePowerSave'
-import { useDeviceTilt } from '../hooks/useDeviceTilt'
 import HeroDisc from './HeroDisc'
 import CdQueueMotion from './CdQueueMotion'
 import CdQueueDisc from './CdQueueDisc'
@@ -49,24 +48,15 @@ const QueueDiscs = memo(function QueueDiscs({ mobile = false, snapshot = null, h
     currentShuffleIndex: s.currentShuffleIndex,
     dislikedTrackIds: s.dislikedTrackIds,
     dislikedTrackKeys: s.dislikedTrackKeys,
-    preview: s.flowPreview || s.flowPreload,
+    flowPreview: s.flowPreview,
+    flowPreload: s.flowPreload,
   }), shallow)
-  const state = snapshot ? { ...snapshot, preview: snapshot.flowPreview || snapshot.flowPreload } : liveState
+  const state = snapshot || liveState
   useLayoutEffect(() => {
     // Child disc slots have adopted their canvases before this parent effect.
     if (!held) onCommit?.()
   }, [snapshot, held, generation, onCommit])
-  // Keep a second real record on either side so the next queue slots arrive
-  // with the moving belt. Mobile keeps its compact center item.
-  const directions = mobile ? [-1, 0, 1] : [-2, -1, 1, 2]
-  const discs = directions.flatMap((direction) => {
-    const step = state.currentTrack && direction !== 0 ? queueStep(state, Math.sign(direction), Math.abs(direction)) : null
-    const track = state.currentTrack
-      ? direction === 0 ? state.currentTrack : step && state.queue[step.index]
-      : direction >= 0 && state.preview?.tracks?.[direction]
-    const index = state.currentTrack ? direction === 0 ? state.currentIndex : step?.index : direction
-    return track ? [{ track, direction, key: `${index}:${track.source || 'local'}:${track.external_id || track.id}` }] : []
-  })
+  const discs = cdQueueRecords(state, mobile)
   const select = (direction) => {
     const player = usePlayerStore.getState()
     if (direction > 0) player.advanceBy(direction, 'cd_queue')
@@ -626,16 +616,6 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
     swipeAnimationRef.current?.stop()
     discSwipeMotionRef.current?.clear()
   }, [])
-  const deviceTilt = useDeviceTilt({
-    enabled: mobile && interactive && !safeRendering && !initialPlayback,
-    active: screenActive && !powerSave && !deckBusy,
-    paused: interacting || queueHeld || Boolean(discSwipeMotionRef.current),
-    ready: modelStatus === 'ready',
-    sceneRef,
-    apiRef: sceneApiRef,
-    dragRef,
-  })
-
   useLayoutEffect(() => {
     if (!screenActive || modelStatus === 'loading' || enteredRef.current || document.hidden) return undefined
     enteredRef.current = true
@@ -670,8 +650,6 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
       const headerBounds = header?.getBoundingClientRect()
       const headerBottom = headerBounds?.height ? headerBounds.bottom : heroTop
       const chassisTop = stage.getBoundingClientRect().top + y
-      const root = stage.parentElement
-      root?.style.setProperty('--cd-tilt-top', `${stage.getBoundingClientRect().top - root.getBoundingClientRect().top}px`)
       // Center the source between the brow and the resting visible chassis.
       const center = `${((headerBottom + chassisTop) / 2 - heroTop).toFixed(3)}px`
       if (hero.style.getPropertyValue('--cd-source-center-y') !== center) hero.style.setProperty('--cd-source-center-y', center)
@@ -744,17 +722,6 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
         }
         if (overlay) return
       }
-      const control = discControlRef.current
-      if (geometry && mobile && !cachedRendering && !safeRendering && control) {
-        // Sensor updates move the touch target with the rendered disc without
-        // re-rendering the React player on every orientation sample.
-        Object.assign(control.style, {
-          left: '0', top: '0', width: `${SOFTWARE_DISC_SIZE}px`, height: `${SOFTWARE_DISC_SIZE}px`,
-          transform: squareToQuadTransform(geometry.quad, SOFTWARE_DISC_SIZE), transformOrigin: '0 0',
-          visibility: geometry.facing === false ? 'hidden' : 'visible',
-        })
-        return
-      }
       pendingDiscOverlayRef.current = geometry
       if (discOverlayFrameRef.current) return
       discOverlayFrameRef.current = requestAnimationFrame(() => {
@@ -794,9 +761,10 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
           setVisualTrack(state.currentTrack)
         },
         move: (direction, previous, next, done) => {
-          playedRecordsRef.current.add(cdDiscRecordKey(previous.currentTrack, previous.currentIndex))
+          const departingKey = cdDiscRecordKey(previous.currentTrack, previous.currentIndex)
+          playedRecordsRef.current.add(departingKey)
           const root = sceneRef.current?.closest('.desktop-cd-player')
-          const key = `${next.currentIndex}:${next.currentTrack?.source || 'local'}:${next.currentTrack?.external_id || next.currentTrack?.id}`
+          const key = cdDiscRecordKey(next.currentTrack, next.currentIndex)
           const record = [...root?.querySelectorAll('[data-queue-record]') || []]
             .find(node => node.dataset.queueRecord === key)
           const source = discSwipeMotionRef.current?.incomingFor(key) || record?.querySelector('.hero-disc')
@@ -816,9 +784,17 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
           }
           let transfer = null
           if (incoming) {
-            const previousRecord = root.querySelector(`[data-queue-direction="${direction < 0 ? 1 : -1}"]`)
-            const outgoing = discSwipeMotionRef.current?.incomingFor(previousRecord?.dataset.queueRecord) || previousRecord?.querySelector('.hero-disc')
+            const nextSlots = new Map(cdQueueRecords(next, mobile).map(record => [record.key, record.direction]))
+            const keepsDeparture = nextSlots.get(departingKey) === -direction
+            // A disliked disc leaves the queue. The preceding eligible disc
+            // already occupies the free slot and should stay in place.
+            const previousRecord = root.querySelector(`[data-queue-slot="${-direction}"]`)
+            const previousSlot = nextSlots.get(previousRecord?.dataset.queueRecord)
+            const movesPrevious = keepsDeparture && previousRecord && (previousSlot == null || previousSlot === -direction * 2)
             const swipe = discSwipeMotionRef.current
+            const outgoing = movesPrevious
+              ? swipe?.incomingFor(previousRecord.dataset.queueRecord) || previousRecord.querySelector('.hero-disc')
+              : null
             const placement = swipe?.placementFor(key)
             // Return borrowed queue nodes before the exchange measures them,
             // retaining the finger's offset on the shared belt's first frame.
@@ -832,33 +808,28 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
               incoming, parent: placement?.parent || incoming.parentElement, nextSibling: placement ? placement.nextSibling : incoming.nextSibling,
               style: placement ? placement.style : incoming.style.cssText, outgoing, outgoingVisibility: outgoing?.style.visibility,
               prepare,
-              swipe: mobile && swipe ? () => swipe.release(direction) : null,
+              swipe: mobile && swipe && keepsDeparture ? () => swipe.release(direction) : null,
               incomingOpacity: mobile ? 1 : Number(getComputedStyle(incoming).opacity),
               incomingFilter: mobile ? 'none' : getComputedStyle(incoming).filter,
-              outgoingOpacity: mobile ? 1 : 0.72, outgoingFilter: mobile ? 'none' : 'brightness(0.88) blur(2px)',
+              outgoingOpacity: keepsDeparture ? (mobile ? 1 : 0.72) : 0,
+              outgoingFilter: mobile ? 'none' : 'brightness(0.88) blur(2px)',
+              outgoingTargetSlot: previousSlot,
               horizontal: true,
               preservePrevious: true,
-              extras: [...root.querySelectorAll('[data-queue-record]')]
-                .filter(node => Math.abs(Number(node.dataset.queueSlot)) > 1 &&
-                  node.querySelector('.hero-disc') !== incoming && node.querySelector('.hero-disc') !== outgoing)
-                .map(node => ({ node: node.querySelector('.hero-disc'), slot: Number(node.dataset.queueSlot) })),
+              extras: [...root.querySelectorAll('[data-queue-record]')].flatMap(record => {
+                const slot = Number(record.dataset.queueSlot)
+                const targetSlot = nextSlots.get(record.dataset.queueRecord)
+                const node = record.querySelector('.hero-disc')
+                return Math.abs(slot) > 1 && node && (targetSlot == null || targetSlot === slot - direction)
+                  ? [{ node, targetSlot }] : []
+              }),
               alignQueue: target => {
                 const bounds = root.getBoundingClientRect()
                 root.style.setProperty('--cd-queue-center-x', `${target.left + target.width / 2 - bounds.left}px`)
                 root.style.setProperty('--cd-queue-center-y', `${target.top + target.height / 2 - bounds.top}px`)
                 root.style.setProperty('--cd-queue-disc-size', `${target.width}px`)
               },
-              park: record => {
-                const current = next
-                const destination = queueStep(current, direction < 0 ? 1 : -1)
-                const key = cdDiscRecordKey(previous.currentTrack, previous.currentIndex)
-                if (destination && cdDiscRecordKey(current.queue[destination.index], destination.index) === key) {
-                  parkCdDiscRecord(key, record)
-                  return true
-                }
-                record.settle()
-                return false
-              },
+              park: keepsDeparture ? record => parkCdDiscRecord(departingKey, record) : undefined,
             }
           }
           const controls = softwareDiscApiRef.current
@@ -887,7 +858,7 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
           return cdPointInQuad(quad, clientX, clientY)
         },
         // Project poses directly onto the live disc; camera frames need no
-        // React commits, including manual orbit and phone tilt.
+        // React commits.
         onDiscOverlayChange: mobile || cachedRendering ? queueDiscOverlay : undefined,
         onFramingChange: mobile ? positionSource : undefined,
         onAction: animateBody,
@@ -1246,13 +1217,6 @@ function DesktopCdPlayer({ onPlay, onStartFlow = onPlay, busy = false, intentHan
           </div>
         </div>
       </div>
-      {mobile && interactive && !safeRendering && !initialPlayback && modelStatus === 'ready' && deviceTilt.permission !== 'granted' && deviceTilt.permission !== 'unavailable' && <button
-          type="button"
-          className="cd-mobile-tilt-enable"
-          aria-label="Управление наклоном проигрывателя"
-          disabled={deviceTilt.permission === 'requesting' || deviceTilt.permission === 'denied'}
-          onClick={deviceTilt.requestPermission}
-        ><Compass size={16} aria-hidden="true" />{deviceTilt.permission === 'denied' ? 'Наклон недоступен' : deviceTilt.permission === 'requesting' ? 'Подключаем…' : 'Включить наклон'}</button>}
     </div>
   )
 }

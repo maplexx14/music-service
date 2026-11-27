@@ -1,0 +1,173 @@
+[
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "cupsize",
+      "artists": [
+        {
+          "name": "CUPSIZE",
+          "url": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FnaZwo1VUprBDJatuZrfc2NXPbuqhoeo40mQv5OH4UCzgLRSs9oGD72e7YxKouvr4ulscoCnzCS9EB2Do%3Dw300-h300-l90-rj"
+        }
+      ],
+      "rows": [
+        {
+          "title": "ты любишь танцевать",
+          "artist": "CUPSIZE",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FnaZwo1VUprBDJatuZrfc2NXPbuqhoeo40mQv5OH4UCzgLRSs9oGD72e7YxKouvr4ulscoCnzCS9EB2Do%3Dw120-h120-l90-rj",
+          "duration": "2:25"
+        },
+        {
+          "title": "урод",
+          "artist": "CUPSIZE",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FhMbqopQUClVZIx-pJ9LspiSdRiGJMcaFBgG9bvqpAFUXEZ3UEnrCHEwlw7Tqe-dGnj0FEe730T1V2Zol%3Dw120-h120-l90-rj",
+          "duration": "3:03"
+        },
+        {
+          "title": "Юра Юра",
+          "artist": "CUPSIZE",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-DAFQUCVz6DtiYrGR-8OAxbQ-t300x300.jpg",
+          "duration": "2:11"
+        },
+        {
+          "title": "ЗППП",
+          "artist": "CUPSIZE",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-9kSpNoPUxCQKbfwV-MpEyDw-t300x300.png",
+          "duration": "2:29"
+        },
+        {
+          "title": "Забуду",
+          "artist": "CUPSIZE",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-MLdBHyRM5crYK9DY-oDd5XA-t300x300.jpg",
+          "duration": "3:11"
+        }
+      ],
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "touch": 1,
+        "coarse": true,
+        "navVisible": true
+      }
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "madk1d",
+      "artists": [
+        {
+          "name": "madk1d",
+          "url": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-Q981zjAlkvLAfW5Y-imoUTQ-t500x500.png"
+        }
+      ],
+      "rows": [
+        {
+          "title": "Malo 2.0",
+          "artist": "madk1d, тёмный принц, Егор Крид, Og Buda, Toxi$, Мэйби Бэйби, Baby Cute, Дора",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-Q981zjAlkvLAfW5Y-imoUTQ-t300x300.png",
+          "duration": "5:20"
+        },
+        {
+          "title": "ДИНАСТИЯ",
+          "artist": "VILLIAN, madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FKOLLl51-w4X7jII_lt1jX4HnP3D7fMW8UyG0kXjFYeakeoTwXSSFyIWuoW5BdKv6vyyCfL0Ag0-EMET4%3Dw120-h120-l90-rj",
+          "duration": "2:31"
+        },
+        {
+          "title": "ты че обиделась",
+          "artist": "madk1d, тёмный принц",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FAnLnCTvGHeMyf4VFYZjak3tD81SdiuUxozBjoBkm1SHWFYEpRgEXC_j5JFibaY5MMhnodIm7IhxcTWA7%3Dw120-h120-l90-rj",
+          "duration": "1:30"
+        },
+        {
+          "title": "так по***",
+          "artist": "madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-kXOQozMfAIWh3Ee4-HujXpw-t300x300.png",
+          "duration": "1:46"
+        },
+        {
+          "title": "дырки в штанах",
+          "artist": "madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-nIDkmpIJ1JMSoE6w-AZwXhQ-t300x300.png",
+          "duration": "1:45"
+        },
+        {
+          "title": "засосы",
+          "artist": "madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-kXOQozMfAIWh3Ee4-HujXpw-t300x300.png",
+          "duration": "1:38"
+        },
+        {
+          "title": "sexyswag2010",
+          "artist": "madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-kXOQozMfAIWh3Ee4-HujXpw-t300x300.png",
+          "duration": "1:28"
+        },
+        {
+          "title": "супермаркет",
+          "artist": "madk1d",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-kXOQozMfAIWh3Ee4-HujXpw-t300x300.png",
+          "duration": "1:58"
+        }
+      ],
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "touch": 1,
+        "coarse": true,
+        "navVisible": true
+      }
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "fortuna812",
+      "artists": [
+        {
+          "name": "FORTUNA 812",
+          "url": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FWmn903SEbCtKc0Ut_jPZmymDl01WJHBL6XISKT1jR6mLr26fjZ_HhjSCL21IFi1aRRybwGGY2xvw6yQ%3Dw300-h300-l90-rj"
+        }
+      ],
+      "rows": [
+        {
+          "title": "tectonic (prod. greyrock,akkiru1)",
+          "artist": "fortuna812",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-ya8vE6qkC6VfYeiM-iGF7Sg-t300x300.jpg",
+          "duration": "2:35"
+        },
+        {
+          "title": "fortuna812- снова",
+          "artist": "yungplug",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-biOY0O8vol6yLvVG-jLk3dg-t300x300.jpg",
+          "duration": "1:50"
+        },
+        {
+          "title": "fortuna812 archivecore",
+          "artist": "blaze",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-cVogzsPEgX20j5Yh-j3R1WQ-t300x300.jpg",
+          "duration": "2:10"
+        },
+        {
+          "title": "не знакомы+fortuna812 (prod:JESUSTALKWME)",
+          "artist": "тревога",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-foXIuCnRsPzjfrmv-iXnx0g-t300x300.png",
+          "duration": "1:56"
+        },
+        {
+          "title": "FORTUNA 812 - YoungRussia (prod. akkiru1,greyrock)",
+          "artist": "FORTUNA812",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-773iC8F50JXvL8aN-vpGPGg-t300x300.jpg",
+          "duration": "1:27"
+        }
+      ],
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "touch": 1,
+        "coarse": true,
+        "navVisible": true
+      }
+    }
+  }
+]

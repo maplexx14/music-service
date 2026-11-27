@@ -1,0 +1,120 @@
+import { create } from 'zustand'
+import { readUiSession, writeUiSession } from '../services/uiSession'
+
+const emptyResults = { tracks: [], playlists: [] }
+const emptyExternalTracks = { top: [], ytmusic: [], soundcloud: [] }
+// Поиск по Deezer/Spotify идёт только под своим фильтром; выдача помнит свой
+// запрос: { [provider]: { q, tracks } }.
+const emptyProviderTracks = {}
+
+function restoredSearch() {
+  const saved = readUiSession('search')
+  if (!saved || typeof saved.query !== 'string') return {}
+  return {
+    query: saved.query.slice(0, 2000),
+    filter: ['all', 'top', 'library', 'ytmusic', 'soundcloud', 'deezer', 'spotify'].includes(saved.filter) ? saved.filter : 'all',
+    results: saved.results && Array.isArray(saved.results.tracks) && Array.isArray(saved.results.playlists) ? saved.results : emptyResults,
+    resultsQuery: typeof saved.resultsQuery === 'string' ? saved.resultsQuery : '',
+    externalTracks: saved.externalTracks && ['top', 'ytmusic', 'soundcloud'].every((key) => Array.isArray(saved.externalTracks[key])) ? saved.externalTracks : emptyExternalTracks,
+    externalPlaylists: Array.isArray(saved.externalPlaylists) ? saved.externalPlaylists : [],
+    providerTracks: saved.providerTracks && typeof saved.providerTracks === 'object' ? saved.providerTracks : {},
+    artists: Array.isArray(saved.artists) ? saved.artists : [],
+    cachedQuery: Date.now() - saved.savedAt < 5 * 60000 && typeof saved.cachedQuery === 'string' ? saved.cachedQuery : '',
+  }
+}
+
+// Выдача поиска живёт в сторе, а не в состоянии страницы: роутер размонтирует
+// /search при уходе на другую вкладку, и локальный useState терял и запрос, и
+// результаты — возврат начинался с пустого экрана и повторного поиска.
+const useSearchStore = create((set) => ({
+  query: '',
+  results: emptyResults,
+  // Строка, по которой получена results: пока идёт набор, query уже новая, а
+  // выдача старая — топ медиатеки считается по её собственному запросу.
+  resultsQuery: '',
+  externalTracks: emptyExternalTracks,
+  externalPlaylists: [],
+  providerTracks: emptyProviderTracks,
+  artists: [],
+  searchError: '',
+  // Запрос, чья выдача дособрана целиком. Только по нему возврат на страницу
+  // считает результаты готовыми; оборванный на середине запрос ищется заново.
+  cachedQuery: '',
+  // Фильтр выдачи: 'all' или один источник (см. SEARCH_FILTERS в Search.jsx).
+  // В сторе, чтобы пережить уход на другую вкладку вместе с выдачей.
+  filter: 'all',
+
+  setQuery: (query) => set({ query }),
+  setFilter: (filter) => set({ filter }),
+
+  // Старт нового запроса: внешние секции дорисовываются позже и не должны
+  // миксоваться с новой выдачей, а полустарая выдача — считаться закешированной.
+  beginSearch: () =>
+    set({
+      externalTracks: emptyExternalTracks,
+      externalPlaylists: [],
+      artists: [],
+      searchError: '',
+      cachedQuery: '',
+    }),
+
+  setResults: (results, resultsQuery = '') => set({ results, resultsQuery }),
+  setExternalTracks: (externalTracks) => set({ externalTracks }),
+  setExternalPlaylists: (externalPlaylists) => set({ externalPlaylists }),
+  setProviderTracks: (provider, q, tracks) =>
+    set((state) => ({ providerTracks: { ...state.providerTracks, [provider]: { q, tracks } } })),
+  setArtists: (artists) => set({ artists }),
+  setSearchError: (searchError) => set({ searchError }),
+
+  finishSearch: (query) => set({ cachedQuery: query }),
+
+  clearSearch: () =>
+    set({
+      results: emptyResults,
+      resultsQuery: '',
+      externalTracks: emptyExternalTracks,
+      externalPlaylists: [],
+      providerTracks: emptyProviderTracks,
+      artists: [],
+      searchError: '',
+      cachedQuery: '',
+    }),
+
+  // Полный сброс, включая строку запроса — на выход из аккаунта.
+  resetSearch: () =>
+    set({
+      query: '',
+      filter: 'all',
+      results: emptyResults,
+      resultsQuery: '',
+      externalTracks: emptyExternalTracks,
+      externalPlaylists: [],
+      providerTracks: emptyProviderTracks,
+      artists: [],
+      searchError: '',
+      cachedQuery: '',
+    }),
+  ...restoredSearch(),
+}))
+
+useSearchStore.subscribe((state) => {
+  const { query, filter, results, resultsQuery, externalTracks, externalPlaylists, providerTracks, artists, cachedQuery } = state
+  writeUiSession('search', { query, filter, results, resultsQuery, externalTracks, externalPlaylists, providerTracks, artists, cachedQuery, savedAt: Date.now() })
+})
+
+// Стор живёт на уровне модуля и переживает конец сессии — без сброса запрос и
+// выдача прошлого пользователя встречали бы следующего. Явный выход сбрасывает
+// стор из authStore, здесь ловим истёкший токен.
+if (typeof window !== 'undefined') {
+  window.addEventListener('ui-session:changed', () => {
+    // Сначала читаем: resetSearch тоже вызывает подписчика записи.
+    const restored = restoredSearch()
+    useSearchStore.getState().resetSearch()
+    useSearchStore.setState(restored)
+  })
+  window.addEventListener('auth:unauthorized', () => {
+    useSearchStore.getState().resetSearch()
+  })
+}
+
+export { useSearchStore }

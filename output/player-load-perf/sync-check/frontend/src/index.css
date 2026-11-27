@@ -1,0 +1,849 @@
+@import "tw-animate-css";
+
+/* Geologica хранится локально, основное начертание — Semibold 600.
+   Вариативные WOFF2 также поддерживают веса заголовков и подписей.
+   unicode-range загружает только нужные наборы символов, font-display: swap
+   позволяет сразу показать текст. Кириллица и латиница используют одну гарнитуру. */
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F,
+    U+FE2E-FE2F;
+}
+
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-greek.woff2') format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C,
+    U+038E-03A1, U+03A3-03FF;
+}
+
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169,
+    U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309,
+    U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Geologica';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geologica-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-md: 18px;
+  --text-lg: 20px;
+  --text-xl: 28px;
+  --text-2xl: 36px;
+  --text-3xl: 54px;
+  --icon-sm: 16px;
+  --icon-md: 18px;
+  --icon-lg: 20px;
+  --icon-xl: 24px;
+  --icon-2xl: 48px;
+  /* Нижний safe-area. Android в установленном приложении отдаёт 0, и
+     таб-бар ложился на самый край экрана, под жестовую полоску; там держим
+     минимальный зазор. На iPhone без кнопки inset больше и ничего не меняется. */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Верхний safe-area. Android-оболочка растянута под статус-бар, а env()
+     в WebView там часто 0 — оболочка ставит --safe-top на html сама. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  /* Основной шрифт текста и заголовков (см. @font-face выше). */
+  /* Шрифт как в референсе — системный гротеск (SF на Apple, Segoe UI на Windows).
+     Geologica остаётся в @font-face и не грузится, пока не используется. */
+  --font-text: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: var(--font-text);
+  /* Service palette: приглушённый фиолетовый — интерактив; зелёный — только успех.
+     Два оттенка: светлый для текста и иконок на чёрном (контраст ~11:1),
+     тёмный для заливок — пилюль, активных кнопок (белый текст ~8:1). */
+  --brand-accent: #c4b0f0;
+  --brand-accent-hover: #d6c6f5;
+  --brand-accent-active: #a98be6;
+  --brand-accent-text: #dccbf7;
+  --brand-accent-fill: #5b3a9e;
+  --brand-accent-fill-hover: #6b4ab4;
+  --brand-accent-fill-active: #4b2c86;
+  --brand-accent-soft: rgba(196, 176, 240, 0.14);
+  --brand-accent-soft-strong: rgba(196, 176, 240, 0.22);
+  /* Промо-ролик: фиолетовый градиент, розовая жёсткая тень, глитч
+     циан/розовый у заголовков. Применение — styles/promo.css. */
+  --promo-violet-deep: #2f086d;
+  --promo-violet: #6626b6;
+  --promo-violet-light: #a262dc;
+  --promo-pink: #ff2fa0;
+  --promo-cyan: #22e4ff;
+  --promo-ink: #0d0420;
+  --promo-glitch: -0.035em 0.015em 0 var(--promo-cyan),
+    0.035em 0.015em 0 var(--promo-pink);
+  --status-success: #4ade80;
+  --status-success-soft: rgba(74, 222, 128, 0.14);
+  --status-success-border: rgba(74, 222, 128, 0.3);
+  /* Один красный на весь сервис: ошибки, удаление, дизлайк. */
+  --status-danger: #ff5c63;
+  --status-danger-soft: rgba(255, 92, 99, 0.14);
+  --status-warning: #e8b44c;
+  --status-warning-soft: rgba(232, 180, 76, 0.14);
+  /* Поверхности снизу вверх: фон приложения → карточки → приподнятое →
+     поля и hover → активное. Нейтральные, без оттенка: обложки дают цвет. */
+  --bg-app: #121212;
+  --bg-app-mobile: #050505;
+  --surface-1: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --surface-3: #3a3a3c;
+  --surface-4: #48484a;
+  --surface-inverse: #ffffff;
+  --surface-overlay: rgba(28, 28, 30, 0.92);
+  --scrim: rgba(0, 0, 0, 0.6);
+  /* Текст: четыре ступени, как в референсе (серый вторичный, без лишнего). */
+  --text-primary: #ffffff;
+  --text-secondary: #8e8e93;
+  --text-tertiary: #6e6e73;
+  --text-disabled: #48484a;
+  --text-inverse: #000000;
+  /* Границы прозрачные — ложатся на любую поверхность одинаково. */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.28);
+  /* Тени для приподнятых поверхностей (меню, диалоги, тосты). */
+  --shadow-popover: 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-dialog: 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 24px 64px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.35);
+  /* Жёсткая тень-сдвиг из промо: чернильная ступень, под ней розовая. */
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.1), 6px 6px 0 var(--promo-ink),
+    9px 9px 0 var(--promo-pink);
+  --shadow-pop-sm: 3px 3px 0 var(--promo-ink), 5px 5px 0 var(--promo-pink);
+  /* Обводка картинок (обложки, аватары): чистый белый, не тонированный. */
+  --image-outline: 1px solid rgba(255, 255, 255, 0.1);
+  /* Нажатие: одно значение на весь сервис. */
+  --press-scale: 0.96;
+  /* Высоты контролов. */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 48px;
+  /* Motion tokens */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Уже видимое меняет место или размер (сайдбар, морф обложки): плавный
+     разгон и торможение — ease-in-out-cubic. */
+  --ease-morph: cubic-bezier(0.645, 0.045, 0.355, 1);
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  /* Radius family (Spotify-reference: не смешивать семейства) */
+  --radius-sm: 4px;      /* мелкие чипы, progress-thumb */
+  --radius-card: 8px;    /* карточки, инпуты, строки — базовый контент */
+  --radius-lg: 12px;     /* крупные поверхности: панели, обложки, меню */
+  --radius-dialog: 16px; /* модальные окна и шторки */
+  --radius-pill: 999px;  /* кнопки, теги */
+  --radius-avatar: 50%;  /* аватары, круглые иконки */
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+body {
+  font-family: var(--font-text);
+  font-weight: 600;
+  font-size: var(--text-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  overflow-x: hidden;
+  /* Нативное приложение никогда не выделяет текст пальцем. Выделение
+     остаётся там, где оно по смыслу: ввод и читаемый контент. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Долгое нажатие на ссылку или картинку в iOS открывало системное превью
+     страницы и меню «Открыть в Safari / Скопировать» — в нативном
+     приложении такого нет. */
+  -webkit-touch-callout: none;
+}
+
+/* Мобильный фон = фон .layout (#050505). Под статус-баром PWA и в резинке
+   отскролла виден именно body: с #121212 сверху была светлая полоса над
+   шапкой. Тот же цвет — в theme-color (index.html) и манифесте. */
+@media (max-width: 768px) {
+  html,
+  body {
+    background-color: var(--bg-app-mobile);
+  }
+}
+
+/* Весь документ не «пружинит»: резинка iOS утаскивала вместе с контентом
+   таб-бар и мини-плеер. Скроллится и пружинит только сам экран
+   (.screen-scroll), как нативный список. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+@media (display-mode: standalone) {
+  :root {
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  }
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+img {
+  -webkit-user-drag: none;
+}
+
+/* Контролы по умолчанию не наследуют шрифт — без этого кнопки и поля
+   рисовались бы системным шрифтом браузера. */
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-weight: inherit;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Поля всех страниц загружаются с каркасом приложения. Раньше они жили
+   в ленивом Home.css: открытый по ссылке экран менял ширину и отступы,
+   когда фоновый прогрев наконец загружал главную. */
+.page-container {
+  padding: 32px;
+  min-height: 100%;
+}
+
+@media (max-width: 768px) {
+  .page-container {
+    padding: 0 16px 150px;
+  }
+}
+
+@media (max-width: 380px) {
+  .page-container {
+    padding-inline: 12px;
+  }
+}
+
+/* Разрешаем выделение там, где пользователь ожидает его видеть:
+   поля ввода и «читательский» контент (био, тексты, названия). */
+input,
+textarea,
+[contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Мгновенный отклик кнопок на тач: без manipulation Safari держит тап
+   ~300 мс в ожидании второго (double-tap-to-zoom), и кнопка «нажимается»
+   с заметной задержкой. Пинч-зум страницы это не отключает. Ссылки — туда
+   же: нижнее меню и карточки сделаны <a>, и без них ждали те же 300 мс. */
+button,
+a[href],
+[role='button'] {
+  touch-action: manipulation;
+}
+
+/* Отклик нажатия (кнопки, ссылки, карточки) — services/pressFeedback.js:
+   с задержкой против мигания при скролле и с плавным возвратом. */
+
+/* Переходы между экранами — View Transitions (services/navigation.js ставит
+   html[data-nav] = forward | back | fade на время перехода). Анимируется
+   только экран (.main-content), таб-бар, мини-плеер и сайдбар стоят на
+   месте, как в нативном стеке навигации. Имена слоёв выдаются только на
+   время перехода: view-transition-name делает элемент stacking context, и
+   постоянное имя у .main-content заперло бы z-index всего, что внутри. */
+html[data-nav] .main-content {
+  view-transition-name: page;
+}
+html[data-nav] .player {
+  view-transition-name: mini-player;
+}
+html[data-nav] .mobile-nav-global {
+  view-transition-name: tabbar;
+}
+html[data-nav] .sidebar {
+  view-transition-name: sidebar;
+}
+html[data-nav] .toast-container {
+  view-transition-name: toasts;
+}
+
+/* Корень (фон) и «хром» не анимируются: показываем живое новое состояние
+   без кроссфейда. Прежний опыт: на iOS полупрозрачная пара снапшотов корня
+   давала затемнение экрана — старый слой тут просто не рисуется. */
+::view-transition-old(root),
+::view-transition-old(mini-player),
+::view-transition-old(tabbar),
+::view-transition-old(sidebar),
+::view-transition-old(toasts),
+::view-transition-old(status-scrim) {
+  display: none;
+}
+::view-transition-new(root),
+::view-transition-new(mini-player),
+::view-transition-new(tabbar),
+::view-transition-new(sidebar),
+::view-transition-new(toasts),
+::view-transition-new(status-scrim) {
+  animation: none;
+}
+::view-transition-group(root),
+::view-transition-group(mini-player),
+::view-transition-group(tabbar),
+::view-transition-group(sidebar),
+::view-transition-group(toasts),
+::view-transition-group(status-scrim),
+::view-transition-group(page) {
+  animation: none;
+}
+
+/* Тени мини-плеера и таб-бара лежат за их краем, а снапшот перехода это
+   рамка элемента: WebKit тень в него не берёт, и после перехода она
+   появлялась рывком. Поэтому на время перехода тень рисует слой группы, а у
+   живого элемента она снята — в снапшот (во всех движках) попадает только
+   сам элемент, без двойной тени. */
+html[data-nav] .player,
+html[data-nav] .mobile-nav-global {
+  box-shadow: none;
+}
+::view-transition-group(mini-player) {
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+::view-transition-group(tabbar) {
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+}
+
+::view-transition-old(page),
+::view-transition-new(page) {
+  mix-blend-mode: normal;
+  animation-duration: 380ms;
+  animation-timing-function: var(--ease-drawer);
+  animation-fill-mode: both;
+  /* Экран на мобильном прозрачный (фон даёт .layout) — без подложки
+     въезжающий экран просвечивал бы, и сквозь него был виден старый. */
+  background-color: var(--bg-app);
+}
+
+@media (max-width: 768px) {
+  ::view-transition-old(page),
+  ::view-transition-new(page) {
+    background-color: var(--bg-app-mobile);
+  }
+}
+
+/* Вперёд: новый экран въезжает справа поверх старого, старый уходит
+   влево с параллаксом и притемнением — схема UINavigationController. */
+html[data-nav='forward']::view-transition-old(page) {
+  animation-name: vt-page-under-out;
+}
+html[data-nav='forward']::view-transition-new(page) {
+  animation-name: vt-page-in-right;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
+}
+
+/* Назад: зеркально, уходящий экран сверху. */
+html[data-nav='back']::view-transition-old(page) {
+  z-index: 1;
+  animation-name: vt-page-out-right;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.55);
+}
+html[data-nav='back']::view-transition-new(page) {
+  animation-name: vt-page-under-in;
+}
+
+/* Свайп (hooks/useSwipeNavigation.js): старый экран продолжает движение от
+   точки, где его отпустил палец, новый въезжает из-под него с другой
+   стороны. Точки и длительность (от скорости пальца) — в --swipe-*. */
+html[data-nav='swipe']::view-transition-old(page),
+html[data-nav='swipe']::view-transition-new(page) {
+  animation-duration: var(--swipe-ms, 380ms);
+}
+html[data-nav='swipe']::view-transition-old(page) {
+  z-index: 1;
+  animation-name: vt-swipe-out;
+  box-shadow: var(--swipe-shadow, -12px) 0 32px rgba(0, 0, 0, 0.55);
+}
+html[data-nav='swipe']::view-transition-new(page) {
+  animation-name: vt-swipe-under-in;
+}
+
+@keyframes vt-swipe-out {
+  from {
+    transform: translateX(var(--swipe-from, 0px));
+  }
+  to {
+    transform: translateX(var(--swipe-to, 100%));
+  }
+}
+@keyframes vt-swipe-under-in {
+  from {
+    transform: translateX(var(--swipe-under, -25%));
+  }
+}
+
+/* Десктоп: мягкий кроссфейд, старый слой держит подложку. */
+html[data-nav='fade']::view-transition-old(page) {
+  animation: none;
+}
+html[data-nav='fade']::view-transition-new(page) {
+  animation: 200ms var(--ease-out) both vt-fade-in;
+}
+
+
+/* Экран с тенью въезжает и уезжает из-за края на длину тени (--vt-shadow-
+   reach: сдвиг 12px + размытие 32px): остановись он ровно у края, тень
+   оставалась бы на экране полосой и пропадала рывком вместе с переходом. */
+:root {
+  --vt-shadow-reach: 48px;
+}
+@keyframes vt-page-in-right {
+  from {
+    transform: translateX(calc(100% + var(--vt-shadow-reach)));
+  }
+}
+@keyframes vt-page-out-right {
+  to {
+    transform: translateX(calc(100% + var(--vt-shadow-reach)));
+  }
+}
+@keyframes vt-page-under-out {
+  to {
+    transform: translateX(-28%);
+    opacity: 0.6;
+  }
+}
+@keyframes vt-page-under-in {
+  from {
+    transform: translateX(-28%);
+    opacity: 0.6;
+  }
+}
+
+/* Дерево ::view-transition лежит в top layer поверх страницы и по умолчанию
+   участвует в hit-тесте: пока идёт переход роута тап уходит в снапшот,
+   и экран кажется мёртвым. pointer-events наследуется, так что корня
+   дерева достаточно; правило для (*) — страховка, если UA выставит
+   свойство детям явно. Отдельными правилами: неизвестный селектор в общем
+   списке уронил бы всё правило целиком в браузерах без поддержки (*). */
+::view-transition {
+  pointer-events: none;
+}
+
+::view-transition-group(*) {
+  pointer-events: none;
+}
+
+@keyframes vt-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Единый клавиатурный фокус: контур появляется только при навигации с
+   клавиатуры (не по клику/тапу). Компоненты со своим focus-visible
+   перебивают это правило за счёт специфичности класса. */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+/* Фокус от тапа или мыши без контура. Chromium на Android рисовал свой
+   оранжевый контур на нажатой кнопке. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+
+code {
+  font-family: var(--font-text);
+  font-optical-sizing: auto;
+  font-weight: inherit;
+  font-style: normal;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+/* Бейдж цензуры у названия трека (поиск, страница артиста): E — оригинал
+   (explicit), CLEAN — цензурная редакция. Инлайновые, чтобы строка не
+   переносилась и не «дышала». */
+.track-badge {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  line-height: 14px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.track-badge-e {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.track-badge-clean {
+  color: var(--status-warning);
+  background: rgba(232, 180, 76, 0.14);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-4);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Телефоны и планшеты: полосу прокрутки не показываем вовсе. Кастомные
+   ::-webkit-scrollbar выше превращают системную наложенную полосу (которая
+   сама прячется) в постоянную 12px-колонку, съедающую ширину экрана. Скролл
+   остаётся — пропадает только ползунок. Условие — по устройству ввода, а не
+   по ширине: на узком окне десктопа ползунок мыши нужен. */
+@media (hover: none) and (pointer: coarse) {
+  * {
+    scrollbar-width: none;
+  }
+
+  ::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}
+
+/* Уменьшенная анимация: убираем движение и декоративные циклы,
+   оставляем цвет/прозрачность и спиннеры состояния. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+  .wave-widget.is-playing,
+  .now-playing-bars span,
+  .tracks-grid > *,
+  .playlists-grid > *,
+  .like-btn.liked,
+  .fullscreen-like.active,
+  .pref-genre-tile.active {
+    animation: none !important;
+  }
+}
+
+/* Меньше прозрачности: убираем blur, делаем translucent-поверхности плотными. */
+@media (prefers-reduced-transparency: reduce) {
+  .mobile-player,
+  .mobile-nav,
+  .playlist-add-panel,
+  .toast,
+  .fullscreen-player {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #0a0a0e !important;
+  }
+
+  .fullscreen-backdrop {
+    display: none;
+  }
+}
+
+/* Иконки lucide кистью логотипа: фильтр #brush-icon лежит в index.html,
+   класс brush-icons ставит uiSettingsStore (переключатель в настройках).
+   Без GPU не применяем — шум и смещение на каждую перерисовку иконки. */
+html.brush-icons:not(.no-gpu) .lucide {
+  filter: url(#brush-icon);
+}
+
+/* Кисть — дорогой фильтр (смещения пикселей на процессоре), и он
+   пересчитывается на каждой перерисовке иконки. В прокручиваемом контенте
+   (строки треков, карусели, карточки) это десятки иконок на каждый кадр
+   прокрутки: в замере WebKit список с кистью терял 21–37 кадров за 3 с,
+   без неё — 0–1. Поэтому внутри экранов иконки обычные, а кисть остаётся
+   там, где иконок мало и они на виду: плееры, навигация (вне .screen-scroll)
+   и шапки страниц. */
+html.brush-icons:not(.no-gpu) .screen-scroll .lucide {
+  filter: none;
+}
+
+html.brush-icons:not(.no-gpu) .screen-scroll :is(
+  .mobile-header,
+  .hero-section,
+  .home-tabs,
+  .artist-hero,
+  .artist-toolbar,
+  .search-header,
+  .playlist-header,
+  .playlists-header,
+  .settings-header
+) .lucide {
+  filter: url(#brush-icon);
+}
+
+/* Без аппаратного ускорения (класс ставит utils/gpu.js): браузер растеризует
+   и композитит на CPU. Анимации оставляем — transform/opacity сдвигают уже
+   нарисованные слои и остаются дешёвыми, — а убираем то, что без GPU стоит
+   дорого на каждом кадре:
+   - backdrop-filter: размытие того, что под панелью, пересчитывается на
+     каждый кадр скролла и анимаций под ней. Взамен — плотнее фон;
+   - тени на снапшотах перехода экрана: полноэкранная размытая тень едет
+     вместе со снапшотом и растеризуется каждый кадр;
+   - переходы width/height/margin/left: это раскладка всей страницы на
+     каждом кадре; без GPU они дёргаются, поэтому применяются сразу.
+
+   Размытие и плотные фоны действуют и в энергосбережении устройства (класс
+   power-save ставит utils/powerSave.js): blur под панелью пересчитывается на
+   каждом кадре прокрутки и анимаций под ней и с GPU. */
+html.no-gpu *,
+html.no-gpu *::before,
+html.no-gpu *::after,
+html.power-save *,
+html.power-save *::before,
+html.power-save *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media (max-width: 768px) {
+  html.no-gpu .mobile-player,
+  html.power-save .mobile-player {
+    background: rgba(10, 10, 12, 0.94);
+  }
+}
+
+/* Энергосбережение: эквалайзер у играющего трека замирает — бесконечная
+   анимация держит композитор на кадрах, пока строка на экране. Столбики на
+   всю высоту против 40% на паузе — играет или нет, по-прежнему видно.
+   WebGL-фон, диск и полосу прогресса гасит JS (utils/powerSave). */
+html.power-save .now-playing-bars span {
+  animation: none;
+}
+
+
+html.no-gpu::view-transition-old(page),
+html.no-gpu::view-transition-new(page) {
+  box-shadow: none;
+}
+
+html.no-gpu .sidebar,
+html.no-gpu .main-content,
+html.no-gpu .player,
+html.no-gpu .fullscreen-art,
+html.no-gpu .fullscreen-art img,
+html.no-gpu .player-progress-top-track {
+  transition-property: none;
+}
+
+/* Больше контраста: плотный фон + чёткая граница на плавающих поверхностях. */
+@media (prefers-contrast: more) {
+  .mobile-player,
+  .mobile-nav,
+  .atp-dialog,
+  .track-ctx-menu,
+  .toast {
+    background: #0a0a0e !important;
+    border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  }
+}
+
+/* Облегчённый режим: отключает анимации, переходы и дорогие эффекты (blur/shadow) для снижения нагрузки на CPU/GPU */
+.lite-mode *,
+.lite-mode *::before,
+.lite-mode *::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  scroll-behavior: auto !important;
+}
+
+.lite-mode img,
+.lite-mode video {
+  image-rendering: auto;
+}

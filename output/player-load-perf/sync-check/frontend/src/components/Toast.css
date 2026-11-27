@@ -1,0 +1,127 @@
+/* Одно уведомление на экране (см. toastStore). Десктоп — по центру над
+   плеером (низ плеера 12px, высота 76px), мобильные — сверху под статус-баром. */
+.toast-container {
+  --toast-enter-y: 12px;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 104px;
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  /* Контейнер на всю ширину — клики мимо карточки проходят к странице. */
+  pointer-events: none;
+}
+
+.toast {
+  --toast-accent: #60a5fa;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: min(440px, 100%);
+  min-height: 52px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 16px;
+  /* Плотный фон без backdrop-filter: читается на любом контенте и не
+     пересчитывает размытие под собой. */
+  background: var(--surface-2);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform 260ms var(--ease-out);
+}
+
+@starting-style {
+  .toast {
+    opacity: 0;
+    transform: translateY(var(--toast-enter-y)) scale(0.96);
+  }
+}
+
+.toast-leaving {
+  opacity: 0;
+  transform: translateY(var(--toast-enter-y)) scale(0.96);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.toast-success {
+  --toast-accent: var(--status-success);
+}
+
+.toast-error {
+  --toast-accent: #f87171;
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--toast-accent);
+  background: color-mix(in srgb, var(--toast-accent) 16%, transparent);
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .toast-close:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    --toast-enter-y: -16px;
+    top: calc(var(--safe-top) + 8px);
+    bottom: auto;
+    padding: 0 12px;
+  }
+
+  .toast {
+    width: 100%;
+    max-width: none;
+    min-height: 56px;
+  }
+
+  /* Крестик — под палец: цель 44px. */
+  .toast-close {
+    width: 44px;
+    height: 44px;
+    margin: -6px -6px -6px 0;
+  }
+}

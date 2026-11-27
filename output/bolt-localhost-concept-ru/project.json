@@ -1,0 +1,7 @@
+{
+  "query": "МОТ",
+  "trackTitle": "Сопрано",
+  "artistQueries": ["МОТ", "Zivert", "ANNA ASTI"],
+  "movie": "bolt-localhost-concept-ru.mp4",
+  "silentMovie": "bolt-localhost-concept-ru-silent.mp4"
+}

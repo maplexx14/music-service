@@ -1,0 +1,307 @@
+[
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "ANNA ASTI",
+      "artists": [
+        "ANNA ASTI",
+        "ARTIK & ASTI"
+      ],
+      "rows": [
+        {
+          "title": "NPC",
+          "artist": "ANNA ASTI",
+          "cover": "",
+          "text": "NPC\n\t\nANNA ASTI\n\tNPC\t3:05\t"
+        },
+        {
+          "title": "Преданный бывший",
+          "artist": "ANNA ASTI",
+          "cover": "",
+          "text": "Преданный бывший\n\t\nANNA ASTI\n\tВысшие силы\t3:24\t"
+        },
+        {
+          "title": "ANNA ASTI, Дима Билан — Эпилог",
+          "artist": "Artik, Anna Asti",
+          "cover": "",
+          "text": "ANNA ASTI, Дима Билан — Эпилог\n\t\nArtik, Anna Asti\n\t-\t3:14\t"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "JONY",
+      "artists": [
+        "JONY",
+        "Jony J",
+        "Jony Achileus",
+        "Jony Voy Music",
+        "Johnny Cash",
+        "Jony.music",
+        "Arifur Rahman Jony",
+        "Jony Khandaker"
+      ],
+      "rows": [
+        {
+          "title": "Очень",
+          "artist": "JONY",
+          "cover": "",
+          "text": "Очень\n\t\nJONY\n\tОчень\t3:14\t"
+        },
+        {
+          "title": "Kamin - Ft - Jony",
+          "artist": "Emin",
+          "cover": "",
+          "text": "Kamin - Ft - Jony\n\t\nEmin\n\t-\t3:07\t"
+        },
+        {
+          "title": "Комета",
+          "artist": "JONY",
+          "cover": "",
+          "text": "Комета\n\t\nJONY\n\t-\t2:41\t"
+        },
+        {
+          "title": "ELMAN & JONY - Балкон",
+          "artist": "Zhara Music",
+          "cover": "",
+          "text": "ELMAN & JONY - Балкон\n\t\nZhara Music\n\t-\t2:21\t"
+        },
+        {
+          "title": "Пустой Стакан",
+          "artist": "JONY",
+          "cover": "",
+          "text": "Пустой Стакан\n\t\nJONY\n\t-\t3:13\t"
+        },
+        {
+          "title": "Аллея",
+          "artist": "JONY",
+          "cover": "",
+          "text": "Аллея\n\t\nJONY\n\t-\t2:22\t"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "MACAN",
+      "artists": [
+        "MACAN",
+        "Macan Band"
+      ],
+      "rows": [
+        {
+          "title": "MACAN",
+          "artist": "Как же",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-P4vPaPUdqoIxA1KH-fjbexA-t300x300.jpg",
+          "text": "MACAN\n\t\nКак же\n\t-\t2:33\t"
+        },
+        {
+          "title": "Здравствуй",
+          "artist": "MACAN, Три дня дождя",
+          "cover": "",
+          "text": "Здравствуй\n\t\nMACAN, Три дня дождя\n\tBRATLAND\t\t"
+        },
+        {
+          "title": "Кино",
+          "artist": "MACAN",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-Q26iC7PXdf4ghJ9B-pJN6hg-t300x300.jpg",
+          "text": "Кино\n\t\nMACAN\n\t-\t3:04\t"
+        },
+        {
+          "title": "Бенз",
+          "artist": "MACAN",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-000584100179-zo4cbm-t300x300.jpg",
+          "text": "Бенз\n\t\nMACAN\n\t-\t2:12\t"
+        },
+        {
+          "title": "MONA & MACAN — Город дорог",
+          "artist": "MACAN",
+          "cover": "",
+          "text": "MONA & MACAN — Город дорог\n\t\nMACAN\n\t-\t2:29\t"
+        },
+        {
+          "title": "Shazam",
+          "artist": "MACAN",
+          "cover": "",
+          "text": "Shazam\n\t\nMACAN\n\t-\t2:28\t"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "Егор Крид",
+      "artists": [
+        "Егор Крид",
+        "Egor Kreed"
+      ],
+      "rows": [
+        {
+          "title": "Malo 2.0",
+          "artist": "madk1d, тёмный принц, Егор Крид, Og Buda, Toxi$, Мэйби Бэйби, Baby Cute, Дора",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-Q981zjAlkvLAfW5Y-imoUTQ-t300x300.png",
+          "text": "Malo 2.0\n\t\nmadk1d, тёмный принц, Егор Крид, Og Buda, Toxi$, Мэйби Бэйби, Baby Cute, Дора\n\t-\t5:20\t"
+        },
+        {
+          "title": "Риски",
+          "artist": "Дора, ЕГОР КРИД",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Favatars.yandex.net%2Fget-music-content%2F20608190%2F56f6fe77.a.44990619-1%2F200x200",
+          "text": "Риски\n\t\nДора, ЕГОР КРИД\n\tРиски\t2:43\t"
+        },
+        {
+          "title": "DUBTSOVA",
+          "artist": "ЕГОР КРИД",
+          "cover": "",
+          "text": "DUBTSOVA\n\t\nЕГОР КРИД\n\tМеньше чем три\t2:43\t"
+        },
+        {
+          "title": "милый ублюдок",
+          "artist": "Егор Крид",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-JvoZpvAJC7ddjkbq-Zh3IdQ-t300x300.jpg",
+          "text": "милый ублюдок\n\t\nЕгор Крид\n\t-\t2:54\t"
+        },
+        {
+          "title": "Холостяк (ЛСП, FEDUK & Егор Крид)",
+          "artist": "Егор Крид",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-ZvhqFzcucjIEdASp-REMgDg-t300x300.jpg",
+          "text": "Холостяк (ЛСП, FEDUK & Егор Крид)\n\t\nЕгор Крид\n\t-\t2:48\t"
+        },
+        {
+          "title": "Где ты, где я (Тимати & Егор Крид)",
+          "artist": "Егор Крид",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-xRAODr6tD3Msh8BX-tw80ow-t300x300.jpg",
+          "text": "Где ты, где я (Тимати & Егор Крид)\n\t\nЕгор Крид\n\t-\t4:37\t"
+        },
+        {
+          "title": "Скоро весна (при уч. Николай Булаткин)",
+          "artist": "Егор Крид",
+          "cover": "",
+          "text": "Скоро весна (при уч. Николай Булаткин)\n\t\nЕгор Крид\n\t-\t2:57\t"
+        },
+        {
+          "title": "Самая самая",
+          "artist": "Егор Крид",
+          "cover": "",
+          "text": "Самая самая\n\t\nЕгор Крид\n\t-\t3:50\t"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "Тимати",
+      "artists": [
+        "Timati",
+        "Egor Kreed"
+      ],
+      "rows": [
+        {
+          "title": "Мне наплевать",
+          "artist": "Тимати",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FL7pHkajM_NLDH01uw66ja0yv3RYWqcmDtKhEbGnVFCDvNCOFgxs06j8BXCbO23qJ2ZcizypYbFFwoljA%3Dw120-h120-l90-rj",
+          "text": "Мне наплевать\n\t\nТимати\n\tАудио капсула\t4:06\t"
+        },
+        {
+          "title": "В клубе (feat. Dj Dlee)",
+          "artist": "Тимати",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2F-UtC9cY1DfIVVySKOKrP8imCSRh8OHfhO9D-BxHPPgPS6eC5fmm-SgRuUbO0FfFjFGj30WjXwsulTuh2%3Dw120-h120-l90-rj",
+          "text": "В клубе (feat. Dj Dlee)\n\t\nТимати\n\tBlack Star\t4:29\t"
+        },
+        {
+          "title": "Тимати feat. Света - Дорога в аэропорт",
+          "artist": "Тимати, Света [mp3crazy.me]",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-000240363345-8nhpjs-t300x300.jpg",
+          "text": "Тимати feat. Света - Дорога в аэропорт\n\t\nТимати, Света [mp3crazy.me]\n\t-\t3:50\t"
+        },
+        {
+          "title": "Тимати-Forever(2009)",
+          "artist": "Тимати",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-000528222090-vaz662-t300x300.jpg",
+          "text": "Тимати-Forever(2009)\n\t\nТимати\n\t-\t4:35\t"
+        },
+        {
+          "title": "Тимати- Сколько стоит любовь",
+          "artist": "mariam shermazanashvili ♕",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Favatars-000025531617-hi8yat-t300x300.jpg",
+          "text": "Тимати- Сколько стоит любовь\n\t\nmariam shermazanashvili ♕\n\t-\t3:40\t"
+        },
+        {
+          "title": "Когда мы в клубе чиксы танцуют Тимати",
+          "artist": "Тимати, DJ Dlee",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Favatars-eWbuiCy2h0EEw7M1-yhQLzg-t300x300.jpg",
+          "text": "Когда мы в клубе чиксы танцуют Тимати\n\t\nТимати, DJ Dlee\n\t-\t5:04\t"
+        },
+        {
+          "title": "Где ты, где я (Тимати & Егор Крид)",
+          "artist": "Егор Крид",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-xRAODr6tD3Msh8BX-tw80ow-t300x300.jpg",
+          "text": "Где ты, где я (Тимати & Егор Крид)\n\t\nЕгор Крид\n\t-\t4:37\t"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "Дима Билан",
+      "artists": [
+        "Дима Билан"
+      ],
+      "rows": [
+        {
+          "title": "Дима Билан",
+          "artist": "Я просто люблю тебя",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-KJNhYoA2j2UVbPh8-MCIGrQ-t300x300.jpg",
+          "text": "Дима Билан\n\t\nЯ просто люблю тебя\n\t-\t4:20\t"
+        },
+        {
+          "title": "Я твой номер один",
+          "artist": "Дима Билан",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FKFJ5NZ6APWHHrkcXbqcOuHV6i-x3OV4yTVci1R9M_negz1VLhcIQeDRs9abLjI4eJAbn96ovj3nKV_VQZA%3Dw120-h120-l90-rj",
+          "text": "Я твой номер один\n\t\nДима Билан\n\tПротив правил\t3:10\t"
+        },
+        {
+          "title": "Мечтатели",
+          "artist": "Дима Билан",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FqTs81YEGrXelye9Z9Xjnzsx4KWTrzco15ynJa38mkaWVr4gdz-vnuvXu0KD2wFLkGUFlPx9gX2lamwWP%3Dw120-h120-l90-rj",
+          "text": "Мечтатели\n\t\nДима Билан\n\tМечтатель\t3:49\t"
+        },
+        {
+          "title": "Я твой номер один.mp3",
+          "artist": "Дима Билан",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-441KgeyuJFrjgBBD-EfgzfA-t300x300.jpg",
+          "text": "Я твой номер один.mp3\n\t\nДима Билан\n\t-\t3:09\t"
+        },
+        {
+          "title": "Дима Билан -я твой номер один",
+          "artist": "kkdaetme",
+          "cover": "",
+          "text": "Дима Билан -я твой номер один\n\t\nkkdaetme\n\t-\t3:04\t"
+        },
+        {
+          "title": "Держи",
+          "artist": "Дима Билан",
+          "cover": "",
+          "text": "Держи\n\t\nДима Билан\n\t-\t3:41\t"
+        },
+        {
+          "title": "Дима Билан-Болен Тобой",
+          "artist": "user58329525",
+          "cover": "",
+          "text": "Дима Билан-Болен Тобой\n\t\nuser58329525\n\t-\t3:41\t"
+        },
+        {
+          "title": "Молния",
+          "artist": "Дима Билан",
+          "cover": "",
+          "text": "Молния\n\t\nДима Билан\n\t-\t3:01\t"
+        }
+      ]
+    }
+  }
+]

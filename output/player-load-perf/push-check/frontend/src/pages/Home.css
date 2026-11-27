@@ -1,0 +1,1145 @@
+/* Pull-to-refresh: маленький системного вида индикатор под шапкой.
+   Появляется по мере жеста (opacity/transform управляются инлайном из
+   usePullToRefresh), при обновлении появляется звуковая волна (BoltLoader). */
+.ptr-indicator {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  margin-left: -18px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(24, 24, 24, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* На десктопе поток занимает 75% высоты экрана. На мобильных
+   высоту потока задаём отдельно, переключатель идёт сразу за ним. */
+.page-container.home-page {
+  padding-top: var(--page-padding, 32px);
+}
+
+.home-intro {
+  display: grid;
+  grid-template-rows: minmax(0, 75vh) auto;
+  grid-template-rows: minmax(0, 75dvh) auto;
+  gap: 20px;
+  padding-bottom: 16px;
+  margin-bottom: 28px;
+}
+
+/* Переключатель Главная ⇄ История в стиле нижней навигации (Layout.css):
+   тёмная капсула с градиентным кольцом, фиолетовая подсветка едет
+   под активной вкладкой (::before). Позиция подсветки — от data-active. */
+.home-tabs {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 6px;
+  background: #0a0a0e;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+/* 1px-кольцо светлым градиентом сверху вниз, как у .mobile-nav-global. */
+.home-tabs::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.home-tabs::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: calc(50% - 6px);
+  border-radius: var(--radius-pill);
+  background: #55308a;
+  transition: transform 0.38s var(--ease-drawer);
+}
+
+.home-tabs[data-active='history']::before {
+  transform: translateX(100%);
+}
+
+.home-tab {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 16px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+  transition: color 0.2s ease, transform 100ms var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-tab:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+.home-tab.active {
+  color: var(--text-primary);
+}
+
+.home-tab:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-tabs::before {
+    transition: none;
+  }
+}
+
+.home-empty {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  padding: 24px 8px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+}
+
+.hero-section {
+  border-radius: 24px;
+  padding: 0;
+  min-height: 0;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: #100d13;
+  --disc-size: min(640px, 48vw, 64vh);
+}
+
+/* Typed colors let CSS backgrounds share the shader's gradual palette change. */
+@property --hero-c1 { syntax: '<color>'; inherits: true; initial-value: #b070ff; }
+@property --hero-c2 { syntax: '<color>'; inherits: true; initial-value: #8929ff; }
+@property --hero-c3 { syntax: '<color>'; inherits: true; initial-value: #440f85; }
+
+.hero-section {
+  transition: --hero-c1 900ms ease-in-out, --hero-c2 900ms ease-in-out, --hero-c3 900ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-section { transition: none; }
+}
+
+.hero-section.has-cd {
+  --disc-size: min(600px, 44vw, 54vh);
+}
+
+/* A subdued backdrop keeps the records and controls in the foreground. */
+.hero-section::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(180deg, rgba(8, 6, 10, 0.5), rgba(8, 6, 10, 0.68));
+  pointer-events: none;
+}
+
+/* Нижний край потока — на 16px выше плеера, включая его вариант в два ряда. */
+@media (min-width: 769px) {
+  .layout[data-has-player] .home-intro .hero-section:not(.has-mobile-deck) {
+    max-height: calc(100vh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
+    max-height: calc(100dvh - var(--page-padding, 32px) - var(--main-pad-top, 0px) - var(--bottom-controls-clearance, 0px));
+  }
+}
+
+.hero-grainient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+.hero-section.has-solid-backdrop {
+  transition: none;
+}
+
+.hero-section.has-solid-backdrop::after {
+  background: rgba(8, 6, 10, 0.28);
+}
+
+.hero-solid {
+  position: absolute;
+  inset: 0;
+  background: var(--hero-c3);
+}
+
+.hero-grainient-static {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--hero-c1), var(--hero-c2), var(--hero-c3));
+  /* Статичный слепок Grainient: светлые пятна c1, две диагональные полосы c2
+     под углом blendAngle шейдера, почти чёрные углы и мягкий свет под диском.
+     Плоский трёхцветный градиент выглядел блекло. Рисуется один раз — годится
+     и для lite mode, и для рендера без GPU. Строка выше фолбэком не
+     работает: объявление с var() не откатывается, — без color-mix см.
+     @supports ниже. */
+  background:
+    radial-gradient(30% 26% at 50% 50%, var(--hero-c1) 0%, transparent 100%),
+    radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
+    radial-gradient(38% 50% at 80% 70%, var(--hero-c1) 0%, transparent 70%),
+    linear-gradient(131deg, transparent 18%, var(--hero-c2) 38%, transparent 52%, transparent 58%, var(--hero-c2) 74%, transparent 92%),
+    radial-gradient(45% 50% at 95% 5%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
+    radial-gradient(45% 50% at 5% 98%, color-mix(in oklab, var(--hero-c3) 50%, black) 0%, transparent 80%),
+    var(--hero-c3);
+}
+
+/* Старый Android WebView без color-mix: те же пятна без подсветки и
+   затемнения углов. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .hero-grainient-static {
+    background:
+      radial-gradient(40% 45% at 22% 30%, var(--hero-c1) 0%, transparent 70%),
+      radial-gradient(38% 50% at 80% 70%, var(--hero-c1) 0%, transparent 70%),
+      linear-gradient(131deg, transparent 18%, var(--hero-c2) 38%, transparent 52%, transparent 58%, var(--hero-c2) 74%, transparent 92%),
+      var(--hero-c3);
+  }
+}
+
+/* Зерно поверх слепка — гасит полосы на плавных переходах и добавляет
+   фактуру. Шум — крошечная SVG-плитка, растеризуется один раз. */
+.hero-grainient-static::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.hero-grainient .grainient-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.wave-widget {
+  border-radius: 999px;
+  position: absolute;
+  left: 50%;
+  top: 53%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+}
+.wave-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  position: relative;
+  z-index: 2;
+}
+
+.wave-heading {
+  position: absolute;
+  bottom: calc(100% + 20px);
+  left: 50%;
+  transform: translateX(-50%) scale(1.3, 0.85);
+  transform-origin: 50% 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(44px, 6vw, 84px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.45));
+  pointer-events: none;
+  user-select: none;
+}
+
+.hero-section.has-cd .wave-heading {
+  bottom: calc(50% + var(--disc-size) / 2 + var(--heading-gap, 18px));
+}
+
+/* Запуск рекомендаций и настройки — отдельным рядом под текущей очередью. */
+.flow-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  transform: translateX(-50%);
+}
+
+.flow-start-button,
+.wave-settings-link {
+  height: 44px;
+  min-width: 0;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.flow-start-button svg,
+.wave-settings-link svg {
+  flex-shrink: 0;
+}
+
+.flow-start-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-start-button:disabled {
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .flow-start-button:hover:not(:disabled),
+  .wave-settings-link:hover {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+.flow-start-button:active:not(:disabled),
+.wave-settings-link:active {
+  transform: scale(0.97);
+}
+
+.flow-start-button:focus-visible,
+.wave-settings-link:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 4px;
+}
+
+.wave-title {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.35);
+  border: none;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.wave-title-play {
+  transform: translateX(2px);
+}
+
+/* Поток запускается: иконка крутится, пока не придёт список. */
+.wave-loading-icon {
+  animation: wave-loading-spin 0.8s linear infinite;
+}
+
+@keyframes wave-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-loading-icon {
+    animation-duration: 2s;
+  }
+
+  .flow-start-button,
+  .wave-settings-link {
+    transition: none;
+  }
+}
+
+.wave-title:disabled,
+.wave-gif-button:disabled {
+  cursor: default;
+}
+
+.wave-title:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .wave-title:hover:not(:disabled) {
+    transform: scale(1.04);
+  }
+}
+
+.wave-title:active {
+  background: rgba(0, 0, 0, 0.55);
+  transition-duration: 100ms;
+}
+
+.wave-title:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 4px;
+}
+
+.wave-gif-button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.wave-gif-button:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .wave-gif-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+}
+
+/* Отклик нажатия: кнопка воспроизведения с GIF подтверждает нажатие сразу,
+   без ожидания hover (на таче hover нет). */
+.wave-gif-button:active {
+  transition-duration: 100ms;
+}
+
+.wave-gif-button img {
+  width: min(280px, 30vw);
+  height: min(280px, 30vw);
+  display: block;
+  border-radius: 50%;
+}
+
+.wave-gif-icon {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.wave-title--initial,
+.wave-gif-button--initial,
+.wave-gif-button--initial .wave-gif-icon {
+  background: #55308a;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .wave-title--initial:hover,
+  .wave-gif-button--initial:hover,
+  .wave-gif-button--initial:hover .wave-gif-icon {
+    background: #683ba8;
+  }
+}
+
+.wave-title--initial:active,
+.wave-gif-button--initial:active,
+.wave-gif-button--initial:active .wave-gif-icon {
+  background: #492675;
+}
+
+.wave-play {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: color-mix(in srgb, var(--wave-color) 80%, var(--surface-inverse));
+  color: var(--text-inverse);
+  font-size: 18px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  position: relative;
+  z-index: 3;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .wave-play:hover {
+    transform: scale(1.08);
+  }
+}
+
+.content-section {
+  margin-bottom: 48px;
+}
+
+/* Смена вкладки Главная ⇄ История: короткий fade подменяемой секции.
+   Частое действие — только opacity, 150ms, без движения и stagger. */
+.content-section--tab-fade {
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+@starting-style {
+  .content-section--tab-fade {
+    opacity: 0;
+  }
+}
+
+.section-title {
+  font-size: var(--text-xl);
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+}
+
+.tracks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 24px;
+}
+
+/* Лёгкий stagger появления карточек: только opacity (декоративно,
+   не блокирует клики и не конфликтует с hover-transition). */
+@keyframes cardFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Секция с fade-контейнером: карточки входят без собственной задержки —
+   timing задаёт контейнер. */
+.content-section--tab-fade .tracks-grid > *,
+.content-section--tab-fade .playlists-grid > * {
+  animation: none;
+}
+
+.tracks-grid > *,
+.playlists-grid > * {
+  animation: cardFadeIn var(--duration-base) var(--ease-out) backwards;
+}
+
+.track-card {
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+  min-width: 0;
+}
+
+.carousel-track .track-card,
+.carousel-track .playlist-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.track-card:hover {
+  background-color: var(--surface-3);
+}
+
+/* Отклик в момент нажатия: тач-устройства не имеют hover, без :active
+   нажатие на карточку никак не подтверждается до перехода. Вход —
+   мгновенный (100ms), возврат — базовые 200ms. */
+.track-card:active {
+  transition-duration: 100ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .track-card:hover {
+    transform: translateY(-4px);
+  }
+}
+
+.track-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  background-color: var(--surface-4);
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+
+.track-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-disabled);
+}
+
+.track-info {
+  min-height: 60px;
+  min-width: 0;
+}
+
+.home-page .track-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  line-height: 1.35;
+  white-space: nowrap;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-page .track-artist {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playlists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 24px;
+}
+
+.playlist-card {
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.playlist-card:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.playlist-card:hover {
+  background-color: var(--surface-3);
+}
+
+.playlist-card:active {
+  transition-duration: 100ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playlist-card:hover {
+    transform: translateY(-4px);
+  }
+}
+
+.playlist-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  background-color: var(--surface-4);
+}
+
+.playlist-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-disabled);
+}
+
+.home-page .playlist-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-page .playlist-description {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.mobile-header,
+.mobile-player,
+.mobile-nav {
+  display: none;
+
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mobile-avatar {
+  width: 36px;
+  height: 36px;
+  /* Аватар теперь ссылка в настройки, а не кнопка меню. */
+  text-decoration: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+/* Реальный аватар пользователя внутри круглой кнопки. */
+.mobile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.mobile-player-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mobile-player-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mobile-player-artist {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.play-toggle {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: none;
+  background: var(--brand-accent);
+  color: var(--text-inverse);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .page-container.home-page {
+    padding-top: 0;
+  }
+
+  .home-intro {
+    grid-template-rows: auto auto auto;
+    gap: 0;
+    height: auto;
+    padding-bottom: 0;
+    margin-bottom: 20px;
+  }
+
+  .home-tabs {
+    margin-top: 16px;
+  }
+
+  .home-tab {
+    height: 46px;
+    font-size: 14px;
+  }
+
+  /* Шапка — логотип слева, аватар справа, во всю ширину от самого верха
+     экрана, со скруглёнными нижними углами: под ней виден градиент «потока».
+     Знак на прозрачном фоне. Высота: safe-area + 12 + логотип 48 + 8. */
+  .mobile-header {
+    --mobile-header-radius: 24px;
+    position: relative;
+    z-index: 2;
+    isolation: isolate;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 -16px;
+    padding: calc(var(--safe-top) + 12px) 16px 8px;
+    background-color: var(--mobile-header-backdrop, #100d13);
+    transition: background-color 900ms ease-in-out;
+  }
+
+  .mobile-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 0 0 var(--mobile-header-radius) var(--mobile-header-radius);
+    background: #000;
+    pointer-events: none;
+  }
+
+  .mobile-logo-btn {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s ease-out;
+  }
+
+  .mobile-logo-btn:active {
+    transform: scale(0.96);
+  }
+
+  .mobile-logo-img {
+    display: block;
+    height: 48px;
+    width: auto;
+    object-fit: contain;
+  }
+
+  .hero-grainient {
+    border-radius: 0;
+  }
+
+  .hero-section {
+    z-index: 1;
+    flex-direction: column;
+    /* Fill the first screen behind the floating player and navigation.
+       The header overlaps by 24px; the home/history tabs follow below. */
+    height: calc(100vh - var(--safe-top) - 44px);
+    height: calc(100svh - var(--safe-top) - 44px);
+    height: calc(100dvh - var(--safe-top) - 44px);
+    padding: 0;
+    margin: -24px -16px 0;
+    width: calc(100% + 32px);
+    border-radius: 0;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hero-section .wave-widget,
+  .hero-section .flow-disc-position {
+    /* Anchor the main record and playback control to the visible screen. */
+    top: var(--flow-center-y, calc(50vh - var(--safe-top) - 44px));
+  }
+
+  .wave-gif-button img {
+    width: min(180px, 55vw);
+    height: min(180px, 55vw);
+  }
+
+  .wave-title {
+    width: 84px;
+    height: 84px;
+  }
+
+  .hero-section,
+  .hero-section.has-cd {
+    /* Match the reference: the main record fills 90% of the phone's width. */
+    --disc-size: min(600px, 90vw, 76svh);
+  }
+
+  .hero-section.has-cd {
+    --heading-gap: 24px;
+  }
+
+  @supports not (height: 1svh) {
+    .hero-section,
+    .hero-section.has-cd {
+      --disc-size: min(600px, 90vw, 76vh);
+    }
+  }
+
+  .wave-heading {
+    font-size: clamp(40px, 13vw, 60px);
+    bottom: calc(100% + 16px);
+  }
+
+  .content-section {
+    margin-bottom: 32px;
+  }
+
+  .section-title {
+    font-size: var(--text-lg);
+    margin-bottom: 16px;
+  }
+
+  .tracks-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .playlists-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .track-card,
+  .playlist-card {
+    padding: 10px;
+  }
+
+  .track-cover,
+  .playlist-cover {
+    margin-bottom: 8px;
+  }
+
+  .mobile-player {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 10px 12px;
+    position: sticky;
+    bottom: 92px;
+    margin-top: 16px;
+    backdrop-filter: blur(10px);
+    z-index: 5;
+  }
+
+  .mobile-player-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .mobile-nav,
+  .mobile-nav-item {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .hero-section {
+    margin-inline: -12px;
+    width: calc(100% + 24px);
+  }
+
+  .tracks-grid,
+  .playlists-grid {
+    gap: 10px;
+  }
+
+  .track-card,
+  .playlist-card {
+    padding: 8px;
+  }
+}
+
+/* Скелетон полки рекомендаций. Раньше на время холодного /recommendations
+   (замер: 2.2с) вся страница подменялась спиннером; теперь ждёт только та
+   полка, которой нужны данные. Размеры повторяют .track-card + .track-cover
+   и ту же переменную ширины, что и карусель, — подмена скелетона реальными
+   карточками не двигает вёрстку. */
+.home-skeleton-row {
+  --carousel-item-width: 200px;
+  display: flex;
+  gap: 16px;
+  overflow: hidden;
+  padding: 4px 0;
+  animation: cardFadeIn var(--duration-base) var(--ease-out);
+}
+
+.home-skeleton-card {
+  flex: 0 0 var(--carousel-item-width, 200px);
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.home-skeleton-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.home-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.home-skeleton-line--short {
+  width: 60%;
+}
+
+.home-skeleton-cover,
+.home-skeleton-line {
+  background-color: var(--surface-3);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Бегущий блик: отдельный слой, который едет через transform. Прежний
+   вариант двигал background-position — это перерисовка каждого блока на
+   каждом кадре, а без аппаратного ускорения ещё и на CPU; transform
+   только сдвигает уже нарисованный слой. */
+.home-skeleton-cover::after,
+.home-skeleton-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-100%);
+  animation: home-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes home-skeleton-shimmer {
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-skeleton-cover::after,
+  .home-skeleton-line::after {
+    animation: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .home-skeleton-row {
+    --carousel-item-width: 150px;
+    gap: 12px;
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+  .home-skeleton-card { padding: 12px; }
+}
+
+@media (max-width: 380px) {
+  .home-skeleton-row {
+    --carousel-item-width: 140px;
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+  .home-skeleton-card { padding: 8px; }
+}
+
+/* Подпись под заголовком полки: зачем она и когда обновится. */
+.section-title:has(+ .section-subtitle) {
+  margin-bottom: 4px;
+}
+
+.section-subtitle {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0 0 16px;
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .hero-section {
+    --disc-size: min(640px, 52vw, 34dvh);
+  }
+
+  .hero-section.has-cd {
+    --disc-size: min(600px, 48vw, 32dvh);
+  }
+
+  .wave-heading {
+    font-size: clamp(44px, 5vw, 68px);
+  }
+
+  .section-title {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+/* On desktop, fit the record to the available hero height. Mobile sizing
+   follows the viewport so showing the mini-player cannot shrink the stack. */
+@supports (height: 1cqh) {
+  @media (min-width: 769px) {
+    .hero-section {
+      --disc-size: min(640px, 48vw, 72cqh);
+    }
+
+    .hero-section.has-cd {
+      --disc-size: min(600px, 44vw, 60cqh);
+    }
+  }
+}

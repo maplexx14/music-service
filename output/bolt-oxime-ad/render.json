@@ -1,0 +1,11 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 60,
+  "duration": 18,
+  "frames": 1080,
+  "elapsedSeconds": 50.978,
+  "errors": [],
+  "missing": [],
+  "renderer": "WebKit WebGL"
+}

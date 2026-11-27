@@ -1,0 +1,32 @@
+{
+  "openingThroughSeconds": 1.15,
+  "previous": {
+    "peakDisplacementPixelsPerFrame": 22.5981,
+    "peakVelocityChangePixelsPerFrame": 20.3935,
+    "shutterModeChanges": 2
+  },
+  "current": {
+    "peakDisplacementPixelsPerFrame": 1.4104,
+    "peakVelocityChangePixelsPerFrame": 0.5328,
+    "shutterModeChanges": 0
+  },
+  "peakStepReductionPercent": 93.8,
+  "decodedPrevious": {
+    "fromSeconds": 0.1,
+    "throughSeconds": 1.35,
+    "decodedFrames": 75,
+    "uniqueFrames": 75,
+    "consecutiveDuplicateFrames": 0,
+    "peakMeanPixelChange": 4.5155,
+    "peakChangeAtSeconds": 0.1333
+  },
+  "decodedCurrent": {
+    "fromSeconds": 0.1,
+    "throughSeconds": 1.35,
+    "decodedFrames": 75,
+    "uniqueFrames": 75,
+    "consecutiveDuplicateFrames": 0,
+    "peakMeanPixelChange": 3.5528,
+    "peakChangeAtSeconds": 1.2
+  }
+}

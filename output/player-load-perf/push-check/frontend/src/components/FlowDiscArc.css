@@ -1,0 +1,226 @@
+.flow-disc-arc {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* Те же тайминги, что в utils/discMotion.js (DISC_MOTION): CSS-переходы и
+     Web Animations двигают диск с одним темпом на десктопе и мобильном. */
+  --disc-motion-duration: 340ms;
+  --disc-motion-easing: cubic-bezier(0.32, 0.02, 0.24, 1);
+}
+
+.flow-disc-transition,
+.flow-disc-stack-transition,
+.flow-disc-drum-transition {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.flow-disc-stack-transition { display: none; }
+
+.flow-disc-slot {
+  position: absolute;
+  inset: 0;
+  transform: translate(var(--slot-x), var(--slot-y));
+  z-index: calc(5 - var(--slot-distance));
+}
+
+.flow-disc-position {
+  position: absolute;
+  left: 50%;
+  /* The current record stays aligned with playback controls in both layouts. */
+  top: 53%;
+  width: var(--disc-size);
+  height: var(--disc-size);
+  transform: translate(-50%, -50%) scale(var(--slot-scale));
+  transition: transform var(--disc-motion-duration) var(--disc-motion-easing);
+}
+
+.flow-disc-position .hero-disc {
+  inset: 0;
+  margin: 0;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+/* Keep perspective separate from the orbit, entrance and platter rotation.
+   Inline angles travel with the record when navigation clones it. */
+.flow-disc-volume {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transform-style: preserve-3d;
+  transform: perspective(1100px) rotateX(var(--disc-tilt-x, 4deg)) rotateY(var(--disc-tilt-y, 0deg));
+  transition: transform var(--disc-motion-duration) var(--disc-motion-easing);
+  --disc-rim: #303034;
+  --disc-rim-light: #63636b;
+}
+
+.flow-disc-volume:has(.is-cd) {
+  --disc-rim: #79828e;
+  --disc-rim-light: #aab5c2;
+}
+
+/* Only the outer annulus carries thickness; its center stays transparent. */
+.flow-disc-volume::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle closest-side, transparent 98.5%, var(--disc-rim) 99%);
+  box-shadow: 0 1px 0 var(--disc-rim-light), 0 2px 0 var(--disc-rim), 0 3px 0 #17191f;
+  transform: translateZ(-3px);
+  pointer-events: none;
+}
+
+/* Light stays fixed while the artwork spins underneath it. */
+.flow-disc-volume::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, #ffffff38, transparent 38%, transparent 68%, #00000024);
+  box-shadow: inset 0 0.5px 0.5px #ffffff35, inset 0 -1px 2px #00000080;
+  mask: radial-gradient(circle closest-side, transparent 13%, #000 13.5%);
+  transform: translateZ(0.5px);
+  pointer-events: none;
+}
+
+html.lite-mode .flow-disc-volume {
+  transform: none;
+  transition: none;
+}
+
+html.lite-mode .flow-disc-volume::before,
+html.lite-mode .flow-disc-volume::after { content: none; }
+
+/* Gate the first entrance; keep revealed records visible across tabs. */
+.flow-disc-arc:not([data-discs-ready]) .flow-disc-slot .hero-disc {
+  visibility: hidden;
+}
+
+.flow-disc-arc[data-entrance-running] .flow-disc-slot,
+.flow-disc-arc[data-entrance-running] .flow-disc-position,
+.flow-disc-arc[data-entrance-running] .flow-disc-volume {
+  transition: none;
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: no-preference) {
+  /* Every record enters together, independently of artwork loading. */
+  .flow-disc-arc[data-active][data-discs-ready] .flow-disc-slot .hero-disc[data-disc-enter] {
+    animation: flow-disc-enter 720ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
+  }
+}
+
+@keyframes flow-disc-enter {
+  from {
+    opacity: 0;
+    transform: translateX(var(--disc-enter-x)) rotate(var(--disc-enter-rotation)) scale(0.96);
+  }
+  35% { opacity: 1; }
+  to {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+}
+
+/* Side records lose their blur when they become current; ease that change
+   instead of swapping a sharp disc in for a blurred one. */
+.flow-disc-slot .hero-disc {
+  transition: filter var(--disc-motion-duration) var(--disc-motion-easing);
+}
+
+.flow-disc-position .hero-disc.is-preview {
+  cursor: default;
+  touch-action: auto;
+}
+
+.flow-disc-position .is-preview .hero-disc-spin {
+  will-change: auto;
+}
+
+.flow-disc-slot.is-current .hero-disc:not(.is-preview) {
+  pointer-events: auto;
+}
+
+.flow-disc-indicator {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: min(38px, calc(var(--disc-size) * 0.2));
+  height: min(38px, calc(var(--disc-size) * 0.2));
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.46);
+  color: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.flow-disc-indicator i {
+  width: 3px;
+  height: 14px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: scaleY(0.35);
+}
+
+.flow-disc-indicator i:nth-child(2) { transform: scaleY(1); }
+.flow-disc-indicator i:nth-child(3) { transform: scaleY(0.65); }
+
+.flow-disc-arc.is-playing .flow-disc-indicator i {
+  animation: flow-disc-level 850ms ease-in-out infinite alternate;
+}
+
+.flow-disc-arc.is-playing .flow-disc-indicator i:nth-child(2) { animation-delay: -300ms; }
+.flow-disc-arc.is-playing .flow-disc-indicator i:nth-child(3) { animation-delay: -550ms; }
+
+.screen:not([data-active]) .flow-disc-indicator i {
+  animation-play-state: paused;
+}
+
+@keyframes flow-disc-level {
+  from { transform: scaleY(0.3); }
+  to { transform: scaleY(1); }
+}
+
+@media (max-width: 768px) {
+  .flow-disc-slot {
+    /* Center the mobile stack; overlap follows the main record's diameter. */
+    transform: translateY(calc(var(--disc-size) * var(--slot-mobile-y)));
+    z-index: calc(5 - var(--slot-depth));
+    transition: transform var(--disc-motion-duration) var(--disc-motion-easing);
+  }
+
+  .flow-disc-position {
+    transform: translate(-50%, -50%) scale(var(--slot-mobile-scale, 1));
+    transition: transform var(--disc-motion-duration) var(--disc-motion-easing);
+  }
+
+  .flow-disc-volume {
+    transform: perspective(850px) rotateX(var(--disc-mobile-tilt-x, 4deg));
+  }
+
+  .flow-disc-position .hero-disc { filter: blur(1px); }
+  .flow-disc-slot.is-current .hero-disc,
+  .flow-disc-transition .hero-disc { filter: none; }
+
+  .flow-disc-stack-transition { display: block; }
+}
+
+@media (min-width: 769px) {
+  .flow-disc-slot:not(.is-current) .hero-disc { filter: blur(2px); }
+  .flow-disc-drum-transition .hero-disc { filter: blur(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-disc-slot,
+  .flow-disc-position,
+  .flow-disc-volume { transition: none; }
+  .flow-disc-arc.is-playing .flow-disc-indicator i { animation: none; }
+}

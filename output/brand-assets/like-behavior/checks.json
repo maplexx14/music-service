@@ -1,0 +1,22 @@
+[
+  {
+    "browser": "chromium",
+    "reducedMotion": false,
+    "passed": true
+  },
+  {
+    "browser": "chromium",
+    "reducedMotion": true,
+    "passed": true
+  },
+  {
+    "browser": "webkit",
+    "reducedMotion": false,
+    "passed": true
+  },
+  {
+    "browser": "webkit",
+    "reducedMotion": true,
+    "passed": true
+  }
+]

@@ -1,0 +1,25 @@
+.guest-page-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  padding-bottom: calc(24px + var(--bottom-controls-clearance, 0px));
+  overflow-y: auto;
+  background: rgb(10 10 10 / 45%);
+}
+.guest-page-preview {
+  min-height: 100%;
+  filter: blur(10px);
+  pointer-events: none;
+  user-select: none;
+}
+.guest-page-preview *, .guest-page-preview *::before, .guest-page-preview *::after { animation-play-state: paused !important; }
+.guest-page-lock-card { width: 100%; max-width: 360px; text-align: center; margin: auto; }
+.guest-page-lock-card > svg,
+.guest-page-lock-card > .animate-icon > svg { color: var(--text-secondary); margin-bottom: 16px; }
+.guest-page-lock-card h1 { font-size: var(--text-xl); }
+.guest-page-lock-card p { margin: 12px 0 24px; color: var(--text-secondary); }
+.guest-page-lock-card .btn + .btn { margin-top: 8px; }

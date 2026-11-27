@@ -1,0 +1,663 @@
+.playlist-header {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 32px;
+  padding: 32px 0;
+}
+
+.playlist-header-cover {
+  flex: none;
+  width: 232px;
+  height: 232px;
+  object-fit: cover;
+  border-radius: 8px;
+  background-color: var(--surface-4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.playlist-header-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 96px;
+  color: var(--text-disabled);
+}
+
+.playlist-header-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.playlist-type {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.playlist-title {
+  font-size: 72px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  line-height: 1;
+  overflow-wrap: anywhere;
+  /* У крупного заголовка немного уплотняем межбуквенные интервалы. */
+  letter-spacing: -0.02em;
+}
+
+.playlist-description {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.playlist-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+
+/* Обложка плейлиста в hero-карточке (Artist.css) — квадрат, а не круг. */
+.artist-avatar.playlist-hero-cover {
+  border-radius: var(--radius-lg);
+}
+
+/* «Понравившиеся» без своей обложки: сердце на градиенте в тон шапки. */
+.liked-hero-cover {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background:
+    radial-gradient(90% 90% at 30% 20%, color-mix(in srgb, var(--hero-c1) 90%, #fff 10%), transparent 70%),
+    linear-gradient(135deg, var(--hero-c2) 0%, var(--hero-c3) 100%);
+}
+
+/* Сердце из логотипа. Это не обложка, а значок на ней — контур картинок
+   обложек (styles/controls.css) обводил его квадратом. */
+.liked-hero-cover > img {
+  width: 50%;
+  height: 50%;
+  object-fit: contain;
+  outline: none;
+}
+
+/* Сердце выпрыгивает при открытии и дальше мягко бьётся «тук-тук». Только
+   transform — композитор, без перерисовки. На скрытом экране (вкладка
+   висит в фоне, Layout.css) стук на паузе. */
+.liked-heart-beat {
+  will-change: transform;
+  animation:
+    liked-heart-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+    liked-heart-beat 2.4s ease-in-out 1.2s infinite;
+}
+
+.screen:not([data-active]) .liked-heart-beat {
+  animation-play-state: paused;
+}
+
+@keyframes liked-heart-pop {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes liked-heart-beat {
+  0%, 40%, 100% { transform: scale(1); }
+  8% { transform: scale(1.08); }
+  16% { transform: scale(1); }
+  24% { transform: scale(1.05); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liked-heart-beat {
+    animation: none;
+  }
+}
+
+html.no-gpu .liked-heart-beat,
+html.power-save .liked-heart-beat {
+  animation: none;
+  will-change: auto;
+}
+
+.playlist-hero-description {
+  font-size: var(--text-base);
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.playlist-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Круглая кнопка в ряду действий шапки (альбом: «Добавить в медиатеку»). */
+.playlist-action-icon {
+  width: var(--control-h-lg);
+  padding: 0;
+  flex: none;
+  border-radius: 50%;
+}
+
+.action-button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.action-button:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+.playlist-tracks {
+  margin-top: 32px;
+  container-type: inline-size;
+}
+
+.tracks-table {
+  width: 100%;
+  border-collapse: collapse;
+  /* Ширины колонок — по шапке, один раз. При auto браузер пересчитывал их по
+     ВСЕМ строкам на каждую подгруженную пачку (useLazyBatch), и раскладка
+     длинного списка вставала рывком прямо во время прокрутки. */
+  table-layout: fixed;
+}
+
+/* Название забирает оставшуюся ширину; длительность — фиксированная. */
+.tracks-table .track-artist-heading {
+  width: 22%;
+}
+
+.tracks-table .track-album-heading {
+  width: 24%;
+}
+
+.tracks-table th:nth-last-child(2) {
+  width: 88px;
+}
+
+/* Колонка действий: две кнопки по 44px и отступы ячейки. */
+.tracks-table thead th:last-child {
+  width: 112px;
+}
+
+.tracks-table td {
+  overflow-wrap: anywhere;
+}
+
+.tracks-table thead {
+  border-bottom: 1px solid var(--border-default);
+}
+
+.tracks-table th {
+  text-align: left;
+  padding: 12px;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.tracks-table th:first-child {
+  width: 52px;
+  text-align: center;
+}
+
+.tracks-table th:last-child {
+  width: 112px;
+  text-align: right;
+}
+
+.track-row {
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out);
+  border-radius: 4px;
+}
+
+.track-row:hover {
+  background-color: var(--surface-1);
+}
+
+/* Строка трека — тоже «кнопка»: подтверждаём нажатие сразу. */
+.track-row:active {
+  background-color: var(--surface-2);
+}
+
+.track-row td {
+  padding: 12px;
+  font-size: var(--text-base);
+}
+
+.track-number {
+  text-align: center;
+  color: var(--text-secondary);
+  width: 52px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ячейка остаётся частью таблицы; flex нужен только её содержимому. */
+.track-name-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.track-name-content > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-name,
+.track-artist,
+.track-album {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-table-cover {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: var(--surface-4);
+}
+
+.track-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+/* Одна строка: длинное название не меняет высоту трека. */
+.track-row .track-name {
+  display: block;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.track-artist {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+
+.track-row .track-artist--inline {
+  display: none;
+}
+
+.track-row .track-name {
+  margin-bottom: 0;
+}
+
+.track-album {
+  color: var(--text-secondary);
+}
+
+.track-duration {
+  text-align: right;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-playlist {
+  text-align: center;
+  padding: 128px 32px;
+  color: var(--text-secondary);
+}
+
+/* Вторичная кнопка в шапке (напр. «Добавить в медиатеку» у внешнего плейлиста). */
+/* --- Индикация играющего трека и действия над треком --- */
+
+.track-row.playing .track-name {
+  color: var(--brand-accent);
+}
+
+/* Эквалайзер-анимация в колонке номера у играющего трека. */
+.now-playing-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.now-playing-bars span {
+  display: block;
+  width: 3px;
+  height: 100%;
+  background-color: var(--brand-accent);
+  transform-origin: bottom;
+  animation: nowPlayingBar 0.9s ease-in-out infinite;
+}
+
+.now-playing-bars span:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.now-playing-bars span:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+/* На паузе — столбики замирают. */
+.now-playing-bars.paused span {
+  animation-play-state: paused;
+  height: 40%;
+}
+
+@keyframes nowPlayingBar {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+.track-actions-cell {
+  text-align: right;
+  white-space: nowrap;
+  width: 112px;
+}
+
+.track-action-btn {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.68);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 50%;
+  vertical-align: middle;
+  touch-action: manipulation;
+  transition: color 160ms var(--ease-out),
+              background-color 160ms var(--ease-out),
+              transform 160ms var(--ease-out);
+}
+
+.track-action-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+.track-action-btn--menu {
+  display: none;
+}
+
+.track-action-btn.liked {
+  color: var(--brand-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .track-action-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--brand-accent-soft);
+  }
+
+  .track-action-btn.liked:hover {
+    color: var(--brand-accent-hover);
+  }
+}
+
+.track-action-btn:active {
+  color: var(--brand-accent);
+  background-color: var(--brand-accent-soft-strong);
+}
+
+.track-action-btn:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.load-more-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+/* --- Мобильная адаптация (Понравившиеся / детали плейлиста) --- */
+@media (max-width: 768px) {
+  .playlist-header {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+    padding: 16px 0 8px;
+  }
+
+  .playlist-header-cover {
+    width: 160px;
+    height: 160px;
+  }
+
+  .playlist-header-cover.placeholder {
+    font-size: 64px;
+  }
+
+  .playlist-header-info {
+    align-items: center;
+    width: 100%;
+  }
+
+  .playlist-title {
+    font-size: clamp(28px, 9vw, 44px);
+    margin-bottom: 12px;
+  }
+
+  .playlist-meta {
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .playlist-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .play-button-large {
+    flex: 1;
+  }
+
+  /* Ряд действий шапки (артист, альбом, плейлист, «Понравившиеся») — как в
+     нативных плеерах: слева вторичные действия круглыми иконками, справа
+     крупная круглая «Воспроизвести» под большой палец. Подписи прячем — на
+     узком экране «Добавить в медиатеку» не помещалась и рвалась; смысл несут
+     иконка и aria-label. */
+  .playlist-actions.round-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 12px;
+  }
+
+  .round-actions .round-actions__label {
+    display: none;
+  }
+
+  .round-actions .play-button-large.round-actions__play {
+    order: 3;
+    margin-left: auto;
+    flex: none;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--radius-avatar);
+  }
+
+  /* Вторичное действие, которое относится к самой кнопке «Воспроизвести»
+     («Перемешать»), стоит непосредственно слева от неё. */
+  .round-actions .round-actions__near-play {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .round-actions:has(.round-actions__near-play) .play-button-large.round-actions__play {
+    margin-left: 0;
+  }
+
+  .round-actions .round-actions__icon {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-avatar);
+    color: var(--text-primary);
+    /* У .btn--secondary обводка — inset-тенью; здесь она уже рамкой. */
+    box-shadow: none;
+  }
+
+  .round-actions .action-button.liked,
+  .round-actions .round-actions__icon.liked {
+    color: var(--brand-accent);
+    border-color: var(--brand-accent);
+  }
+
+  .round-actions button {
+    touch-action: manipulation;
+  }
+
+  .playlist-tracks {
+    margin-top: 20px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .track-action-btn--desktop {
+    display: none;
+  }
+
+  .track-action-btn--menu {
+    display: inline-grid;
+  }
+
+  /* Прячем шапку таблицы и превращаем строки во флекс-ряды. */
+  .tracks-table thead {
+    display: none;
+  }
+
+  .tracks-table,
+  .tracks-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .tracks-table tr.track-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 80px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    /* Фиксированная высота сохраняется и у пропущенных строк: уточнение
+       размеров при прокрутке больше не сдвигает весь список. */
+    content-visibility: auto;
+  }
+
+  .track-row .track-artist {
+    line-height: 1.35;
+  }
+
+  .track-row .track-artist--inline {
+    display: block;
+  }
+
+  .track-row .track-name {
+    margin-bottom: 4px;
+  }
+
+  .track-row td {
+    padding: 0;
+  }
+
+  /* Второстепенные колонки скрываем на узких экранах. */
+  .track-row .track-number,
+  .track-row .track-artist-cell,
+  .track-row .track-album {
+    display: none;
+  }
+
+  .track-row .track-duration {
+    display: block;
+    flex: none;
+    width: auto;
+    font-size: var(--text-sm);
+  }
+
+  .tracks-table .track-row .track-name-cell {
+    display: block;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .track-row .track-actions-cell {
+    flex-shrink: 0;
+    width: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    /* Иконка в кнопке 44px отступает от её края на 12px — сдвигаем ячейку
+       на эти 12, чтобы край иконки встал на одну линию с краем обложки
+       слева (оба на 4px внутри строки). Зона нажатия остаётся 44px. */
+    margin-right: -12px;
+  }
+
+  .track-table-cover {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+@media (max-width: 768px) {
+  .tracks-table tr.track-row--with-meta {
+    height: 100px;
+  }
+}
+
+
+/* Без color-mix (старый Android WebView) — без осветления пятна, см. Artist.css. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+  .liked-hero-cover {
+    background:
+      radial-gradient(90% 90% at 30% 20%, var(--hero-c1), transparent 70%),
+      linear-gradient(135deg, var(--hero-c2) 0%, var(--hero-c3) 100%);
+  }
+}
+
+/* Учитываем ширину списка, в том числе при развёрнутой боковой панели. */
+@media (min-width: 769px) {
+  @container (max-width: 680px) {
+    .tracks-table .track-album-heading,
+    .track-row .track-album {
+      display: none;
+    }
+
+    .tracks-table th:nth-last-child(2) {
+      width: 104px;
+    }
+  }
+}

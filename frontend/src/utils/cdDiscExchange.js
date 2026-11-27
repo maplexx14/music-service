@@ -277,7 +277,7 @@ export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, 
           const previous = transfer.outgoing
           const previousStyle = getComputedStyle(previous)
           current.previous = { node: previous, parent: previous.parentElement, nextSibling: previous.nextSibling,
-            style: previous.style.cssText, targetSlot: -current.direction * 2 }
+            style: previous.style.cssText, targetSlot: transfer.outgoingTargetSlot }
           Object.assign(previous.style, {
             position: 'absolute', inset: '0', width: '100%', height: '100%', margin: '0',
             opacity: previousStyle.opacity, filter: previousStyle.filter, boxShadow: 'none',
@@ -287,13 +287,13 @@ export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, 
         }
         current.extras = []
         const movingNodes = new Set([incomingElement, transfer.outgoing])
-        for (const { node, slot } of transfer.extras || []) {
+        for (const { node, targetSlot } of transfer.extras || []) {
           if (!node?.parentElement || movingNodes.has(node)) continue
           movingNodes.add(node)
           const rect = node.getBoundingClientRect()
           const style = getComputedStyle(node)
           current.extras.push({ node, parent: node.parentElement, nextSibling: node.nextSibling,
-            style: node.style.cssText, targetSlot: slot - current.direction })
+            style: node.style.cssText, targetSlot })
           Object.assign(node.style, {
             position: 'absolute', inset: '0', width: '100%', height: '100%', margin: '0',
             opacity: style.opacity, filter: style.filter, boxShadow: 'none', overflow: 'visible',
@@ -339,11 +339,12 @@ export function createCdDiscExchange({ canvas, layer, paint, canAnimate, align, 
     const options = { duration: CD_DISC_EXCHANGE_DURATION, easing: EASING, fill: 'both' }
     const outgoingEndFilter = outgoingTo ? transfer.outgoingFilter || 'brightness(1)' : 'brightness(1)'
     const incomingStartFilter = incomingFrom ? transfer.incomingFilter || 'brightness(1)' : 'brightness(1)'
+    const fadeDeparture = animateOpacity || transfer?.outgoingOpacity === 0
     let outgoingFrames = [
-      { transform: 'translateX(0%)', ...(animateOpacity ? { opacity: 1 } : {}),
+      { transform: 'translateX(0%)', ...(fadeDeparture ? { opacity: 1 } : {}),
         ...(animateFilter ? { filter: 'brightness(1) blur(0px)' } : {}) },
       { transform: outgoingTo || `translateX(${-distance}%)`,
-        ...(animateOpacity ? { opacity: outgoingTo ? transfer.outgoingOpacity ?? 1 : 0 } : {}),
+        ...(fadeDeparture ? { opacity: outgoingTo ? transfer.outgoingOpacity ?? 1 : 0 } : {}),
         ...(animateFilter ? { filter: outgoingEndFilter } : {}) },
     ]
     let incomingFrames = [

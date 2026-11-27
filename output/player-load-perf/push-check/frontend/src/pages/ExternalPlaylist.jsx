@@ -1,0 +1,285 @@
+import { isUuid } from '../utils/identifiers'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { usePlayerStore, trackLikeKey } from '../store/playerStore'
+import { Play, Plus } from '@/components/icons'
+import api from '../services/api'
+import { peekCache, writeCache, patchCache, cacheAge } from '../services/pageCache'
+import Spinner from '../components/Spinner'
+import TrackTableRow from '../components/TrackTableRow'
+import OfflinePlaylistDownloadButton from '../components/OfflinePlaylistDownloadButton'
+import { useOffline } from '../hooks/useOffline'
+import { useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
+import { useTrackContextMenu, TrackContextMenu } from '../components/TrackContextMenu'
+import { useLazyBatch } from '../hooks/useLazyBatch'
+import { toast } from '../store/toastStore'
+import defaultCover from '../assets/default-cover.webp'
+import { handleCoverError, resolveCoverUrl } from '../utils/media'
+import { titleFitStyle } from '../utils/titleFit'
+import { plural } from '../utils/format'
+import CoverBackdrop, { useCoverBackdrop } from '../components/CoverBackdrop'
+import './PlaylistDetail.css'
+// Шапка и фон в тон обложки (CoverBackdrop) — как у исполнителя.
+import './Artist.css'
+
+// Просмотр внешнего (SoundCloud) плейлиста: слушать можно сразу, в библиотеку
+// добавляется только по явному нажатию «Добавить в медиатеку».
+const EXTERNAL_FRESH_MS = 10 * 60 * 1000
+
+function ExternalPlaylist() {
+  const { id } = useParams()
+  const offline = useOffline()
+  const offlineState = useOfflineTracks()
+  const savedPlaylist = offlineCollections(offlineState).playlists.find((item) => item.id === `soundcloud:playlist:${id}`)
+  const navigate = useNavigate()
+  // Внешний плейлист меняется редко, а грузится через SoundCloud (секунды):
+  // из кэша страница рисуется сразу, без спиннера.
+  const cacheKey = `external-playlist:${id}`
+  const [onlinePlaylist, setPlaylist] = useState(() => peekCache(cacheKey)?.playlist ?? null)
+  const [onlineTracks, setTracks] = useState(() => peekCache(cacheKey)?.tracks ?? [])
+  const [onlineLoading, setLoading] = useState(() => !peekCache(cacheKey))
+  const playlist = offline ? savedPlaylist : onlinePlaylist
+  const tracks = offline ? savedPlaylist?.tracks || [] : onlineTracks
+  const loading = offline ? !offlineState.ready : onlineLoading
+  const [importing, setImporting] = useState(false)
+  const backdrop = useCoverBackdrop(playlist?.cover_url)
+  // Атомарные селекторы вместо подписки на весь store: страница со списком
+  // треков больше не перерисовывается на каждом тике currentTime (~4/сек).
+  const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  // Только id: страница отмечает текущую строку, а подписка на весь объект
+  // перерисовывала её и тогда, когда трек тот же, а объект новый.
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const likedTrackIds = usePlayerStore((s) => s.likedTrackIds)
+  const pendingLikeKeys = usePlayerStore((s) => s.pendingLikeKeys)
+  const toggleLikeForTrack = usePlayerStore((s) => s.toggleLikeForTrack)
+  const fetchLikedTracks = usePlayerStore((s) => s.fetchLikedTracks)
+  const materializeTrack = usePlayerStore((s) => s.materializeTrack)
+
+  // Внешний плейлист приходит целиком, одним ответом — постранично его тянуть
+  // неоткуда. Зато рисовать сразу все строки незачем: у каждой своя обложка,
+  // и на плейлисте в пару сотен треков это залп запросов за картинками,
+  // которых никто не увидит. Рисуем партиями по мере прокрутки. Сброс по id
+  // плейлиста, а не по списку: материализация внешнего трека правит список на
+  // месте, и лишний раз схлопывать отрисованное не нужно.
+  const { visibleItems: visibleTracks, sentinelRef: tracksSentinelRef } = useLazyBatch(tracks, {
+    batchSize: 30,
+    resetKey: id,
+  })
+
+  useEffect(() => {
+    fetchPlaylist()
+    fetchLikedTracks()
+  }, [id, offline])
+
+  // Материализация трека (db_id) правит список на месте — кэш следует за ним.
+  useEffect(() => {
+    if (!offline && !loading) patchCache(cacheKey, { tracks })
+  }, [tracks, loading, offline])
+
+  const fetchPlaylist = async () => {
+    if (offline) return
+    const cached = peekCache(cacheKey)
+    if (cached) {
+      setPlaylist(cached.playlist)
+      setTracks(cached.tracks)
+      setLoading(false)
+      usePlayerStore.getState().prefetchTracks(cached.tracks, 8)
+      if (cacheAge(cacheKey) < EXTERNAL_FRESH_MS) return
+    } else {
+      setLoading(true)
+    }
+    try {
+      const response = await api.get(`/soundcloud/playlists/${id}`)
+      writeCache(cacheKey, { playlist: response.data.playlist, tracks: response.data.tracks })
+      setPlaylist(response.data.playlist)
+      setTracks(response.data.tracks)
+      // Прогреваем резолв первых треков — старт воспроизведения без паузы.
+      if (!cached) usePlayerStore.getState().prefetchTracks(response.data.tracks, 8)
+    } catch (error) {
+      console.error('Error fetching external playlist:', error)
+      if (!cached) {
+        toast.error('Не удалось загрузить плейлист')
+        navigate('/search')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const playOptions = { context: { kind: 'playlist', title: playlist?.title } }
+  const handlePlay = () => {
+    if (tracks.length > 0) {
+      playPlaylist(tracks, 0, 'external', null, playOptions)
+    }
+  }
+
+  const handlePlayTrack = (track, index) => {
+    playPlaylist(tracks, index, 'external', null, playOptions)
+  }
+
+  const handleImport = async () => {
+    if (importing || !playlist) return
+    setImporting(true)
+    try {
+      // Без таймаута: большой плейлист импортируется дольше глобальных 60 с.
+      const { data } = await api.post(
+        '/import',
+        { url: playlist.permalink_url },
+        { timeout: 0 },
+      )
+      toast.success(`Плейлист «${data.playlist.name}» добавлен в медиатеку`)
+      navigate(`/playlists/${data.playlist.id}`)
+    } catch (error) {
+      console.error('Playlist import error:', error)
+      toast.error('Не удалось добавить плейлист в медиатеку')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Материализует внешний трек в БД и запоминает db_id в списке, чтобы
+  // индикация лайка работала после действия.
+  const ensureDbId = async (track) => {
+    if (isUuid(track.db_id)) return track.db_id
+    const dbId = await materializeTrack(track)
+    setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: dbId } : t)))
+    return dbId
+  }
+
+  const handleToggleLike = async (track, e) => {
+    e.stopPropagation()
+    try {
+      // Сердечко зальётся сразу (pendingLikeKeys в сторе), материализация
+      // внешнего трека и сам лайк летят в фоне.
+      await toggleLikeForTrack(track, (id) => {
+        setTracks((prev) => prev.map((t) => (t.id === track.id ? { ...t, db_id: id } : t)))
+      })
+    } catch (error) {
+      console.error('Error toggling like:', error)
+      toast.error('Не удалось обновить понравившиеся')
+    }
+  }
+
+  // Свежие обработчики для мемоизированных строк (см. TrackTableRow):
+  // ref стабилен, поэтому пересоздание функций на рендере строки не задевает.
+  const trackMenu = useTrackContextMenu()
+  const rowActions = useRef(null)
+  rowActions.current = {
+    openMenu: trackMenu.open,
+    play: handlePlayTrack,
+    toggleLike: handleToggleLike,
+    resolveId: ensureDbId,
+  }
+  const likedSet = useMemo(() => new Set(likedTrackIds), [likedTrackIds])
+
+  if (loading) {
+    return (
+      <Spinner page />
+    )
+  }
+
+  if (!playlist) {
+    return offline ? <div className="page-container"><p>В этом плейлисте нет скачанных треков</p></div> : null
+  }
+
+  return (
+    <div className={`page-container hero-page${backdrop.hero ? ' has-cover-hero' : ''}`}>
+      <CoverBackdrop {...backdrop} />
+      <header className="artist-hero">
+        <div className="artist-hero-content">
+          <img
+            src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+            alt={playlist.title}
+            decoding="async"
+            className="artist-avatar playlist-hero-cover"
+            onError={handleCoverError}
+          />
+          <div className="artist-hero-info">
+            <div className="artist-kicker">Плейлист · SoundCloud</div>
+            <h1 className="artist-name" style={titleFitStyle(playlist.title)}>{playlist.title}</h1>
+            <ul className="artist-stats">
+              <li>{playlist.owner || 'SoundCloud'}</li>
+              {tracks.length > 0 && <li>{tracks.length} {plural(tracks.length, 'трек', 'трека', 'треков')}</li>}
+            </ul>
+          </div>
+        </div>
+      </header>
+
+      <div className="artist-toolbar">
+        <div className="playlist-actions round-actions">
+          <button
+            className="btn btn--primary btn--lg play-button-large round-actions__play"
+            onClick={handlePlay}
+            aria-label="Воспроизвести"
+          >
+            <Play size={24} fill="currentColor" />
+            <span className="round-actions__label">Воспроизвести</span>
+          </button>
+          <OfflinePlaylistDownloadButton
+            playlist={{ ...playlist, id: `soundcloud:playlist:${id}`, name: playlist.title || playlist.name, tracks,
+              download_source: { type: 'soundcloud', id }, page_url: `/external/soundcloud/playlists/${id}` }}
+            totalTracks={playlist.track_count || tracks.length}
+          />
+          <button
+            className="btn btn--secondary btn--lg play-button-large round-actions__icon"
+            onClick={handleImport}
+            disabled={importing || offline}
+            aria-label="Добавить в медиатеку"
+          >
+            <Plus size={20} />
+            <span className="round-actions__label">{importing ? 'Добавление...' : 'Добавить в медиатеку'}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="playlist-tracks hero-page-sheet">
+        {tracks.length > 0 ? (
+          <table className="tracks-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Название</th>
+                <th className="track-artist-heading">Артист</th>
+                <th className="track-album-heading">Альбом</th>
+                <th>Длительность</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleTracks.map((track, index) => {
+                const isCurrent = currentTrackId === track.id
+                const dbId = isUuid(track.db_id) ? track.db_id : null
+                const isLiked =
+                  (dbId ? likedSet.has(dbId) : false) ||
+                  pendingLikeKeys.includes(trackLikeKey(track))
+                return (
+                  <TrackTableRow
+                    key={track.id}
+                    track={track}
+                    index={index}
+                    isCurrent={isCurrent}
+                    isPlaying={isCurrent && isPlaying}
+                    isLiked={isLiked}
+                    actionsRef={rowActions}
+                  />
+                )
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-playlist">
+            <p>В этом плейлисте пока нет треков</p>
+          </div>
+        )}
+        {/* Маячок догрузки — после таблицы: внутри <tbody> лежать может только
+            строка, произвольный div туда браузер не пустит. */}
+        <div ref={tracksSentinelRef} aria-hidden="true" />
+      </div>
+      <TrackContextMenu menu={trackMenu.menu} menuRef={trackMenu.menuRef} onClose={trackMenu.close} />
+    </div>
+  )
+}
+
+export default ExternalPlaylist

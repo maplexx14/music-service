@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "track-video": "node scripts/track-video/index.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/server-filesystem": "^2026.7.10"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
   }
 }

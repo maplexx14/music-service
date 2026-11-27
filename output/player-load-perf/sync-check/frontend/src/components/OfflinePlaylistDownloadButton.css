@@ -1,0 +1,3 @@
+.playlist-download-button { position: relative; }
+.round-actions .playlist-download-button.btn { border: 0; box-shadow: none; }
+.playlist-download-button.active { color: var(--accent, #a78bfa); }

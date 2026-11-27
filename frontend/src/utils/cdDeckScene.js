@@ -233,7 +233,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     playbackVolume?.dispose()
     gpuVolume?.dispose()
     gpuProjectionNode?.remove()
-    playbackElement?.classList.remove('has-crop', 'has-volume')
+    playbackElement?.classList.remove('has-crop', 'has-volume', 'is-live-disc')
   })
   let gpuDiscTransform
   let gpuEnvelopeKey = '', gpuEnvelope
@@ -1289,14 +1289,12 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     for (const resolve of viewAlignmentWaiters) resolve()
     viewAlignmentWaiters.clear()
   }
-  let tiltMotion = null
   let reactionMotion = null
   let seekFocusMotion = null
   const seekFocus = { value: 0, velocity: 0 }
   let seekGestureCamera = null
   let volumeSeeking = false
   const reaction = { theta: 0, phi: 0, roll: 0, zoom: 0, lift: 0 }
-  const deviceTilt = { theta: 0, phi: 0 }
   const lidWaiters = new Set()
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
   const controlMotions = new Map()
@@ -1338,9 +1336,8 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     // End the invisible tail at the actual projected pixel size. The visible
     // spring keeps its original trajectory and 60 Hz cadence.
     const rest = reactionMotion.rest
-    if (rest && now - reactionMotion.startedAt > 180 && !viewMotion && !tiltMotion &&
-      rest.theta === view.theta && rest.phi === view.phi &&
-      rest.tiltTheta === deviceTilt.theta && rest.tiltPhi === deviceTilt.phi) {
+    if (rest && now - reactionMotion.startedAt > 180 && !viewMotion &&
+      rest.theta === view.theta && rest.phi === view.phi) {
       let displacement = 0
       for (const corner of reactionCorners) {
         reactionPoint.copy(corner).project(camera)
@@ -1380,14 +1377,13 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       }
     }
     const now = performance.now()
-    const rest = reactionMotion?.rest || (!reactionMotion && !viewMotion && !tiltMotion ? {
+    const rest = reactionMotion?.rest || (!reactionMotion && !viewMotion ? {
       camera: camera.clone(), theta: view.theta, phi: view.phi,
-      tiltTheta: deviceTilt.theta, tiltPhi: deviceTilt.phi,
     } : null)
     updateReaction(now)
     const velocity = reactionMotion?.velocity || Object.fromEntries(Object.keys(reaction).map(key => [key, 0]))
     // A damped impulse moves the entire view, retaining velocity when another
-    // action interrupts it. Manual orbit and phone tilt remain independent.
+    // action interrupts it.
     for (const key of Object.keys(reaction)) {
       const kick = (impulse[key] || 0) * Math.E * REACTION_SPRING_OMEGA
       const limit = (key === 'zoom' ? 0.14 : key === 'roll' ? 0.22 : 0.5) * Math.E * REACTION_SPRING_OMEGA
@@ -1552,9 +1548,9 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       ? 0.78 + mobileFramingScale * Math.max(2.88, 2.64 / output.aspect) / Math.tan(output.fov * Math.PI / 360)
       : Math.max(11.1, 12.2 / output.aspect)
     const radius = baseRadius / ((1 + clamp(pose.zoom, -0.12, 0.16)) * (1 + focus * 0.12))
-    const viewTheta = view.theta + deviceTilt.theta + pose.theta
+    const viewTheta = view.theta + pose.theta
     const theta = Math.atan2(Math.sin(viewTheta), Math.cos(viewTheta)) * (1 - focus)
-    const phi = Math.PI / 2 + (clamp(view.phi + deviceTilt.phi + pose.phi, 0.22, 2.65) - Math.PI / 2) * (1 - focus)
+    const phi = Math.PI / 2 + (clamp(view.phi + pose.phi, 0.22, 2.65) - Math.PI / 2) * (1 - focus)
     output.position.set(
       radius * Math.sin(phi) * Math.sin(theta),
       target.y + radius * Math.cos(phi),
@@ -1641,35 +1637,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     positionCamera()
     releaseViewAlignment()
   }
-  function updateDeviceTilt(now) {
-    if (!tiltMotion) return
-    const at = Math.max(now, tiltMotion.updatedAt)
-    const elapsed = clamp((at - tiltMotion.updatedAt) / 1000, 0, 0.05)
-    tiltMotion.updatedAt = at
-    const theta = springStep(deviceTilt.theta, tiltMotion.thetaVelocity, tiltMotion.theta, elapsed)
-    const phi = springStep(deviceTilt.phi, tiltMotion.phiVelocity, tiltMotion.phi, elapsed)
-    deviceTilt.theta = theta.value
-    deviceTilt.phi = phi.value
-    tiltMotion.thetaVelocity = theta.velocity
-    tiltMotion.phiVelocity = phi.velocity
-    if (Math.abs(deviceTilt.theta - tiltMotion.theta) < 0.0005 &&
-        Math.abs(deviceTilt.phi - tiltMotion.phi) < 0.0005 &&
-        Math.abs(theta.velocity) < 0.005 && Math.abs(phi.velocity) < 0.005) {
-      deviceTilt.theta = tiltMotion.theta
-      deviceTilt.phi = tiltMotion.phi
-      tiltMotion = null
-    }
-    positionCamera()
-    updateDiscOverlay()
-  }
-  function holdDeviceTilt() {
-    // Keep the rendered pose while manual gestures or screen changes take
-    // over. The next sensor sample becomes a fresh neutral position.
-    view.theta += deviceTilt.theta
-    view.phi = clamp(view.phi + deviceTilt.phi, 0.22, 2.65)
-    deviceTilt.theta = deviceTilt.phi = 0
-    tiltMotion = null
-  }
   function resetView() {
     if (softwareRendering && !mobile) return
     softwareFrames?.suspend()
@@ -1707,7 +1674,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     // Hardware frames follow vsync; render() caps actual playback draws.
     // A timer followed by rAF can miss the intended refresh and produce an
     // alternating short/long frame cadence even when the GPU is idle.
-    if (seekFocusMotion || viewMotion || !cachedRendering || !softwareRendering && (tiltMotion || reactionMotion || performance.now() - lastViewChangeAt < 80)) {
+    if (seekFocusMotion || viewMotion || !cachedRendering || !softwareRendering && (reactionMotion || performance.now() - lastViewChangeAt < 80)) {
       frame = requestAnimationFrame(render)
       return
     }
@@ -1902,10 +1869,17 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
   }
   function canUseSoftwareFrames() {
     const thetaOffset = view.theta - initialView.theta
-    return !initialPlayback && !seekFocus.value && !seekFocusMotion && !lidMotion && !viewMotion && !tiltMotion && !reactionMotion &&
+    return !initialPlayback && !seekFocus.value && !seekFocusMotion && !lidMotion && !viewMotion && !reactionMotion &&
       Math.abs(Math.atan2(Math.sin(thetaOffset), Math.cos(thetaOffset))) < 1e-7 &&
-      Math.abs(view.phi - initialView.phi) < 1e-7 &&
-      Math.abs(deviceTilt.theta) < 1e-7 && Math.abs(deviceTilt.phi) < 1e-7
+      Math.abs(view.phi - initialView.phi) < 1e-7
+  }
+  // When a seek falls back to the frontal camera focus (the chassis volume is
+  // not on screen yet), the scene is already rendered live. Show its textured
+  // record instead of stacking the flat 2D overlay on top of the real spindle,
+  // foil and lid glass. Software rendering keeps the cheap overlay.
+  function isLiveDiscFocused() {
+    return cachedRendering && !softwareRendering && presentation !== 'setup' && !mobile &&
+      Boolean(artworkMaterial.map) && (seekFocus.value > 0.001 || Boolean(seekFocusMotion))
   }
   function syncPlaybackMotion() {
     if (playbackElement && cachedRendering && presentation !== 'setup') {
@@ -1980,7 +1954,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     frame = 0
     if (!canRender()) return
     const immediate = immediateFrame || needsFullRender
-    const movingBeforeFrame = Boolean(seekFocusMotion || lidMotion || viewMotion || tiltMotion || reactionMotion || controlsMoveScene())
+    const movingBeforeFrame = Boolean(seekFocusMotion || lidMotion || viewMotion || reactionMotion || controlsMoveScene())
     // A moving chassis uses every vsync, including on low-core devices.
     // Resting disc playback retains its existing frame budget.
     if (!cachedRendering && !frameCadence.shouldRender(frameAt, constrainedDevice ? 24 : PLAYBACK_FPS, immediate, movingBeforeFrame)) {
@@ -1994,11 +1968,10 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     // callbacks/main-thread work let this rAF callback start.
     updateLid(frameAt)
     updateViewMotion(frameAt)
-    updateDeviceTilt(frameAt)
     updateReaction(frameAt)
     updateSeekFocus(frameAt)
     updateControls(frameAt)
-    const moving = Boolean(seekFocusMotion || lidMotion || viewMotion || tiltMotion || reactionMotion || controlsMoveScene())
+    const moving = Boolean(seekFocusMotion || lidMotion || viewMotion || reactionMotion || controlsMoveScene())
     let restored = false
     if (!cachedRendering && liveFramePresented && !moving && !needsFullRender &&
       !renderer.shadowMap.needsUpdate && restingPose) {
@@ -2010,6 +1983,9 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       }
     }
     const value = spin.angle()
+    const liveDisc = isLiveDiscFocused()
+    if (cachedRendering && artwork.visible !== liveDisc) artwork.visible = liveDisc
+    playbackElement?.classList.toggle('is-live-disc', liveDisc)
     const partialFrame = !cachedRendering && (!liveFramePresented || restored) && !needsFullRender && !moving && !renderer.shadowMap.needsUpdate && discScissor && artworkMaterial.map
     const discChanged = restored || !partialFrame || artworkMaterial.map !== renderedDiscMap || value !== renderedDiscAngle || lightingDirty || glassDirty
     if (partialFrame) {
@@ -2024,6 +2000,10 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       if (!cachedRendering) {
         if (artworkMaterial.map) artworkMaterial.map.rotation = -value
         artworkMaterial.stencilWrite = true
+      } else if (liveDisc && artworkMaterial.map) {
+        // The resting cache keeps the print still; the focused live frame must
+        // turn it exactly like the prepared disc overlay does at rest.
+        artworkMaterial.map.rotation = -value
       }
       if (renderer.shadowMap.needsUpdate) shadowVersion++
       if (!cachedRendering && moving) renderMotionFrame()
@@ -2048,7 +2028,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
         // WebGL canvas during orbit stalls each visible front-facing frame.
         if (canUseSoftwareFrames()) updateSoftwareControls()
         else hideSoftwareControls()
-        if (!softwareFrames?.camera && !carouselCamera) updateDiscOverlay()
+        if (!liveDisc && !softwareFrames?.camera && !carouselCamera) updateDiscOverlay()
         // Preserve the prepared default view throughout manual motion. A
         // transient camera zoom must not invalidate and rebuild all poses.
         if (canUseSoftwareFrames()) softwareFrames?.warm(softwareFrameKey())
@@ -2064,8 +2044,8 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       if (!cachedRendering && !moving) {
         updateDiscScissor()
         if (artworkMaterial.map && discScissor) cacheDiscVisibility()
-        if (lightingDirty && artworkMaterial.map && discScissor && !lidMotion && !viewMotion && !tiltMotion && !reactionMotion && lastRenderAt - lastViewChangeAt > 100) cacheDiscLighting()
-        if (glassDirty && discScissor && !lidMotion && !viewMotion && !tiltMotion && !reactionMotion && lastRenderAt - lastViewChangeAt > 100) cacheGlass()
+        if (lightingDirty && artworkMaterial.map && discScissor && !lidMotion && !viewMotion && !reactionMotion && lastRenderAt - lastViewChangeAt > 100) cacheDiscLighting()
+        if (glassDirty && discScissor && !lidMotion && !viewMotion && !reactionMotion && lastRenderAt - lastViewChangeAt > 100) cacheGlass()
         restingPose = captureRestingPose()
       }
     }
@@ -2076,7 +2056,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     if (discChanged) { renderedDiscMap = artworkMaterial.map; renderedDiscAngle = value }
     if (!cachedRendering) presentFrame(!partialFrame, discChanged, moving)
     syncPlaybackMotion()
-    if (seekFocusMotion || lidMotion || viewMotion || tiltMotion || reactionMotion || controlMotions.size || (!cachedRendering && artworkMaterial.map && spin.isAnimating())) invalidate(false, false)
+    if (seekFocusMotion || lidMotion || viewMotion || reactionMotion || controlMotions.size || (!cachedRendering && artworkMaterial.map && spin.isAnimating())) invalidate(false, false)
   }
   function discOverlayGeometry(poseCamera = camera) {
     // Hardware playback presents the chassis on the full-size 2D cache;
@@ -2210,14 +2190,14 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     inViewport = entry.isIntersecting
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
     if (inViewport) invalidate()
-    else { softwareFrames?.suspend(); finishControls(); holdDeviceTilt(); snapLid(); if (viewMotion) snapView(); cancelRender() }
+    else { softwareFrames?.suspend(); finishControls(); snapLid(); if (viewMotion) snapView(); cancelRender() }
     syncPlaybackMotion()
   })
   load.onCleanup(() => intersection.disconnect())
   intersection.observe(staticCanvas || canvas)
   const onVisibility = () => {
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
-    if (document.hidden) { softwareFrames?.suspend(); finishControls(); holdDeviceTilt(); snapLid(); if (viewMotion) snapView(); cancelRender() }
+    if (document.hidden) { softwareFrames?.suspend(); finishControls(); snapLid(); if (viewMotion) snapView(); cancelRender() }
     else invalidate()
     syncPlaybackMotion()
   }
@@ -2226,7 +2206,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     spin.setEnabled(canRender() && !powerSave && !reduced.matches)
     finishControls()
     if (reduced.matches) {
-      holdDeviceTilt()
       if (seekFocusMotion) {
         seekFocus.value = seekFocusMotion.target
         seekFocus.velocity = 0
@@ -2729,7 +2708,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       initialPlayback = value
       softwareFrames?.suspend()
       onAction?.(null)
-      holdDeviceTilt()
       stopReaction()
       Object.assign(initialView, value ? FRONTAL_VIEW : playbackView)
       if (value || softwareRendering || powerSave || reduced.matches || !canRender()) {
@@ -2740,26 +2718,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
     },
     reactToAction,
     setAppearance,
-    holdDeviceTilt,
-    setDeviceTilt(theta, phi) {
-      if (!mobile || softwareRendering || carouselActive || softwareFrames?.camera || draggingDisc || seekFocusMotion || powerSave || reduced.matches || !canRender() ||
-          !Number.isFinite(theta) || !Number.isFinite(phi)) return
-      theta = clamp(theta, -Math.PI / 15, Math.PI / 15)
-      phi = clamp(phi, -Math.PI / 22.5, Math.PI / 22.5)
-      const target = tiltMotion || deviceTilt
-      // Ignore sensor jitter; retain spring velocity when a target changes.
-      if (Math.abs(target.theta - theta) < 0.001 && Math.abs(target.phi - phi) < 0.001) return
-      softwareFrames?.suspend()
-      const now = performance.now()
-      tiltMotion = {
-        theta, phi,
-        thetaVelocity: tiltMotion?.thetaVelocity || 0,
-        phiVelocity: tiltMotion?.phiVelocity || 0,
-        updatedAt: tiltMotion?.updatedAt || now,
-      }
-      lastViewChangeAt = now
-      invalidate(false, false)
-    },
     closeLid() {
       if (disposed) return Promise.resolve(false)
       moveLid(LID_CLOSED_ANGLE)
@@ -2774,14 +2732,14 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       if (!active) hideSoftwareControls()
       spin.setEnabled(canRender() && !powerSave && !reduced.matches)
       if (active) invalidate()
-      else { softwareFrames?.suspend(); finishControls(); holdDeviceTilt(); snapLid(); if (viewMotion) snapView(); cancelRender() }
+      else { softwareFrames?.suspend(); finishControls(); snapLid(); if (viewMotion) snapView(); cancelRender() }
       syncPlaybackMotion()
     },
     setPowerSave(value) {
       if (value === powerSave) return
       powerSave = value
       spin.setEnabled(canRender() && !powerSave && !reduced.matches)
-      if (powerSave) { softwareFrames?.suspend(); finishControls(); holdDeviceTilt(); snapLid(); if (viewMotion) snapView() }
+      if (powerSave) { softwareFrames?.suspend(); finishControls(); snapLid(); if (viewMotion) snapView() }
       // Cached chassis lighting stays identical when motion or power saving changes.
       renderer.shadowMap.enabled = !constrainedDevice && (!powerSave || cachedRendering)
       renderer.shadowMap.needsUpdate = renderer.shadowMap.enabled
@@ -2794,7 +2752,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       if (mobile || softwareRendering) return
       softwareFrames?.suspend()
       if (reactionMotion) stopReaction()
-      holdDeviceTilt()
       lastViewChangeAt = performance.now()
       if (viewMotion) updateViewMotion()
       viewMotion = null
@@ -2856,7 +2813,9 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       }
       draggingDisc = true
       dragProgress = clamp(value, 0, 1)
-      if (cachedRendering) { syncPlaybackMotion(); return }
+      // The focused live frame turns the real print. Keep the prepared overlay
+      // path free of extra WebGL frames when it owns the gesture instead.
+      if (cachedRendering && !isLiveDiscFocused()) { syncPlaybackMotion(); return }
       spin.turn(dragProgress)
       invalidate(true, false)
     },
@@ -2868,7 +2827,8 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       syncPlaybackMotion()
     },
     setCover(url) {
-      if (cachedRendering) return
+      // Cached playback keeps the resting print hidden, but the live disc
+      // shown while a seek focuses the camera still needs the same texture.
       if (url === loadedCover) return
       loadedCover = url
       const version = ++coverVersion
@@ -2917,7 +2877,7 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       gpuVolume?.dispose()
       gpuProjectionNode?.remove()
       playbackVolume?.dispose()
-      playbackElement?.classList.remove('has-crop', 'has-volume')
+      playbackElement?.classList.remove('has-crop', 'has-volume', 'is-live-disc')
       unsubscribeCarousel?.()
       finishControls()
       disposed = true
@@ -2925,7 +2885,6 @@ async function buildCdDeckScene(canvas, { onError, softwareRendering = false, on
       releaseViewAlignment()
       softwareFrames?.dispose()
       lidMotion = null
-      tiltMotion = null
       resolveLid(false)
       coverVersion++
       for (const image of logoImages) image.onload = null

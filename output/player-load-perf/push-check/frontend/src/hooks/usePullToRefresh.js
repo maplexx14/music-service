@@ -1,0 +1,132 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+const AXIS_LOCK_PX = 10
+const AXIS_RATIO = 1.2
+
+// Pull-to-refresh как в нативных приложениях: тянешь список вниз от самого
+// верха — выезжает индикатор, отпускаешь — обновление. Работает ТОЛЬКО на
+// таче; мышью на десктопе не активируется (там F5).
+//
+// Не перехватывает скролл у страницы: показывает индикатор на те пиксели,
+// которые браузер и так отводит под «резинку» (overscroll). Контейнер
+// страницы при этом должен иметь overscroll-behavior-y: contain, чтобы
+// rubber-band не проваливался в системный pull-to-refresh Chrome.
+//
+// reachTop: () => boolean — «проскроллено в самый верх?». По умолчанию —
+// документ-скролл; для вложенных скролл-контейнеров передайте свою проверку.
+// root: () => Element | null — где жест считается потягиванием. Слушатели
+// висят на window, а страница живёт под оверлеями: без этой проверки свайп
+// вниз, закрывающий полноэкранный плеер над главной, тянул и её — каждый
+// кадр перерисовывал страницу, а на отпускании запускал обновление.
+export function usePullToRefresh({ onRefresh, reachTop, root, maxPull = 90, threshold = 64 } = {}) {
+  const [pull, setPull] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const gesture = useRef(null)
+  // pull/refreshing/onRefresh читаются внутри жеста из ref-зеркал: эффект
+  // ниже подписывается ОДИН раз, а не перевешивает window-слушатели на
+  // каждый тик setPull (жест тикает до 60 раз/сек).
+  const pullRef = useRef(0)
+  const refreshingRef = useRef(false)
+  const onRefreshRef = useRef(onRefresh)
+  const reachTopRef = useRef(reachTop)
+  const rootRef = useRef(root)
+  onRefreshRef.current = onRefresh
+  reachTopRef.current = reachTop
+  rootRef.current = root
+
+  const isAtTop = useCallback(
+    () =>
+      reachTopRef.current
+        ? reachTopRef.current()
+        : (window.scrollY || document.documentElement.scrollTop) <= 0,
+    [],
+  )
+
+  useEffect(() => {
+    const setPullSafe = (v) => {
+      pullRef.current = v
+      setPull(v)
+    }
+    const setRefreshingSafe = (v) => {
+      refreshingRef.current = v
+      setRefreshing(v)
+    }
+
+    const onStart = (e) => {
+      if (e.touches.length !== 1 || refreshingRef.current || !isAtTop()) {
+        gesture.current = null
+        return
+      }
+      // Элементы-«крутилки» (диск на главной) помечены data-no-pull: жест,
+      // начатый на них, — это поворот, а не потягивание списка. Без этой
+      // проверки вращение диска вниз на самом верху страницы одновременно
+      // дёргало бы обновление рекомендаций.
+      const rootEl = rootRef.current?.()
+      if (e.target?.closest?.('[data-no-pull]') || (rootEl && !rootEl.contains(e.target))) {
+        gesture.current = null
+        return
+      }
+      const t = e.touches[0]
+      gesture.current = { x: t.clientX, y: t.clientY, pulling: false }
+    }
+
+    const onMove = (e) => {
+      const g = gesture.current
+      if (!g || e.touches.length !== 1) return
+      const dx = e.touches[0].clientX - g.x
+      const dy = e.touches[0].clientY - g.y
+      if (!g.pulling) {
+        // Выбираем ось до показа индикатора, как useSwipeNavigation.
+        // Пара пикселей вниз в начале бокового свайпа раньше запускала
+        // pull-to-refresh и обновление индикатора на каждом движении пальца.
+        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return
+        if (Math.abs(dy) < Math.abs(dx) * AXIS_RATIO) {
+          gesture.current = null
+          return
+        }
+      }
+      if (dy <= 0) {
+        if (g.pulling) {
+          g.pulling = false
+          setPullSafe(0)
+        }
+        return
+      }
+      if (!g.pulling) {
+        g.pulling = true
+      }
+      // Прогрессия с затуханием, как системный rubber-band: 60px пальца
+      // ≈ 30px индикатора. rAF батчит setPull до кадра.
+      const eased = Math.min(maxPull, dy * 0.5)
+      requestAnimationFrame(() => {
+        if (gesture.current === g && g.pulling) setPullSafe(eased)
+      })
+    }
+
+    const onEnd = () => {
+      const g = gesture.current
+      gesture.current = null
+      if (!g) return
+      if (pullRef.current >= threshold) {
+        setPullSafe(0)
+        setRefreshingSafe(true)
+        Promise.resolve(onRefreshRef.current?.()).finally(() => setRefreshingSafe(false))
+      } else {
+        setPullSafe(0)
+      }
+    }
+
+    window.addEventListener('touchstart', onStart, { passive: true })
+    window.addEventListener('touchmove', onMove, { passive: true })
+    window.addEventListener('touchend', onEnd, { passive: true })
+    window.addEventListener('touchcancel', onEnd, { passive: true })
+    return () => {
+      window.removeEventListener('touchstart', onStart)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onEnd)
+      window.removeEventListener('touchcancel', onEnd)
+    }
+  }, [isAtTop, maxPull, threshold])
+
+  return { pull, refreshing }
+}

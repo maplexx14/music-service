@@ -1,0 +1,544 @@
+.search-header {
+  margin-bottom: 32px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 16px 24px;
+  background-color: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--brand-accent);
+  background-color: var(--surface-2);
+}
+
+/* Кликнув в поле, пользователь должен видеть каретку сразу —
+   caret-color в акценте подчёркивает фокус даже до рамки. */
+/* Системное оформление поля поиска (скругления и отступы Safari) ломает наш
+   вид; крестик очистки оставляем — на телефоне он полезен. */
+.search-input {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+.search-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Фильтр источника: лента пилюль под полем, внутри шапки. На узком экране
+   не переносится, а листается вбок — пять кнопок в две строки занимали бы
+   пол-экрана. */
+.search-filters {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.search-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.search-filter {
+  flex: none;
+  padding: 8px 14px;
+  background-color: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out),
+              color var(--duration-base) var(--ease-out),
+              border-color var(--duration-base) var(--ease-out);
+}
+
+.search-filter.active {
+  background-color: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--bg-app);
+}
+
+.search-filter:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.results-section {
+  margin-bottom: 32px;
+}
+
+.results-title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-desktop-tracks {
+  display: none;
+  container-type: inline-size;
+}
+
+@media (min-width: 1025px) {
+  .search-desktop-tracks {
+    display: block;
+  }
+
+  .search-mobile-tracks {
+    display: none;
+  }
+
+  .search-desktop-tracks .search-track-artist-column {
+    width: 20%;
+  }
+
+  .search-desktop-tracks .search-track-album-column {
+    width: 22%;
+  }
+
+  .search-desktop-tracks .search-track-duration-column {
+    width: 88px;
+  }
+
+  .search-desktop-tracks .search-track-actions-column {
+    width: 112px;
+  }
+
+  .search-desktop-tracks--downloads .search-track-actions-column {
+    width: 156px;
+  }
+
+  .search-desktop-tracks .track-row td {
+    padding: 16px 12px;
+    font-size: var(--text-md);
+  }
+
+  .search-desktop-tracks .track-table-cover {
+    width: 56px;
+    height: 56px;
+  }
+
+  .search-desktop-tracks .track-name-content {
+    gap: 16px;
+  }
+
+  .search-desktop-tracks .track-name {
+    font-size: 22px;
+  }
+
+  .search-desktop-tracks .track-artist {
+    font-size: var(--text-md);
+  }
+
+  @container (max-width: 680px) {
+    .search-desktop-tracks .search-track-album-column {
+      display: none;
+    }
+  }
+}
+
+.track-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+  min-width: 0;
+}
+
+.track-item:hover {
+  background-color: var(--surface-3);
+}
+
+/* Кольцо значка сервиса — цвета строки, в том числе под наведением. */
+.track-item {
+  --source-icon-ring: var(--surface-1);
+}
+
+.track-item:hover {
+  --source-icon-ring: var(--surface-3);
+}
+
+.track-item-cover {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: var(--surface-4);
+}
+
+.track-item-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: var(--text-disabled);
+}
+
+.track-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-item-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Бейджи цензуры (E/CLEAN) живут в index.css: их рисуют и выдача поиска,
+   и таблица треков на странице артиста. */
+
+.track-item-artist {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+/* Длительность трека в строке выдачи. Табличные цифры — чтобы столбик
+   значений не «дышал» по ширине от строки к строке. */
+.track-item-duration {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.track-download {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-decoration: none;
+}
+
+.track-download:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.track-download:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.playlist-item {
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+  /* Карточка живёт в карусели: ширину задаёт лента, а содержимое не должно
+     её распирать. */
+  min-width: 0;
+}
+
+.playlist-item:hover {
+  background-color: var(--surface-3);
+}
+
+.playlist-item-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  background-color: var(--surface-4);
+}
+
+/* Значок сервиса на обложке плейлиста — внутри угла, крупнее, чем у трека. */
+.playlist-item .source-cover {
+  margin-bottom: 12px;
+}
+
+.playlist-item .source-cover .playlist-item-cover {
+  margin-bottom: 0;
+}
+
+.playlist-item .source-icon {
+  right: 8px;
+  bottom: 8px;
+  width: 24px;
+  height: 24px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.playlist-item-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-disabled);
+}
+
+.playlist-item-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-item-description {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  /* Две строки максимум: иначе описание плейлиста растягивает всю ленту по
+     высоте самой болтливой карточки. */
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.search-error {
+  text-align: center;
+  padding: 16px;
+  margin-bottom: 16px;
+  color: var(--status-danger);
+  background-color: rgba(226, 33, 52, 0.1);
+  border: 1px solid rgba(226, 33, 52, 0.3);
+  border-radius: 8px;
+}
+
+/* Вставленная ссылка Spotify/Deezer/Яндекса: вместо выдачи — переход. */
+.search-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  border-radius: 12px;
+  background-color: var(--surface-2);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+.search-link-card:hover {
+  background-color: var(--surface-3);
+}
+
+.search-link-card:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.search-link-card__kicker {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+
+.search-link-card__title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+
+.search-link-card__hint {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+
+.no-results {
+  text-align: center;
+  padding: 64px;
+  color: var(--text-secondary);
+}
+
+.search-placeholder {
+  text-align: center;
+  padding: 128px 32px;
+  color: var(--text-secondary);
+}
+
+.search-placeholder h2 {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 768px) {
+  /* Поле поиска прилипает к верху: результаты длинные, и чтобы поправить
+     запрос, не нужно листать обратно. Фон — под цвет страницы, иначе
+     строки просвечивали бы сквозь промежутки. */
+  /* Вкладка корневая: над ней нет панели «Назад», только матовая подложка
+     статус-бара (Layout.css) — поле встаёт сразу под неё. */
+  .search-header {
+    position: sticky;
+    top: var(--safe-top);
+    z-index: 5;
+    margin: 0 -16px 20px;
+    padding: 8px 16px 12px;
+    /* Сплошной фон: полупрозрачный хвост градиента пускал строки выдачи
+       прямо под поле. Тень вверх закрывает полосу между подложкой
+       статус-бара и шапкой — в ней тоже просвечивала выдача. */
+    background: var(--bg-app-mobile);
+    box-shadow: 0 -64px 0 var(--bg-app-mobile);
+  }
+
+  /* Лента до краёв экрана: обрезка на полях выглядела как сломанная вёрстка,
+     а так видно, что её можно листать. Шапка липкая — лента всегда под полем. */
+  .search-filters {
+    margin: 10px -16px 0;
+    padding: 0 16px;
+  }
+
+  .search-input {
+    padding: 14px 18px;
+    border-radius: var(--radius-pill);
+  }
+
+  .track-item {
+    gap: 12px;
+    padding: 14px 12px;
+  }
+
+  .track-item-cover {
+    width: 56px;
+    height: 56px;
+  }
+
+  .playlist-item {
+    padding: 10px;
+  }
+
+  .playlist-item-cover {
+    margin-bottom: 8px;
+  }
+
+}
+
+.playlist-item.importing {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Секция «Исполнители»: карточки-переходы на страницу артиста в карусели.
+   Ширину карточки задаёт лента через --carousel-item-width (Carousel.css),
+   обложка тянется по карточке, поэтому круг растёт вместе с ней. Свои
+   значения ширины нужны, потому что у .artists-section .carousel
+   специфичность выше, чем у базовых правил ленты. */
+.artists-section .carousel {
+  --carousel-item-width: 184px;
+}
+
+.artist-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 14px;
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  text-align: center;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+
+.artist-card:hover {
+  background-color: var(--surface-3);
+}
+
+.artist-card-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: var(--surface-4);
+}
+
+.artist-card-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+@media (max-width: 768px) {
+  .artists-section .carousel {
+    --carousel-item-width: 156px;
+  }
+
+  .artist-card {
+    padding: 14px 12px;
+  }
+
+}
+
+@media (max-width: 380px) {
+  .artists-section .carousel {
+    --carousel-item-width: 144px;
+  }
+}
+
+@media (max-width: 380px) {
+  /* Поля страницы здесь 12px (Home.css). */
+  .search-header {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+
+  .search-filters {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}

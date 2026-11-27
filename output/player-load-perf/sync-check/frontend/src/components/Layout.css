@@ -1,0 +1,329 @@
+.layout {
+  --page-padding: 32px;
+  --player-height: 88px;
+  --player-bottom: 12px;
+  --bottom-controls-clearance: 0px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  background-color: var(--bg-app);
+}
+
+.layout[data-has-player] {
+  --bottom-controls-clearance: calc(var(--player-bottom) + var(--player-height) + 16px);
+}
+
+/* Контейнер стека экранов (ScreenStack.jsx). Сам не прокручивается: у
+   каждого экрана свой .screen-scroll, и скрытые вкладки помнят позицию. */
+.main-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  margin-left: 240px;
+  background: var(--bg-app);
+  transition: margin-left 0.3s var(--ease-morph);
+}
+
+/* Без z-index: экран не должен становиться stacking context — модалки и
+   меню страниц (position: fixed с большим z-index) поднимаются над плеером
+   и таб-баром. Порядок на время свайпа задаёт useSwipeNavigation инлайном. */
+.screen {
+  position: absolute;
+  inset: 0;
+}
+
+.screen:not([data-active]) {
+  visibility: hidden;
+}
+
+/* Пока экраны едут, декор сохраняет текущий кадр. Пауза не сбрасывает
+   transform и не перезапускает анимации после отпускания: ресурсы нужны
+   самому жесту, в том числе во время доезда и повторного захвата. */
+.main-content[data-swiping] :is(
+  .liked-heart-beat,
+  .liked-hero-bolt,
+  .bolt-loader-heart
+),
+.main-content[data-swiping] .bolt-loader-wave::before,
+.main-content[data-swiping] .bolt-loader-wave::after {
+  animation-play-state: paused;
+}
+
+/* Скрытые вкладки остаются смонтированными. Их лоадеры не
+   должны продолжать декоративные циклы за видимым экраном. */
+.screen:not([data-active]) :is(.bolt-loader-heart),
+.screen:not([data-active]) .bolt-loader-wave::before,
+.screen:not([data-active]) .bolt-loader-wave::after {
+  animation-play-state: paused;
+}
+
+/* Полоса у левой кромки в установленной PWA (useSwipeNavigation): касание в
+   ней забирается у системного жеста «назад». Ширину ставит хук. Выше шапки
+   экрана (1003), ниже плеера во весь экран и диалогов; на нижнее меню не
+   заходит. */
+.swipe-edge-guard {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: calc(var(--safe-bottom) + 70px);
+  z-index: 1004;
+}
+
+.screen-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  /* Нативные экраны не скроллятся «вбок» от случайного диагонального жеста. */
+  overflow-x: hidden;
+  /* Отступы через переменные: их же снимает полноэкранный Spinner, чтобы
+     встать по центру экрана, а не области между шапкой и плеером. */
+  --main-pad-top: 0px;
+  --main-pad-bottom: calc(var(--bottom-controls-clearance) + 24px);
+  padding-top: var(--main-pad-top);
+  padding-bottom: var(--main-pad-bottom);
+  scroll-padding-top: var(--main-pad-top);
+  scroll-padding-bottom: var(--main-pad-bottom);
+  /* Резинка отскролла не проваливается в системный pull-to-refresh —
+     на главной им управляет наш индикатор (usePullToRefresh). На остальных
+     страницах жест просто «гасится» контейнером, как в нативных списках. */
+  overscroll-behavior-y: contain;
+}
+
+/* Меню и формы настроек прокручиваются только над нижними панелями:
+   ссылка обратной связи и кнопка отправки остаются в доступной области. */
+.screen-scroll.is-settings {
+  bottom: var(--bottom-controls-clearance);
+  --main-pad-bottom: 24px;
+}
+
+/* Общие отступы доступны и при открытии страницы по прямой ссылке. */
+.page-container {
+  padding: var(--page-padding, 32px);
+  min-height: 100%;
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .layout {
+    --page-padding: 24px;
+  }
+
+  .main-content {
+    transition: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .page-container {
+    padding: 0 16px 150px;
+  }
+
+  .layout {
+    --mobile-nav-height: 72px;
+    --mobile-nav-bottom: calc(var(--safe-bottom) - 2px);
+    --player-height: 72px;
+    --player-bottom: calc(var(--mobile-nav-bottom) + var(--mobile-nav-height) + 10px);
+    --bottom-controls-clearance: calc(var(--mobile-nav-bottom) + var(--mobile-nav-height) + 16px);
+    background-color: var(--bg-app-mobile);
+  }
+
+  /* Сайдбара на телефоне нет. Отступ под него Layout ставит инлайном по
+     window.innerWidth, и стоило JS-проверке ширины хоть раз разойтись с этим
+     медиазапросом (запуск PWA, возврат из фона), отступ ехал transition'ом
+     margin-left — раскладка всего экрана на каждом кадре; замер плавности
+     ловил её в кадрах с рывком. Здесь отступ всегда 0 и без анимации. */
+  .main-content {
+    margin-left: 0 !important;
+    transition: none;
+    background: transparent;
+    /* До коммита соседняя вкладка inert: новый палец попадает в общий
+       контейнер. Горизонталь и здесь принадлежит свайпу, иначе браузер
+       отправляет pointercancel и второй жест отменяет первый переход. */
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* Непрозрачный фон: при свайпе под экраном виден соседний. */
+  .screen {
+    background: var(--bg-app-mobile);
+  }
+
+  .screen-scroll {
+    /* Горизонталь отдаём JS (hooks/useSwipeNavigation.js): без этого iOS
+       считает косой/боковой жест кандидатом на свою прокрутку, и экран под
+       пальцем ехал рывками. Вложенные ленты-карусели — сами контейнеры
+       прокрутки и своё горизонтальное листание сохраняют. */
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* Статус-бар прозрачный (black-translucent) — без отступа под него
+     заголовок экрана уезжал под часы и чёлку. */
+  .screen-scroll.has-safe-top {
+    --main-pad-top: var(--safe-top);
+  }
+
+  /* Под плавающей «Назад» (safe-area + 6 + 44) — место, чтобы она не
+     наезжала на заголовок экрана. Полосы нет: отступ прозрачный. */
+  .screen-scroll.has-mobile-topbar {
+    --main-pad-top: calc(var(--safe-top) + 58px);
+  }
+
+  /* «Назад» — плавающая капсула в стилистике таб-бара (.mobile-nav-global):
+     сплошной тёмный фон, светлое градиентное кольцо. Сплошной чёрной
+     полосы через весь экран больше нет — контент виден под кнопкой. */
+  .mobile-topbar {
+    position: absolute;
+    top: calc(var(--safe-top) + 6px);
+    left: 10px;
+    z-index: 1003;
+    pointer-events: none;
+  }
+
+  .mobile-back-btn {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: none;
+    background: #0a0a0e;
+    color: var(--text-primary);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  .mobile-back-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Геометрия один в один с iOS-приложением (MainTabView.swift): высота 72,
+     по 6px от краёв экрана, ячейки идут от самого торца капсулы, а подсветка
+     вписана в ячейку с зазором 5 со всех сторон. Зазор одинаковый всюду
+     именно потому, что подсветка — та же капсула, уменьшенная на 5: её дуги
+     концентричны дугам бара. Эллипс в тех же рамках оставлял бы на углах
+     больше воздуха, чем сверху и снизу. */
+  .mobile-nav-global {
+    position: fixed;
+    left: 6px;
+    right: 6px;
+    bottom: var(--mobile-nav-bottom);
+    height: var(--mobile-nav-height);
+    padding: 0;
+    /* Сплошной фон, без просвета: hero и обложки под панелью не видны.
+       Блюр подложки поэтому не нужен — и не пересчитывается каждый кадр
+       анимированного hero. */
+    background: #0a0a0e;
+    border: none;
+    border-radius: 999px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    z-index: 1002;
+    /* Протяжка пальцем по панели (Layout.jsx): без этого браузер забирал бы
+       горизонтальное движение себе и слал pointercancel. */
+    touch-action: none;
+  }
+
+  /* Обводка светлым градиентом сверху вниз — как у капсулы бара в приложении.
+     Обычной рамкой такой градиент не задать, поэтому 1px-кольцо: заливка
+     маскируется по content-box, остаётся только пиксель по краю. */
+  .mobile-nav-global::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Плавающая подсветка. Ширина — ровно ячейка (25% на четыре пункта),
+     положение — номер ячейки × своя ширина, поэтому сдвиг в процентах
+     попадает в цель без вычислений. */
+  .mobile-nav-global-pill {
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 0;
+    width: 25%;
+    transform: translateX(calc(var(--nav-index, 0) * 100%));
+    transition: transform 240ms var(--ease-out);
+    pointer-events: none;
+  }
+
+  .mobile-nav-global-pill-inner {
+    position: absolute;
+    inset: 0 5px;
+    border-radius: 999px;
+    /* Акцентная заливка — как активная вкладка в .home-tabs (Home.css). */
+    background: var(--brand-accent-fill);
+  }
+
+  .mobile-nav-global-item {
+    flex: 1;
+    /* Относительное позиционирование — чтобы иконка рисовалась поверх
+       подсветки, а не под ней. */
+    position: relative;
+    z-index: 1;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-nav-global-icon {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 44px;
+    /* Цвет SVG постоянный: transition color заново растеризовал фильтр
+       «кисти» на каждом кадре одновременно с доездом вкладки. Прозрачность
+       меняет композитор над уже нарисованной иконкой. */
+    opacity: 0.55;
+    will-change: opacity;
+    transition: opacity 0.2s ease;
+  }
+
+  /* Активный пункт: иконка в акцентном цвете поверх акцентной подсветки. */
+  .mobile-nav-global-item.active {
+    color: var(--brand-accent-text);
+  }
+
+  .mobile-nav-global-item.active .mobile-nav-global-icon {
+    opacity: 1;
+  }
+
+}
+
+@media (max-width: 380px) {
+  .page-container {
+    padding-inline: 12px;
+  }
+}
+
+/* Leave room for content when the phone turns sideways. */
+@media (max-width: 768px) and (max-height: 500px) and (orientation: landscape) {
+  .layout {
+    --mobile-nav-height: 52px;
+    --player-height: 56px;
+    --player-bottom: calc(var(--mobile-nav-bottom) + var(--mobile-nav-height) + 8px);
+  }
+}

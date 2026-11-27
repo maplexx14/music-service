@@ -1,0 +1,3 @@
+const fs=require('node:fs'),path=require('node:path');
+const {chromium}=require(path.join(process.env.USERPROFILE,'AppData/Local/npm-cache/_npx/e41f203b7505f1fb/node_modules/playwright-core'));
+(async()=>{const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});try{const page=await browser.newPage({viewport:{width:1440,height:1000}});await page.goto('http://localhost:80',{waitUntil:'domcontentloaded'});await page.waitForTimeout(4000);console.log(JSON.stringify({url:page.url(),text:(await page.locator('body').innerText()).slice(0,1800)}));await page.screenshot({path:path.join(__dirname,'live-app-initial.png')})}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

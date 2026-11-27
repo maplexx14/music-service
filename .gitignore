@@ -79,3 +79,6 @@ backups/
 # Cached external audio (YouTube Music etc.)
 backend/ytdlp_cache/
 
+# Generated track videos
+/output/track-videos/
+

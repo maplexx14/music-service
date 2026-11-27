@@ -84,7 +84,6 @@ function player({ mobile = true, action = 'seek', canNext = true, canPrev = true
     '../hooks/useDiscCover': { useDiscCover: () => ({ src: '', settled: true }) },
     '../hooks/useScreen': { useScreen: () => ({ active: true }) },
     '../hooks/usePowerSave': { usePowerSave: () => false },
-    '../hooks/useDeviceTilt': { useDeviceTilt: () => ({ permission: 'unavailable' }) },
     'motion/mini': { animate: (element, values) => {
       const animation = { element, values, stop() {}, then(callback) { this.complete = callback } }
       animations.push(animation)

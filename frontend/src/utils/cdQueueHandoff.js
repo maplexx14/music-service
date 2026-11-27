@@ -2,6 +2,11 @@
 // new queue slot. Clear the compensation only after that slot has committed.
 export function returnCdQueueRecord(record) {
   const { node, parent, nextSibling, style, targetSlot } = record
+  if (targetSlot == null) {
+    node.style.cssText = style
+    parent.insertBefore(node, nextSibling?.parentElement === parent ? nextSibling : null)
+    return
+  }
   const visible = node.getBoundingClientRect()
   node.style.cssText = style
   const originalTransform = node.dataset.cdQueueOriginalTransform ?? node.style.transform ?? ''

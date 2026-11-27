@@ -1,0 +1,952 @@
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Play, Pause, Loader2, Home as HomeIcon, History, Settings } from '@/components/icons'
+import {
+  recordRecommendationImpression,
+  usePlayerStore,
+  trackIntentHandlers,
+} from '../store/playerStore'
+import { useAuthStore } from '../store/authStore'
+import { useWaveSettingsStore } from '../store/waveSettingsStore'
+import { useUiSettingsStore } from '../store/uiSettingsStore'
+import api from '../services/api'
+import { peekCache, writeCache } from '../services/pageCache'
+import defaultCover from '../assets/default-cover.webp'
+import brandWordmark from '../assets/bolt-wordmark.webp'
+import { resolveCoverUrl, handleCoverError } from '../utils/media'
+import { splitArtists } from '../utils/artists'
+import { usePullToRefresh } from '../hooks/usePullToRefresh'
+import { useScreen } from '../hooks/useScreen'
+import Spinner from '../components/Spinner'
+import BoltLoader from '../components/BoltLoader'
+import ArtistLink from '../components/ArtistLink'
+import Carousel from '../components/Carousel'
+import FlowDiscArc from '../components/FlowDiscArc'
+import DesktopCdPlayer from '../components/DesktopCdPlayer'
+import FlowHeading from '../components/FlowHeading'
+import HeroHearts from '../components/HeroHearts'
+import TasteAvatar from '../components/TasteAvatar'
+import { useCoverColors, prefetchCoverColors } from '../hooks/useCoverColors'
+import { DEFAULT_HERO_COLORS, hslToHex, rgbToHsl } from '../utils/coverColor'
+import { isIOS, isStandalone } from '../services/navigation'
+import { toast } from '../store/toastStore'
+import { MONTH_GENITIVE } from '../utils/format'
+import './Home.css'
+import { useOffline } from '../hooks/useOffline'
+import { downloadedTracks, useOfflineTracks } from '../services/offlineTracks'
+import { offlineCollections } from '../services/offlineLibrary'
+
+// Lazy-load Grainient (ogl WebGL ~150KB) — не блокирует LCP.
+const Grainient = lazy(() => import('../components/Grainient'))
+const MOBILE_HERO_QUERY = '(max-width: 768px), (pointer: coarse), (orientation: portrait)'
+
+const SOUNDCLOUD_PLAYLIST_LIMIT = 12
+const SOUNDCLOUD_SEED_LIMIT = 3
+// Главная живёт смонтированной, пока юзер ходит по вкладкам, — без этого
+// порога полка плейлистов не менялась бы, пока приложение не перезапустят.
+const SOUNDCLOUD_PLAYLIST_REFRESH_MS = 10 * 60 * 1000
+const homeRecommendationImpressions = new Set()
+const EMPTY_SHELVES = { releases: [], weekly: [], rediscover: [] }
+// Полки «повода вернуться» (релизы, открытия недели, давно не слушали)
+// меняются раз в час–неделю: чаще раза в 10 минут не спрашиваем.
+const SHELVES_REFRESH_MS = 10 * 60 * 1000
+
+function releaseAge(isoDate) {
+  const days = Math.round((Date.now() - new Date(`${isoDate}T00:00:00`).getTime()) / 86400000)
+  if (days <= 0) return 'сегодня'
+  if (days === 1) return 'вчера'
+  if (days < 7) return `${days} дн. назад`
+  const [, month, day] = isoDate.split('-')
+  return `${Number(day)} ${MONTH_GENITIVE[Number(month) - 1]}`
+}
+
+const RELEASE_TYPE = { single: 'сингл', album: 'альбом', ep: 'EP' }
+
+function shuffled(items) {
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
+
+// Сиды тянутся случайно из всего пула вкуса, а не первые три любимых артиста:
+// иначе поиск по одним и тем же запросам каждый раз отдавал одну и ту же
+// дюжину плейлистов. Один сид — всегда из preferred_artists (если есть),
+// чтобы полка не уезжала целиком в случайные жанры.
+function getSoundCloudPlaylistSeeds(user, tracks) {
+  const seen = new Set()
+  const clean = (values) =>
+    values
+      .map((value) => String(value || '').trim())
+      .filter((value) => {
+        const key = value.toLocaleLowerCase()
+        if (!value || key === 'unknown artist' || seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+  const preferred = shuffled(clean(user?.preferred_artists || []))
+  const rest = shuffled(
+    clean([
+      ...preferred.slice(1),
+      ...tracks.slice(0, 8).flatMap((track) => splitArtists(track.artist)),
+      ...(user?.preferred_genres || []),
+    ]),
+  )
+  return [...preferred.slice(0, 1), ...rest].slice(0, SOUNDCLOUD_SEED_LIMIT)
+}
+
+// Не зависит от состояния компонента — вынесено на уровень модуля, чтобы
+// ссылка была стабильной и не ломала мемоизацию TrackCard.
+function handlePlayTrack(track, queue) {
+  usePlayerStore.getState().playTrack(track, queue, 'wave')
+}
+
+// Мемоизированная карточка трека: при перерисовках Home (смена
+// isPlaying/source и т.д.) карточки со стабильными пропсами не
+// пересобираются. intent-префетч (hover/pointerdown) прогревает резолв
+// на бэке до клика — старт воспроизведения почти мгновенный.
+const TrackCard = memo(function TrackCard({ track, queue }) {
+  const cardRef = useRef(null)
+  // Главная живёт смонтированной и скрытой, пока открыта другая вкладка, а
+  // IntersectionObserver видимость (visibility: hidden) не учитывает — без
+  // этой проверки скрытые карточки засчитывались бы как показанные.
+  const { active } = useScreen()
+  useEffect(() => {
+    if (!active) return undefined
+    if (!track?.recommendation_id || typeof IntersectionObserver === 'undefined') return undefined
+    const key = `${track.recommendation_id}:${track.recommendation_position}:${track.id}`
+    if (homeRecommendationImpressions.has(key)) return undefined
+    const node = cardRef.current
+    if (!node) return undefined
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) return
+        if (homeRecommendationImpressions.has(key)) return
+        homeRecommendationImpressions.add(key)
+        recordRecommendationImpression(track, { trigger: 'intersection' })
+        observer.disconnect()
+      },
+      { threshold: [0.5] },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [track, active])
+
+  return (
+    <div
+      ref={cardRef}
+      className="track-card"
+      data-fast-tap=""
+      onClick={() => handlePlayTrack(track, queue)}
+      {...trackIntentHandlers(track)}
+    >
+      <img
+        src={resolveCoverUrl(track.cover_url) || defaultCover}
+        alt={track.title}
+        className="track-cover"
+        loading="lazy"
+        decoding="async"
+        onError={handleCoverError}
+      />
+      <div className="track-info">
+        <div className="track-title" title={track.title}>{track.title}</div>
+        <ArtistLink artist={track.artist} className="track-artist" />
+      </div>
+    </div>
+  )
+})
+
+// Последняя выдача главной живёт в модуле и переживает размонтирование
+// страницы. Без неё каждый возврат на главную начинался со скелетона, карточки
+// монтировались с нуля, и в iOS PWA обложки проявлялись заново. Теперь прошлая
+// выдача рисуется сразу, а свежая подменяет её по ответу; если выдача та же
+// (кэш бэка), React оставляет те же <img>. Снимок привязан к юзеру: после
+// смены аккаунта чужая выдача не покажется.
+function readHomeSnapshot(userId) {
+  const snapshot = peekCache('home:snapshot')
+  return snapshot?.userId === userId ? snapshot : null
+}
+
+function writeHomeSnapshot(userId, patch) {
+  writeCache('home:snapshot', { ...(readHomeSnapshot(userId) || { userId }), ...patch })
+}
+
+// Индикатор pull-to-refresh: выезжает из-под шапки по мере жеста. Состояние
+// жеста живёт здесь, а не в Home: жест тикает каждый кадр, и перерисовывать
+// на каждом тике всю главную (полки, карусели, hero) незачем.
+function PullToRefreshIndicator({ onRefresh, reachTop, root }) {
+  const { pull, refreshing } = usePullToRefresh({ onRefresh, reachTop, root })
+  if (pull <= 0 && !refreshing) return null
+  const pullProgress = refreshing ? 1 : Math.min(pull / 64, 1)
+  return (
+    <div
+      className="ptr-indicator"
+      style={{ opacity: pullProgress, transform: `translateY(${-32 + (refreshing ? 32 : pull * 0.35)}px)` }}
+      aria-hidden="true"
+    >
+      <BoltLoader
+        size={18}
+        frame={36}
+        active={refreshing}
+        style={refreshing ? undefined : { transform: `scale(${0.6 + pullProgress * 0.4})` }}
+      />
+    </div>
+  )
+}
+
+function Home({ guest = false } = {}) {
+  const userId = useAuthStore((s) => s.user?.id)
+  const offline = useOffline()
+  const downloads = useOfflineTracks((s) => s.tracks)
+  const library = useOfflineTracks((s) => s.library)
+  const offlineReady = useOfflineTracks((s) => s.ready)
+  const offlineData = useMemo(() => offlineCollections({ tracks: downloads, library }), [downloads, library])
+  const [snapshot] = useState(() => readHomeSnapshot(userId))
+  const [onlineRecommendations, setRecommendations] = useState(
+    () => snapshot?.recommendations ?? { tracks: [], playlists: [] },
+  )
+  const [onlineSoundCloudPlaylists, setSoundCloudPlaylists] = useState(
+    () => snapshot?.soundCloudPlaylists ?? [],
+  )
+  const [onlineHistory, setHistory] = useState(() => snapshot?.history ?? [])
+  const [onlineShelves, setShelves] = useState(() => snapshot?.shelves ?? EMPTY_SHELVES)
+  const recommendations = offline ? { tracks: offlineData.tracks, playlists: offlineData.playlists } : onlineRecommendations
+  const soundCloudPlaylists = offline ? [] : onlineSoundCloudPlaylists
+  const history = offline ? downloadedTracks(onlineHistory) : onlineHistory
+  const shelves = offline ? EMPTY_SHELVES : onlineShelves
+  const shelvesFetchedAtRef = useRef(0)
+  const [onlineLoading, setLoading] = useState(!guest && !snapshot?.recommendations)
+  const loading = offline ? !offlineReady : onlineLoading
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const historyRequestedRef = useRef(false)
+  const [activeTab, setActiveTab] = useState('home')
+  // Атомарные селекторы: подписка на весь store перерисовывала всю главную
+  // (со всеми списками карточек) на каждом тике currentTime — 4 раза/сек
+  // всё время воспроизведения.
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const [playerRevealed, setPlayerRevealed] = useState(false)
+  const showHeroPlayer = playerRevealed || isPlaying
+  useEffect(() => {
+    if (isPlaying) setPlayerRevealed(true)
+  }, [isPlaying])
+  const source = usePlayerStore((s) => s.source)
+  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause)
+  // Текущий трек нужен главной только ради цвета фона под его обложку. Берём
+  // лишь обложку и id: подписка на весь объект перерисовывала главную и
+  // тогда, когда трек тот же, а объект новый (материализация трека и т.п.).
+  const currentCoverUrl = usePlayerStore((s) => s.currentTrack?.cover_url)
+  const currentTrackId = usePlayerStore((s) => s.currentTrack?.id)
+  const hasCurrentTrack = usePlayerStore((s) => !!s.currentTrack)
+  const liteMode = useUiSettingsStore((s) => s.liteMode)
+  const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia(MOBILE_HERO_QUERY).matches)
+  const [narrowHero, setNarrowHero] = useState(false)
+  const heroRef = useRef(null)
+  const mobileHero = mobileViewport || narrowHero
+  const cdDisc = useUiSettingsStore((s) => s.vinylDisc)
+  // Сцена проигрывателя собирается заранее, в скрытом слое: к моменту показа
+  // она уже готова и не заставляет ждать после нажатия.
+  const [deckWarm, setDeckWarm] = useState(false)
+  useEffect(() => {
+    if (!cdDisc) return undefined
+    const timer = window.setTimeout(() => setDeckWarm(true), 600)
+    return () => window.clearTimeout(timer)
+  }, [cdDisc])
+  const showCdPlayer = cdDisc && showHeroPlayer
+  const mobileDeck = mobileHero && showCdPlayer
+  // Обложку разбираем и в облегчённом режиме: там фон — сердца (HeroHearts),
+  // и они тоже красятся в тон трека. Разбор — один thumb на трек, дёшево.
+  const coverColors = useCoverColors(currentCoverUrl)
+  // Пока цвет не разобран (серая обложка, трек без обложки, ошибка canvas) —
+  // дефолтная фиолетовая палитра.
+  // Для фона потока снижаем светлоту на 30%, сохраняя тон обложки.
+  const heroColors = useMemo(() => (coverColors || DEFAULT_HERO_COLORS).map((color) => {
+    const rgb = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16))
+    const [hue, saturation, lightness] = rgbToHsl(...rgb)
+    return hslToHex(hue, saturation, lightness * 0.7)
+  }), [coverColors])
+  const waveGif = useWaveSettingsStore((s) => s.waveGif)
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_HERO_QUERY)
+    const sync = () => setMobileViewport(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
+  useLayoutEffect(() => {
+    const hero = heroRef.current
+    if (!hero) return undefined
+    // Sidebar width and browser zoom can leave a narrow hero in a wide window.
+    // Size the queue layout from its actual column, including sidebar changes.
+    const sync = () => {
+      const width = hero.getBoundingClientRect().width
+      if (width > 0) setNarrowHero(width <= 1000)
+    }
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(hero)
+    return () => observer.disconnect()
+  }, [])
+
+  // Разбор обложки следующего трека — заранее. Разбор идёт через сеть и декод
+  // картинки, поэтому без прогрева фон докрашивался бы уже во время трека, а на
+  // быстрых переключениях цвет отставал бы на один трек. Следующий трек известен
+  // из очереди, а кэш разбора общий с useCoverColors — так что в момент смены
+  // трека палитра уже готова и берётся синхронно.
+  useEffect(() => {
+    const next = usePlayerStore.getState().getNextTrack(1)
+    prefetchCoverColors(next?.cover_url)
+  }, [currentTrackId])
+
+  // Аватар в верхней шапке — вход в профиль и настройки на мобильных
+  // (сайдбар скрыт, в нижней навигации профиля нет). Выход — там же.
+  const user = useAuthStore((s) => s.user)
+
+  useEffect(() => {
+    fetchData()
+  }, [offline])
+
+  // Каждая полка независима: упавшая или пустая просто не рисуется и не
+  // держит остальные.
+  const fetchShelves = async () => {
+    if (guest || navigator.onLine === false) return
+    shelvesFetchedAtRef.current = Date.now()
+    const opts = { skipErrorToast: true }
+    const [releases, weekly, rediscover] = await Promise.allSettled([
+      api.get('/home/releases', opts),
+      api.get('/home/weekly', opts),
+      api.get('/home/rediscover', opts),
+    ])
+    const data = (result, fallback) => (result.status === 'fulfilled' ? result.value.data ?? fallback : fallback)
+    const next = {
+      releases: data(releases, []),
+      weekly: data(weekly, []),
+      rediscover: data(rediscover, []),
+    }
+    setShelves(next)
+    writeHomeSnapshot(userId, { shelves: next })
+  }
+  const fetchShelvesRef = useRef(fetchShelves)
+  fetchShelvesRef.current = fetchShelves
+
+  // Плейлисты SoundCloud раньше стартовали ТОЛЬКО из .then() рекомендаций —
+  // получался водопад: 2.2с recs (холодные) + 1.2с плейлисты = 3.4с до второй
+  // полки. Но сиды из preferred_artists юзера известны сразу, до всякой сети,
+  // поэтому запрос уходит параллельно с /recommendations. Если предпочтений
+  // нет, ждём треки как раньше (см. fetchSoundCloudPlaylists).
+  const scRequestedRef = useRef(false)
+  const scFetchedAtRef = useRef(0)
+  const lastTracksRef = useRef([])
+  useEffect(() => {
+    if (scRequestedRef.current) return
+    if (!user?.preferred_artists?.length) return
+    scRequestedRef.current = true
+    fetchSoundCloudPlaylists([])
+  }, [user])
+
+  const fetchData = (refresh = false) => {
+    if (guest || navigator.onLine === false) { setLoading(false); return }
+    fetchShelves()
+    api
+      // Локальный час клиента — для контекста времени суток в рекомендациях
+      // (таймзона юзера бэку неизвестна): утренняя выдача тяготеет к
+      // «утреннему» вкусу, вечерняя — к вечернему. Слэш в конце: без него
+      // FastAPI отвечает 307 и каждый заход платит лишний раунд-трип.
+      .get('/recommendations/', { params: { hour: new Date().getHours() } })
+      .then((res) => {
+        const data = {
+          tracks: res.data?.tracks || [],
+          playlists: res.data?.playlists || [],
+        }
+        setRecommendations(data)
+        writeHomeSnapshot(userId, { recommendations: data })
+        // Если сиды из preferred_artists уже ушли параллельным эффектом —
+        // второй раз не ходим: дедуп в api.get спасает только одновременные
+        // запросы, а этот пришёл бы позже и стоил бы ещё раунд-трипа.
+        // Pull-to-refresh обновляет и полку плейлистов — с новыми сидами.
+        if (refresh || !scRequestedRef.current) {
+          scRequestedRef.current = true
+          fetchSoundCloudPlaylists(data.tracks)
+        }
+        lastTracksRef.current = data.tracks
+      })
+      .catch((error) => console.error('Error fetching recommendations:', error))
+      .finally(() => setLoading(false))
+  }
+
+  const fetchSoundCloudPlaylists = async (tracks) => {
+    if (guest || navigator.onLine === false) return
+    scFetchedAtRef.current = Date.now()
+    const seeds = getSoundCloudPlaylistSeeds(user, tracks)
+    if (seeds.length === 0) return
+
+    const results = await Promise.allSettled(
+      seeds.map((seed) =>
+        api.get('/search/external/playlists', {
+          params: { q: seed, limit: 6 },
+          skipErrorToast: true,
+        }),
+      ),
+    )
+    const seen = new Set()
+    const playlists = []
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue
+      for (const playlist of result.value.data || []) {
+        const key = playlist.external_id || playlist.id
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        playlists.push(playlist)
+        if (playlists.length >= SOUNDCLOUD_PLAYLIST_LIMIT) break
+      }
+      if (playlists.length >= SOUNDCLOUD_PLAYLIST_LIMIT) break
+    }
+
+    setSoundCloudPlaylists(playlists)
+    writeHomeSnapshot(userId, { soundCloudPlaylists: playlists })
+  }
+
+  const fetchHistory = async () => {
+    if (guest || navigator.onLine === false) return
+    historyRequestedRef.current = true
+    // Спиннер только когда показать нечего: снимок прошлого захода остаётся
+    // на экране, пока свежая история не придёт.
+    if (history.length === 0) setHistoryLoading(true)
+    try {
+      const response = await api.get('/tracks/me/history', { params: { limit: 30 } })
+      setHistory(response.data)
+      writeHomeSnapshot(userId, { history: response.data })
+    } catch (error) {
+      console.error('Error fetching history:', error)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  // Пока очередь пуста, центральная кнопка запускает поток. Затем она
+  // управляет текущей очередью, а отдельная кнопка включает рекомендации.
+  const isFlowSelected = hasCurrentTrack && source === 'flow'
+  // Поток запускается (список ещё не пришёл) — кнопка сразу показывает, что
+  // нажатие принято. Подгрузка следующей порции идёт при flowActive — её не
+  // показываем.
+  const flowStarting = usePlayerStore((s) => s.flowLoading && (!s.currentTrack || s.source !== 'flow'))
+  const initialFlowStarting = !hasCurrentTrack && flowStarting
+  const isInitialPlayback = !hasCurrentTrack && !flowStarting
+  const playbackLabel = !hasCurrentTrack ? (flowStarting ? 'Запускаем поток рекомендаций…' : 'Включить поток рекомендаций')
+    : isPlaying ? 'Приостановить воспроизведение' : 'Продолжить воспроизведение'
+  const flowLabel = flowStarting ? 'Запускаем поток…' : 'Включить поток'
+  // Pull-to-refresh: шапка/hero не зависят от рекомендаций, поэтому тянем
+  // обновление вручную по жесту — как в нативных приложениях. Индикатор
+  // рисуется отдельным fixed-элементом, список не дёргается.
+  // reachTop важен: скролл живёт в контейнере экрана, window.scrollY всегда 0.
+  // Слушатели жеста висят на window — на скрытой главной (открыта другая
+  // вкладка) жест не начинается вовсе.
+  const { active: screenActive, scrollerRef } = useScreen()
+
+  // Предзагружаем поток рекомендаций: к клику по «потоку» список уже получен,
+  // а резолв первых треков прогрет на бэке — старт почти мгновенный.
+  // До первого запуска этот список рисует диски, поэтому запрашиваем сразу.
+  // При уже выбранном треке прогреваем в idle, чтобы не мешать воспроизведению.
+  // Главная живёт смонтированной всю сессию (ScreenStack), поэтому одной
+  // предзагрузки на монтировании мало: через 5 минут (TTL) список устаревал,
+  // и нажатие ждало расчёта рекомендаций на бэке — секунды без отклика.
+  // Пока главная на экране, освежаем предзагрузку раз в минуту и при
+  // возврате в приложение; preloadFlow сам пропускает свежий список, летящий
+  // запрос и уже играющий поток, так что лишних запросов нет. С погашенным
+  // экраном не освежаем: нажать на поток там нельзя, а запрос посреди трека
+  // будит модем (и считает рекомендации на бэке) зря — возврат на экран
+  // освежит список сам.
+  useEffect(() => {
+    if (guest || !screenActive) return undefined
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500))
+    const cancel = window.cancelIdleCallback ?? clearTimeout
+    const preload = () => {
+      if (!document.hidden && navigator.onLine !== false) usePlayerStore.getState().preloadFlow()
+    }
+    const handle = hasCurrentTrack ? idle(preload) : null
+    if (!hasCurrentTrack) preload()
+    const timer = setInterval(preload, 60 * 1000)
+    document.addEventListener('visibilitychange', preload)
+    return () => {
+      if (handle !== null) cancel(handle)
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', preload)
+    }
+  }, [screenActive, hasCurrentTrack, guest])
+
+  // Полка плейлистов: при возврате на главную или в приложение, если с
+  // прошлой загрузки прошло больше SOUNDCLOUD_PLAYLIST_REFRESH_MS, берём
+  // новые сиды. Функция — через ref, чтобы не замкнуть устаревшего user.
+  const scFetchRef = useRef(fetchSoundCloudPlaylists)
+  scFetchRef.current = fetchSoundCloudPlaylists
+  useEffect(() => {
+    if (!screenActive) return undefined
+    const maybeRefresh = () => {
+      if (document.hidden || !scRequestedRef.current) return
+      if (Date.now() - scFetchedAtRef.current < SOUNDCLOUD_PLAYLIST_REFRESH_MS) return
+      scFetchRef.current(lastTracksRef.current)
+    }
+    maybeRefresh()
+    document.addEventListener('visibilitychange', maybeRefresh)
+    return () => document.removeEventListener('visibilitychange', maybeRefresh)
+  }, [screenActive])
+  useEffect(() => {
+    if (!screenActive) return undefined
+    const maybeRefresh = () => {
+      if (document.hidden || !shelvesFetchedAtRef.current) return
+      if (Date.now() - shelvesFetchedAtRef.current < SHELVES_REFRESH_MS) return
+      fetchShelvesRef.current()
+    }
+    maybeRefresh()
+    document.addEventListener('visibilitychange', maybeRefresh)
+    return () => document.removeEventListener('visibilitychange', maybeRefresh)
+  }, [screenActive])
+  // Страховка на случай долгого пребывания на странице (TTL предзагрузки
+  // истёк): наведение/касание кнопки обновляет предзагрузку за секунды
+  // до клика. Внутри preloadFlow есть дедуп — повторные вызовы бесплатны.
+  const waveIntentHandlers = {
+    // Только мышь: синтетический mouseenter на тапе задерживал бы клик (см.
+    // trackIntentHandlers в playerStore).
+    onPointerEnter: (e) => {
+      if (e.pointerType === 'mouse' && navigator.onLine !== false) usePlayerStore.getState().preloadFlow()
+    },
+    onPointerDown: () => { if (navigator.onLine !== false) usePlayerStore.getState().preloadFlow() },
+  }
+
+  const handleWaveClick = async () => {
+    if (offline && !offlineData.tracks.length) {
+      toast.info('Скачайте треки, чтобы слушать поток без интернета')
+      return
+    }
+    setPlayerRevealed(true)
+    // Пауза потока — возобновляем, не пересоздавая очередь.
+    const st = usePlayerStore.getState()
+    if (st.source === 'flow' && st.currentTrack) {
+      if (!st.isPlaying) togglePlayPause('flow')
+      return
+    }
+    if (st.flowLoading) return
+    // Персональный поток.
+    try {
+      const started = await st.startFlow()
+      if (started) return
+    } catch (error) {
+      console.error('Flow start error:', error)
+    }
+    // Раньше здесь был фолбэк на статичную выдачу /recommendations (список
+    // бывшего раздела «Рекомендуем новинки»). Он играл под source 'wave',
+    // поток при этом не активировался — extendFlowIfNeeded молчал, очередь
+    // не росла, и каждое нажатие давало одну и ту же цепочку треков.
+    // Пустой поток — это ошибка бэка, а не повод подменять его чем-то другим.
+    // flowLoading — параллельный запуск/подгрузка потока (двойной клик):
+    // это не ошибка, тост не показываем.
+    const stAfter = usePlayerStore.getState()
+    if (!stAfter.flowActive && !stAfter.flowLoading) {
+      if (!stAfter.currentTrack) setPlayerRevealed(false)
+      toast.error('Поток пока недоступен, попробуйте ещё раз')
+    }
+  }
+
+  const handleCurrentPlayback = () => {
+    if (usePlayerStore.getState().currentTrack) setPlayerRevealed(true)
+    if (usePlayerStore.getState().currentTrack) togglePlayPause('home_player')
+    else handleWaveClick()
+  }
+
+  const flowStartControl = (
+    <button
+      type="button"
+      className="flow-start-button"
+      onClick={handleWaveClick}
+      disabled={flowStarting}
+      aria-busy={flowStarting || undefined}
+      aria-label={flowLabel.replace('поток', 'поток рекомендаций')}
+      {...waveIntentHandlers}
+    >
+      {flowStarting ? (
+        <Loader2 size={18} className="wave-loading-icon" aria-hidden="true" />
+      ) : (
+        <Play size={18} strokeWidth={2.25} aria-hidden="true" />
+      )}
+      <span>{flowLabel}</span>
+    </button>
+  )
+
+  // Раньше здесь был ранний `return <Spinner/>` на всю страницу: пока шли
+  // холодные /recommendations (замер: 2.2с), юзер смотрел на пустой контейнер —
+  // хотя шапка, hero с кнопкой потока и вкладки не зависят от этого запроса
+  // вообще. Теперь оболочка рисуется сразу (FCP не ждёт сеть), а ожидание
+  // локализовано в той единственной полке, которой нужны данные.
+  return (
+    <div className="page-container home-page">
+      <PullToRefreshIndicator
+        onRefresh={() => fetchData(true)}
+        reachTop={() => screenActive && (scrollerRef?.current?.scrollTop ?? window.scrollY) <= 0}
+        root={() => scrollerRef?.current ?? null}
+      />
+      <div className={`home-intro${!mobileHero && showCdPlayer ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}`}>
+        <div className="mobile-header" style={{ '--mobile-header-backdrop': heroColors[2] }}>
+          {/* Тап по логотипу — то же, что pull-to-refresh: шапка не липкая, и
+              логотип виден, только когда главная уже прокручена наверх. */}
+          <button type="button" className="mobile-logo-btn" onClick={() => fetchData(true)} aria-label="Обновить главную">
+            <img src={brandWordmark} alt="bolt" className="mobile-logo-img" />
+          </button>
+          <Link to="/settings" className="mobile-avatar" aria-label="Профиль и настройки">
+            <TasteAvatar user={user} className="mobile-avatar-img" />
+          </Link>
+        </div>
+        <div
+          ref={heroRef}
+          className={`hero-section${showHeroPlayer ? ' has-hero-player' : ''}${showCdPlayer ? ' has-cd' : ''}${!mobileHero && showHeroPlayer ? ' has-solid-backdrop' : ''}${!mobileHero && showCdPlayer ? ' has-desktop-deck' : ''}${mobileDeck ? ' has-mobile-deck' : ''}${mobileDeck && isFlowSelected ? ' is-mobile-flow' : ''}`}
+          // Палитра обложки для фона потока.
+          style={{
+            '--hero-c1': heroColors[0],
+            '--hero-c2': heroColors[1],
+            '--hero-c3': heroColors[2],
+          }}
+        >
+          <div className="hero-grainient">
+            {showHeroPlayer && (mobileDeck || !mobileHero) ? (
+              <div className="hero-solid" />
+            ) : liteMode ? (
+              <HeroHearts />
+            ) : isIOS && isStandalone ? (
+              // The WebGL background can leave a magenta scanline in iOS PWA.
+              // Animate the cover palette in CSS without that canvas.
+              <div className="hero-grainient-static hero-grainient-animated" />
+            ) : (
+              <Suspense fallback={<div className="hero-grainient-static" />}>
+                <Grainient
+                  color1={heroColors[0]}
+                  color2={heroColors[1]}
+                  color3={heroColors[2]}
+                  timeSpeed={5}
+                  colorBalance={-0.32}
+                  warpStrength={1.4}
+                  warpFrequency={5}
+                  warpSpeed={2}
+                  warpAmplitude={50}
+                  blendAngle={-49}
+                  blendSoftness={0.05}
+                  rotationAmount={500}
+                  noiseScale={1.95}
+                  grainAmount={0}
+                  grainScale={0.2}
+                  grainAnimated={false}
+                  contrast={1.5}
+                  gamma={1}
+                  saturation={1}
+                  centerX={0}
+                  centerY={0}
+                  zoom={0.9}
+                  rippleFrom=".home-page .wave-center > button"
+                  rippleStrength={1.2}
+                  rippleKey={currentTrackId != null ? 1 : 0}
+                  active={isPlaying}
+                />
+              </Suspense>
+            )}
+          </div>
+          {cdDisc ? (
+            <div
+              className={`hero-deck-reveal${showHeroPlayer ? ' is-revealed' : ''}`}
+              inert={showHeroPlayer ? undefined : ''}
+              aria-hidden={showHeroPlayer ? undefined : true}
+            >
+              {(deckWarm || showHeroPlayer) && (
+                <DesktopCdPlayer
+                  presentation={mobileHero ? 'mobile' : 'default'}
+                  onPlay={handleCurrentPlayback}
+                  onStartFlow={handleWaveClick}
+                  busy={flowStarting}
+                  intentHandlers={!hasCurrentTrack ? waveIntentHandlers : undefined}
+                />
+              )}
+            </div>
+          ) : showHeroPlayer && (
+            <FlowDiscArc tracks={recommendations.tracks} playing={isPlaying} />
+          )}
+          <div className={`wave-widget ${isPlaying ? 'is-playing' : ''}`}>
+            <div className="wave-center">
+              <FlowHeading />
+              {waveGif ? (
+                <button
+                  type="button"
+                  onClick={handleCurrentPlayback}
+                  className={`wave-gif-button${isInitialPlayback ? ' wave-gif-button--initial' : ''}`}
+                  aria-label={playbackLabel}
+                  disabled={initialFlowStarting}
+                  aria-busy={initialFlowStarting || undefined}
+                  {...(!hasCurrentTrack ? waveIntentHandlers : {})}
+                >
+                  <img
+                    key={isPlaying ? 'playing' : 'paused'}
+                    src={isPlaying ? waveGif : `${waveGif}${waveGif.includes('#') ? '&' : '#'}paused`}
+                    alt=""
+                  />
+                  <span className="wave-gif-icon">
+                    {initialFlowStarting ? (
+                      <Loader2 size={20} className="wave-loading-icon" aria-hidden="true" />
+                    ) : isPlaying ? (
+                      <Pause size={20} />
+                    ) : (
+                      <Play size={20} />
+                    )}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleCurrentPlayback}
+                  className={`wave-title${isInitialPlayback ? ' wave-title--initial' : ''}`}
+                  aria-label={playbackLabel}
+                  disabled={initialFlowStarting}
+                  aria-busy={initialFlowStarting || undefined}
+                  {...(!hasCurrentTrack ? waveIntentHandlers : {})}
+                >
+                  {initialFlowStarting ? (
+                    <Loader2 size={38} className="wave-loading-icon" aria-hidden="true" />
+                  ) : isPlaying ? (
+                    <Pause size={38} fill="currentColor" strokeWidth={0} />
+                  ) : (
+                    // Треугольник визуально тяжелее слева — сдвиг вправо
+                    // ставит его в оптический центр круга.
+                    <Play size={44} fill="currentColor" strokeWidth={0} className="wave-title-play" />
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+          {hasCurrentTrack && <div className="flow-controls">
+            {isFlowSelected ? (
+              <Link to="/settings/wave" className="wave-settings-link" aria-label="Настроить поток">
+                <Settings size={18} strokeWidth={2.25} aria-hidden="true" />
+                <span>Настроить поток</span>
+              </Link>
+            ) : (
+              flowStartControl
+            )}
+          </div>}
+        </div>
+
+        <div className="home-tabs" role="tablist" data-active={activeTab}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'home'}
+            className={`home-tab ${activeTab === 'home' ? 'active' : ''}`}
+            onClick={() => setActiveTab('home')}
+          >
+            <HomeIcon size={18} strokeWidth={2.25} />
+            Рекомендации
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'history'}
+            className={`home-tab ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('history')
+              if ((!historyRequestedRef.current || history.length === 0) && !historyLoading) {
+                fetchHistory()
+              }
+            }}
+          >
+            <History size={18} strokeWidth={2.25} />
+            История
+          </button>
+        </div>
+      </div>
+
+      {/* Обе вкладки остаются в DOM, неактивная скрыта. Условный рендер
+          размонтировал карточки на каждом переключении, и на iOS обложки
+          заново проходили lazy-загрузку и декод: мигали пустыми. */}
+      <div hidden={activeTab !== 'home'}>
+          <div className="content-section content-section--tab-fade">
+            <h2 className="section-title">Рекомендуемые треки</h2>
+            {offline && <p className="section-subtitle">Музыка из скачанной медиатеки</p>}
+            {loading ? (
+              <div className="home-skeleton-row" aria-busy="true" aria-label="Загрузка рекомендаций">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <div className="home-skeleton-card" key={i}>
+                    <div className="home-skeleton-cover" />
+                    <div className="home-skeleton-line" />
+                    <div className="home-skeleton-line home-skeleton-line--short" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Carousel
+                items={recommendations.tracks}
+                label="Рекомендуемые треки"
+                renderItem={(track) => (
+                  <TrackCard
+                    key={track.id}
+                    track={track}
+                    queue={recommendations.tracks}
+                  />
+                )}
+              />
+            )}
+          </div>
+
+          {offline && (offlineData.playlists.length > 0 || offlineData.liked.tracks.length > 0) && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Скачанные плейлисты</h2>
+              <Carousel items={[...(offlineData.liked.tracks.length ? [offlineData.liked] : []), ...offlineData.playlists]} label="Скачанные плейлисты" renderItem={(playlist) => (
+                <Link className="playlist-card" to={playlist.is_liked ? '/liked' : playlist.page_url || `/playlists/${playlist.id}`}>
+                  <img src={resolveCoverUrl(playlist.cover_url) || defaultCover} alt="" className="playlist-cover" onError={handleCoverError} />
+                  <div className="playlist-info"><div className="playlist-name">{playlist.name}</div><div className="playlist-description">{playlist.tracks.length} скачанных треков</div></div>
+                </Link>
+              )} />
+            </div>
+          )}
+          {shelves.releases.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Новое у ваших артистов</h2>
+              <Carousel
+                items={shelves.releases}
+                label="Новые релизы ваших артистов"
+                renderItem={(release) => (
+                  <Link
+                    key={release.id}
+                    className="playlist-card"
+                    to={`/artists/${encodeURIComponent(release.artist)}`}
+                  >
+                    <img
+                      src={resolveCoverUrl(release.cover) || defaultCover}
+                      alt={release.title}
+                      className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name" title={release.title}>{release.title}</div>
+                      <div className="playlist-description">
+                        {release.artist} · {RELEASE_TYPE[release.type] || 'релиз'} · {releaseAge(release.date)}
+                      </div>
+                    </div>
+                  </Link>
+                )}
+              />
+            </div>
+          )}
+
+          {shelves.weekly.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Открытия недели</h2>
+              <p className="section-subtitle">Похожие на ваших любимых, но ещё не слышанные. Обновляется по понедельникам</p>
+              <Carousel
+                items={shelves.weekly}
+                label="Открытия недели"
+                renderItem={(track) => (
+                  <TrackCard key={track.id} track={track} queue={shelves.weekly} />
+                )}
+              />
+            </div>
+          )}
+
+          {shelves.rediscover.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Давно не слушали</h2>
+              <p className="section-subtitle">Ваши лайки, которые не звучали больше месяца</p>
+              <Carousel
+                items={shelves.rediscover}
+                label="Давно не слушали"
+                renderItem={(track) => (
+                  <TrackCard key={track.id} track={track} queue={shelves.rediscover} />
+                )}
+              />
+            </div>
+          )}
+
+          {soundCloudPlaylists.length > 0 && (
+            <div className="content-section content-section--tab-fade">
+              <h2 className="section-title">Плейлисты для вас</h2>
+              <Carousel
+                items={soundCloudPlaylists}
+                label="Рекомендуемые плейлисты SoundCloud"
+                renderItem={(playlist) => (
+                  <Link
+                    key={playlist.id}
+                    className="playlist-card"
+                    to={`/external/soundcloud/playlists/${playlist.external_id}`}
+                  >
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.title}
+                      className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name" title={playlist.title}>{playlist.title}</div>
+                      <div className="playlist-description">
+                        {playlist.owner ? `${playlist.owner} · ` : ''}
+                        {playlist.track_count} треков · SoundCloud
+                      </div>
+                    </div>
+                  </Link>
+                )}
+              />
+            </div>
+          )}
+
+          {/* {recommendations.playlists.length > 0 && (
+            <div className="content-section">
+              <h2 className="section-title">Добавленные в сервис</h2>
+              <Carousel
+                items={recommendations.playlists}
+                label="Добавленные в сервис плейлисты"
+                renderItem={(playlist) => (
+                  <Link
+                    key={playlist.id}
+                    className="playlist-card"
+                    to={`/playlists/${playlist.id}`}
+                  >
+                    <img
+                      src={resolveCoverUrl(playlist.cover_url) || defaultCover}
+                      alt={playlist.name}
+                      className="playlist-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={handleCoverError}
+                    />
+                    <div className="playlist-info">
+                      <div className="playlist-name" title={playlist.name}>{playlist.name}</div>
+                      {playlist.description && (
+                        <div className="playlist-description">{playlist.description}</div>
+                      )}
+                    </div>
+                  </Link>
+                )}
+              />
+            </div>
+          )} */}
+      </div>
+      <div hidden={activeTab !== 'history'}>
+        <div className="content-section content-section--tab-fade">
+          <h2 className="section-title">История прослушиваний</h2>
+          {historyLoading ? (
+            <Spinner />
+          ) : history.length === 0 ? (
+            <div className="home-empty">Пока нет истории прослушивания</div>
+          ) : (
+            <div className="tracks-grid">
+              {history.map((track) => (
+                <TrackCard key={track.id} track={track} queue={history} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default Home

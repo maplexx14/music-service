@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">
+    <defs>
+      <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b187f"/><stop offset="0.5" stop-color="#7c3aed"/><stop offset="1" stop-color="#a78bfa"/></linearGradient>
+      <filter id="markShadow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="11" result="b"/><feFlood flood-color="#8b5cf6" flood-opacity=".34" result="c"/><feComposite in="c" in2="b" operator="in" result="s"/><feOffset dy="9" result="o"/><feMerge><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <g filter="url(#markShadow)"><path d="M139 87h111c69 0 112 34 112 88 0 36-20 63-55 77 45 12 72 44 72 88 0 60-49 94-132 94H139Z" fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round" stroke-width="38"/><path d="m271 111-69 132h61l-42 126 111-158h-63Z" fill="#ff4fd8"/></g>
+  </svg>

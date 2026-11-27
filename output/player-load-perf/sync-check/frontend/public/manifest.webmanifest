@@ -1,0 +1,78 @@
+{
+  "id": "/",
+  "name": "bolt music",
+  "short_name": "bolt",
+  "description": "Музыкальный сервис с фоновым воспроизведением",
+  "lang": "ru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "categories": [
+    "music",
+    "entertainment"
+  ],
+  "icons": [
+    {
+      "src": "/icon-192-v7.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512-v7.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512-v7.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "shortcuts": [
+    {
+      "name": "Поиск",
+      "short_name": "Поиск",
+      "url": "/search",
+      "icons": [
+        {
+          "src": "/icon-192-v7.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Любимое",
+      "short_name": "Любимое",
+      "url": "/liked",
+      "icons": [
+        {
+          "src": "/icon-192-v7.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Медиатека",
+      "short_name": "Медиатека",
+      "url": "/playlists",
+      "icons": [
+        {
+          "src": "/icon-192-v7.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "source": "http://localhost/search",
+  "query": "Daft Punk",
+  "capturedAt": "2026-11-22T21:52:18.183Z",
+  "fps": 60,
+  "count": 374,
+  "width": 1040,
+  "height": 1000,
+  "pixelRatio": 1.5,
+  "partial": false,
+  "artistImages": [
+    "Daft Punk",
+    "The Weeknd",
+    "Kavinsky"
+  ],
+  "best": {
+    "x": 241.2421875,
+    "y": 124.5,
+    "width": 103.265625,
+    "height": 41
+  },
+  "selected": {
+    "x": 313.5234375,
+    "y": 448,
+    "width": 219.046875,
+    "height": 29.6875
+  },
+  "selectedRow": {
+    "x": 564,
+    "y": 448,
+    "width": 888,
+    "height": 88
+  },
+  "controls": {
+    "x": 520,
+    "y": 864,
+    "width": 72,
+    "height": 72
+  },
+  "fullscreenArt": {
+    "x": 520,
+    "y": 382.5,
+    "width": 440,
+    "height": 444
+  },
+  "nativeAnimationCount": 966,
+  "audioProof": {
+    "ready": 3,
+    "playing": true,
+    "time": 0.052097
+  },
+  "playback": {
+    "ready": 4,
+    "playing": true,
+    "time": 0.014219
+  },
+  "finalState": {
+    "authenticated": false,
+    "url": "http://localhost/search",
+    "track": "One More Time",
+    "action": "Пауза",
+    "dialogs": false,
+    "audio": [
+      {
+        "playing": true,
+        "ready": 4,
+        "error": null
+      },
+      {
+        "playing": false,
+        "ready": 4,
+        "error": null
+      },
+      {
+        "playing": false,
+        "ready": 0,
+        "error": null
+      }
+    ]
+  },
+  "actions": [
+    {
+      "time": 1.1666666666666667,
+      "action": "Click the real Лучшие filter"
+    },
+    {
+      "time": 3.2,
+      "action": "Play the real One More Time search result"
+    },
+    {
+      "time": 3.35,
+      "action": "Open the real fullscreen player"
+    },
+    {
+      "time": 5.583333333333333,
+      "action": "Pause using the real player control"
+    },
+    {
+      "time": 5.766666666666667,
+      "action": "Resume using the real player control"
+    }
+  ]
+}

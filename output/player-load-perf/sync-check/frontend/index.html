@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Иконки нужных размеров и прозрачный знак генерируются из
+         src/assets/brand-source.png: node scripts/update_brand_assets.mjs.
+         При смене мастера поднимать -vN: iOS хранит иконки и сплэши по URL. -->
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64-v7.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-v7.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- maximum-scale=1: iOS зумит страницу при фокусе на поле с шрифтом
+         мельче 16px и не отзумливает обратно — интерфейс «уезжал». Ручной
+         пинч-зум iOS при этом всё равно разрешает. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#050505" />
+    <meta name="application-name" content="bolt" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="bolt" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- iOS-сплэши: генерируются скриптом scripts/make_splash.py, руками не
+         править. Линки идут от крупных к мелким — iOS берёт первый подходящий
+         по media-запросу, неподходящие просто не скачиваются (iOS fetch'ит
+         только совпавший размер). -->
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1290-2796.png" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1179-2556.png" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1284-2778.png" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1170-2532.png" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1125-2436.png" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1242-2688.png" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-828-1792.png" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-1242-2208.png" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-750-1334.png" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)" />
+    <link rel="apple-touch-startup-image" href="/apple-splash-v8-640-1136.png" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)" />
+    <!-- Шрифт свой: @font-face в src/index.css. Google Fonts отсюда убран —
+         он блокировал отрисовку двумя цепочками к чужим доменам. -->
+    <!-- Рантайм-конфиг: в <head> с defer, чтобы не тормозить парсер. Порядок
+         с бандлом сохраняется — defer и модули идут в порядке документа. -->
+    <script defer src="/config.js"></script>
+    <title>bolt — музыка</title>
+    <!-- Фон до загрузки бандла CSS: иначе после сплэша iOS на мгновение
+         показывает белый WebView. Цвет — как у сплэша (make_splash.py). -->
+    <style>html, body { background-color: #000; }</style>
+    <!-- The loading indicator repeats the brand heart and its sound-wave pulse. -->
+    <style>
+      #boot-splash { position: fixed; inset: 0; z-index: 9999; background: #000; pointer-events: none; transition: opacity 160ms cubic-bezier(.23, 1, .32, 1); }
+      #boot-splash.is-hiding { opacity: 0; }
+      #boot-splash .boot-logo { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; }
+      #boot-splash .boot-mark { position: relative; width: 80px; height: 80px; }
+      #boot-splash .boot-heart, #boot-splash .boot-echo { position: absolute; left: 0; top: 0; width: 80px; height: 80px; }
+      #boot-splash .boot-heart { animation: boot-heartbeat 1200ms ease-in-out infinite; will-change: transform, opacity; }
+      /* Эхо-слои логотипа: голубой и маджентовый сдвиг контура, вспыхивают разрядами. */
+      #boot-splash .boot-echo { mix-blend-mode: screen; opacity: 0; pointer-events: none; animation: boot-glitch 1200ms steps(1, end) infinite; }
+      #boot-splash .boot-echo--cyan { filter: hue-rotate(150deg) saturate(3) brightness(1.2); }
+      #boot-splash .boot-echo--magenta { filter: hue-rotate(-70deg) saturate(3) brightness(1.1); animation-delay: 180ms; }
+      @keyframes boot-heartbeat {
+        0%, 100% { transform: scale(.94); opacity: .6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+        12% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 16px rgba(157, 89, 255, .95)); }
+        24% { transform: scale(.98); opacity: .8; filter: drop-shadow(0 0 6px rgba(157, 89, 255, .5)); }
+        36% { transform: scale(1.06); opacity: 1; filter: drop-shadow(0 0 11px rgba(157, 89, 255, .75)); }
+        60% { transform: scale(.94); opacity: .6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+      }
+      @keyframes boot-glitch {
+        0%, 9%, 40%, 100% { opacity: 0; transform: translate(0, 0); }
+        10% { opacity: .85; transform: translate(-3px, 0); }
+        12% { opacity: 0; transform: translate(0, 0); }
+        14% { opacity: .6; transform: translate(-2px, 1px); }
+        16% { opacity: 0; transform: translate(0, 0); }
+        30% { opacity: .7; transform: translate(-1px, -1px); }
+        32% { opacity: 0; transform: translate(0, 0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash { transition: none; }
+        #boot-splash .boot-heart, #boot-splash .boot-echo { animation: none; will-change: auto; }
+        #boot-splash .boot-echo { display: none; }
+      }
+    </style>
+    <!-- Сторож загрузки. SW на медленной сети отдаёт index.html из кэша, и
+         тот может ссылаться на бандл прошлого деплоя, которого на сервере уже
+         нет: модуль не исполнится, React не стартует — чёрный экран навсегда.
+         Ловим ошибку загрузки /assets/*, выбрасываем кэш каркаса SW и один раз
+         перезагружаемся (логика и ключ флага — как в src/services/staleBuild.js).
+         Если бандл так и не стартовал — показываем кнопку вместо пустоты. -->
+    <script>
+      (function () {
+        var KEY = 'bolt-stale-reload-at'
+        function recover(force) {
+          if (navigator.onLine === false) return false
+          try {
+            if (!force && Date.now() - Number(sessionStorage.getItem(KEY) || 0) < 60000) return false
+            sessionStorage.setItem(KEY, String(Date.now()))
+          } catch (e) {}
+          var reload = function () { location.reload() }
+          if (!window.caches) return reload(), true
+          caches.keys().then(function (keys) {
+            return Promise.all(keys.filter(function (k) { return k.indexOf('bolt-shell') === 0 }).map(function (k) { return caches.delete(k) }))
+          }).then(reload, reload)
+          return true
+        }
+        function showFallback() {
+          if (window.__boltBooted || document.getElementById('boot-fallback')) return
+          if (window.__bootSplashHide) window.__bootSplashHide()
+          if (!document.body) return void document.addEventListener('DOMContentLoaded', showFallback)
+          var box = document.createElement('div')
+          box.id = 'boot-fallback'
+          box.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#fff;font:17px -apple-system,system-ui,sans-serif'
+          box.innerHTML = '<div>Не удалось загрузить приложение</div><button type="button" style="padding:12px 24px;border:0;border-radius:12px;background:#fff;color:#000;font-size:16px">Обновить</button>'
+          box.querySelector('button').onclick = function () { recover(true) }
+          document.body.appendChild(box)
+        }
+        window.addEventListener('error', function (e) {
+          var el = e.target
+          var src = el && (el.src || el.href)
+          if (window.__boltBooted || !src || src.indexOf('/assets/') === -1) return
+          if (!recover(false)) showFallback()
+        }, true)
+        setTimeout(function () { if (!window.__boltBooted) showFallback() }, 15000)
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="boot-splash" role="status" aria-label="Загрузка bolt">
+      <div class="boot-logo">
+        <div class="boot-mark" aria-hidden="true">
+          <img class="boot-echo boot-echo--cyan" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" />
+          <img class="boot-echo boot-echo--magenta" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" />
+          <img class="boot-heart" src="/src/assets/loader-heart.webp" width="80" height="80" alt="" fetchpriority="high" />
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var root = document.getElementById('boot-splash')
+        var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches
+        window.__bootSplashHide = function () {
+          window.__bootSplashHide = null
+          root.classList.add('is-hiding')
+          setTimeout(function () { root.remove() }, reduced ? 0 : 180)
+        }
+      })()
+    </script>
+    <!-- Кисть логотипа для иконок lucide (html.brush-icons в index.css,
+         переключатель в настройках): плавное дрожание руки (шум 0.12),
+         рваный край (0.9), просветы сухой кисти (полосатый шум с порогом) и
+         второй полупрозрачный мазок со сдвигом, как двойной контур сердца на
+         логотипе. Единицы — CSS px иконки. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <filter id="brush-icon" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.12" numOctaves="1" seed="4" result="wobble" />
+        <feDisplacementMap in="SourceGraphic" in2="wobble" scale="2.2" xChannelSelector="R" yChannelSelector="G" result="hand" />
+        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="grain" />
+        <feDisplacementMap in="hand" in2="grain" scale="1.3" xChannelSelector="R" yChannelSelector="G" result="edge" />
+        <feTurbulence type="fractalNoise" baseFrequency="0.7 1.4" numOctaves="1" seed="11" result="streaks" />
+        <feColorMatrix in="streaks" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  14 0 0 0 -4.6" result="dry" />
+        <feComposite in="edge" in2="dry" operator="in" result="stroke" />
+        <feDisplacementMap in="hand" in2="grain" scale="2.4" xChannelSelector="G" yChannelSelector="R" result="ghostShape" />
+        <feOffset in="ghostShape" dx="-0.8" dy="0.6" result="ghostShift" />
+        <feComponentTransfer in="ghostShift" result="ghost"><feFuncA type="linear" slope="0.5" /></feComponentTransfer>
+        <feMerge><feMergeNode in="ghost" /><feMergeNode in="stroke" /></feMerge>
+      </filter>
+    </svg>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

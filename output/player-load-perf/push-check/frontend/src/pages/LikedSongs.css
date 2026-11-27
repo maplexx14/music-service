@@ -1,0 +1,300 @@
+.liked-header {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 32px;
+  padding: 32px 0;
+}
+
+.liked-cover {
+  width: 232px;
+  height: 232px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.liked-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.liked-type {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.liked-title {
+  font-size: clamp(32px, 8vw, 72px);
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  line-height: 1;
+  /* Крупный кегль — отрицательный трекинг (Unbounded широкий). */
+  letter-spacing: -0.02em;
+}
+
+.liked-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+
+.liked-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.liked-tracks {
+  margin-top: 32px;
+}
+
+.tracks-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tracks-table thead {
+  border-bottom: 1px solid var(--border-default);
+}
+
+.tracks-table th {
+  text-align: left;
+  padding: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.tracks-table th:first-child {
+  width: 40px;
+  text-align: center;
+}
+
+.tracks-table th:last-child {
+  width: 56px;
+  text-align: right;
+}
+
+.track-remove-cell {
+  width: 96px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.track-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--brand-accent);
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, transform 0.1s;
+}
+
+.track-remove-btn:hover {
+  background-color: var(--brand-accent-soft);
+  color: var(--status-danger);
+}
+
+.track-remove-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.track-row {
+  cursor: pointer;
+  transition: background-color var(--duration-base) var(--ease-out);
+  border-radius: 4px;
+}
+
+.track-row:hover {
+  background-color: var(--surface-1);
+}
+
+.track-row:active {
+  background-color: var(--surface-2);
+}
+
+.track-row td {
+  padding: 12px;
+  font-size: var(--text-base);
+}
+
+.track-number {
+  text-align: center;
+  color: var(--text-secondary);
+  width: 40px;
+}
+
+.track-table-cover {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: var(--surface-4);
+}
+
+.track-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.track-artist {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+
+.track-album {
+  color: var(--text-secondary);
+}
+
+.track-duration {
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+.empty-liked {
+  text-align: center;
+  padding: 128px 32px;
+  color: var(--text-secondary);
+}
+
+.empty-liked p {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.empty-liked-subtitle {
+  font-size: 14px;
+  color: var(--text-disabled);
+}
+
+@media (max-width: 768px) {
+  .liked-header {
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 0 8px;
+  }
+
+  .liked-cover {
+    width: 160px;
+    height: 160px;
+  }
+
+  .liked-info {
+    align-items: center;
+    text-align: center;
+  }
+
+  .liked-title {
+    font-size: 32px;
+  }
+
+  .liked-meta {
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .liked-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .play-button-large {
+    width: 100%;
+  }
+
+  .liked-tracks {
+    margin-top: 24px;
+  }
+
+  .tracks-table thead {
+    display: none;
+  }
+
+  .tracks-table,
+  .tracks-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  /* Строка = флекс-ряд: обложка+название слева, кнопка справа.
+     Используем .tracks-table tr для достаточной специфичности. */
+  .tracks-table tr.track-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .track-row td {
+    padding: 0;
+  }
+
+  /* Специфичность .track-row .track-* перебивает .tracks-table td. */
+  .track-row .track-number,
+  .track-row .track-album,
+  .track-row .track-duration {
+    display: none;
+  }
+
+  .track-row .track-name-cell {
+    flex: 1;
+    min-width: 0;
+    gap: 12px;
+  }
+
+  .track-row .track-name-cell > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Имя артиста, как и название, занимает одну строку. */
+  .track-row .track-artist {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-row .track-remove-cell {
+    flex-shrink: 0;
+    width: auto;
+  }
+
+  .track-table-cover {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+  }
+}
+
+.load-more-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+

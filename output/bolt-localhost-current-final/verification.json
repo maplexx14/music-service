@@ -1,0 +1,18 @@
+{
+  "origin": "http://localhost",
+  "errors": [],
+  "checks": [
+    {
+      "mode": "mobile",
+      "url": "http://localhost/",
+      "title": "bolt — музыка",
+      "newDashboard": 0
+    },
+    {
+      "mode": "desktop",
+      "url": "http://localhost/",
+      "title": "bolt — музыка",
+      "newDashboard": 0
+    }
+  ]
+}

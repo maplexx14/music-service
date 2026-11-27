@@ -1,0 +1,434 @@
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 240px;
+  height: 100vh;
+  background-color: #000000;
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  padding: 24px 16px;
+  transition: width 0.3s var(--ease-morph);
+}
+
+.sidebar.collapsed {
+  width: 88px;
+  padding: 24px 16px;
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .sidebar {
+    transition: none;
+  }
+}
+
+.sidebar.collapsed .nav-item {
+  padding: 14px;
+  justify-content: center;
+}
+
+.sidebar.collapsed .nav-item svg {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+}
+
+.sidebar-header {
+  margin-bottom: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 40px;
+}
+
+.sidebar.collapsed .sidebar-header {
+  flex-direction: row;
+  justify-content: center;
+  height: 48px;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.sidebar.collapsed .logo {
+  display: none;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--brand-accent);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed .logo {
+  justify-content: center;
+}
+
+.sidebar.collapsed .logo-text {
+  display: none;
+}
+.logo-img {
+  height: 64px;
+  width: auto;
+  object-fit: contain;
+}
+.sidebar.collapsed .logo-img {
+  display: none;
+}
+
+.collapse-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  display: flex;
+
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.collapse-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+.sidebar.collapsed .collapse-btn {
+  margin: 0 auto;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+}
+
+.sidebar-logo-heart {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+
+.collapse-btn:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.collapse-btn:active {
+  transform: none;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-radius: 8px;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.sidebar .nav-item svg {
+  flex-shrink: 0;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+.nav-item.active {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+/* Плейлисты занимают место между вкладками и низом и прокручиваются сами:
+   длинная медиатека не выталкивает профиль за экран. */
+.sidebar-playlists {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Заголовок и подсказка — на левом крае обложек (отступ строки 8px),
+   а не на оси иконок вкладок: иначе надпись висит правее списка. */
+.sidebar-section-title {
+  padding: 0 8px 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-section-title:hover {
+  color: var(--text-primary);
+}
+
+/* Список уходит под край мягко, а не обрезается: затухание сверху и снизу,
+   отступы того же размера — у начала и конца списка ничего не прячется. */
+.sidebar-playlists-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  padding-block: 4px 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 4px, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 4px, #000 calc(100% - 16px), transparent);
+}
+
+.sidebar-playlists-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Строка выровнена по вкладкам выше: центр обложки — на оси иконок,
+   название — на линии подписей (8 + 40 + 8 = 56, как 14 + 28 + 14).
+   Радиус концентричен обложке: 4 + отступ 4 = 8. */
+.sidebar-playlist {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-card);
+  text-decoration: none;
+  color: var(--text-secondary);
+  transition: background-color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-playlist:hover,
+.sidebar-playlist.active {
+  background-color: var(--surface-1);
+}
+
+.sidebar-playlist:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -2px;
+}
+
+.sidebar-playlist-cover {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+  background-color: var(--surface-4);
+  outline: var(--image-outline);
+  outline-offset: -1px;
+}
+
+.sidebar-playlist-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-playlist-name {
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-playlist.active .sidebar-playlist-name {
+  color: var(--brand-accent);
+}
+
+.sidebar-playlist-meta {
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-playlists-empty {
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.sidebar-playlists-empty:hover {
+  color: var(--text-primary);
+}
+
+.sidebar.collapsed .sidebar-playlist {
+  justify-content: center;
+  padding: 4px;
+}
+
+.sidebar.collapsed .sidebar-playlist-cover {
+  width: 48px;
+  height: 48px;
+}
+
+.nav-item-contact {
+  margin-bottom: 12px;
+}
+
+.sidebar-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  position: relative;
+}
+
+.profile-trigger {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  color: inherit;
+}
+
+.profile-trigger:hover .user-info,
+.profile-trigger:hover .user-avatar-collapsed {
+  opacity: 0.9;
+}
+
+.sidebar-footer .user-info {
+  width: 100%;
+}
+
+.profile-chevron {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Профиль — ссылка, а не кнопка: сбрасываем подчёркивание и подсвечиваем,
+   пока открыты настройки. */
+.profile-trigger {
+  text-decoration: none;
+  border-radius: var(--radius-card);
+}
+
+.profile-trigger:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 4px;
+}
+
+.profile-trigger.active .profile-chevron {
+  color: var(--brand-accent);
+}
+
+.sidebar.collapsed .sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sidebar.collapsed .profile-trigger {
+  justify-content: center;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: var(--surface-4);
+}
+
+
+.user-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-name {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+.logout-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+}
+
+.logout-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-1);
+}
+
+.user-avatar-collapsed {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: var(--surface-4);
+}
+
+
+.sidebar.collapsed .user-info {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+/* Аватарка по вкусу: блок, обрезка по кругу и слои — в TasteAvatar.css. */
+.user-avatar.taste-avatar,
+.user-avatar-collapsed.taste-avatar {
+  flex-shrink: 0;
+}

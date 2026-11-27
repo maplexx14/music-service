@@ -1,0 +1,263 @@
+[
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "cachalot onda andar",
+      "url": "http://localhost/search",
+      "text": "Все\nЛучшие\nМедиатека\nYouTube Music\nSoundCloud\nDeezer\nЛучшие совпадения\ncachalotE\nONDA ANDAR\n2:01",
+      "authenticated": false,
+      "rows": [
+        {
+          "title": "cachalot",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2Ft-SKqLnZDmz91qINWORWycgJX31L8N8K6kh7egWi9LOM3uEeqgGNuO2HjvzqvAuXtmyuuWDmGr9dBX4%3Dw120-h120-l90-rj",
+          "duration": "2:01"
+        }
+      ],
+      "buttons": [
+        {
+          "label": null,
+          "text": "Все",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Лучшие",
+          "className": "search-filter active"
+        },
+        {
+          "label": null,
+          "text": "Медиатека",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "YouTube Music",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "SoundCloud",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Deezer",
+          "className": "search-filter"
+        },
+        {
+          "label": "Действия с треком cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "onda andar",
+      "url": "http://localhost/search",
+      "text": "Все\nЛучшие\nМедиатека\nYouTube Music\nSoundCloud\nDeezer\nЛучшие совпадения\nночное кафе\nmirèle, onda andar\n2:29\ncachalotE\nONDA ANDAR\n2:01\ntype londonE\nONDA ANDAR\n1:44\nsleep mode\nONDA ANDAR\n2:53\none way ticketE\nONDA ANDAR\n2:21\nred weather\nONDA ANDAR\n1:44",
+      "authenticated": false,
+      "rows": [
+        {
+          "title": "ночное кафе",
+          "artist": "mirèle, onda andar",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fi1.sndcdn.com%2Fartworks-2d5Jqk0WLjgSiH1V-ojacQg-t300x300.jpg",
+          "duration": "2:29"
+        },
+        {
+          "title": "cachalot",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2Ft-SKqLnZDmz91qINWORWycgJX31L8N8K6kh7egWi9LOM3uEeqgGNuO2HjvzqvAuXtmyuuWDmGr9dBX4%3Dw120-h120-l90-rj",
+          "duration": "2:01"
+        },
+        {
+          "title": "type london",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2Fq1vABZN0h_VTLRuqZvcaS1UsLvvP_y9c_MSdLxw0G3tyubirqRo_a9YVmBPIpImlGbi3cJeLBF1Rm44i%3Dw120-h120-l90-rj",
+          "duration": "1:44"
+        },
+        {
+          "title": "sleep mode",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FhdMBE0Cx_zNUTF3qR-GW7CaW2570_GVGJgsPGgL86tQdRKQtDjHAhZ68nXcY5UOyRr0esxtMCyq9zpY%3Dw120-h120-l90-rj",
+          "duration": "2:53"
+        },
+        {
+          "title": "one way ticket",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FO91k5E2fG5O0GrqbxoRrCbCsv6_CvMaMC9rOMmw_NOzSYmmQf29YpEmcYPbg03nnI4gDk0v3v4YChs5p%3Dw120-h120-l90-rj",
+          "duration": "2:21"
+        },
+        {
+          "title": "red weather",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FSf3gezJ6fYTzOUzb3twZIXu9J_vA4MogUFqEFZOoa0Kwh1VKks_avENO1BgNz7BsJ6vPG9n4Gvjd5Ri_%3Dw120-h120-l90-rj",
+          "duration": "1:44"
+        }
+      ],
+      "buttons": [
+        {
+          "label": null,
+          "text": "Все",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Лучшие",
+          "className": "search-filter active"
+        },
+        {
+          "label": null,
+          "text": "Медиатека",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "YouTube Music",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "SoundCloud",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Deezer",
+          "className": "search-filter"
+        },
+        {
+          "label": "Действия с треком ночное кафе",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком type london",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком sleep mode",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком one way ticket",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком red weather",
+          "text": "",
+          "className": "track-item-menu"
+        }
+      ]
+    }
+  },
+  {
+    "status": "fulfilled",
+    "value": {
+      "query": "cachalot",
+      "url": "http://localhost/search",
+      "text": "Все\nЛучшие\nМедиатека\nYouTube Music\nSoundCloud\nDeezer\nЛучшие совпадения\ncachalotE\nONDA ANDAR\n2:01\nCachalot\nJenny Kelly\n1:01\nCachalot\nKolzoch/\n3:28\nCachalot\nLes Pics À Flore\n3:25\nLe grand cachalot\nCompagnie la Rustine\n1:26",
+      "authenticated": false,
+      "rows": [
+        {
+          "title": "cachalot",
+          "artist": "ONDA ANDAR",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2Ft-SKqLnZDmz91qINWORWycgJX31L8N8K6kh7egWi9LOM3uEeqgGNuO2HjvzqvAuXtmyuuWDmGr9dBX4%3Dw120-h120-l90-rj",
+          "duration": "2:01"
+        },
+        {
+          "title": "Cachalot",
+          "artist": "Jenny Kelly",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2F0T7nxdCQj_oMR7oUICwKBsuuzitIPtUdzf5c21u82vRt6DkSM2Y24dZPw6F34sJ_Enp5UGDH2Bii8jOIlQ%3Dw120-h120-l90-rj",
+          "duration": "1:01"
+        },
+        {
+          "title": "Cachalot",
+          "artist": "Kolzoch/",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FGfw0geEqiza5XnCbbm0lgglq1BJAn5UcWuD--Bkl84AvrUcUXjT7a_zqetFSTDhBEYe7O8STQkw-ZJdBiA%3Dw120-h120-l90-rj",
+          "duration": "3:28"
+        },
+        {
+          "title": "Cachalot",
+          "artist": "Les Pics À Flore",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2FPmsiQ-oJ8ae1wP6zbmC1cFWP9n_aSz7Sv-UEPsgydHfEMgnBwRLyTafuColj-xBYPbI2V-W6HNiG5pO6%3Dw120-h120-l90-rj",
+          "duration": "3:25"
+        },
+        {
+          "title": "Le grand cachalot",
+          "artist": "Compagnie la Rustine",
+          "cover": "http://localhost/api/tracks/cover-proxy?url=https%3A%2F%2Fyt3.googleusercontent.com%2Fib_U1Z7WHdbHrxroiy692r7dc3x0v_hniC6wDkCH-289g4jMqkAi9jMF3iq8VnJkp6o78LWuDGb2V69r%3Dw120-h120-l90-rj",
+          "duration": "1:26"
+        }
+      ],
+      "buttons": [
+        {
+          "label": null,
+          "text": "Все",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Лучшие",
+          "className": "search-filter active"
+        },
+        {
+          "label": null,
+          "text": "Медиатека",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "YouTube Music",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "SoundCloud",
+          "className": "search-filter"
+        },
+        {
+          "label": null,
+          "text": "Deezer",
+          "className": "search-filter"
+        },
+        {
+          "label": "Действия с треком cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком Cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком Cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком Cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        },
+        {
+          "label": "Действия с треком Le grand cachalot",
+          "text": "",
+          "className": "track-item-menu"
+        }
+      ]
+    }
+  }
+]

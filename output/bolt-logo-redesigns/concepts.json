@@ -1,0 +1,82 @@
+[
+  {
+    "name": "split-heart",
+    "title": "Геометрическое сердце с импульсом-молнией",
+    "kind": "split-heart"
+  },
+  {
+    "name": "bolt-b",
+    "title": "Монограмма B с диагональной молнией",
+    "kind": "bolt-b"
+  },
+  {
+    "name": "wave-heart",
+    "title": "Сердце, собранное из звуковой волны",
+    "kind": "wave-heart"
+  },
+  {
+    "name": "play-bolt",
+    "title": "Кнопка play, рассечённая молнией",
+    "kind": "play-bolt"
+  },
+  {
+    "name": "vinyl-bolt",
+    "title": "Виниловая пластинка с молнией-дорожкой",
+    "kind": "vinyl-bolt"
+  },
+  {
+    "name": "headphones-heart",
+    "title": "Наушники, образующие сердце",
+    "kind": "headphones-heart"
+  },
+  {
+    "name": "note-bolt",
+    "title": "Музыкальная нота со стержнем-молнией",
+    "kind": "note-bolt"
+  },
+  {
+    "name": "infinity-pulse",
+    "title": "Бесконечный музыкальный поток с импульсом",
+    "kind": "infinity-pulse"
+  },
+  {
+    "name": "speaker-heart",
+    "title": "Динамик с сердцем в центре",
+    "kind": "speaker-heart"
+  },
+  {
+    "name": "ear-bolt",
+    "title": "Абстрактное ухо с молнией внутри",
+    "kind": "ear-bolt"
+  },
+  {
+    "name": "orbital-b",
+    "title": "Монограмма B на музыкальной орбите",
+    "kind": "orbital-b"
+  },
+  {
+    "name": "spark-beat",
+    "title": "Искра-бит с вырезом в форме сердца",
+    "kind": "spark-beat"
+  },
+  {
+    "name": "wing-bolt",
+    "title": "Молния между двумя звуковыми крыльями",
+    "kind": "wing-bolt"
+  },
+  {
+    "name": "equalizer-b",
+    "title": "Эквалайзер, складывающийся в букву B",
+    "kind": "equalizer-b"
+  },
+  {
+    "name": "ribbon-b",
+    "title": "Непрерывная лента B с острым энергетическим хвостом",
+    "kind": "ribbon-b"
+  },
+  {
+    "name": "final-hybrid",
+    "title": "Финальный гибрид: B, сердце и молния одним знаком",
+    "kind": "final-hybrid"
+  }
+]

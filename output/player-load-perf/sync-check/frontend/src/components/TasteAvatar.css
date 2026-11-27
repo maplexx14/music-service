@@ -1,0 +1,35 @@
+.taste-avatar {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 50%;
+  /* Без изоляции слои с transform в Safari вылезают за скругление. */
+  isolation: isolate;
+}
+
+.taste-avatar-orbit {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--start));
+}
+
+.taste-avatar-blob {
+  position: absolute;
+  border-radius: 50%;
+}
+
+/* Затемнение ауры, чтобы металл читался на светлых пятнах. */
+.taste-avatar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.taste-avatar svg {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}

@@ -735,6 +735,43 @@ def test_flow_liked_quota_takes_one_track_per_artist(client, db):
     assert len(set(liked_artists)) == len(liked_artists), liked_artists
 
 
+def test_flow_opening_portion_has_no_artist_repeats(client, db, monkeypatch):
+    """Открытие волны не должно повторять артиста: лайв-путь собирает широкий пул.
+
+    Прод, 2026-11-25: с главной уходит прогрев на ``limit`` треков, и раньше
+    лайв-путь собирал ровно столько же кандидатов. Если рейтинг тянул один
+    артист, заменять его повторы было нечем — волна открывалась несколькими
+    его треками подряд. Теперь лайв-путь считает пул на несколько выдач, как
+    предрасчёт, и порция выбирается из него с разносом.
+    """
+    user = create_user(db, username="flow-wide-pool-user")
+    _liked(db, user, artist="Dominant", title="dominant-liked")
+    db.add_all([
+        Track(title=f"dominant-{i}", artist="Dominant", duration=100,
+              source="local", file_path=f"minio://music/dom-{i}.mp3")
+        for i in range(10)
+    ] + [
+        Track(title=f"other-{i}", artist=f"Other {i % 8}", duration=100,
+              source="local", file_path=f"minio://music/oth-{i}.mp3")
+        for i in range(20)
+    ])
+    db.commit()
+
+    def _score(item, **kwargs):
+        return 100.0 if getattr(item, "artist", None) == "Dominant" else 1.0
+
+    monkeypatch.setattr("app.routers.flow.score_track", _score)
+    response = client.get(
+        "/api/recommendations/flow?limit=8",
+        headers=auth_headers(client, username="flow-wide-pool-user"),
+    )
+    assert response.status_code == 200, response.text
+    artists = [track["artist"] for track in response.json()]
+    assert len(artists) == 8, artists
+    assert all(left != right for left, right in zip(artists, artists[1:])), artists
+    assert len(set(artists)) == len(artists), artists
+
+
 def test_flow_returns_liked_tracks_the_user_has_already_played(client, db):
     """Остывший лайк возвращается в поток, даже если он весь в recent_ids.
 

@@ -1,0 +1,1679 @@
+import { isUuid, getTrackDbId } from '../utils/identifiers'
+import { create } from 'zustand'
+import api from '../services/api'
+import { invalidateCache, patchCache, peekCache, LIKED_CACHE_KEY } from '../services/pageCache'
+import { isDislikedTrack, queueStep, trackKeys } from '../utils/playerQueue'
+import { downloadedTracks, offlineTrackKey } from '../services/offlineTracks'
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
+
+function shuffleArray(arr) {
+  const result = [...arr]
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
+// Ключ прогрева резолва трека — зеркалит логику prefetchTracks. Нужен, чтобы
+// понять, завершился ли резолв трека (см. isTrackResolved).
+// Возвращает null для локальных/несписочных треков: им резолв не нужен, они
+// «готовы» всегда.
+function prefetchKeyFor(track) {
+  if (!track) return null
+  if (track.source === 'ytmusic') {
+    const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+    return externalId ? `yt:${externalId}` : null
+  }
+  if (track.source === 'soundcloud') {
+    const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
+    return token ? `sc:${token}` : null
+  }
+  return null
+}
+
+// Ключ идентификации трека для индикации лайка. У записей из БД (UUID
+// id/db_id) — стабильный db-ключ; у внешних (строчный id вида «ytmusic:...»)
+// — source + external_id. Нужен, чтобы залить сердечко ОПТИМИСТИЧНО ещё до
+// материализации внешнего трека в БД (см. toggleLikeForTrack).
+function trackLikeKey(track) {
+  if (!track) return null
+  if (isUuid(track.id)) return `db:${track.id}`
+  if (isUuid(track.db_id)) return `db:${track.db_id}`
+  const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+  return externalId ? `${track.source}:${externalId}` : null
+}
+
+// Готов ли трек к мгновенному старту: его резолв на бэке уже завершён, либо
+// резолв ему не нужен вовсе (локальный трек — prefetchKeyFor даёт null).
+function isTrackResolved(track) {
+  const key = prefetchKeyFor(track)
+  return !key || resolvedPrefetchKeys.has(key)
+}
+
+// Кэш страницы «Понравившиеся» (services/pageCache) следует за лайками,
+// поставленными где угодно: иначе возврат на неё сперва рисовал прошлый
+// список, и свежий трек появлялся только после фонового запроса. Лайкнутый
+// трек ставится в начало — там же его ставит бэк (position = max+1).
+function syncLikedPageCache(trackId, liked, track = null) {
+  const cached = peekCache(LIKED_CACHE_KEY)
+  if (!cached) return
+  const rest = cached.playlist.tracks.filter((t) => t.id !== trackId)
+  const removed = cached.playlist.tracks.length - rest.length
+  const known = track && (track.id === trackId || track.db_id === trackId)
+  if (liked && !known) {
+    // Нечего нарисовать — пусть страница честно сходит в сеть.
+    invalidateCache(LIKED_CACHE_KEY)
+    return
+  }
+  patchCache(LIKED_CACHE_KEY, {
+    playlist: {
+      ...cached.playlist,
+      tracks: liked ? [{ ...track, id: trackId }, ...rest] : rest,
+    },
+    // Снятие трека за первой страницей total не трогает: открытая страница
+    // уже вычла его сама и записала в кэш, второй раз вычесть нельзя, а
+    // остальное поправит фоновый запрос (X-Total-Count).
+    total: liked ? cached.total + (removed ? 0 : 1) : Math.max(0, cached.total - removed),
+  })
+}
+
+// Трек-левел дедуп прогрева резолва (см. prefetchTracks) — переживает
+// ре-рендеры компонентов, но не персистится между перезагрузками страницы
+// (это нормально: кэш на бэке в Redis всё равно тёплый). Ключ → момент
+// запроса: повтор через PREFETCH_REPEAT_MS снова идёт на бэк — прогрев кладёт
+// архивный трек в дисковый кэш, а тот за часы прослушивания вытесняет давно
+// прогретое.
+const requestedPrefetchIds = new Map()
+const PREFETCH_REPEAT_MS = 20 * 60 * 1000
+
+function claimPrefetch(key) {
+  const at = requestedPrefetchIds.get(key)
+  if (at && Date.now() - at < PREFETCH_REPEAT_MS) return false
+  requestedPrefetchIds.set(key, Date.now())
+  return true
+}
+
+// Ключи треков, для которых прогрев резолва на бэке УЖЕ ЗАВЕРШИЛСЯ (POST
+// вернулся). Set держим на уровне модуля, чтобы переживал ре-рендеры.
+const resolvedPrefetchKeys = new Set()
+
+// Предзагрузка потока рекомендаций (см. preloadFlow/startFlow):
+// дедуп летящего запроса + TTL свежести предзагруженного списка.
+let flowPreloadPromise = null
+let flowPreloadGeneration = 0
+let flowExtendRequest = null
+const FLOW_PRELOAD_TTL_MS = 5 * 60 * 1000
+// Порции волны короче и чаще: каждая выдача выбирается на бэке из готового
+// пула под сигналы сессии (sess), и чем меньше треков уже стоит в очереди,
+// тем быстрее скип или лайк меняет то, что заиграет дальше. Раньше порция
+// была 15 и догружалась за 8 до конца — сигнал доходил через 8–15 треков.
+// Готовый пул отдаётся за десятки мс, поэтому запаса в 4 трека хватает.
+const FLOW_START_LIMIT = 8
+const FLOW_EXTEND_LIMIT = 6
+const FLOW_EXTEND_LEAD = 4
+// Сколько последних сигналов волны отправлять в sess (см. flow_session.py).
+const FLOW_SESSION_MAX = 30
+// Разрыв больше этого — прошлая сессия: её сигналы в sess не идут, иначе
+// артист, скипнутый вчера вечером, оставался бы «отвергнутым» и сегодня.
+const FLOW_SESSION_GAP_MS = 30 * 60 * 1000
+// Скип быстрый, если звука не было или он шёл меньше этого.
+const FLOW_FAST_SKIP_MS = 10 * 1000
+// Столько быстрых скипов подряд — и волна просит порцию спасения (rescueFlow).
+const FLOW_RESCUE_STREAK = 3
+const FLOW_PROTECTED_ARTIST_SKIP_LIMIT = 3
+const FLOW_NEGATIVE_CODES = new Set(['n', 's', 'd'])
+const FLOW_POSITIVE_CODES = new Set(['l', 'c', 'f'])
+// Переходы, которые сделал плеер, а не слушатель: ошибка воспроизведения и
+// конец потока раньше 25% длительности. В сигналы сессии они не идут.
+const FLOW_AUTO_ADVANCE = new Set(['error', 'ended'])
+
+// Ключ артиста для сигналов волны — зеркало primary_artist_key
+// (backend/app/diversity.py): первый участник коллаба, регистр и пробелы сведены.
+const FLOW_COLLAB_SPLIT_RE = /\s*,\s*|\s+(?:&|x|vs\.?|feat\.?|ft\.?)\s+/i
+
+function flowArtistKey(name) {
+  const first = (name || '').trim().split(FLOW_COLLAB_SPLIT_RE)[0] || ''
+  return first.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function invalidateFlowPreload() {
+  flowPreloadGeneration += 1
+  usePlayerStore.setState({ flowPreload: null, flowPreview: null })
+}
+
+function recommendationTrackPayload(track, eventType, value, metadata = null) {
+  // Generic playback already feeds /play, /listen and /skip.  This stream is
+  // specifically for attribution to a delivered recommendation; rows without
+  // a request id cannot be evaluated and only duplicate the generic signals.
+  if (!track?.recommendation_id || !eventType) return null
+  const localId =
+    getTrackDbId(track)
+  const rawId = typeof track.id === 'string' ? track.id : ''
+  const externalId =
+    track.external_id ?? (rawId.includes(':') ? rawId.split(':').slice(1).join(':') : null)
+  return {
+    event_type: eventType,
+    track_id: localId || undefined,
+    source: track.source || (localId ? 'local' : undefined),
+    external_id: externalId || undefined,
+    title: track.title || undefined,
+    artist: track.artist || undefined,
+    value: value == null ? undefined : Number(value),
+    surface: track.recommendation_surface || undefined,
+    position: Number.isInteger(track.recommendation_position)
+      ? track.recommendation_position
+      : undefined,
+    request_id: track.recommendation_id || undefined,
+    algorithm_version: track.recommendation_model_version || undefined,
+    client_hour: new Date().getHours(),
+    metadata: metadata || undefined,
+  }
+}
+
+// Recommendation telemetry must never make playback controls fail. The call
+// is intentionally fire-and-forget; the server keeps external identity even
+// when materialisation is still pending.
+function postRecommendationEvent(track, eventType, value = null, metadata = null) {
+  if (usePlayerStore.getState().guestMode) return Promise.resolve()
+  const payload = recommendationTrackPayload(track, eventType, value, metadata)
+  if (!payload) return Promise.resolve()
+  return api
+    .post('/recommendations/events', payload, { skipErrorToast: true })
+    .catch(() => {})
+}
+
+// Сколько трека реально прозвучало и был ли звук вообще. Скип до первого
+// звука — осознанный отказ по названию и обложке, а не сбой: сохраняем его
+// отдельно, чтобы ранкер мог отличать «отказ по метаданным» от «послушал и
+// ушёл».
+function playbackMetadata(state) {
+  const { currentTrack, currentTime, audibleTrackId, startup } = state
+  const meta = {
+    played_ms: Math.max(0, Math.round((currentTime || 0) * 1000)),
+    audible: currentTrack?.id != null && audibleTrackId === currentTrack.id,
+  }
+  // Сколько трек ждал первого звука — замер скорости загрузки у живых
+  // слушателей (см. noteTrackAudible).
+  if (startup && currentTrack?.id != null && startup.trackId === currentTrack.id) {
+    meta.start_ms = startup.ms
+    meta.start_swap = startup.swap
+    meta.start_bg = startup.bg
+  }
+  return meta
+}
+
+// Момент смены трека — точка отсчёта времени до первого звука. Пишется
+// подпиской, а не в экшенах: трек меняет десяток путей (клик, скип, конец
+// трека, поток, восстановление очереди). Смена на паузе не в счёт: звук там
+// ждёт нажатия ▶, а не сети.
+let trackSwitch = { id: null, at: 0, playing: false }
+
+// Первый звук трека: сколько прошло от смены трека. swap — трек играл с
+// прогретого второго элемента (мгновенный путь), bg — старт в фоне (там
+// WebKit сам тормозит загрузку, такие замеры не про сеть).
+function noteTrackAudible(trackId, { swap = false } = {}) {
+  if (trackId == null || trackSwitch.id !== trackId || !trackSwitch.playing) return
+  const ms = Math.round(performance.now() - trackSwitch.at)
+  trackSwitch = { ...trackSwitch, playing: false }
+  usePlayerStore.setState({
+    startup: { trackId, ms, swap, bg: typeof document !== 'undefined' && document.hidden },
+  })
+}
+
+function recordRecommendationImpression(track, metadata = null) {
+  return postRecommendationEvent(track, 'impression', null, metadata)
+}
+
+// --- Постраничная очередь (см. queuePager / extendQueueIfNeeded) ---
+// Страница плейлиста рисует треки не все сразу, а страницами по мере прокрутки,
+// и в очередь плеера попадало ровно то, что она успела загрузить. Поэтому
+// воспроизведение вставало на последнем загруженном треке: для плеера это был
+// конец очереди, хотя в плейлисте оставались треки. Ленивую загрузку это не
+// отменяет — просто хвост очереди плеер дотягивает сам, независимо от того,
+// докуда доскроллил пользователь.
+//
+// Страницу берём крупнее, чем у списка на экране (20): очередь ничего не
+// рисует и обложек не тянет, так что дешевле сходить реже и с большим запасом.
+const QUEUE_PAGE_SIZE = 50
+// За сколько треков до конца очереди идём за следующей страницей. Запас нужен
+// не для одного перехода, а на случай серии быстрых скипов подряд.
+const QUEUE_EXTEND_LEAD = 5
+// Дедуп летящей догрузки. Промис отдаётся наружу: тому, кто упёрся в конец
+// очереди прямо сейчас (см. handleEnded в Player.jsx), важно дождаться
+// реального прибытия хвоста — в том числе когда запрос стартовал до его вызова.
+let queueExtendPromise = null
+
+// Сколько треков «Перемешать» на странице плейлиста забирает перед стартом
+// (см. shufflePlaylist). 100 — максимум страницы на бэке (limit le=100).
+const SHUFFLE_WINDOW = 100
+
+// Монотонный id позволяет обработчику перемотки сбросить именно тот запрос,
+// который он применил, не затерев более свежий seek из следующего рендера.
+let seekRequestSequence = 0
+
+// Запись скипа — негативный сигнал для рекомендаций, поэтому важно не терять
+// его молча на сетевой ошибке (как было раньше с голым .catch(() => {})).
+// Несколько попыток с небольшой задержкой; skipErrorToast, чтобы фоновая
+// телеметрия не спамила пользователя тостами при временных сбоях сети.
+function postSkipWithRetry(dbId, attemptsLeft = 3, delayMs = 500) {
+  api
+    .post(`/tracks/${dbId}/skip`, null, { skipErrorToast: true })
+    .catch((error) => {
+      if (attemptsLeft > 1) {
+        setTimeout(() => postSkipWithRetry(dbId, attemptsLeft - 1, delayMs * 2), delayMs)
+      } else {
+        console.error('Failed to record skip after retries:', error)
+      }
+    })
+}
+
+// Событие прослушивания с финальной долей дослушивания (0..1) и локальным
+// часом клиента — питает completion-веса и контекст времени суток в
+// рекомендациях (POST /tracks/{id}/listen). Фоновая телеметрия: ошибки
+// не показываем и не ретраим агрессивно (в отличие от скипа, сигнал
+// не бинарный и следующее событие быстро компенсирует потерю).
+function postListenEvent(dbId, completion) {
+  api
+    .post(
+      `/tracks/${dbId}/listen`,
+      {
+        completion: Math.max(0, Math.min(1, completion)),
+        client_hour: new Date().getHours(),
+      },
+      { skipErrorToast: true },
+    )
+    .catch(() => {})
+}
+
+// Громкость — настройка устройства, а не аккаунта: на ноутбуке и телефоне
+// она разная, поэтому localStorage, а не профиль на сервере. Хранится всегда,
+// независимо от «Запоминать плеер» — тот про очередь и позицию.
+const VOLUME_KEY = 'player-volume'
+
+const clampVolume = (value) => Math.max(0, Math.min(1, value))
+
+const loadVolume = () => {
+  try {
+    const stored = parseFloat(localStorage.getItem(VOLUME_KEY))
+    return Number.isFinite(stored) ? clampVolume(stored) : 1
+  } catch {
+    return 1
+  }
+}
+
+// Экран, с которого запустили очередь: play* зовут только страницы, и в момент
+// нажатия адрес — это экран под пальцем.
+function capturePlayContext(source, track, context = {}) {
+  return {
+    kind: context.kind || source || null,
+    path: context.path ?? (typeof window !== 'undefined' ? window.location.pathname : null),
+    title: context.title ?? (source === 'album' ? track?.album || null : null),
+    ...(context.offline ? { offline: true } : {}),
+  }
+}
+
+function queueTrackState(state, step) {
+  const currentTrack = state.queue[step.index]
+  const entersFlow = state.flowStartIndex != null && step.index >= state.flowStartIndex
+  return {
+    currentTrack, currentIndex: step.index, currentShuffleIndex: step.shuffleIndex,
+    isPlaying: true, currentTime: 0, seekRequest: null,
+    ...(entersFlow ? {
+      source: 'flow', flowActive: true, flowStartIndex: null,
+      playContext: capturePlayContext('flow', currentTrack),
+    } : {}),
+  }
+}
+
+const telemetryText = (value, limit) => value == null ? undefined : String(value).slice(0, limit)
+
+const usePlayerStore = create((set, get) => ({
+  guestMode: false,
+  requireAccount: () => {
+    if (!get().guestMode) return true
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('guest:registration-required'))
+    return false
+  },
+  currentTrack: null,
+  queue: [],
+  currentIndex: -1,
+  shuffledOrder: [],
+  currentShuffleIndex: -1,
+  isPlaying: false,
+  source: null,
+  // Откуда запущена очередь — для статуса в админке («в волне», «из плейлиста»).
+  // kind — тип подборки, path — экран, где нажали play (ставится в playTrack/
+  // playPlaylist; переходы по очереди его не трогают), title — имя, если оно
+  // есть под рукой (плейлист, артист, альбом). Контекст сохраняется со снимком
+  // плеера и служит подписью очереди на главной.
+  playContext: null,
+  volume: loadVolume(),
+  currentTime: 0,
+  duration: 0,
+  // id трека, для которого уже можно грузить hi-res обложку. Ставит Player
+  // после первого звука (с форой буферу): до этого сотни КБ картинки качались
+  // бы параллельно с первыми байтами аудио и на узком канале задерживали старт.
+  heavyCoverTrackId: null,
+  // id трека, у которого уже пошёл звук ('playing'). Ставит Player.
+  audibleTrackId: null,
+  // Замер старта текущего трека: { trackId, ms, swap, bg } (см. noteTrackAudible).
+  startup: null,
+  // Сигналы волны этой сессии: [{ code, id }] — n/s скип до/после звука,
+  // c дослушал от 55%, f от 80%, l лайк, d дизлайк. Уходят на бэк параметром sess.
+  flowSession: [],
+  isFullScreen: false,
+  isRepeatOne: false,
+  isShuffle: false,
+  likedTrackIds: [],
+  likedTracksLoaded: false,
+  // Момент, когда бэк подтвердил новый лайк: страница «Понравившиеся» по нему
+  // перезапрашивает список. По оптимистичному likedTrackIds рано — запрос
+  // обгонял POST и приходил без трека.
+  likeConfirmedAt: 0,
+  likedTracksLoading: false,
+  // Ключи внешних треков (trackLikeKey), чей лайк сейчас «летит»: трек ещё не
+  // материализован в БД, но сердечко уже должно быть залито. Пустеет по
+  // завершении — к тому моменту db-трек уже в likedTrackIds.
+  pendingLikeKeys: [],
+  dislikedTrackIds: [],
+  dislikedTrackKeys: [],
+  dislikedTracksLoaded: false,
+  dislikedTracksLoading: false,
+
+  setCurrentTrack: (track) => {
+    set({ currentTrack: track, currentTime: 0, seekRequest: null })
+  },
+
+  // Намерение пользователя — до await, смены очереди и первого звука.
+  // Этот журнал не участвует в счётчиках прослушиваний и рекомендациях.
+  recordPlayClick: (action, { track = null, source = null, via = action, queueLength = null } = {}) => {
+    if (get().guestMode || isOffline()) return
+    try {
+      const state = get()
+      const rawId = typeof track?.id === 'string' ? track.id : ''
+      const externalId = track?.external_id ?? (rawId.includes(':') ? rawId.split(':').slice(1).join(':') : null)
+      const position = action === 'resume' && Number.isFinite(state.currentTime) ? Math.max(0, state.currentTime) : 0
+      api.post('/users/me/play-click', {
+        action,
+        via: telemetryText(via, 40),
+        path: typeof window !== 'undefined' ? telemetryText(window.location.pathname, 300) : undefined,
+        source: telemetryText(source, 40),
+        track_id: telemetryText(track?.id ?? track?.db_id, 200),
+        track_source: telemetryText(track?.source, 40),
+        external_id: telemetryText(externalId, 512),
+        title: telemetryText(track?.title, 512),
+        artist: telemetryText(track?.artist, 512),
+        position,
+        queue_length: queueLength,
+        was_playing: state.isPlaying,
+        flow_loading: state.flowLoading,
+        client_time: new Date().toISOString(),
+        build: import.meta.env.VITE_BUILD_TIME,
+      }, { skipErrorToast: true, skipAuthRedirect: true, timeout: 5000 }).catch(() => {})
+    } catch {
+      // Диагностика не должна мешать Play, даже если запрос не удалось создать.
+    }
+  },
+
+  // Материализует произвольный внешний трек в БД (для лайков/плейлистов).
+  // Возвращает UUID локальной записи. Идемпотентно на бэке.
+  // Материализованные треки возвращаются как есть.
+  materializeTrack: async (track) => {
+    if (!get().requireAccount()) return null
+    if (!track) return null
+    if (isUuid(track.id)) return track.id
+    if (isUuid(track.db_id)) return track.db_id
+
+    const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+    const { data } = await api.post('/tracks/import', {
+      source: track.source,
+      external_id: externalId,
+      title: track.title,
+      artist: track.artist,
+      album: track.album ?? null,
+      duration: track.duration || 0,
+      cover_url: track.cover_url ?? null,
+      stream_url: track.stream_url ?? null,
+    })
+    return data.id
+  },
+
+  // Материализует текущий внешний трек в БД (для лайков/плейлистов/истории).
+  // Возвращает UUID локальной записи. Идемпотентно на бэке.
+  materializeCurrentTrack: async () => {
+    if (!get().requireAccount()) return null
+    const { currentTrack } = get()
+    if (!currentTrack) return null
+    if (isUuid(currentTrack.id)) return currentTrack.id
+  
+    const externalId =
+      currentTrack.external_id ?? String(currentTrack.id).split(':').slice(1).join(':')
+    const { data } = await api.post('/tracks/import', {
+      source: currentTrack.source,
+      external_id: externalId,
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      album: currentTrack.album ?? null,
+      duration: currentTrack.duration || 0,
+      cover_url: currentTrack.cover_url ?? null,
+      stream_url: currentTrack.stream_url ?? null,
+    })
+
+    // Числовой id БД кладём в отдельное поле db_id, НЕ трогая id — иначе <audio>
+    // перезагрузится и трек начнётся заново. id остаётся ключом стриминга.
+    //
+    // Импорт — сетевой раундтрип (на проде секунды), и за это время юзер мог
+    // переключить трек. Раньше merged собирался из снимка ДО запроса и
+    // безусловно ставился в currentTrack: после скипа плеер возвращался на
+    // прошлый трек, как только импорт отвечал (его зовёт запись play на 60-й
+    // секунде). Вшиваем db_id в строки очереди этого трека, а currentTrack
+    // трогаем, только если играет всё ещё он — как toggleLikeForTrack.
+    const withDbId = (track) => ({
+      ...track,
+      db_id: data.id,
+      external_id: track.external_id ?? data.external_id,
+      stream_url: track.stream_url || data.stream_url,
+    })
+    set((state) => ({
+      currentTrack:
+        state.currentTrack && state.currentTrack.id === currentTrack.id
+          ? withDbId(state.currentTrack)
+          : state.currentTrack,
+      queue: state.queue.map((t) => (t.id === currentTrack.id ? withDbId(t) : t)),
+    }))
+    return data.id
+  },
+
+  // Лайк трека «как он есть»: у записи из БД — мгновенный оптимистичный
+  // toggleTrackLike; внешнему треку сначала нужно материализоваться
+  // (POST /tracks/import), что занимает сетевой раундтрип. Чтобы кнопка
+  // отзывалась без задержки, ключ попадает в pendingLikeKeys ДО похода в
+  // сеть — сердечко зальётся сразу и откатится только при ошибке.
+  // onMaterialized вызывается с db_id сразу после импорта, чтобы вызывающая
+  // страница успела записать его в свой локальный список ДО снятия
+  // pending-ключа (иначе между ними проскакивал кадр с незалитым сердцем).
+  toggleLikeForTrack: async (track, onMaterialized = null) => {
+    if (!get().requireAccount()) return null
+    if (!track) return null
+    const localId = isUuid(track.id) ? track.id : null
+    const dbId = localId ?? (isUuid(track.db_id) ? track.db_id : null)
+    if (dbId) {
+      await get().toggleTrackLike(dbId, track)
+      return dbId
+    }
+
+    const key = trackLikeKey(track)
+    if (!key) return null
+    if (get().pendingLikeKeys.includes(key)) return null // уже летит
+    set({ pendingLikeKeys: [...get().pendingLikeKeys, key] })
+    try {
+      const id = await get().materializeTrack(track)
+      if (!id) return null
+      // Лайкнут играющий сейчас трек — вшиваем db_id в него и в очередь
+      // (зеркалит materializeCurrentTrack): иначе следующий лайк/дизлайк
+      // этого же трека снова ждал бы материализации.
+      const state = get()
+      if (state.currentTrack && String(state.currentTrack.id) === String(track.id)) {
+        const merged = { ...state.currentTrack, db_id: id }
+        set((s) => ({
+          currentTrack: merged,
+          queue: s.queue.map((t) => (t.id === track.id ? merged : t)),
+        }))
+      }
+      onMaterialized?.(id)
+      await get().toggleTrackLike(id, track)
+      return id
+    } finally {
+      set((s) => ({ pendingLikeKeys: s.pendingLikeKeys.filter((k) => k !== key) }))
+    }
+  },
+
+  fetchLikedTracks: async () => {
+    if (get().guestMode) return
+    const { likedTracksLoaded, likedTracksLoading } = get()
+    if (likedTracksLoaded || likedTracksLoading) return
+
+    set({ likedTracksLoading: true })
+    try {
+      const response = await api.get('/tracks/me/liked/ids')
+      set({
+        likedTrackIds: response.data,
+        likedTracksLoaded: true,
+      })
+    } finally {
+      set({ likedTracksLoading: false })
+    }
+  },
+
+  toggleTrackLike: async (trackId, trackContext = null) => {
+    if (!get().requireAccount()) return
+    if (!trackId) return
+
+    const { likedTrackIds } = get()
+    const wasLiked = likedTrackIds.includes(trackId)
+    const nextLikedTrackIds = wasLiked
+      ? likedTrackIds.filter((id) => id !== trackId)
+      : [...likedTrackIds, trackId]
+
+    // Лайк снимает дизлайк (это же делает бэк в like_track): иначе строка в
+    // user_track_skips продолжала бы исключать трек из рекомендаций.
+    const { dislikedTrackIds, dislikedTrackKeys } = get()
+    const context = trackContext || get().currentTrack
+    const keys = [...trackKeys(context), `local:${trackId}`]
+    set({
+      likedTrackIds: nextLikedTrackIds,
+      likedTracksLoaded: true,
+      dislikedTrackIds: wasLiked
+        ? dislikedTrackIds
+        : dislikedTrackIds.filter((id) => id !== trackId),
+      dislikedTrackKeys: wasLiked ? dislikedTrackKeys : dislikedTrackKeys.filter((key) => !keys.includes(key)),
+    })
+
+    try {
+      if (wasLiked) {
+        await api.delete(`/tracks/${trackId}/like`)
+      } else {
+        await api.post(`/tracks/${trackId}/like`)
+      }
+      syncLikedPageCache(trackId, !wasLiked, context)
+      if (!wasLiked) set({ likeConfirmedAt: Date.now() })
+      if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, wasLiked ? 'unlike' : 'like')
+        if (!wasLiked) get()._noteFlowSignal(context, 'l')
+      }
+      invalidateFlowPreload()
+    } catch (error) {
+      set({ likedTrackIds, dislikedTrackIds, dislikedTrackKeys })
+      throw error
+    }
+  },
+
+  fetchDislikedTracks: async () => {
+    if (get().guestMode) return
+    const { dislikedTracksLoaded, dislikedTracksLoading } = get()
+    if (dislikedTracksLoaded || dislikedTracksLoading) return
+
+    set({ dislikedTracksLoading: true })
+    try {
+      const [ids, keys] = await Promise.all([
+        api.get('/tracks/me/disliked/ids'),
+        api.get('/tracks/me/disliked/keys'),
+      ])
+      set((state) => ({
+        dislikedTrackIds: [...new Set([...state.dislikedTrackIds, ...ids.data])],
+        dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...keys.data])],
+        dislikedTracksLoaded: true,
+      }))
+    } finally {
+      set({ dislikedTracksLoading: false })
+    }
+  },
+
+  // Дизлайк («не нравится»): трек уходит из рекомендаций и волны. Лайк при
+  // этом снимается и на бэке (см. dislike_track), поэтому чистим его и в
+  // локальном состоянии — иначе сердечко осталось бы залитым.
+  toggleTrackDislike: async (trackId, trackContext = null) => {
+    if (!get().requireAccount()) return
+    if (!trackId) return
+    const { dislikedTrackIds, dislikedTrackKeys, likedTrackIds } = get()
+    const wasDisliked = dislikedTrackIds.includes(trackId)
+    const context = trackContext || get().currentTrack
+    const keys = [...trackKeys(context), `local:${trackId}`]
+
+    set({
+      dislikedTrackIds: wasDisliked
+        ? dislikedTrackIds.filter((id) => id !== trackId)
+        : [...dislikedTrackIds, trackId],
+      dislikedTracksLoaded: true,
+      dislikedTrackKeys: wasDisliked
+        ? dislikedTrackKeys.filter((key) => !keys.includes(key))
+        : [...new Set([...dislikedTrackKeys, ...keys])],
+      likedTrackIds: wasDisliked ? likedTrackIds : likedTrackIds.filter((id) => id !== trackId),
+    })
+
+    try {
+      if (wasDisliked) {
+        await api.delete(`/tracks/${trackId}/dislike`)
+      } else {
+        await api.post(`/tracks/${trackId}/dislike`)
+      }
+      if (!wasDisliked && likedTrackIds.includes(trackId)) syncLikedPageCache(trackId, false)
+      if (!trackContext && context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, wasDisliked ? 'undislike' : 'dislike')
+        if (!wasDisliked) get()._noteFlowSignal(context, 'd')
+      }
+      invalidateFlowPreload()
+    } catch (error) {
+      set({ dislikedTrackIds, dislikedTrackKeys, likedTrackIds })
+      throw error
+    }
+  },
+
+  // Exclude provider aliases before navigation and asynchronous materialization.
+  markTrackDisliked: (track) => {
+    set((state) => ({
+      dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...trackKeys(track)])],
+    }))
+    invalidateFlowPreload()
+  },
+
+  // Явное удаление из понравившихся (всегда DELETE) — не зависит от того,
+  // загружен ли likedTrackIds. Для страницы «Понравившиеся».
+  removeLike: async (trackId) => {
+    if (!trackId) return
+    const { likedTrackIds } = get()
+    set({ likedTrackIds: likedTrackIds.filter((id) => id !== trackId) })
+    try {
+      await api.delete(`/tracks/${trackId}/like`)
+      syncLikedPageCache(trackId, false)
+      const context = get().currentTrack
+      if (context && (context.db_id === trackId || context.id === trackId)) {
+        postRecommendationEvent(context, 'unlike')
+      }
+      invalidateFlowPreload()
+    } catch (error) {
+      set({ likedTrackIds })
+      throw error
+    }
+  },
+
+  // Трек, который заиграет через `offset` позиций (с учётом шаффла), без
+  // побочных эффектов. offset=1 (по умолчанию) — следующий трек. Используется
+  // и для прогрева резолва на бэке (в т.ч. на несколько треков вперёд), и для
+  // ленивой подгрузки аудио-буфера следующего трека в плеере (см. Player.jsx).
+  getNextTrack: (offset = 1) => {
+    const state = get()
+    const step = queueStep(state, 1, offset)
+    return step ? state.queue[step.index] : null
+  },
+
+  // Трек, с которого уйдёт previousTrack() (с учётом шаффла), без побочных
+  // эффектов. Нужен карусели обложек в полноэкранном плеере.
+  getPrevTrack: () => {
+    const state = get()
+    const step = queueStep(state, -1)
+    return step ? state.queue[step.index] : null
+  },
+
+  // Заранее прогревает резолв на бэке для первых `count` треков списка (не
+  // дожидаясь ответа) — чтобы к моменту, когда <audio> реально попросит
+  // поток, yt-dlp/Redis-кэш уже был тёплым. Бэк дедуплицирует параллельные
+  // резолвы одного video_id (см. _inflight_resolves в ytdlp.py), так что
+  // прогрев текущего трека не конкурирует с его же реальным стримом за
+  // отдельный yt-dlp вызов. requestedPrefetchIds — трек-левел дедуп на
+  // фронте, чтобы одно и то же не гонялось повторно при ре-рендерах.
+  //
+  // ВАЖНО: POST /prefetch — fire-and-forget (ставит фоновую задачу и сразу
+  // отвечает "queued", см. schedule_prefetch на бэке). Поэтому «POST вернулся»
+  // НЕ значит «трек готов». Готовность узнаём отдельным поллингом
+  // GET /prefetch/{id}/ready — только он даёт настоящий сигнал готовности
+  // (см. _pollPrefetchReady / isTrackResolved).
+  prefetchTracks: (tracks, count = 1) => {
+    if (isOffline()) return
+    const list = (tracks || []).filter(Boolean).slice(0, count)
+    for (const track of list) {
+      if (track.source === 'ytmusic') {
+        const externalId = track.external_id ?? String(track.id).split(':').slice(1).join(':')
+        if (!externalId) continue
+        const key = `yt:${externalId}`
+        if (!claimPrefetch(key)) continue
+        api.post(`/ytdlp/prefetch/${externalId}`)
+          .then(() => get()._pollPrefetchReady(key, `/ytdlp/prefetch/${externalId}/ready`))
+          .catch(() => requestedPrefetchIds.delete(key))
+      } else if (track.source === 'soundcloud') {
+        // Токен резолва зашит в stream_url (.../soundcloud/stream/{token}).
+        const token = (track.stream_url || '').split('/soundcloud/stream/')[1]
+        if (!token) continue
+        const key = `sc:${token}`
+        if (!claimPrefetch(key)) continue
+        api.post(`/soundcloud/prefetch/${token}`)
+          .then(() => get()._pollPrefetchReady(key, `/soundcloud/prefetch/${token}/ready`))
+          .catch(() => requestedPrefetchIds.delete(key))
+      }
+    }
+  },
+
+  // Поллит GET /prefetch/{id}/ready, пока бэк не подтвердит, что резолв трека
+  // реально готов (URL в Redis или кэш-файл на диске) — тогда помечает ключ
+  // готовым. Лёгкий запрос (без запуска работы на бэке), интервал ~600 мс,
+  // кап попыток, чтобы зависший резолв не поллился вечно. При исчерпании
+  // попыток ключ всё равно помечаем готовым.
+  _pollPrefetchReady: (key, readyUrl) => {
+    if (!key || resolvedPrefetchKeys.has(key)) return
+    const POLL_INTERVAL_MS = 600
+    const MAX_ATTEMPTS = 40 // ~24 c потолок
+    let attempts = 0
+    const tick = () => {
+      if (resolvedPrefetchKeys.has(key)) return
+      attempts += 1
+      api
+        .get(readyUrl, { skipErrorToast: true })
+        .then(({ data }) => {
+          if (data?.ready) {
+            get()._markPrefetchResolved(key)
+          } else if (attempts < MAX_ATTEMPTS) {
+            setTimeout(tick, POLL_INTERVAL_MS)
+          } else {
+            get()._markPrefetchResolved(key) // не запираем навсегда
+          }
+        })
+        .catch(() => {
+          if (attempts < MAX_ATTEMPTS) setTimeout(tick, POLL_INTERVAL_MS)
+          else get()._markPrefetchResolved(key)
+        })
+    }
+    tick()
+  },
+
+  // Прогрев резолва трека реально завершён (ready=True с бэка) — помечаем ключ
+  // готовым. Local/несписочные треки резолва не требуют — их prefetchKeyFor
+  // даёт null, и isTrackResolved считает их готовыми и без этой записи.
+  _markPrefetchResolved: (key) => {
+    if (!key) return
+    resolvedPrefetchKeys.add(key)
+  },
+
+  // Заранее прогревает резолв следующих в очереди треков на бэке, чтобы
+  // переключение началось мгновенно (без ожидания yt-dlp). Греем
+  // PREFETCH_WINDOW треков вперёд — при быстром пролистывании очереди (не
+  // только next-next) следующие треки тоже успевают попасть в Redis-кэш.
+  // Окно небольшое: каждый ytmusic-прогрев — резолв в YouTube, а объём
+  // резолвов с одного IP и вызывает bot-check.
+  prefetchNext: () => {
+    const PREFETCH_WINDOW = 2
+    const upcoming = Array.from({ length: PREFETCH_WINDOW }, (_, i) => get().getNextTrack(i + 1)).filter(Boolean)
+    get().prefetchTracks(upcoming, upcoming.length)
+  },
+
+  playTrack: (track, queue = [], source = null) => {
+    if (isOffline()) {
+      const selected = downloadedTracks([track])[0]
+      if (!selected) return
+      track = selected
+      queue = downloadedTracks(queue.length ? queue : [track])
+    }
+    get().recordPlayClick('track', { track, source, queueLength: queue.length || 1 })
+    const list = queue.length > 0 ? queue : [track]
+    const trackIndex = list.findIndex(t => t.id === track.id)
+    const { isShuffle } = get()
+    const order = isShuffle ? shuffleArray(list.map((_, i) => i)) : list.map((_, i) => i)
+    const shuffleIndex = isShuffle ? order.indexOf(trackIndex >= 0 ? trackIndex : 0) : trackIndex >= 0 ? trackIndex : 0
+    set({
+      currentTrack: track,
+      queue: list,
+      currentIndex: trackIndex >= 0 ? trackIndex : 0,
+      shuffledOrder: order,
+      currentShuffleIndex: isShuffle ? shuffleIndex : -1,
+      isPlaying: true,
+      source,
+      playContext: capturePlayContext(source, track),
+      flowActive: source === 'flow',
+      flowStartIndex: null,
+      flowPreview: null,
+      seekRequest: null,
+      // Очередь пришла целиком (поиск, карточка на главной) — тянуть нечего,
+      // а пейджер прежнего плейлиста дописал бы в неё чужие треки.
+      queuePager: null,
+    })
+    // Кликнутый трек прогреваем немедленно — не дожидаясь, пока до него
+    // дойдёт очередь через prefetchNext(). Дедуп на бэке (single-flight в
+    // _resolve_cached) не даёт этому конкурировать с реальным <audio>-GET.
+    // Заодно греем 2 следующих по очереди (с учётом шаффла) — переключение
+    // вперёд стартует мгновенно даже сразу после клика.
+    const upcoming = [track, get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean)
+    get().prefetchTracks(upcoming, upcoming.length)
+  },
+
+  // --- Персональный поток («Моя волна») ---
+  flowActive: false,
+  flowLoading: false,
+  // Рекомендации уже в хвосте, но название и режим очереди меняются только
+  // при переходе на первый трек потока.
+  flowStartIndex: null,
+  canContinueWithFlow: () => {
+    if (get().guestMode || isOffline()) return false
+    const { currentTrack, source, playContext } = get()
+    if (!currentTrack) return false
+    const kind = playContext?.kind || source
+    const path = playContext?.path || ''
+    return ['album', 'playlist', 'liked'].includes(kind) ||
+      path === '/liked' || path.startsWith('/albums/') || path.startsWith('/playlists/') ||
+      (kind === 'external' && (path.startsWith('/external/') || path === '/link'))
+  },
+  // Предзагруженный список потока: { tracks, ts }. Заполняется preloadFlow()
+  // (монтирование главной / hover по кнопке), потребляется startFlow().
+  flowPreload: null,
+  // The batch whose artwork has appeared on Home must also start playback.
+  flowPreview: null,
+  pinFlowPreview: (preload) => {
+    if (!get().currentTrack && !get().flowPreview && preload?.tracks?.length) {
+      set({ flowPreview: preload })
+    }
+  },
+
+  // Фоновая предзагрузка потока. Без неё клик по «потоку» ждал ДВЕ
+  // последовательные операции: расчёт рекомендаций на бэке
+  // (GET /recommendations/flow), а ЗАТЕМ холодный резолв первого трека
+  // (yt-dlp — единицы секунд). Теперь и список, и резолв первых треков
+  // греются заранее, и клик стартует почти мгновенно.
+  // Дедуп через flowPreloadPromise; TTL защищает от устаревшей выдачи
+  // (лайки/скипы после предзагрузки меняют рекомендации).
+  preloadFlow: () => {
+    if (get().guestMode) return Promise.resolve(null)
+    const { flowActive, flowPreload } = get()
+    if (flowActive) return
+    if (flowPreload && Date.now() - flowPreload.ts < FLOW_PRELOAD_TTL_MS) return
+    if (flowPreloadPromise) return
+    const generation = flowPreloadGeneration
+    flowPreloadPromise = api
+      .get('/recommendations/flow', {
+        // preload: прогрев могут так и не включить — бэк не пишет его в
+        // историю, которая исключает отданное из следующих порций.
+        params: {
+          limit: FLOW_START_LIMIT,
+          hour: new Date().getHours(),
+          sess: get()._flowSessionParam(),
+          preload: 1,
+        },
+        skipErrorToast: true,
+      })
+      .then(({ data }) => {
+        if (generation === flowPreloadGeneration && data && data.length > 0) {
+          set({ flowPreload: { tracks: data, ts: Date.now() } })
+          // Греем резолв первых двух треков заранее — к клику Redis уже тёплый.
+          get().prefetchTracks(data.slice(0, 2), 2)
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        flowPreloadPromise = null
+      })
+  },
+
+  startFlow: async (via = 'flow') => {
+    if (!get().requireAccount()) return
+    if (isOffline()) {
+      const { data } = await api.get('/recommendations/flow')
+      const tracks = downloadedTracks(data).filter((track) => !isDislikedTrack(get(), track))
+      if (!tracks.length) return false
+      set({ flowPreload: null, flowPreview: null, flowLoading: false })
+      get().playPlaylist(tracks, 0, 'flow', null, { recordClick: false, context: { kind: 'flow', offline: true } })
+      return true
+    }
+    get().recordPlayClick('flow', { source: 'flow', via })
+    if (get().flowLoading) return false
+    set({ flowLoading: true })
+    try {
+      // Если предзагрузка ещё летит (клик сразу после открытия страницы) —
+      // дожидаемся её вместо запуска дублирующего запроса.
+      let preview = !get().currentTrack ? get().flowPreview : null
+      if (!preview && flowPreloadPromise) {
+        try {
+          await flowPreloadPromise
+        } catch {
+          /* предзагрузка упала — ниже сходим за списком сами */
+        }
+      }
+
+      preview = !get().currentTrack ? get().flowPreview : null
+      // Мгновенный старт из предзагруженного списка: без ожидания
+      // расчёта рекомендаций, а резолв первого трека уже прогрет.
+      // Список потребляется (обнуляется), чтобы следующий запуск потока
+      // получил свежую выдачу с учётом новых сигналов.
+      const preload = preview || get().flowPreload
+      const tracks = (preload?.tracks || []).filter((track) => !isDislikedTrack(get(), track))
+      if (preload && (preview || Date.now() - preload.ts < FLOW_PRELOAD_TTL_MS) && tracks.length > 0) {
+        set({ flowPreload: null, flowPreview: null })
+        // Стартуем с трека, чей резолв УЖЕ завершён (preloadFlow греет первые
+        // два, ready-поллинг помечает готовность). Если первый ещё резолвится,
+        // а второй готов — начать со второго значит играть сразу вместо
+        // ожидания нескольких секунд; порядок потока при этом не важен, он
+        // и так перемешан на бэке. Ничего не готово — стартуем с нулевого.
+        // A visible preview fixes the first record and its two neighbors.
+        const startIndex = preview ? 0 : Math.max(tracks.findIndex(isTrackResolved), 0)
+        get().playPlaylist(tracks, startIndex, 'flow', null, {
+          recordClick: false, shufflePrefixLength: preview ? 3 : 0,
+        })
+        get().prefetchTracks(tracks.slice(0, 3), 3)
+        set({ flowActive: true })
+        return true
+      }
+
+      const { data } = await api.get('/recommendations/flow', {
+        params: { limit: FLOW_START_LIMIT, hour: new Date().getHours(), sess: get()._flowSessionParam() },
+      })
+      if (!data || data.length === 0) return false
+      get().playPlaylist(data, 0, 'flow', null, { recordClick: false })
+      // Прогреваем несколько треков вперёд, чтобы «Моя волна» шла без
+      // ожидания резолва на каждом переключении — это основной сценарий,
+      // где скорость важнее всего.
+      get().prefetchTracks(data.slice(0, 3), 3)
+      set({ flowActive: true })
+      return true
+    } finally {
+      set({ flowLoading: false })
+    }
+  },
+
+  // В конце подборки готовит поток, затем пополняет его обычным образом.
+  // Общий промис позволяет ended дождаться уже летящего запроса.
+  extendFlowIfNeeded: async () => {
+    const { flowActive, flowLoading, queue, queuePager, playContext } = get()
+    if (queuePager || (!flowActive && !get().canContinueWithFlow())) return false
+    if (get().getNextTrack(FLOW_EXTEND_LEAD)) return false
+    if (isOffline()) {
+      if (flowLoading) return false
+      set({ flowLoading: true })
+      try {
+        const { data } = await api.get('/recommendations/flow', {
+          params: { exclude: downloadedTracks().length > 1 ? get().queue.at(-1)?.id : '' },
+        })
+        const state = get()
+        if (state.playContext !== playContext || !state.flowActive || !state.currentTrack) return false
+        const tracks = downloadedTracks(data).filter((track) => !isDislikedTrack(state, track))
+        if (!tracks.length) return false
+        set((state) => {
+          const indices = tracks.map((_, i) => state.queue.length + i)
+          return { queue: [...state.queue, ...tracks], shuffledOrder: [...state.shuffledOrder, ...indices] }
+        })
+        return true
+      } finally { set({ flowLoading: false }) }
+    }
+    if (flowExtendRequest?.playContext === playContext) return flowExtendRequest.promise
+    if (flowLoading && !flowExtendRequest?.ownsLoading) return false
+
+    const previousRequest = flowExtendRequest
+    const request = { playContext, promise: null, ownsLoading: flowActive }
+    flowExtendRequest = request
+    // Подготовка хвоста не блокирует явное нажатие «поток» на главной.
+    if (flowActive || previousRequest?.ownsLoading) set({ flowLoading: flowActive })
+    request.promise = (async () => {
+      try {
+        // Исключаем то, что уже в очереди (хвост до 100 треков).
+        const exclude = queue.slice(-100).map((t) => t.id).join(',')
+        const { data } = await api.get('/recommendations/flow', {
+          params: {
+            limit: FLOW_EXTEND_LIMIT,
+            exclude,
+            hour: new Date().getHours(),
+            sess: get()._flowSessionParam(),
+            ...(!flowActive ? { preload: 1 } : {}),
+          },
+          skipErrorToast: true,
+        })
+        const state = get()
+        if (state.playContext !== playContext || !state.currentTrack) return false
+        const known = new Set(state.queue.flatMap(trackKeys))
+        const fresh = (data || []).filter((track) => {
+          const keys = trackKeys(track)
+          if (keys.some((key) => known.has(key)) || isDislikedTrack(state, track)) return false
+          keys.forEach((key) => known.add(key))
+          return true
+        })
+        if (fresh.length === 0) return false
+
+        get().prefetchTracks(fresh.slice(0, 2), 2)
+
+        set((state) => {
+          const startIdx = state.queue.length
+          const newIndices = fresh.map((_, i) => startIdx + i)
+          return {
+            queue: [...state.queue, ...fresh],
+            flowStartIndex: state.flowActive ? null : state.flowStartIndex ?? startIdx,
+            // При шаффле новые индексы дописываем в конец порядка вперемешку.
+            shuffledOrder: state.isShuffle
+              ? [...state.shuffledOrder, ...shuffleArray(newIndices)]
+              : [...state.shuffledOrder, ...newIndices],
+          }
+        })
+        return true
+      } catch (error) {
+        console.error('Flow extend error:', error)
+        return null
+      } finally {
+        if (flowExtendRequest === request) {
+          flowExtendRequest = null
+          if (request.ownsLoading) set({ flowLoading: false })
+        }
+      }
+    })()
+    return request.promise
+  },
+
+  // --- Постраничная очередь ---
+  // Откуда дотягивать хвост очереди: { url, params, total }. Ставится
+  // playPlaylist со страницы, которая грузит треки постранично; null означает
+  // «очередь полная, тянуть неоткуда» (поиск, волна, внешний плейлист).
+  queuePager: null,
+
+  // Дотягивает следующую страницу очереди, когда до её конца осталось меньше
+  // QUEUE_EXTEND_LEAD треков. Возвращает промис, который резолвится в true,
+  // если очередь реально выросла — вызывающему (handleEnded) это нужно, чтобы
+  // понять, появился ли следующий трек, или плейлист правда кончился. null —
+  // запрос упал (сеть): это НЕ конец плейлиста, пейджер цел и запрос можно
+  // повторить. Для проверок на истинность null и false равнозначны.
+  //
+  // Ленивую отрисовку списка на странице это не трогает: очередь живёт в store
+  // и ничего не рисует, поэтому её хвост можно тянуть независимо от того,
+  // докуда доскроллил пользователь.
+  extendQueueIfNeeded: async (force = false) => {
+    const { queuePager, queue, currentIndex, isShuffle, currentShuffleIndex } = get()
+    if (!queuePager) return false
+    if (queue.length >= queuePager.total) {
+      set({ queuePager: null })
+      return false
+    }
+    const pos = isShuffle ? currentShuffleIndex : currentIndex
+    if (!force && pos < queue.length - 1 - QUEUE_EXTEND_LEAD) return false
+    // Запрос уже летит — ждём его, а не запускаем второй за той же страницей.
+    if (queueExtendPromise) return queueExtendPromise
+
+    const skip = queue.length
+    queueExtendPromise = (async () => {
+      try {
+        const response = await api.get(queuePager.url, {
+          // cursor — смещение не по очереди, а по списку источника: у ссылки
+          // Spotify/Deezer часть треков не находится, и очередь короче списка.
+          params: { ...queuePager.params, skip: queuePager.cursor ?? skip, limit: QUEUE_PAGE_SIZE },
+          skipErrorToast: true,
+        })
+        const total = Number(response.headers['x-total-count']) || queuePager.total
+        // Гонка с самим собой: пока запрос летел, очередь могли сменить
+        // (playPlaylist с другого экрана) — тогда дописывать хвост некуда,
+        // он от прежнего плейлиста.
+        const state = get()
+        if (state.queuePager?.url !== queuePager.url || state.queue.length !== skip) return false
+
+        // Дедуп по id: пагинация идёт по смещению, и если плейлист правили
+        // прямо во время прослушивания, смещения съезжают и страница может
+        // вернуть уже знакомый трек. Одинаковых треков внутри плейлиста бэк
+        // не допускает (POST даёт 400), так что совпадение id — всегда съезд.
+        const known = new Set(state.queue.map((t) => t.id))
+        const fresh = (response.data?.tracks || []).filter((t) => !known.has(t.id))
+        const cursorMode = queuePager.cursor != null
+        const cursor = response.data?.next_offset ?? null
+        const cursorPager = cursor != null ? { ...queuePager, cursor } : null
+        if (fresh.length === 0) {
+          // По курсору пустая страница — ещё не конец: её треки могли просто
+          // не найтись. Конец — когда источник не дал следующего смещения.
+          if (cursorMode) {
+            set({ queuePager: cursorPager })
+            return false
+          }
+          // Тянуть больше нечего: плейлист кончился или укоротился, пока его
+          // слушали. Пейджер закрываем, иначе на каждом переходе ходили бы за
+          // страницей, которой нет.
+          set({ queuePager: null })
+          return false
+        }
+
+        set({
+          queue: [...state.queue, ...fresh],
+          // При шаффле новые индексы дописываем в конец порядка вперемешку —
+          // так же, как это делает extendFlowIfNeeded.
+          shuffledOrder: state.isShuffle
+            ? [...state.shuffledOrder, ...shuffleArray(fresh.map((_, i) => skip + i))]
+            : [...state.shuffledOrder, ...fresh.map((_, i) => skip + i)],
+          queuePager: cursorMode
+            ? cursorPager
+            : skip + fresh.length < total ? { ...queuePager, total } : null,
+        })
+        // Хвост приехал — греем резолв ближайших, иначе первый же переход в
+        // догруженную часть ждал бы холодный yt-dlp.
+        get().prefetchTracks(fresh, 2)
+        return true
+      } catch (error) {
+        console.error('Queue extend error:', error)
+        return null
+      } finally {
+        queueExtendPromise = null
+      }
+    })()
+    return queueExtendPromise
+  },
+
+  // Сначала весь плейлист (включая пустые страницы внешнего источника и
+  // страницы с одними дизлайками), затем поток. Ошибка сети не означает конец.
+  extendPlaybackQueueIfNeeded: async (force = false) => {
+    const playContext = get().playContext
+    let grew = false
+    while (get().queuePager) {
+      const { queue, queuePager } = get()
+      const result = await get().extendQueueIfNeeded(force)
+      if (get().playContext !== playContext) return false
+      if (result === null) return null
+      grew ||= result
+      if (!force || get().getNextTrack() || !get().queuePager) break
+      if (get().queue.length === queue.length && get().queuePager.cursor === queuePager.cursor) break
+    }
+    const extendingFlow = get().extendFlowIfNeeded()
+    // Приехавший трек плейлиста можно включать сразу, не дожидаясь потока.
+    if (force && get().getNextTrack()) return true
+    const flowGrew = await extendingFlow
+    return flowGrew === null ? null : grew || flowGrew
+  },
+
+  playPlaylist: (tracks, startIndex = 0, source = null, pager = null, {
+    recordClick = true, context, shufflePrefixLength = 0,
+  } = {}) => {
+    if (isOffline()) {
+      const selected = tracks[startIndex]
+      tracks = downloadedTracks(tracks)
+      startIndex = tracks.findIndex((track) => offlineTrackKey(track) === offlineTrackKey(selected))
+      if (startIndex < 0) return
+      pager = null
+    }
+    // startFlow/shufflePlaylist уже записали нажатие до своего запроса.
+    if (recordClick) get().recordPlayClick('playlist', { track: tracks[startIndex], source, queueLength: tracks.length })
+    if (tracks.length === 0) return
+    const { isShuffle } = get()
+    const indices = tracks.map((_, i) => i)
+    const order = isShuffle
+      ? [...indices.slice(0, shufflePrefixLength), ...shuffleArray(indices.slice(shufflePrefixLength))]
+      : indices
+    const idx = isShuffle ? order.indexOf(startIndex) : startIndex
+    const actualIndex = isShuffle ? order[idx] : startIndex
+    set({
+      currentTrack: tracks[actualIndex],
+      queue: tracks,
+      currentIndex: actualIndex,
+      shuffledOrder: order,
+      currentShuffleIndex: isShuffle ? idx : -1,
+      isPlaying: true,
+      source,
+      playContext: capturePlayContext(source, tracks[actualIndex], context),
+      flowActive: source === 'flow',
+      flowStartIndex: null,
+      flowPreview: null,
+      seekRequest: null,
+      // Пейджер описывает, откуда брать хвост очереди (см. extendQueueIfNeeded).
+      // Прошлый — всегда сбрасываем: он относился к прежнему списку, и дотянуть
+      // по нему хвост к новой очереди значит склеить два разных плейлиста.
+      queuePager: pager && pager.total > tracks.length ? { ...pager } : null,
+    })
+    get().prefetchTracks(
+      [tracks[actualIndex], get().getNextTrack(1), get().getNextTrack(2)].filter(Boolean),
+      3
+    )
+  },
+
+  // «Перемешать» со страницы плейлиста: включает случайный порядок и стартует
+  // с произвольного трека. Отдельное действие, а не toggleShuffle +
+  // playPlaylist: toggle выключил бы режим, если он уже включён, а playPlaylist
+  // начинает ровно с переданного индекса — то есть первый трек оказался бы не
+  // случайным.
+  //
+  // Страница отдаёт только загруженный ею кусок плейлиста (первые 20 треков),
+  // поэтому перед стартом добираем окно пошире одним запросом: иначе
+  // «перемешать» на большом плейлисте — это случайный порядок двадцати самых
+  // заигранных треков, а не плейлиста. Хвост дальше окна доберёт по пейджеру
+  // extendQueueIfNeeded (он тоже подмешивает новые индексы в конец порядка).
+  shufflePlaylist: async (tracks, source = null, pager = null, { context } = {}) => {
+    get().recordPlayClick('shuffle', { source, queueLength: tracks.length })
+    if (tracks.length === 0) return
+    // Пока догружается окно, слушатель может уйти с исходной страницы.
+    const playContext = capturePlayContext(source, tracks[0], context)
+    let list = tracks
+    if (pager?.url && pager.total > tracks.length && tracks.length < SHUFFLE_WINDOW) {
+      try {
+        const response = await api.get(pager.url, {
+          params: { ...pager.params, skip: 0, limit: SHUFFLE_WINDOW },
+          skipErrorToast: true,
+        })
+        const fetched = response.data?.tracks || []
+        if (fetched.length > list.length) list = fetched
+      } catch (error) {
+        // Не повод не перемешать: стартуем тем, что уже загружено.
+        console.error('Shuffle window fetch error:', error)
+      }
+    }
+    // set до playPlaylist: он читает isShuffle через get() и сам раскладывает
+    // перемешанный порядок обхода очереди.
+    set({ isShuffle: true })
+    get().playPlaylist(list, Math.floor(Math.random() * list.length), source, pager, { recordClick: false, context: playContext })
+    // playPlaylist ставит стартовый трек туда, куда он попал в перемешанном
+    // порядке, — то есть в середину, и всё, что оказалось до него, за проход
+    // вперёд уже не сыграет. Прокручиваем порядок так, чтобы старт стал первым:
+    // тогда «Перемешать» обходит весь плейлист, а не случайный его хвост.
+    const { shuffledOrder, currentShuffleIndex } = get()
+    if (currentShuffleIndex > 0) {
+      set({
+        shuffledOrder: [
+          ...shuffledOrder.slice(currentShuffleIndex),
+          ...shuffledOrder.slice(0, currentShuffleIndex),
+        ],
+        currentShuffleIndex: 0,
+      })
+    }
+  },
+
+  toggleRepeatOne: () => {
+    set((state) => ({ isRepeatOne: !state.isRepeatOne }))
+  },
+
+  toggleShuffle: () => {
+    const state = get()
+    if (state.queue.length === 0) {
+      set({ isShuffle: !state.isShuffle })
+      return
+    }
+    if (!state.isShuffle) {
+      const indices = state.queue.map((_, i) => i)
+      const boundary = state.flowStartIndex ?? indices.length
+      // Подготовленный поток всегда идёт после подборки, даже если режим
+      // перемешивания включили, когда рекомендации уже приехали.
+      const order = [...shuffleArray(indices.slice(0, boundary)), ...shuffleArray(indices.slice(boundary))]
+      const shuffleIndex = order.indexOf(state.currentIndex)
+      set({ isShuffle: true, shuffledOrder: order, currentShuffleIndex: shuffleIndex })
+    } else {
+      set({ isShuffle: false, currentShuffleIndex: -1 })
+    }
+  },
+  
+  togglePlayPause: (via = null) => {
+    // via передают кнопки. Системная синхронизация и демо вызывают без него.
+    const state = get()
+    if (typeof via === 'string' && via && !state.isPlaying) {
+      get().recordPlayClick('resume', { track: state.currentTrack, source: state.source, via, queueLength: state.queue.length })
+    }
+    set((state) => ({ isPlaying: !state.isPlaying }))
+  },
+
+  openFullScreen: (karaoke = false) => {
+    if (karaoke && !get().requireAccount()) return
+    set({ isFullScreen: true, karaokeMode: karaoke })
+  },
+
+  closeFullScreen: () => {
+    set({ isFullScreen: false, karaokeMode: false })
+  },
+
+  karaokeMode: false,
+  
+  // Скип как негативный сигнал: если переключили, прослушав <25% трека.
+  // nextTrack вызывается и при естественном окончании — там прогресс ~100%,
+  // так что порог отсекает его сам собой.
+  //
+  // Важно: если duration ещё не известна (быстрое переключение — метаданные
+  // не успели прогрузиться), это НЕ повод молчать. Раз duration не пришла,
+  // значит с момента старта трека прошло совсем немного — то есть точно
+  // меньше 25%. Раньше здесь был ранний return при неизвестной duration, из-за
+  // чего при быстром проматывании самые очевидные скипы (переключили почти
+  // сразу) массово не записывались.
+  //
+  // via — чем переключили (button, swipe, fullscreen_button, fullscreen_swipe,
+  // dislike, system, error, ended): уходит в метаданные скипа. offset — на
+  // сколько треков вперёд уходит очередь (advanceBy).
+  _recordSkipIfNeeded: (via = 'unknown', offset = 1) => {
+    if (get().guestMode) return
+    const { currentTrack, currentTime, duration, isPlaying } = get()
+    if (!currentTrack || !isPlaying) return
+    const durationKnown = duration && !isNaN(duration) && duration > 0
+    if (durationKnown && currentTime / duration >= 0.25) return
+    const completion = durationKnown ? currentTime / duration : 0
+    const playback = { ...playbackMetadata(get()), via }
+    postRecommendationEvent(currentTrack, 'skip', completion, playback)
+    if (!FLOW_AUTO_ADVANCE.has(via)) {
+      get()._noteFlowSignal(currentTrack, playback.audible ? 's' : 'n', {
+        fast: playback.played_ms < FLOW_FAST_SKIP_MS,
+        offset,
+      })
+    }
+    invalidateFlowPreload()
+    const dbId =
+      getTrackDbId(currentTrack)
+    if (dbId) {
+      postSkipWithRetry(dbId)
+    } else if (currentTrack.source) {
+      const externalTrack = currentTrack
+      get()
+        .materializeTrack(externalTrack)
+        .then((id) => {
+          if (id) postSkipWithRetry(id)
+        })
+        .catch(() => {})
+    }
+  },
+
+  // Финальная доля прослушивания при КАЖДОМ уходе с трека (переключение
+  // вперёд/назад, естественный конец — там прогресс ~100%). В отличие от
+  // бинарных /play (>=50%) и /skip (<25%) покрывает и «серую зону» 25-50%:
+  // трек, регулярно бросаемый на трети, — мягкий негатив для рекомендаций.
+  _recordListenProgress: () => {
+    if (get().guestMode) return
+    const { currentTrack, currentTime, duration } = get()
+    if (!currentTrack) return
+    const durationKnown = duration && !isNaN(duration) && duration > 0
+    if (!durationKnown || currentTime <= 0) return // не успел начаться — не событие
+    const completion = Math.max(0, Math.min(1, currentTime / duration))
+    postRecommendationEvent(currentTrack, 'listen', completion, playbackMetadata(get()))
+    // Дослушал от 80% — очень понравился (f), от 55% — понравился (c).
+    if (completion >= 0.8) get()._noteFlowSignal(currentTrack, 'f')
+    else if (completion >= 0.55) get()._noteFlowSignal(currentTrack, 'c')
+    invalidateFlowPreload()
+    const dbId =
+      getTrackDbId(currentTrack)
+    if (dbId) {
+      postListenEvent(dbId, completion)
+    } else if (currentTrack.source) {
+      const externalTrack = currentTrack
+      get()
+        .materializeTrack(externalTrack)
+        .then((id) => {
+          if (id) postListenEvent(id, completion)
+        })
+        .catch(() => {})
+    }
+  },
+
+  // Сигнал волны в сессию (sess). fast — быстрый скип (для серии, см.
+  // _maybeRescueFlow); offset — сколько треков вперёд плеер уже запускает
+  // (их _dropRejectedArtist не трогает).
+  _noteFlowSignal: (track, code, { fast = false, offset = 1 } = {}) => {
+    if (!track || track.recommendation_surface !== 'flow' || track.id == null) return
+    const entry = {
+      code,
+      id: String(track.id),
+      trackKey: track.recommendation_track_key || trackKeys(track).find((key) => !key.startsWith('local:')) || String(track.id),
+      artist: flowArtistKey(track.artist),
+      at: Date.now(),
+      fast: fast || code === 'n' || code === 'd',
+      protected: !!track.recommendation_protected_artist,
+    }
+    set((state) => ({
+      flowSession: [...state.flowSession, entry].slice(-FLOW_SESSION_MAX),
+      ...(code === 'd' ? {
+        dislikedTrackKeys: [...new Set([...state.dislikedTrackKeys, ...trackKeys(track)])],
+      } : {}),
+    }))
+    if (FLOW_NEGATIVE_CODES.has(code)) {
+      get()._dropRejectedArtist(entry.artist, offset)
+      get()._maybeRescueFlow()
+    }
+  },
+
+  // Сигналы текущей сессии: с конца, пока соседние (и последний — от «сейчас»)
+  // не дальше FLOW_SESSION_GAP_MS.
+  _flowSessionEntries: () => {
+    const entries = get().flowSession
+    let at = Date.now()
+    let start = entries.length
+    while (start > 0 && at - (entries[start - 1].at ?? 0) <= FLOW_SESSION_GAP_MS) {
+      start -= 1
+      at = entries[start].at ?? 0
+    }
+    return entries.slice(start)
+  },
+
+  _flowSessionParam: () =>
+    get()
+      ._flowSessionEntries()
+      .map(({ code, id }) => `${code}${id}`)
+      .join(','),
+
+  // Артиста только что отвергли (скип, дизлайк), а в загруженной очереди волны
+  // ещё лежат его треки — убираем их: прод, 2026-10-20, такой трек в той же
+  // порции скипали в 84–90% случаев. Следующие порции сервер отдаёт уже без
+  // него (flow_session.SessionState.rejected_artists, то же правило: лайк или
+  // дослушанный трек артиста в сессии отказ снимает). Ближайшие offset треков
+  // не трогаем — плеер их уже запускает или прогрел.
+  _dropRejectedArtist: (artist, offset = 1) => {
+    const { flowActive, isShuffle, queue, currentIndex } = get()
+    if (!artist || !flowActive || isShuffle) return
+    const entries = get()._flowSessionEntries().filter((entry) => entry.artist === artist)
+    const accepted = entries.some((entry) => FLOW_POSITIVE_CODES.has(entry.code))
+    if (accepted) return
+    const protectedArtist = entries.some((entry) => entry.protected) ||
+      queue.some((track) => flowArtistKey(track.artist) === artist && track.recommendation_protected_artist)
+    const rejectedItems = new Set(entries.filter((entry) => FLOW_NEGATIVE_CODES.has(entry.code)).map((entry) => entry.trackKey || entry.id))
+    if (protectedArtist && rejectedItems.size < FLOW_PROTECTED_ARTIST_SKIP_LIMIT) return
+    const keepUntil = queueStep(get(), 1, offset)?.index ?? currentIndex + offset
+    const kept = queue.filter(
+      (track, index) =>
+        index <= keepUntil ||
+        track.recommendation_surface !== 'flow' ||
+        flowArtistKey(track.artist) !== artist
+    )
+    if (kept.length === queue.length) return
+    set({ queue: kept, shuffledOrder: kept.map((_, i) => i) })
+  },
+
+  // Момент последнего запроса спасения: серия считается только после него.
+  flowRescueAt: 0,
+
+  // Серия быстрых скипов подряд — волна сейчас мимо: просим порцию из
+  // доказанного. Прод, 2026-10-20: после 5+ промахов подряд следующий трек
+  // нравился в 6.5% случаев, и такие серии чаще всего кончались уходом из волны.
+  _maybeRescueFlow: () => {
+    const { flowActive, flowRescueAt } = get()
+    if (!flowActive) return
+    const session = get()._flowSessionEntries()
+    let streak = 0
+    for (let i = session.length - 1; i >= 0; i -= 1) {
+      const entry = session[i]
+      if (entry.at <= flowRescueAt || !FLOW_NEGATIVE_CODES.has(entry.code) || !entry.fast) break
+      streak += 1
+    }
+    if (streak >= FLOW_RESCUE_STREAK) get().rescueFlow()
+  },
+
+  // Порция спасения (rescue на бэке, app/flow_session.py: принятые в сессии
+  // артисты, лайки, хиты знакомых) встаёт сразу за ближайшим следующим —
+  // остаток очереди, который и давал серию, уходит. Ближайший следующий
+  // остаётся: плеер его уже прогрел, подмена дала бы медленный старт.
+  rescueFlow: async () => {
+    const { flowActive, flowLoading } = get()
+    if (!flowActive || flowLoading) return
+    set({ flowLoading: true, flowRescueAt: Date.now() })
+    try {
+      const exclude = get().queue.slice(-100).map((t) => t.id).join(',')
+      const { data } = await api.get('/recommendations/flow', {
+        params: {
+          limit: FLOW_EXTEND_LIMIT,
+          exclude,
+          hour: new Date().getHours(),
+          sess: get()._flowSessionParam(),
+          rescue: 1,
+        },
+        skipErrorToast: true,
+      })
+      const state = get()
+      if (!state.flowActive || state.isShuffle) return
+      const keepUntil = queueStep(state)?.index ?? state.currentIndex
+      const head = state.queue.slice(0, keepUntil + 1)
+      const known = new Set(head.map((t) => t.id))
+      const fresh = (data || []).filter((t) => !known.has(t.id) && !isDislikedTrack(state, t))
+      if (fresh.length === 0) return
+      const queue = [...head, ...fresh]
+      set({ queue, shuffledOrder: queue.map((_, i) => i) })
+      get().prefetchTracks(fresh.slice(0, 2), 2)
+    } catch (error) {
+      console.error('Flow rescue error:', error)
+    } finally {
+      set({ flowLoading: false })
+    }
+  },
+
+  nextTrack: (via) => {
+    get()._recordSkipIfNeeded(via)
+    get()._recordListenProgress()
+    const state = get()
+    const step = queueStep(state)
+    if (!step) {
+      set({ isPlaying: false, seekRequest: null })
+      return
+    }
+    set(queueTrackState(state, step))
+  },
+
+  // Переход сразу на n треков вперёд — когда промежуточные не загрузились
+  // (см. отложенный переход в Player). Скип пишем только по треку, с которого
+  // уходим: пропущенные незагружаемые пользователь не отвергал, и сигнал
+  // «скип» по ним испортил бы рекомендации.
+  advanceBy: (n, via) => {
+    if (n <= 1) {
+      get().nextTrack(via)
+      return
+    }
+    get()._recordSkipIfNeeded(via, n)
+    get()._recordListenProgress()
+    const state = get()
+    const step = queueStep(state, 1, n)
+    if (!step) {
+      set({ isPlaying: false, seekRequest: null })
+      return
+    }
+    set(queueTrackState(state, step))
+  },
+
+  previousTrack: () => {
+    get()._recordListenProgress()
+    const state = get()
+    const step = queueStep(state, -1)
+    if (!step) return
+    set({
+      currentTrack: state.queue[step.index], currentIndex: step.index,
+      currentShuffleIndex: step.shuffleIndex, isPlaying: true,
+      currentTime: 0, seekRequest: null,
+    })
+  },
+  
+  setVolume: (volume) => {
+    const next = clampVolume(volume)
+    set({ volume: next })
+    try {
+      localStorage.setItem(VOLUME_KEY, String(next))
+    } catch {
+      // Приватный режим/квота: громкость просто не переживёт перезагрузку.
+    }
+  },
+  
+  setCurrentTime: (time) => {
+    set({ currentTime: time })
+  },
+
+  // Запрос на перемотку из компонентов без доступа к <audio> (полноэкранный
+  // плеер). Player подхватывает seekRequest и выставляет audio.currentTime.
+  seekRequest: null,
+  // from — кто перематывает, для диагностики плеера: «сам прыгнул» на
+  // телефоне без этого не отличить от случайного касания диска или полосы.
+  seekTo: (time, from = 'unknown') => {
+    if (time == null || isNaN(time)) return
+    set({
+      currentTime: time,
+      seekRequest: {
+        id: ++seekRequestSequence,
+        time,
+        from,
+        trackId: get().currentTrack?.id ?? null,
+      },
+    })
+  },
+  clearSeekRequest: (requestId = null) => set((state) => {
+    if (requestId !== null && state.seekRequest?.id !== requestId) return state
+    return { seekRequest: null }
+  }),
+
+  setDuration: (duration) => {
+    set({ duration })
+  },
+  
+  restrictToOfflineLibrary: () => {
+    const state = get()
+    if (!state.currentTrack) { set({ flowPreload: null, flowPreview: null, queuePager: null }); return }
+    const tracks = downloadedTracks(state.queue)
+    const index = tracks.findIndex((track) => offlineTrackKey(track) === offlineTrackKey(state.currentTrack))
+    if (index < 0) { get().clearQueue(); return }
+    const order = tracks.map((_, i) => i)
+    set({ queue: tracks, currentTrack: tracks[index], currentIndex: index, shuffledOrder: order,
+      currentShuffleIndex: state.isShuffle ? index : -1, queuePager: null, flowPreload: null, flowPreview: null,
+      flowLoading: false, playContext: state.playContext?.offline ? state.playContext : { ...state.playContext, offline: true } })
+  },
+
+  clearQueue: () => {
+    set({
+      currentTrack: null,
+      queue: [],
+      currentIndex: -1,
+      shuffledOrder: [],
+      currentShuffleIndex: -1,
+      isPlaying: false,
+      currentTime: 0,
+      seekRequest: null,
+      source: null,
+      playContext: null,
+      flowActive: false,
+      flowStartIndex: null,
+      isFullScreen: false,
+      queuePager: null,
+      heavyCoverTrackId: null,
+    })
+  },
+}))
+
+usePlayerStore.subscribe((state, prev) => {
+  const id = state.currentTrack?.id ?? null
+  if (id === (prev.currentTrack?.id ?? null)) return
+  trackSwitch = { id, at: performance.now(), playing: state.isPlaying }
+})
+
+// --- Intent-префетч (hover/pointerdown по строке трека) ---
+// Запускает прогрев резолва на бэке ЗАРАНЕЕ — в момент, когда пользователь
+// только навёл курсор / коснулся строки, за 200–1000 мс до реального
+// клика. К моменту, когда <audio> запросит поток, резолв уже в Redis —
+// старт воспроизведения почти мгновенный. Дедуп: requestedPrefetchIds
+// на фронте + single-flight на бэке, так что повторные наведения бесплатны.
+//
+// hover дебаунсим (~300 мс), чтобы пролистывание списка мышью не спамило
+// бэк префетчами всех задетых строк: каждый ytmusic-прогрев — резолв в
+// YouTube, лишние резолвы приближают bot-check. pointerdown — без
+// задержки: касание/нажатие почти всегда предшествует клику.
+let intentHoverTimer = null
+
+function prefetchOnIntent(track, { immediate = false } = {}) {
+  if (!track) return
+  const fire = () => usePlayerStore.getState().prefetchTracks([track], 1)
+  if (immediate) {
+    if (intentHoverTimer) {
+      clearTimeout(intentHoverTimer)
+      intentHoverTimer = null
+    }
+    fire()
+    return
+  }
+  if (intentHoverTimer) clearTimeout(intentHoverTimer)
+  intentHoverTimer = setTimeout(() => {
+    intentHoverTimer = null
+    fire()
+  }, 300)
+}
+
+// Готовые пропсы для строки/карточки трека: распылить через
+// {...trackIntentHandlers(track)} на кликабельный элемент.
+//
+// Наведение — только настоящей мышью (pointerType), не onMouseEnter: на iPhone
+// mouseenter синтетический и приходит при каждом тапе, а таймер, поставленный
+// в обработчике наведения, WebKit ждёт перед тем, как отдать клик (проверяет,
+// не открылось ли меню по наведению). 300-мс таймер prefetchOnIntent так
+// задерживал тап по треку на ~300 мс.
+function trackIntentHandlers(track) {
+  return {
+    onPointerEnter: (e) => {
+      if (e.pointerType === 'mouse') prefetchOnIntent(track)
+    },
+    onPointerDown: () => prefetchOnIntent(track, { immediate: true }),
+  }
+}
+
+export {
+  usePlayerStore,
+  prefetchOnIntent,
+  trackIntentHandlers,
+  invalidateFlowPreload,
+  postRecommendationEvent,
+  recordRecommendationImpression,
+  trackLikeKey,
+  noteTrackAudible,
+}

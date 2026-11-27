@@ -1,0 +1,130 @@
+{
+  "source": "http://localhost/search",
+  "query": "МОТ",
+  "trackTitle": "Сопрано",
+  "capturedAt": "2026-11-22T22:21:07.158Z",
+  "fps": 60,
+  "count": 374,
+  "width": 1040,
+  "height": 1000,
+  "pixelRatio": 1.5,
+  "partial": false,
+  "cursorBaked": false,
+  "introFrame": 0,
+  "searchArtists": [
+    "Перемотка",
+    "МОТ"
+  ],
+  "artistImages": [
+    "МОТ",
+    "Zivert",
+    "ANNA ASTI"
+  ],
+  "artistImageSources": [
+    {
+      "name": "МОТ",
+      "query": "МОТ",
+      "imageSource": "100% Мот"
+    },
+    {
+      "name": "Zivert",
+      "query": "Zivert",
+      "imageSource": "Zivert"
+    },
+    {
+      "name": "ANNA ASTI",
+      "query": "ANNA ASTI",
+      "imageSource": "ANNA ASTI"
+    }
+  ],
+  "best": {
+    "x": 241.2421875,
+    "y": 124.5,
+    "width": 103.265625,
+    "height": 41
+  },
+  "selected": {
+    "x": 313.5234375,
+    "y": 624,
+    "width": 219.046875,
+    "height": 29.6875
+  },
+  "selectedRow": {
+    "x": 564,
+    "y": 624,
+    "width": 888,
+    "height": 88
+  },
+  "controls": {
+    "x": 520,
+    "y": 864,
+    "width": 72,
+    "height": 72
+  },
+  "fullscreenArt": {
+    "x": 520,
+    "y": 382.5,
+    "width": 440,
+    "height": 444
+  },
+  "nativeAnimationCount": 940,
+  "audioProof": {
+    "ready": 3,
+    "playing": true,
+    "time": 0.026642,
+    "track": "Сопрано"
+  },
+  "playback": {
+    "ready": 3,
+    "playing": true,
+    "time": 0.049903,
+    "track": "Сопрано"
+  },
+  "finalState": {
+    "authenticated": false,
+    "url": "http://localhost/search",
+    "track": "Сопрано",
+    "artist": "Мот, Ани Лорак",
+    "action": "Пауза",
+    "dialogs": false,
+    "audio": [
+      {
+        "playing": true,
+        "ready": 4,
+        "error": null
+      },
+      {
+        "playing": false,
+        "ready": 4,
+        "error": null
+      },
+      {
+        "playing": false,
+        "ready": 0,
+        "error": null
+      }
+    ]
+  },
+  "actions": [
+    {
+      "time": 1.1666666666666667,
+      "action": "Click the real Лучшие filter"
+    },
+    {
+      "time": 3.2,
+      "action": "Play the real Сопрано search result"
+    },
+    {
+      "time": 3.35,
+      "action": "Open the real fullscreen player"
+    },
+    {
+      "time": 5.583333333333333,
+      "action": "Pause using the real player control"
+    },
+    {
+      "time": 5.766666666666667,
+      "action": "Resume using the real player control"
+    }
+  ]
+}

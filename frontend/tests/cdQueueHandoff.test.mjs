@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { returnCdQueueRecord, settleCdQueueRecord, isCdQueueFrameReady } from '../src/utils/cdQueueHandoff.js'
+import { cdQueueRecords } from '../src/utils/cdDiscRecords.js'
+
+test('disliking the current track keeps the preceding eligible disc in the previous slot', () => {
+  const queue = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id }))
+  const before = { queue, currentIndex: 2, currentTrack: queue[2] }
+  const after = { ...before, currentIndex: 3, currentTrack: queue[3], dislikedTrackKeys: ['c'] }
+  for (const mobile of [false, true]) {
+    const previous = cdQueueRecords(before, mobile).find(record => record.direction === -1)
+    const records = cdQueueRecords(after, mobile)
+    assert.equal(previous.track.id, 'b')
+    assert.equal(records.find(record => record.direction === -1).key, previous.key)
+    assert.equal(records.some(record => record.track.id === 'c'), false)
+    assert.equal(records.find(record => record.direction === 1).track.id, 'e')
+  }
+})
 
 test('a present disc is not ready for another shift until the entire queue has committed its slots', () => {
   let pending = false
@@ -33,5 +48,14 @@ test('a farther disc retains its completed screen position until its new keyed q
   settleCdQueueRecord(node, 1)
   assert.equal(node.style.transform, '')
   assert.equal(node.style.transition, '')
+  assert.equal(node.dataset.cdQueueTargetSlot, undefined)
+})
+
+test('a disc leaving the queue returns without blocking the next handoff', () => {
+  const node = { dataset: {}, style: { cssText: 'transform: translateX(50px)' } }
+  const parent = { insertBefore(child) { this.child = child } }
+  returnCdQueueRecord({ node, parent, style: '' })
+  assert.equal(parent.child, node)
+  assert.equal(node.style.cssText, '')
   assert.equal(node.dataset.cdQueueTargetSlot, undefined)
 })

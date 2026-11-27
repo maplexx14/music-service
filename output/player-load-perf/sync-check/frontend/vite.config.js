@@ -1,0 +1,67 @@
+import { defineConfig, loadEnv } from 'vite'
+import react from '@vitejs/plugin-react'
+import path from 'path'
+import { offlineUiManifest } from './scripts/offline-ui-manifest.mjs'
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiUrl = env.VITE_API_URL || 'http://localhost:8000/api'
+  // The Docker preview reaches the API through the backend service name;
+  // browsers continue using their own origin + /api.
+  const serverUrl = env.API_PROXY_TARGET || apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:8000'
+
+  return {
+    plugins: [react(), offlineUiManifest()],
+    // Время сборки — пишется в журнал диагностики плеера при старте, чтобы по
+    // логу с телефона было видно, какая сборка на нём работает (PWA может
+    // держать старую).
+    define: {
+      'import.meta.env.VITE_BUILD_TIME': JSON.stringify(new Date().toISOString().slice(0, 16)),
+    },
+    build: {
+      target: 'es2020',
+      cssCodeSplit: true,
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          // Каркас (react, react-dom, react-router, zustand) — отдельным
+          // чанком от кода приложения. Он меняется только при апгрейде
+          // зависимостей, а прикладной код — каждый деплой: с общим бандлом
+          // любая правка инвалидировала весь мегабайт, теперь возвращающийся
+          // пользователь дотягивает только изменившуюся часть.
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom', 'react-router-dom', 'zustand'],
+          },
+        },
+      },
+    },
+    resolve: {
+      alias: [
+        { find: '@', replacement: path.resolve(__dirname, './src') },
+        // Profiling-сборка react-dom: в ней работают <Profiler> и onRender,
+        // по ним замер плавности (utils/frameMeter) раскладывает долгие кадры
+        // по частям интерфейса прямо на iPhone, где профилировщика нет.
+        // Время считается только у поддеревьев под <Profiler>; в dev
+        // profiling.js сам отдаёт обычную dev-сборку.
+        { find: /^react-dom$/, replacement: 'react-dom/profiling' },
+      ],
+    },
+    server: {
+      // Явно событийный file-watcher (без поллинга): поллинг опрашивает
+      // весь дерево файлов по таймеру и постоянно грузит CPU/диск даже
+      // в простое. (Ранее здесь был недействующий server.usePolling —
+      // опция читается только из server.watch.usePolling.)
+      watch: {
+        usePolling: false,
+      },
+      allowedHosts: true,
+      port: 3000,
+      proxy: {
+        '/api': {
+          target: serverUrl,
+          changeOrigin: true,
+        },
+      },
+    },
+  }
+})

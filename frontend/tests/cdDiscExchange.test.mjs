@@ -151,7 +151,7 @@ test('the existing queue record moves into the player without an incoming clone 
     prepare: () => -80,
     // While an old queue commit is pending, its slot metadata can list the
     // same incoming/previous elements again among the farther records.
-    extras: [{ node: incoming, slot: 2 }, { node: outgoing, slot: -2 }, { node: incoming, slot: 2 }],
+    extras: [{ node: incoming, targetSlot: 1 }, { node: outgoing, targetSlot: -3 }, { node: incoming, targetSlot: 1 }],
     outgoingOpacity: 0.82, outgoingFilter: 'brightness(0.88)',
     park(record) { parked = record }, release() { released = true } })
   exchange.setArtwork('next')

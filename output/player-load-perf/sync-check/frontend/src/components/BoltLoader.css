@@ -1,0 +1,99 @@
+.bolt-loader {
+  /* Scale the whole indicator to fit compact controls without clipping its bars. */
+  --bl-unit: min(var(--bl-size), calc(var(--bl-frame) / 3.16));
+  --bl-accent: #9d59ff;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--bl-frame);
+  height: var(--bl-frame);
+  overflow: hidden;
+  contain: strict;
+}
+
+.bolt-loader-heart {
+  flex: none;
+  width: var(--bl-unit);
+  height: var(--bl-unit);
+  user-select: none;
+}
+
+.bolt-loader-wave {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--bl-unit) * 3.16);
+  height: var(--bl-unit);
+}
+
+/* Два сдвинутых «эхо»-слоя логотипа: голубой и маджентовый контур, как в loader-bolt-1.svg.
+   Вспыхивают короткими разрядами поверх сердца. */
+.bolt-loader-wave::before,
+.bolt-loader-wave::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--bl-unit);
+  height: var(--bl-unit);
+  margin: calc(var(--bl-unit) * -0.5) 0 0 calc(var(--bl-unit) * -0.5);
+  background-image: var(--bl-heart);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  mix-blend-mode: screen;
+  opacity: 0;
+  pointer-events: none;
+  animation: bolt-loader-glitch 1200ms steps(1, end) infinite;
+}
+
+.bolt-loader-wave::before {
+  filter: hue-rotate(150deg) saturate(3) brightness(1.2);
+}
+
+.bolt-loader-wave::after {
+  filter: hue-rotate(-70deg) saturate(3) brightness(1.1);
+  animation-delay: 180ms;
+}
+
+.bolt-loader-wave .bolt-loader-heart {
+  will-change: transform, opacity;
+  animation: bolt-loader-heartbeat 1200ms ease-in-out infinite;
+}
+
+/* «lub-dub»: два удара в цикле. На первом ударе сердце вспыхивает фиолетовым разрядом. */
+@keyframes bolt-loader-heartbeat {
+  0%, 100% { transform: scale(0.94); opacity: 0.6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+  12% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 calc(var(--bl-unit) * 0.2) rgba(157, 89, 255, 0.95)); }
+  24% { transform: scale(0.98); opacity: 0.8; filter: drop-shadow(0 0 calc(var(--bl-unit) * 0.08) rgba(157, 89, 255, 0.5)); }
+  36% { transform: scale(1.06); opacity: 1; filter: drop-shadow(0 0 calc(var(--bl-unit) * 0.14) rgba(157, 89, 255, 0.75)); }
+  60% { transform: scale(0.94); opacity: 0.6; filter: drop-shadow(0 0 0 rgba(157, 89, 255, 0)); }
+}
+
+/* Разряд: эхо-слой появляется короткими вспышками с дрожанием, как глитч логотипа. */
+@keyframes bolt-loader-glitch {
+  0%, 9%, 40%, 100% { opacity: 0; transform: translate(0, 0); }
+  10% { opacity: 0.85; transform: translate(-3px, 0); }
+  12% { opacity: 0; transform: translate(0, 0); }
+  14% { opacity: 0.6; transform: translate(-2px, 1px); }
+  16% { opacity: 0; transform: translate(0, 0); }
+  30% { opacity: 0.7; transform: translate(-1px, -1px); }
+  32% { opacity: 0; transform: translate(0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bolt-loader-wave .bolt-loader-heart,
+  .bolt-loader-wave::before,
+  .bolt-loader-wave::after {
+    animation: none;
+    will-change: auto;
+  }
+
+  .bolt-loader-wave::before,
+  .bolt-loader-wave::after {
+    display: none;
+  }
+}

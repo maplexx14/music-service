@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bolt — монтаж ролика</title>
+  <style>
+    @font-face{font-family:Geologica;src:url(assets/geologica-cyrillic.woff2);font-weight:100 900;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+    @font-face{font-family:Geologica;src:url(assets/geologica-latin.woff2);font-weight:100 900;unicode-range:U+0000-00FF}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-content:center;justify-items:center;gap:20px;padding:24px;background:#0d0a12;color:#f7f3ff;font:14px system-ui}canvas{display:block;width:min(90vw,44vh);height:auto;aspect-ratio:9/16;border-radius:10px;box-shadow:0 24px 90px #0007}nav{display:flex;align-items:center;gap:15px;flex-wrap:wrap;max-width:720px}button,a{padding:10px 16px;border:1px solid #bba1e62a;border-radius:9px;background:#21162f;color:#f7f3ff;font:inherit;text-decoration:none;cursor:pointer}button:hover,a:hover{background:#392349}input{flex:1;min-width:180px;accent-color:#a87cfa}span{font-variant-numeric:tabular-nums;color:#b5a8c9}@media(max-width:540px){body{padding:10px}nav{gap:10px}input{order:4;flex-basis:100%}}
+  </style>
+</head>
+<body>
+  <canvas id="film" width="1080" height="1920" aria-label="Мобильная демонстрация Bolt"></canvas>
+  <nav><button id="play">Смотреть</button><input id="seek" aria-label="Перемотка ролика" type="range" min="0" max="12.716667" step="0.0166667" value="0"><span id="time">0.0 / 12.7</span><button id="mute" aria-pressed="false">Звук включён</button><a href="bolt-mobile-9x16.mp4">Открыть MP4</a></nav>
+  <audio id="sound" src="soundtrack-mixed.m4a" preload="auto"></audio>
+  <script src="capture-data.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

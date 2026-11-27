@@ -1,0 +1,348 @@
+/* Окно «Добавить в плейлист». Десктоп — диалог по центру, телефон — нижняя
+   шторка (медиазапрос внизу). Выше мини-плеера и нижней навигации (1000–1003)
+   и ниже тостов (2000): тост об успехе должен быть виден поверх затемнения. */
+
+.atp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  /* backwards, не both: анимация, удерживающая конечный кадр, перебивала бы
+     инлайн-стили перетаскивания шторки (см. useSheetDrag в компоненте). */
+  animation: atp-fade 180ms var(--ease-out) backwards;
+  /* touch-action: none здесь нельзя: он действует и на потомков, и список
+     плейлистов перестал бы прокручиваться пальцем. Страница под окном и так
+     не скроллится — подложка ей не потомок. */
+  overscroll-behavior: contain;
+}
+
+.atp-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 440px;
+  max-height: min(640px, calc(100dvh - 48px));
+  background-color: var(--surface-2);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+  animation: atp-pop 200ms var(--ease-out) backwards;
+}
+
+.atp-grabber {
+  display: none;
+}
+
+.atp-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 12px 12px 20px;
+}
+
+.atp-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.atp-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.atp-subtitle {
+  margin-top: 4px;
+  font-size: var(--text-base);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atp-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-top: -8px;
+  border: none;
+  border-radius: var(--radius-avatar);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+              background-color var(--duration-fast) var(--ease-out);
+}
+
+.atp-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 20px 8px;
+  padding: 0 14px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background-color: var(--surface-3);
+  color: var(--text-tertiary);
+}
+
+.atp-search:focus-within {
+  box-shadow: 0 0 0 2px var(--brand-accent);
+}
+
+.atp-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  /* 16px — меньше iOS зумит страницу при фокусе. */
+  font-size: 16px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.atp-search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.atp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+}
+
+.atp-list {
+  list-style: none;
+}
+
+.atp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-card);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.atp-row:active:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.atp-row:disabled {
+  cursor: default;
+}
+
+.atp-row:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -2px;
+}
+
+.atp-row-cover {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background-color: var(--surface-3);
+  color: var(--text-tertiary);
+}
+
+.atp-row-cover-create {
+  background-color: var(--brand-accent-soft);
+  color: var(--brand-accent);
+}
+
+.atp-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.atp-row-name {
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atp-row-meta {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.atp-row.is-exists .atp-row-meta {
+  color: var(--brand-accent-text);
+}
+
+.atp-row-status {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  color: var(--brand-accent);
+}
+
+.atp-status {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: var(--text-base);
+  color: var(--text-tertiary);
+}
+
+.atp-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 12px 12px;
+}
+
+.atp-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .atp-close:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .atp-row:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+}
+
+@keyframes atp-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes atp-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes atp-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+/* Уход (класс ставит usePresence на ATP_EXIT_MS): зеркало появления, но
+   короче — закрытое окно должно убраться быстро. Конечный кадр держим
+   (both), иначе за кадр до размонтирования окно мигнуло бы обратно.
+   Уходящее окно не ловит тапы — они уже относятся к странице под ним. */
+.atp-backdrop.is-leaving {
+  pointer-events: none;
+  animation: atp-fade-out 180ms var(--ease-out) both;
+}
+
+.atp-backdrop.is-leaving .atp-dialog {
+  animation: atp-pop-out 160ms var(--ease-out) both;
+}
+
+@keyframes atp-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes atp-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* Шторка уезжает вниз той же кривой, что и въезжала. После свайпа вниз она
+   уже за краем (инлайн-transform), и анимация от этого значения до того же
+   ничего не двигает. */
+@keyframes atp-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* --- Телефон: нижняя шторка --- */
+@media (max-width: 768px) {
+  .atp-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .atp-dialog {
+    max-width: none;
+    /* Отступ сверху под статус-бар: шторка не должна заходить под часы. */
+    max-height: calc(100dvh - var(--safe-top) - 24px);
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px 20px 0 0;
+    padding-bottom: var(--safe-bottom);
+    animation: atp-sheet-in 240ms var(--ease-drawer) backwards;
+    will-change: transform;
+  }
+
+  .atp-backdrop.is-leaving .atp-dialog {
+    animation: atp-sheet-out 180ms var(--ease-drawer) both;
+  }
+
+  .atp-grabber {
+    display: block;
+    width: 36px;
+    height: 4px;
+    margin: 8px auto 0;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .atp-header {
+    padding: 12px 8px 8px 20px;
+  }
+
+  .atp-search {
+    margin-inline: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atp-backdrop,
+  .atp-dialog,
+  .atp-backdrop.is-leaving,
+  .atp-backdrop.is-leaving .atp-dialog {
+    animation: none;
+  }
+}

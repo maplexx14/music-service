@@ -1,0 +1,19 @@
+{
+  "query": "cupsize",
+  "trackTitle": "Юра Юра",
+  "artistQueries": ["cupsize", "madk1d", "fortuna812"],
+  "viewport": { "width": 390, "height": 844 },
+  "pixelRatio": 3,
+  "output": { "width": 1080, "height": 1920 },
+  "playAt": 4.7,
+  "openAt": 2.7,
+  "sourceDuration": 6.6,
+  "introDuration": 2.0,
+  "swipeStart": 1.2,
+  "swipeDuration": 0.25,
+  "introPauseAt": 1.75,
+  "endingSpeed": 1.75,
+  "seekSeconds": 30,
+  "movie": "bolt-mobile-9x16.mp4",
+  "silentMovie": "bolt-mobile-9x16-silent.mp4"
+}

@@ -1,0 +1,22 @@
+.empty-playlist.page-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: clamp(64px, 12vh, 128px) 20px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.page-load-error h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 22px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.page-load-error p {
+  margin: 0;
+  line-height: 1.5;
+}

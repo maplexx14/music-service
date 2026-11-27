@@ -1,0 +1,641 @@
+/* Страница исполнителя берёт у PlaylistDetail кнопки и таблицу треков; шапка и
+   фон в тон обложки (CoverBackdrop) — свои. */
+
+/* --- Шапка --- */
+
+/* Шапка: обложка, название, счётчики. Своего фона нет — его рисует
+   страница (.hero-page, CoverBackdrop). --hero-c* — фирменная палитра для
+   сердца «Понравившихся» без обложки (.liked-hero-cover, PlaylistDetail.css). */
+.artist-hero {
+  --hero-c1: #b070ff;
+  --hero-c2: #8929ff;
+  --hero-c3: #440f85;
+  position: relative;
+  padding: 24px 32px 32px;
+}
+
+.artist-hero-content {
+  display: flex;
+  align-items: flex-end;
+  gap: 32px;
+}
+
+.artist-avatar {
+  flex: none;
+  width: 208px;
+  height: 208px;
+  object-fit: cover;
+  border-radius: var(--radius-avatar);
+  background-color: var(--surface-4);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.artist-hero-info {
+  min-width: 0;
+  flex: 1;
+  width: 100%;
+  container-type: inline-size;
+}
+
+.artist-kicker {
+  font-size: var(--text-base);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 8px;
+}
+
+.artist-name {
+  font-size: clamp(40px, 6vw, 88px);
+  /* Учитываем ширину текста рядом с обложкой и сайдбаром. Нижний предел
+     сохраняет читаемость у длинного слова, которое дальше переносится. */
+  font-size: clamp(28px, min(
+    clamp(40px, 6vw, 88px),
+    calc(100cqi / (var(--title-chars, 1) * 0.82))
+  ), 88px);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.25);
+}
+
+.artist-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.artist-stats li {
+  font-size: var(--text-base);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  /* Плотнее и без backdrop-filter: плашки едут вместе со скроллом, и блюр
+     под каждой пересчитывался на каждом кадре прокрутки. */
+  background-color: rgba(255, 255, 255, 0.18);
+  color: var(--text-primary);
+}
+
+/* Компактная полоса — только мобильная (см. медиазапрос ниже). */
+.artist-compact-bar {
+  display: none;
+}
+
+/* Кнопки под карточкой, а не внутри: на цветном фоне фиолетовая «Воспроизвести»
+   спорила бы с палитрой аватара. */
+.artist-toolbar {
+  padding: 24px 0 8px;
+}
+
+/* Лайк исполнителя: у .action-button из PlaylistDetail.css нет активного
+   состояния (там кнопка декоративная), а здесь она несёт статус. */
+.playlist-actions .action-button.liked {
+  color: var(--brand-accent);
+}
+
+.playlist-actions .action-button.liked:hover {
+  color: var(--brand-accent-hover);
+}
+
+.playlist-actions .action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Бейдж источника в строке трека: MP3/SC как в поиске, но приглушённее —
+   в таблице он справочный, а не главный элемент. */
+.artist-track-source {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.artist-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin: 32px 0 12px;
+}
+
+.artist-section-count {
+  font-size: var(--text-base);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+/* --- Карусель релизов --- */
+
+/* Карточка альбома повторяет плейлистную (обложка, название, подпись), но
+   классы свои: .playlist-card живёт в Home.css/Playlists.css, а на страницу
+   артиста заходят по прямой ссылке — CSS тех страниц тогда не загружен
+   (страницы грузятся lazy) и карточка осталась бы без стилей. */
+.album-card {
+  display: flex;
+  flex-direction: column;
+  background-color: transparent;
+  border-radius: var(--radius-card);
+  padding: 10px;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+}
+
+.album-card:hover {
+  background-color: var(--surface-2);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .album-card:hover {
+    transform: translateY(-4px);
+  }
+}
+
+.album-card:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.album-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-card);
+  margin-bottom: 10px;
+  background-color: var(--surface-4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.album-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  /* Названия релизов бывают длинными: две строки вместо обрезки в одну, но не
+     больше — иначе карточки в ленте разной высоты. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.album-meta {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Источник и длительность строкой под названием трека. На широких экранах
+   это колонки таблицы, дублировать их незачем. */
+.track-inline-meta {
+  display: none;
+}
+
+/* --- Страница в два слоя (исполнитель, альбом, плейлисты) ---
+   Сверху фон как у полноэкранного плеера (CoverBackdrop): приглушённый цвет
+   обложки, зерно и затемнение книзу, на телефоне — обложка во весь верх
+   экрана. Ниже — содержимое (.hero-page-sheet) отдельной карточкой с
+   закруглённым верхом, на сером фоне как у остальных экранов на ПК
+   (.main-content, Layout.css). */
+.hero-page {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Во всю страницу: под карточкой его не видно, а над ней цвет не
+   обрывается. clip, а не hidden: hidden делал бы фон своим контейнером
+   прокрутки, и обложка (sticky) не держалась бы на месте. */
+.cover-backdrop {
+  position: absolute;
+  /* На телефоне шапка заходит под плавающую панель — фон туда же. */
+  top: calc(-1 * var(--main-pad-top, 0px));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  overflow: hidden;
+  overflow: clip;
+  pointer-events: none;
+  background-color: var(--surface-2);
+}
+
+/* Слой цвета — только сплошной фон и свой слой: проявление нового цвета
+   ничего не перерисовывает (как .fullscreen-tint). */
+.cover-backdrop-tint {
+  position: absolute;
+  inset: 0;
+  animation: cover-backdrop-in 0.6s ease both;
+}
+
+/* Фактура полноэкранного плеера: зерно и затемнение книзу под кнопками,
+   своим постоянным слоем поверх цвета и обложки. */
+.cover-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E"),
+    linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.42) 560px);
+}
+
+@keyframes cover-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Обложка во весь верх — только на телефоне (как в плеере): на широком
+   экране квадрат во всю ширину обрезался бы до полоски. */
+.cover-backdrop-hero {
+  display: none;
+}
+
+html.no-gpu .cover-backdrop-tint {
+  animation: none;
+}
+
+/* Карточка во всю ширину до низа экрана: съедает нижние отступы страницы
+   (.page-container, index.css) и прокрутки (--main-pad-bottom, Layout.css —
+   под плеер) и сама держит их внутри, иначе под ней полоса фона страницы. */
+.hero-page-sheet {
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  margin: 32px calc(-1 * var(--page-padding, 32px)) calc(-1 * var(--page-padding, 32px) - var(--main-pad-bottom, 0px));
+  padding: 16px var(--page-padding, 32px) calc(var(--page-padding, 32px) + var(--main-pad-bottom, 0px));
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: linear-gradient(180deg, var(--surface-1) 0%, var(--bg-app) 100%);
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .artist-hero {
+    padding: 16px 0 24px;
+  }
+
+  .artist-hero-content {
+    gap: 24px;
+  }
+
+  .artist-avatar {
+    width: 160px;
+    height: 160px;
+  }
+
+  .artist-name {
+    font-size: clamp(32px, 4.5vw, 56px);
+    line-height: 1.1;
+  }
+
+  .artist-toolbar {
+    padding-top: 20px;
+  }
+
+  .playlist-actions {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .hero-page-sheet {
+    margin: 20px -16px calc(-150px - var(--main-pad-bottom, 0px));
+    padding: 8px 16px calc(150px + var(--main-pad-bottom, 0px));
+  }
+}
+
+@media (max-width: 380px) {
+  .hero-page-sheet {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}
+
+/* Верхний отступ задаёт карточка: у первого блока внутри (карусель альбомов
+   или список треков) свой margin-top лишний. */
+.hero-page-sheet > :first-child {
+  margin-top: 0;
+}
+
+/* Параллакс — только на широком экране с мышью. На телефоне заголовок,
+   кнопки и список прокручиваются вместе: при возврате к сохранённой
+   позиции карточка больше не перекрывает половину названия. Обложка
+   остаётся отдельным sticky-фоном, без scroll-timeline у текста. */
+@supports (animation-timeline: scroll()) {
+  @media (min-width: 769px) and (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .hero-page .artist-hero,
+    .hero-page .artist-toolbar {
+      animation: hero-page-parallax linear both;
+      animation-timeline: scroll(nearest block);
+      animation-range: 0px 600px;
+    }
+  }
+}
+
+@keyframes hero-page-parallax {
+  /* WebKit при переводе экрана на слой свайпа заново берёт неявный from
+     из текущего transform. Явный ноль сохраняет положение шапки. */
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(300px);
+  }
+}
+
+/* --- Мобильная адаптация --- */
+@media (max-width: 768px) {
+  /* Шапка на всю ширину экрана, как карусели ниже (Carousel.css): карточка
+     с полями по 16px на телефоне выглядела вставкой, а не экраном артиста. */
+  .artist-hero {
+    flex-shrink: 0;
+    margin-inline: -16px;
+    /* Градиент заходит под плавающую «Назад» до верха экрана: отступ под неё
+       (--main-pad-top, Layout.css) иначе оставался чёрной полосой. */
+    margin-top: calc(-1 * var(--main-pad-top, 0px));
+    padding: calc(32px + var(--main-pad-top, 0px)) 16px 24px;
+    border-radius: 0;
+  }
+
+  .artist-hero-content {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+  }
+
+  /* Обложка во весь верх экрана, книзу растворяется в цвет — под
+     названием и кнопками ровный фон. Квадрата в шапке тогда нет, а
+     название прижато к растворяющемуся краю, как подпись в плеере. */
+  /* Обложка стоит на месте, а треки карточкой наезжают на неё — как в
+     Apple Music. sticky, а не параллакс по scroll-timeline: в Safari его
+     нет, и обложка уезжала вместе со страницей. */
+  .hero-page.has-cover-hero .cover-backdrop-hero {
+    display: block;
+    position: sticky;
+    /* sticky держит край по отступу контейнера прокрутки (--main-pad-top,
+       место под «Назад»): с top: 0 обложка сползала на этот отступ и над
+       ней оставалась полоса фона. Фон и так поднят на отступ — обложка тоже. */
+    top: calc(-1 * var(--main-pad-top, 0px));
+    height: calc(100vw + 48px);
+    /* Срезанные чёрные поля обложки (heroImageStyle) уходят за край. */
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+    mask-image: linear-gradient(to bottom, #000 42%, rgba(0, 0, 0, 0.35) 76%, transparent 94%);
+  }
+
+  /* Под плавающей «Назад» и статус-баром — затемнение, как в плеере.
+     Только где «Назад» есть: у вкладок (Понравившиеся) оно было просто
+     тёмной полосой над шапкой. */
+  .has-mobile-topbar .hero-page.has-cover-hero .cover-backdrop-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(var(--safe-top) + 120px);
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent);
+  }
+
+  .cover-backdrop-hero-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Подложка-миниатюра (heroImageStyle) ложится так же, как картинка:
+       обложка на экране сразу, без проявления, крупная — поверх. */
+    background-size: cover;
+    background-position: center;
+  }
+
+  /* Сердце «Понравившихся» вместо обложки — квадрат шапки во весь верх.
+     --hero-c* у фона свои: шапка, где они заданы, — не его предок. */
+  .liked-hero-art {
+    --hero-c1: #b070ff;
+    --hero-c2: #8929ff;
+    --hero-c3: #440f85;
+    position: absolute;
+    inset: 0;
+    /* Сердце по центру над названием, а не под ним: снизу место подписи. */
+    padding: var(--main-pad-top, 0px) 0 30vw;
+    animation: cover-backdrop-in 0.6s ease both;
+  }
+
+  /* Исходник 271px (liked-hero-heart.webp): крупнее он мылится. */
+  .liked-hero-heart {
+    position: relative;
+    width: 36vw;
+    height: 36vw;
+  }
+
+  .liked-hero-heart > img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    outline: none;
+  }
+
+  /* Молнии вылетают веером из-за сердца один раз, когда оно выпрыгнуло
+     (спрайты BoltLoader), и гаснут на подлёте к краю экрана. */
+  .liked-hero-bolt {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: calc(36vw * 0.42 * var(--k));
+    aspect-ratio: 76 / 136;
+    background: center / contain no-repeat;
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    animation: liked-bolt-burst 1.1s cubic-bezier(0.165, 0.84, 0.44, 1) calc(0.3s + var(--i) * 60ms) both;
+  }
+
+  .liked-hero-bolt.v1 { background-image: url('../assets/loader-bolt-1.svg'); }
+  .liked-hero-bolt.v2 { background-image: url('../assets/loader-bolt-2.svg'); }
+  .liked-hero-bolt.v3 { background-image: url('../assets/loader-bolt-3.svg'); }
+
+  html.no-gpu .liked-hero-bolt,
+  html.power-save .liked-hero-bolt {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .liked-hero-bolt {
+    display: none;
+  }
+}
+
+@keyframes liked-bolt-burst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(-4vw) rotate(180deg) scale(0.45);
+  }
+  15% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(-46vw) rotate(calc(180deg + var(--spin))) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+
+  .hero-page.has-cover-hero .artist-hero {
+    min-height: 100vw;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  .hero-page.has-cover-hero .artist-avatar {
+    display: none;
+  }
+
+  .hero-page.has-cover-hero .artist-hero-info {
+    text-shadow: 0 1px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  .artist-avatar {
+    width: 148px;
+    height: 148px;
+  }
+
+  .artist-name {
+    /* Самое длинное слово (--title-chars, utils/titleFit.js) влезает в
+       ширину экрана за полями 16px: у Unbounded 800 буква ~0.84em, с
+       трекингом -0.03em — 0.82em («Понравившиеся» иначе рвалось).
+       Минимум 26px: более длинные слова переносим, сохраняя читаемость. */
+    font-size: clamp(26px, min(
+      clamp(30px, 10vw, 44px),
+      calc((100vw - 32px) / (var(--title-chars, 1) * 0.82))
+    ), 44px);
+    margin-bottom: 12px;
+  }
+
+  .artist-stats {
+    justify-content: center;
+  }
+
+  .artist-toolbar {
+    flex-shrink: 0;
+    padding-top: 16px;
+  }
+
+  /* --- Компактная полоса при прокрутке ---
+     Ложится на центр и правую ячейку мобильной верхней панели (Layout.css:
+     высота 52px под safe-area, кнопка «Назад» в левой ячейке 52px + 8px
+     отступа), поэтому «Назад» остаётся доступной. */
+  .artist-compact-bar {
+    display: flex;
+    position: fixed;
+    top: var(--safe-top);
+    left: 64px;
+    right: 8px;
+    height: 52px;
+    align-items: center;
+    gap: 12px;
+    z-index: 1004;
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition: opacity var(--duration-fast) var(--ease-out),
+                transform var(--duration-fast) var(--ease-out);
+  }
+
+  .artist-compact-bar.visible {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .artist-compact-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .artist-compact-play {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: var(--radius-avatar);
+    background-color: var(--brand-accent);
+    color: var(--text-primary);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .artist-compact-play:active:not(:disabled) {
+    background-color: var(--brand-accent-active);
+  }
+
+  .artist-compact-play:disabled {
+    opacity: 0.5;
+  }
+
+  .track-inline-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    font-size: var(--text-base);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .artist-section-title {
+    margin: 24px 0 8px;
+  }
+
+  .album-card {
+    padding: 6px;
+  }
+
+  .album-cover {
+    margin-bottom: 8px;
+  }
+
+}
+
+@media (max-width: 380px) {
+  /* На самых узких экранах поля страницы 12px (index.css). */
+  .artist-hero {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .artist-compact-bar {
+    transform: none;
+  }
+}

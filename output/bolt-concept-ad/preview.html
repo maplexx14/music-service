@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bolt — концепт интерфейса</title>
+<style>
+@font-face{font-family:Geologica;src:url(assets/geologica-cyrillic.woff2);font-weight:100 900;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:Geologica;src:url(assets/geologica-latin.woff2);font-weight:100 900;unicode-range:U+0000-00FF}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#100c18;color:#f9f5ff;font:15px system-ui;display:grid;place-content:center;padding:28px;gap:18px}canvas{width:min(92vw,1280px);height:auto;aspect-ratio:16/9;box-shadow:0 24px 100px #0008}nav{display:flex;gap:18px;align-items:center;flex-wrap:wrap}button,a{background:#8754ff;border:0;color:white;border-radius:9px;padding:11px 17px;font:inherit;text-decoration:none;cursor:pointer}input{flex:1;min-width:120px;accent-color:#a884ff}span{font-variant-numeric:tabular-nums;color:#cfbfe8}
+</style>
+<canvas id="film" width="1920" height="1080"></canvas>
+<nav><button id="play">Смотреть</button><input id="seek" type="range" min="0" max="12.78333" step="0.0166667" value="0"><span id="time">0.0 / 12.8</span><a href="bolt-motion-ru.mp4">Открыть MP4</a></nav>
+<audio id="sound" src="soundtrack.wav" preload="auto"></audio><script src="renderer.js"></script>
+</html>

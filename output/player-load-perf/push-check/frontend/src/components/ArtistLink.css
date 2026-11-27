@@ -1,0 +1,33 @@
+/* Обёртка списка имён. Блок, а не строчный элемент: на инлайне overflow и
+   text-overflow не работают вовсе, поэтому обрезка по многоточию, заданная в
+   местах использования (.track-artist, .track-item-artist, .fullscreen-artist),
+   молча игнорировалась — длинное имя исполнителя вылезало за границы карточки
+   трека. white-space: nowrap при этом действовал, так что строка не
+   переносилась, а просто уезжала наружу. */
+.artist-names {
+  display: block;
+  min-width: 0;
+}
+
+.artist-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.artist-link:hover,
+.artist-link:focus-visible {
+  color: var(--text-primary, var(--text-primary));
+  text-decoration: underline;
+}
+
+.artist-link:focus-visible {
+  outline: 2px solid var(--brand-accent, var(--brand-accent));
+  outline-offset: 2px;
+}
+
+/* Разделитель между исполнителями кликабельным быть не должен. */
+.artist-link-sep {
+  cursor: default;
+}

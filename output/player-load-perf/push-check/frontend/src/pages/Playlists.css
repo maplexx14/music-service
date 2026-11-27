@@ -1,0 +1,686 @@
+.playlists-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32px;
+}
+
+.playlists-header h1 {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .playlists-header {
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .playlists-header .playlists-header-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+
+.create-playlist-form {
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 32px;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+}
+
+/* Плавное появление инлайн-форм вместо телепортации. */
+@starting-style {
+  .create-playlist-form,
+  .import-playlist-form {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.create-playlist-form .field {
+  margin-bottom: 16px;
+}
+
+.create-playlist-form input[type="file"] {
+  margin-bottom: 16px;
+}
+.create-playlist-form-input-btn {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.create-playlist-form-input-form{
+  border: 2px dashed var(--border-default);
+  border-radius: 12px;
+  padding: 48px;
+  text-align: center;
+  background-color: var(--surface-1);
+  transition: border-color var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out);
+  color: var(--text-secondary);
+}
+.form-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 128px 32px;
+  color: var(--text-secondary);
+}
+
+.empty-state p {
+  font-size: var(--text-lg);
+  margin-bottom: 8px;
+}
+
+.empty-state-subtitle {
+  font-size: var(--text-base);
+  color: var(--text-disabled);
+}
+
+.playlists-grid {
+  display: grid;
+  /* Минимум две колонки при любой ширине: карточка не уже 200px, пока
+     две помещаются, а дальше сжимается до половины ряда. */
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, calc(50% - 12px)), 1fr));
+  gap: 24px;
+}
+
+.playlist-card {
+  min-width: 0;
+  background-color: var(--surface-1);
+  border-radius: 8px;
+  padding: 16px;
+  text-decoration: none;
+  transition: background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+  display: block;
+  position: relative;
+}
+
+.playlist-delete-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: var(--text-primary);
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity var(--duration-base) var(--ease-out),
+              background-color var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+}
+
+.playlist-card:hover .playlist-delete-btn {
+  opacity: 1;
+}
+
+.playlist-delete-btn:hover {
+  background-color: var(--status-danger);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playlist-delete-btn:hover {
+    transform: scale(1.1);
+  }
+}
+
+.playlist-card:hover {
+  background-color: var(--surface-3);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .playlist-card:hover {
+    transform: translateY(-4px);
+  }
+}
+
+.playlist-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.playlist-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  background-color: var(--surface-4);
+}
+
+.playlist-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  color: var(--text-disabled);
+}
+
+.playlist-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.playlist-description {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.playlist-tracks-count {
+  font-size: var(--text-base);
+  color: var(--text-disabled);
+}
+
+/* --- Импорт по ссылке --- */
+.playlists-header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.import-playlist-form {
+  min-width: 0;
+  max-width: 720px;
+  background-color: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 24px;
+  margin-bottom: 32px;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+}
+
+.import-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.import-form-header h2 {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.025em;
+}
+
+.import-close {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  margin-right: -8px;
+}
+
+.import-hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+  margin-bottom: 16px;
+}
+
+.import-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+}
+
+.import-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.import-service-logo {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.import-field-label {
+  display: block;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.import-url-field {
+  position: relative;
+  min-width: 0;
+}
+
+.import-url-field > svg,
+.import-url-field > .animate-icon > svg {
+  position: absolute;
+  left: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.import-url-input {
+  min-width: 0;
+  min-height: 52px;
+  height: 52px;
+  padding: 0 14px 0 44px;
+  border-color: var(--border-default);
+  border-radius: 12px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.import-field-hint,
+.import-field-error {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+}
+
+.import-field-error {
+  font-size: 12px;
+  color: var(--status-danger);
+}
+
+.import-form-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.import-submit {
+  width: 100%;
+  min-height: 48px;
+  height: auto;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.import-submit:disabled {
+  background-color: var(--surface-3);
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+.import-selection-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.import-busy-icon {
+  animation: import-link-busy 800ms linear infinite;
+}
+
+@keyframes import-link-busy {
+  to { transform: rotate(360deg); }
+}
+
+.import-help {
+  margin-top: 20px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.import-help > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  list-style: none;
+  cursor: pointer;
+}
+
+.import-help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.import-help > summary > svg,
+.import-help > summary > .animate-icon > svg {
+  flex-shrink: 0;
+}
+
+.import-help[open] > summary > svg,
+.import-help[open] > summary > .animate-icon > svg {
+  transform: rotate(180deg);
+}
+
+.import-help > summary:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.import-examples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  padding-top: 12px;
+}
+
+.import-example {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.import-example-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.import-example-url {
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.import-help-note {
+  margin-top: 20px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.import-preview {
+  min-width: 0;
+  background-color: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px;
+  margin-top: 20px;
+}
+
+.import-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.import-preview .import-collections {
+  margin-top: 16px;
+}
+
+.import-preview-cover {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.import-preview-info {
+  min-width: 0;
+}
+
+.import-preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.import-preview-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.import-preview-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.import-preview-source .import-service-logo {
+  flex-basis: 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.import-preview-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-preview-list li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.import-preview-number {
+  padding-top: 2px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-preview-song {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.import-preview-track {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.import-preview-artist {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-preview-list .import-preview-more {
+  display: block;
+  padding-left: 26px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-playlist-form { transition: none; }
+  .import-busy-icon { animation: none; }
+}
+
+/* --- Мобильная адаптация (Медиатека) --- */
+@media (max-width: 768px) {
+  .playlists-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .playlists-header h1 {
+    font-size: var(--text-2xl);
+    text-align: center;
+  }
+
+  /* Кнопки в колонку на всю ширину. */
+  .playlists-header-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .import-playlist-btn,
+  .create-playlist-btn {
+    width: 100%;
+  }
+
+  .import-services {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .import-form-header h2 {
+    font-size: 18px;
+  }
+
+  .import-playlist-form {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .import-examples {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .import-preview .import-collection {
+    display: grid;
+    grid-template-columns: 20px 32px minmax(0, 1fr);
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 8px 0;
+  }
+
+  .import-preview .import-collection > input,
+  .import-preview .import-collection-cover {
+    grid-row: 1 / 3;
+  }
+
+  .import-preview .import-collection-cover {
+    width: 32px;
+    height: 32px;
+  }
+
+  .import-preview .import-collection-title {
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .import-preview .import-collection-count {
+    grid-column: 3;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .create-playlist-form {
+    padding: 16px;
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .form-actions .submit-btn,
+  .form-actions .cancel-btn {
+    width: 100%;
+  }
+
+  /* Сетка плейлистов — 2 колонки на телефоне. */
+  .playlists-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .playlist-card {
+    padding: 10px;
+  }
+
+  .playlist-delete-btn {
+    top: 14px;
+    right: 14px;
+    width: 32px;
+    height: 32px;
+    opacity: 1;
+  }
+}

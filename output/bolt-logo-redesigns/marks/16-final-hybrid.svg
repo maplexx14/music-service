@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">
+    <defs>
+      <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#ddd6fe"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+      <filter id="markShadow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="11" result="b"/><feFlood flood-color="#8b5cf6" flood-opacity=".34" result="c"/><feComposite in="c" in2="b" operator="in" result="s"/><feOffset dy="9" result="o"/><feMerge><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <g filter="url(#markShadow)"><path d="M132 95v286c0 29 23 52 52 52h72c77 0 126-37 126-96 0-44-26-75-67-88 32-16 51-44 51-80 0-56-45-91-117-91h-65c-29 0-52 23-52 52Z" fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/><path d="M240 389C177 345 92 283 92 196c0-59 69-89 113-48 16 14 27 32 35 54 8-22 19-40 35-54 44-41 113-11 113 48 0 87-85 149-148 193Z" fill="none" stroke="url(#mark)" stroke-linecap="round" stroke-linejoin="round" stroke-width="25" opacity=".92"/><path d="m270 121-67 127h60l-41 119 102-154h-62Z" fill="#8b5cf6"/></g>
+  </svg>

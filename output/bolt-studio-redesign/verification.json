@@ -1,0 +1,85 @@
+{
+  "errors": [],
+  "checks": [
+    {
+      "mode": "desktop",
+      "name": "home",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 1
+    },
+    {
+      "mode": "desktop",
+      "name": "search",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "desktop",
+      "name": "library",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "desktop",
+      "name": "liked",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "desktop",
+      "name": "settings",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "desktop",
+      "name": "player",
+      "closed": true
+    },
+    {
+      "mode": "mobile",
+      "name": "home",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 1
+    },
+    {
+      "mode": "mobile",
+      "name": "search",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "mobile",
+      "name": "library",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "mobile",
+      "name": "liked",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "mobile",
+      "name": "settings",
+      "title": "bolt — музыка",
+      "overflow": false,
+      "dashboard": 0
+    },
+    {
+      "mode": "mobile",
+      "name": "player",
+      "closed": true
+    }
+  ]
+}

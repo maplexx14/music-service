@@ -1,0 +1,27 @@
+/* Обложка с значком сервиса в углу (выдача поиска). */
+.source-cover {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  line-height: 0;
+}
+
+.source-icon {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  /* Кольцо цвета фона отделяет значок от обложки любой яркости. */
+  box-shadow: 0 0 0 2px var(--source-icon-ring, var(--bg-app));
+  transition: box-shadow var(--duration-base) var(--ease-out);
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .source-icon {
+    width: 16px;
+    height: 16px;
+  }
+}

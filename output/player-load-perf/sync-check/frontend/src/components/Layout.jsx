@@ -1,0 +1,501 @@
+import { lazy, memo, Suspense, useCallback, useState, useEffect, useRef } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Home, Search, Library, Heart } from '@/components/icons'
+import { usePlayerStore } from '../store/playerStore'
+import { useAuthStore } from '../store/authStore'
+import GuestAccessDialog from './GuestAccessDialog'
+import GuestPageLock from './GuestPageLock'
+import { useSwipeNavigation } from '../hooks/useSwipeNavigation'
+import { usePwaBackHandler } from '../hooks/usePwaBackHandler'
+import { useSidebarLayout } from '../hooks/useSidebarLayout'
+import MeterProfiler from './MeterProfiler'
+import { isTabRoot, tabForLocation, canGoBack, isStandalone, entryAt, entryIndexOf, showTabNow, getShownTab } from '../services/navigation'
+import { haptic, HAPTIC } from '../utils/haptics'
+import ScreenStack, { detailScreenId, tabScreenId } from './ScreenStack'
+import SidebarView from './Sidebar'
+import PlayerView from './Player'
+import ToastView from './Toast'
+import PushPrompt from './PushPrompt'
+import RatePrompt from './RatePrompt'
+import { syncPushSubscription, trackPushOpen } from '../services/push'
+import { isAndroidApp, runAppAction } from '../services/androidApp'
+import { preloadInIdle } from '../services/preloadQueue'
+import { cancelScrollRestoration } from '../services/scrollRestoration'
+import AddToPlaylistDialogView from './AddToPlaylistDialog'
+import CensorOverrideDialogView from './CensorOverrideDialog'
+import './Layout.css'
+
+// Layout перерисовывается на каждом переходе и на каждом шаге капсулы меню.
+// Плеер, сайдбар и диалоги пропсов не принимают и живут на своих подписках —
+// без memo они перерисовывались бы вместе с ним, а плеер — тяжёлый
+// компонент, и тап по вкладке ждал этих рендеров.
+const Sidebar = memo(SidebarView)
+const Player = memo(PlayerView)
+const ToastContainer = memo(ToastView)
+const AddToPlaylistDialog = memo(AddToPlaylistDialogView)
+const CensorOverrideDialog = memo(CensorOverrideDialogView)
+
+// Полноэкранный плеер вместе с панелью текстов — отдельный чанк. Он и так
+// рисуется только по isFullScreen, но статический импорт тянул его (плюс
+// LyricsPanel и их CSS) в главный бандл, который блокирует первую отрисовку.
+// Открывают его жестом уже после загрузки — к этому моменту чанк успевает
+// приехать.
+const importFullScreenPlayer = () => import('./FullScreenPlayer')
+const FullScreenPlayer = lazy(importFullScreenPlayer)
+
+// Прогрев чанков страниц по intent (hover тачпадом / pointerdown тапа):
+// к моменту клика чанк уже в кэше, переход мгновенный — как в нативных
+// приложениях. Ссылки на десктопе прогреваются по hover (120мс задержка
+// против случайных ведений), на таче pointerdown на ~100мс раньше click.
+const ROUTE_CHUNKS = {
+  '/': () => import('../pages/Home'),
+  '/search': () => import('../pages/Search'),
+  '/playlists': () => import('../pages/Playlists'),
+  '/liked': () => import('../pages/LikedSongs'),
+  '/upload': () => import('../pages/UploadTrack'),
+  '/settings': () => import('../pages/Settings'),
+  '/admin': () => import('../pages/Admin'),
+}
+
+// Вложенные страницы, куда попадают из вкладок, — тоже прогреваются в простое.
+const DETAIL_CHUNKS = [
+  () => import('../pages/Artist'),
+  () => import('../pages/PlaylistDetail'),
+  () => import('../pages/Album'),
+  () => import('../pages/ExternalPlaylist'),
+]
+
+// Вкладки, которые открывают почти всегда, — в порядке вероятности. Грузятся
+// по одной в простое после первой отрисовки: hover-прогрев не работает на
+// таче, а первый тап по вкладке упирался в загрузку чанка со спиннером.
+const IDLE_CHUNKS = [
+  ROUTE_CHUNKS['/search'],
+  ROUTE_CHUNKS['/playlists'],
+  ROUTE_CHUNKS['/liked'],
+  ROUTE_CHUNKS['/'],
+  ...DETAIL_CHUNKS,
+  ROUTE_CHUNKS['/settings'],
+]
+
+function prefetchRouteChunk(path) {
+  const loader = ROUTE_CHUNKS[path]
+  if (loader) loader().catch(() => {})
+}
+
+export { prefetchRouteChunk }
+
+// Пункты нижней навигации на мобильном. Загрузки трека отдельным пунктом нет
+// ни здесь, ни в сайдбаре: под неё есть кнопка в «Медиатеке».
+const MOBILE_NAV = [
+  { to: '/', icon: Home, label: 'Главная' },
+  { to: '/search', icon: Search, label: 'Поиск' },
+  { to: '/liked', icon: Heart, label: 'Любимое' },
+  { to: '/playlists', icon: Library, label: 'Медиатека' },
+]
+
+// Ячейка нижнего меню для маршрута: вложенные экраны без своей вкладки —
+// под «Главной».
+const navIndexOf = (pathname) =>
+  Math.max(
+    0,
+    MOBILE_NAV.findIndex(({ to }) => (to === '/' ? pathname === '/' : pathname.startsWith(to)))
+  )
+
+function Layout({ renderRoutes }) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  usePwaBackHandler()
+  const { isCollapsed, sidebarWidth, toggleCollapse } = useSidebarLayout()
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.innerWidth <= 768
+  })
+  const isFullScreen = usePlayerStore((state) => state.isFullScreen)
+  const hasPlayer = usePlayerStore((state) => Boolean(state.currentTrack))
+  const location = useLocation()
+  const navigate = useNavigate()
+  const mainRef = useRef(null)
+  const navPillAnimationRef = useRef(null)
+  // Ячейка, куда уже едет подсветка меню, пока роутер не закоммитил экран:
+  // переход идёт в startTransition и под стеком смонтированных экранов
+  // коммитится заметно позже тапа или свайпа.
+  const [pendingNavIndex, setPendingNavIndex] = useState(null)
+
+  // Пуши: открытие из уведомления (?push=…) и сверка подписки устройства.
+  useEffect(() => {
+    if (!isAuthenticated) return
+    trackPushOpen()
+    syncPushSubscription()
+  }, [isAuthenticated])
+
+  // Android-оболочка открывает ссылки, «Поделиться» и ярлыки внутри уже
+  // запущенной страницы, без перезагрузки — иначе оборвалась бы музыка.
+  useEffect(() => {
+    if (!isAndroidApp()) return
+    window.__boltNavigate = (path) => navigate(path)
+    return () => {
+      delete window.__boltNavigate
+    }
+  }, [navigate])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const action = params.get('app')
+    if (!action) return
+    params.delete('app')
+    const rest = params.toString()
+    navigate(`${location.pathname}${rest ? `?${rest}` : ''}`, { replace: true })
+    runAppAction(action)
+  }, [location.search, location.pathname, navigate])
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 768)
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Одна очередь на приложение: параллельный прогрев из App раньше
+  // запускал все эти страницы разом, обходя ограничения этой очереди.
+  useEffect(() => preloadInIdle(isAuthenticated ? [importFullScreenPlayer, ...IDLE_CHUNKS] : [importFullScreenPlayer, ROUTE_CHUNKS['/search']]), [isAuthenticated])
+
+  // «Назад» — только у вложенных экранов, как в нативном стеке: у корней
+  // вкладок его нет. Сама панель рисуется в экране (ScreenStack).
+  const showMobileBack = isMobile && !isTabRoot(location.pathname)
+
+  // Открыли вложенный экран по ссылке (холодный старт PWA): в истории
+  // вернуться некуда, и navigate(-1) ничего бы не сделал — идём в корень
+  // его вкладки.
+  // Стабильная ссылка: кнопка «Назад» живёт в мемоизированном экране.
+  const locationRef = useRef(location)
+  locationRef.current = location
+  const goBack = useCallback(() => {
+    if (canGoBack()) navigate(-1)
+    else navigate(tabForLocation(locationRef.current), { replace: true })
+  }, [navigate])
+
+  // Свайпы — только в установленном PWA: во вкладке браузера горизонтальный
+  // жест у края уже занят его собственным «Назад».
+  const swipeEnabled = isStandalone && isMobile && isAuthenticated
+  const tabIndex = MOBILE_NAV.findIndex(({ to }) => to === location.pathname)
+  const prevTab = tabIndex > 0 ? MOBILE_NAV[tabIndex - 1].to : null
+  const nextTab = tabIndex >= 0 && tabIndex < MOBILE_NAV.length - 1 ? MOBILE_NAV[tabIndex + 1].to : null
+  // Экран, который окажется под пальцем: тот, куда ведёт «Назад» (вкладка
+  // или нижний вложенный экран), или соседняя вкладка. Если его ещё нет в
+  // стеке (только что вернулись, нижний досоздаётся в простое), свайп
+  // доигрывает переход View Transition.
+  let backTarget = null
+  let backPath = null
+  if (showMobileBack) {
+    const entryIdx = entryIndexOf(location.key)
+    const below = canGoBack() ? entryAt(entryIdx - 1) : null
+    backPath = canGoBack() ? below?.pathname : tabForLocation(location)
+    if (backPath && isTabRoot(backPath)) backTarget = tabScreenId(backPath)
+    else if (below) backTarget = detailScreenId(entryIdx - 1)
+  }
+  // Подсветка меню переезжает в момент отпускания пальца: иначе она ждала бы
+  // доезда экранов и коммита роутера и отставала от свайпа.
+  const handleSwipeCommit = (dir) => {
+    if (dir === null) {
+      setPendingNavIndex(null)
+      return
+    }
+    const to = showMobileBack ? backPath : dir > 0 ? prevTab : nextTab
+    if (to) setPendingNavIndex(navIndexOf(to))
+  }
+  // Капсула меню едет вместе с экраном: сдвиг экрана на ширину — ровно одна
+  // ячейка, теми же кадрами. Инлайн-сдвиг снимается в конце жеста, когда
+  // капсулу уже держит pendingNavIndex или маршрут — на том же месте.
+  const handleSwipePan = (x, width, transition, motion) => {
+    const pill = navPillRef.current
+    if (!pill) return
+    if (x === null || tabIndex < 0 || (!motion?.drag && !motion?.duration)) {
+      navPillAnimationRef.current?.cancel()
+      navPillAnimationRef.current = null
+    }
+    if (x === null || tabIndex < 0) {
+      // Коммит уже держит капсулу на месте. Включение CSS-перехода здесь
+      // заставляет WebKit повторно доезжать от последнего кадра WAAPI.
+      pill.style.transition = 'none'
+      pill.style.transform = ''
+      return
+    }
+    const pos = Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - x / width))
+    pill.style.transition = transition
+    pill.style.transform = `translateX(${pos * 100}%)`
+    if (motion?.drag) {
+      navPillAnimationRef.current = motion.drag(pill, pos, MOBILE_NAV.length, value => `translateX(${value * 100}%)`)
+    } else if (motion?.duration) {
+      // Те же кадры пружины, что у экранов: отдельный CSS-переход расходился
+      // с ними по скорости при отпускании и по моменту остановки.
+      navPillAnimationRef.current = motion.animate(pill, motion.samples.map(({ value, offset }) => ({
+        transform: `translateX(${Math.min(MOBILE_NAV.length - 1, Math.max(0, tabIndex - value / width)) * 100}%)`,
+        offset,
+      })))
+    }
+  }
+  const cancelSwipeRef = useSwipeNavigation(mainRef, {
+    enabled: swipeEnabled && !isFullScreen,
+    screenKey: location.key,
+    onCommit: handleSwipeCommit,
+    onPan: handleSwipePan,
+    onBack: showMobileBack ? goBack : null,
+    onPrev: prevTab ? () => navigate(prevTab) : null,
+    onNext: nextTab ? () => navigate(nextTab) : null,
+    targets: {
+      right: showMobileBack ? backTarget : prevTab && tabScreenId(prevTab),
+      left: nextTab && tabScreenId(nextTab),
+    },
+  })
+
+  // Тап по уже открытой вкладке — наверх, как в нативных таб-барах.
+  const handleNavClick = (event, to) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    // Клик, завершивший протяжку пальцем по панели: переход уже сделан там.
+    if (performance.now() < navSuppressClickUntil.current) {
+      event.preventDefault()
+      return
+    }
+    // Новый выбор сразу отменяет старый доезд, не дожидаясь коммита роутера.
+    cancelSwipeRef.current?.()
+    // После свайпа CSS-доезд отключён; обычный тап снова анимирует капсулу.
+    if (navPillRef.current) navPillRef.current.style.transition = ''
+    const requestedTab = getShownTab()
+    if (location.pathname === to && (!requestedTab || requestedTab === to)) {
+      event.preventDefault()
+      setPendingNavIndex(null)
+      const scroller = mainRef.current?.querySelector(':scope > .screen[data-active] > .screen-scroll')
+      cancelScrollRestoration(scroller)
+      scroller?.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    } else {
+      setPendingNavIndex(navIndexOf(to))
+      // Экран вкладки — в этом же кадре, не дожидаясь коммита роутера.
+      // Только между вкладками: с вложенного экрана переход идёт через View
+      // Transition, и подмена до снимка «до» сломала бы его анимацию.
+      if (isTabRoot(location.pathname)) showTabNow(to)
+    }
+    haptic(HAPTIC.selection)
+  }
+
+  // Одна капсула перемещается между ячейками без дополнительной деформации.
+  const activeNavIndex = navIndexOf(tabForLocation(location))
+
+  // Роутер закоммитил экран — подсветку дальше ведёт маршрут.
+  useEffect(() => {
+    // Старый коммит не сбрасывает подсветку более свежего тапа.
+    const requestedTab = getShownTab()
+    setPendingNavIndex((pending) => requestedTab && requestedTab !== location.pathname && navIndexOf(requestedTab) === pending ? pending : null)
+  }, [location.key])
+
+  // Перехода так и не случилось (свайп отменён) — капсула возвращается к
+  // текущей вкладке, а не зависает на чужой.
+  useEffect(() => {
+    if (pendingNavIndex === null) return undefined
+    const timer = setTimeout(() => setPendingNavIndex(null), 2000)
+    return () => clearTimeout(timer)
+  }, [pendingNavIndex])
+
+  // Протяжка пальцем по панели, как в Telegram: капсула едет за пальцем,
+  // подсвечивается вкладка под ним, отпустили — открылась она. Короткий тап
+  // по-прежнему обычный клик по ссылке.
+  //
+  // Пока палец на панели, капсулу двигаем напрямую (style.transform в px), без
+  // React-рендера на каждое движение. После отпускания её ведёт CSS-переход к
+  // выбранной ячейке: pendingNavIndex держит её там, пока роутер не закоммитит
+  // новый экран, — иначе она дёрнулась бы назад к старой вкладке.
+  const navRef = useRef(null)
+  const navPillRef = useRef(null)
+  const navDragRef = useRef(null)
+  const navSuppressClickUntil = useRef(0)
+  const [navHoverIndex, setNavHoverIndex] = useState(null)
+  const displayNavIndex = navHoverIndex ?? pendingNavIndex ?? activeNavIndex
+
+  const navGeometry = () => {
+    const rect = navRef.current.getBoundingClientRect()
+    return { rect, cell: rect.width / MOBILE_NAV.length }
+  }
+  const navIndexAt = (clientX, { rect, cell }) => {
+    return Math.min(MOBILE_NAV.length - 1, Math.max(0, Math.floor((clientX - rect.left) / cell)))
+  }
+  const releaseNavPill = () => {
+    const pill = navPillRef.current
+    if (!pill) return
+    pill.style.transition = ''
+    pill.style.transform = ''
+  }
+
+  const handleNavPointerDown = (event) => {
+    if (!isAuthenticated) return
+    if (event.pointerType === 'mouse' || !event.isPrimary) return
+    // Геометрию читаем до движения: замеры после записи transform на каждом
+    // pointermove заставляли браузер синхронно пересчитывать стили.
+    const geometry = navGeometry()
+    navDragRef.current = {
+      ...geometry,
+      id: event.pointerId,
+      x: event.clientX,
+      dragging: false,
+      index: navIndexAt(event.clientX, geometry),
+    }
+  }
+  const handleNavPointerMove = (event) => {
+    const drag = navDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    if (!drag.dragging) {
+      if (Math.abs(event.clientX - drag.x) < 8) return
+      cancelSwipeRef.current?.()
+      setPendingNavIndex(null)
+      drag.dragging = true
+      navRef.current.setPointerCapture?.(event.pointerId)
+      setNavHoverIndex(drag.index)
+    }
+    const { rect, cell } = drag
+    const x = Math.min(rect.width - cell, Math.max(0, event.clientX - rect.left - cell / 2))
+    const pill = navPillRef.current
+    if (pill) {
+      pill.style.transition = 'none'
+      pill.style.transform = `translateX(${x}px)`
+    }
+    const index = navIndexAt(event.clientX, drag)
+    if (index !== drag.index) {
+      drag.index = index
+      haptic(HAPTIC.selection, { allowDomFallback: false })
+      setNavHoverIndex(index)
+    }
+  }
+  const handleNavPointerEnd = (event) => {
+    const drag = navDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    navDragRef.current = null
+    if (!drag.dragging) return
+    navSuppressClickUntil.current = performance.now() + 400
+    setNavHoverIndex(null)
+    releaseNavPill()
+    if (event.type === 'pointercancel') return
+    const { to } = MOBILE_NAV[drag.index]
+    if (location.pathname !== to || (getShownTab() && getShownTab() !== to)) {
+      setPendingNavIndex(drag.index)
+      if (isTabRoot(location.pathname)) showTabNow(to)
+      navigate(to)
+    }
+  }
+
+  useEffect(() => {
+    if (!isMobile) return undefined
+    const cancelNavDrag = () => {
+      const drag = navDragRef.current
+      if (!drag) return
+      navDragRef.current = null
+      setNavHoverIndex(null)
+      if (navRef.current?.hasPointerCapture?.(drag.id)) navRef.current.releasePointerCapture(drag.id)
+      if (navPillRef.current) {
+        navPillRef.current.style.transition = ''
+        navPillRef.current.style.transform = ''
+      }
+    }
+    const onVisibility = () => { if (document.hidden) cancelNavDrag() }
+    let width = window.innerWidth
+    const onResize = () => {
+      if (width === window.innerWidth) return
+      width = window.innerWidth
+      cancelNavDrag()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', cancelNavDrag)
+    window.addEventListener('blur', cancelNavDrag)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', cancelNavDrag)
+      window.removeEventListener('blur', cancelNavDrag)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [isMobile])
+
+  return (
+    <div className="layout" data-has-player={hasPlayer ? '' : undefined} style={{ '--sidebar-width': isMobile ? '0px' : `${sidebarWidth}px` }}
+      onClickCapture={(event) => {
+        if (isAuthenticated) return
+        const link = event.target.closest('a[href]')
+        if (!link) return
+        const url = new URL(link.href, window.location.href)
+        const download = link.hasAttribute('download') || link.classList.contains('track-download') || (link.classList.contains('fullscreen-tool') && link.closest('.fullscreen-player'))
+        if (url.origin === window.location.origin && !download) return
+        event.preventDefault()
+        event.stopPropagation()
+        usePlayerStore.getState().requireAccount()
+      }}>
+      <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />
+      <main ref={mainRef} className="main-content" style={{ marginLeft: isMobile ? 0 : `${sidebarWidth}px` }}>
+        <ScreenStack renderRoutes={renderRoutes} isMobile={isMobile} warmTabs={swipeEnabled} onBack={goBack} />
+        {!isAuthenticated && location.pathname !== '/search' && <GuestPageLock />}
+      </main>
+      <MeterProfiler id="мини-плеер">
+        <Player />
+      </MeterProfiler>
+      <ToastContainer />
+      {isAuthenticated && <PushPrompt />}
+      {isAuthenticated && <RatePrompt />}
+      {!isAuthenticated && <GuestAccessDialog />}
+      <AddToPlaylistDialog />
+      <CensorOverrideDialog />
+      {/* fallback пустой: полноэкранный плеер открывается поверх уже
+          отрисованного мини-плеера, спиннер здесь мигал бы зря. */}
+      {isFullScreen && (
+        <Suspense fallback={null}>
+          <MeterProfiler id="фуллскрин">
+            <FullScreenPlayer />
+          </MeterProfiler>
+        </Suspense>
+      )}
+      {isMobile && (
+        <nav
+          ref={navRef}
+          className="mobile-nav-global"
+          aria-label="Нижняя навигация"
+          onPointerDown={handleNavPointerDown}
+          onPointerMove={handleNavPointerMove}
+          onPointerUp={handleNavPointerEnd}
+          onPointerCancel={handleNavPointerEnd}
+          onLostPointerCapture={(event) => {
+            if (event.target === navRef.current) handleNavPointerEnd({ pointerId: event.pointerId, type: 'pointercancel' })
+          }}
+        >
+          <span
+            ref={navPillRef}
+            className="mobile-nav-global-pill"
+            style={{ '--nav-index': displayNavIndex }}
+            aria-hidden="true"
+          >
+            <span className="mobile-nav-global-pill-inner" />
+          </span>
+          {MOBILE_NAV.map(({ to, icon: Icon, label }, index) => {
+            const isActive = to === tabForLocation(location)
+            // Подсветка иконки идёт за пальцем (и за выбранной, пока экран
+            // меняется); aria-current — только за реальным маршрутом.
+            const isLit = index === displayNavIndex
+            return (
+              <Link
+                key={to}
+                to={to}
+                className={`mobile-nav-global-item ${isLit ? 'active' : ''}`}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={label}
+                onPointerEnter={() => prefetchRouteChunk(to)}
+                onPointerDown={() => prefetchRouteChunk(to)}
+                onClick={(event) => handleNavClick(event, to)}
+              >
+                <span className="mobile-nav-global-icon">
+                  <Icon size={22} strokeWidth={2.25} />
+                </span>
+              </Link>
+            )
+          })}
+        </nav>
+      )}
+    </div>
+  )
+}
+
+export default Layout

@@ -1,0 +1,64 @@
+.bolt-loader {
+  /* Scale the whole indicator to fit compact controls without clipping its bars. */
+  --bl-unit: min(var(--bl-size), calc(var(--bl-frame) / 3.16));
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--bl-frame);
+  height: var(--bl-frame);
+  overflow: hidden;
+  contain: strict;
+}
+
+.bolt-loader-heart {
+  flex: none;
+  width: var(--bl-unit);
+  height: var(--bl-unit);
+  user-select: none;
+}
+
+.bolt-loader-wave .bolt-loader-heart {
+  will-change: opacity;
+  animation: bolt-loader-heartbeat 1200ms cubic-bezier(.45, 0, .55, 1) infinite;
+}
+
+.bolt-loader-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--bl-unit) * 0.08);
+  width: calc(var(--bl-unit) * 3.16);
+  height: var(--bl-unit);
+}
+
+.bolt-loader-bar {
+  flex: none;
+  width: calc(var(--bl-unit) * 0.1);
+  height: 65%;
+  border-radius: 999px;
+  background: #9d59ff;
+  transform: scaleY(var(--level));
+  opacity: 0.85;
+  will-change: transform, opacity;
+  animation: bolt-loader-wave 1200ms cubic-bezier(.45, 0, .55, 1) calc(var(--i) * 100ms - 1200ms) infinite;
+}
+
+@keyframes bolt-loader-wave {
+  0%, 100% { transform: scaleY(0.25); opacity: 0.4; }
+  50% { transform: scaleY(var(--level)); opacity: 0.9; }
+}
+
+@keyframes bolt-loader-heartbeat {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bolt-loader-bar,
+  .bolt-loader-wave .bolt-loader-heart {
+    animation: none;
+    will-change: auto;
+  }
+}

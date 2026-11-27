@@ -1,0 +1,958 @@
+.player {
+  position: fixed;
+  bottom: var(--player-bottom, 12px);
+  left: calc(var(--sidebar-width, 240px) + 16px);
+  right: 16px;
+  height: var(--player-height, 88px);
+  transition: left 0.3s var(--ease-morph);
+  background: var(--player-background, var(--surface-2));
+  border: none;
+  /* Сильное скругление — плеер выглядит как капсула (как меню ниже). */
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  z-index: 1000;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  overflow: visible;
+}
+
+.player-progress-top {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  right: 0;
+  height: 28px;
+  cursor: pointer;
+  z-index: 2;
+}
+
+/* На мобильном полоса только показывает прогресс: тап и свайп по ней
+   проходят к капсуле (открыть плеер, листать карусель), перемотки нет. */
+.player-progress-top.is-readonly {
+  pointer-events: none;
+}
+
+.player-progress-top-track {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: transparent;
+  transition: height 0.15s ease, background-color 0.15s ease;
+}
+
+.player-progress-top:hover .player-progress-top-track {
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Заливку и ползунок двигает композитор (usePlaybackProgress): сдвиг на
+   (доля − 1) ширины полосы. Заливка — в обрезке, иначе сдвинутая влево она
+   торчала бы за начало полосы; голова с ползунком и временем — без обрезки,
+   её содержимое стоит на правом краю и выходит за полосу. */
+.player-progress-top-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.player-progress-top-fill,
+.player-progress-top-head {
+  will-change: transform;
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+}
+
+.player-progress-top-fill {
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.player-progress-top-head {
+  pointer-events: none;
+}
+
+.player-progress-top:hover .player-progress-top-fill {
+  background-color: var(--brand-accent);
+}
+
+.player-progress-thumb {
+  position: absolute;
+  top: 50%;
+  right: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--brand-accent);
+  /* Появление из scale(0.6) + прозрачность: ничто не возникает из ниоткуда. */
+  transform: translateY(-50%) scale(0.6);
+  opacity: 0;
+  transition: transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-progress-top:hover .player-progress-thumb {
+    transform: translateY(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+.player-progress-time-bubble {
+  position: absolute;
+  bottom: 100%;
+  right: -18px;
+  transform: translateY(6px);
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.player-progress-top:hover .player-progress-time-bubble {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-progress-top:hover .player-progress-time-bubble {
+    transform: translateY(0);
+  }
+}
+
+.player-progress-duration {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.player-left {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* Постоянная ширина области текста держит кнопки рядом с названием
+   и не даёт им смещаться при смене трека. В тесном ряду текст сжимается. */
+@media (min-width: 769px) {
+  .player-left {
+    grid-template-columns: auto minmax(0, 160px) auto;
+    justify-content: start;
+  }
+}
+
+/* Соседний трек в карусели мини-плеера (см. useTrackCarousel): капсула-
+   двойник на шаг «ширина + зазор» слева или справа. Свайп двигает саму
+   .player, двойники едут вместе с ней. Такой же непрозрачный фон. */
+.player-ghost {
+  position: absolute;
+  inset: 0;
+  transform: translateX(calc(var(--slot) * (100% + var(--strip-gap))));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--player-background, #0a0a0e);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.player-ghost .player-cover {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.player-ghost .player-info {
+  flex: 1;
+}
+
+.player-cover-wrap {
+  position: relative;
+  display: block;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  border-radius: 8px;
+  line-height: 0;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.player-cover-wrap:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .player-cover-wrap:hover {
+    transform: translateY(-1px);
+  }
+}
+
+.player-cover {
+  width: 50px;
+  height: 50px;
+  object-fit: cover;
+  border-radius: 8px;
+  background-color: var(--surface-1);
+}
+
+/* Оверлей поверх обложки на время (пере)резолва потока внешнего трека —
+   без него долгий, но живой резолв YouTube Music выглядит как зависание. */
+.player-cover-buffering {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.player-info {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.player-track-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.player-track-artist {
+  font-size: var(--text-xs);
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.58);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Многоточие должно жить на самой обёртке имён: она блочная, и text-overflow
+   родителя до её содержимого уже не достаёт. nowrap наследуется отсюда же. */
+.player-artist-names {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-track-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+/* Secondary track actions (dislike, playlist, download) live behind this one
+   button instead of a five-icon row fighting the playback controls. */
+.player-track-more.is-open { color: #fff; }
+
+.player-track-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 232px;
+  padding: 6px;
+  border: 1px solid #ffffff1f;
+  border-radius: 14px;
+  background: #1a1720f2;
+  box-shadow: 0 18px 48px #00000073;
+  backdrop-filter: blur(18px);
+  animation: player-track-menu-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes player-track-menu-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.player-track-menu-item,
+.player-track-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #eae5f2;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.player-track-menu-item:hover,
+.player-track-menu-row:hover { background: #ffffff14; }
+.player-track-menu-item.is-active { color: var(--brand-accent, #a259ff); }
+.player-track-menu-item:disabled { opacity: 0.5; cursor: default; }
+.player-track-menu-item svg,
+.player-track-menu-row > svg { flex: 0 0 auto; color: #bdb4cc; }
+.player-track-menu-item.is-active svg { color: currentColor; }
+.player-track-menu-row > span { flex: 1 1 auto; }
+.player-track-menu-row .player-track-menu-action { width: 32px; height: 32px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .player-track-menu { animation: none; }
+}
+
+html.lite-mode .player-track-menu { animation: none; backdrop-filter: none; background: #1a1720; }
+
+/* Secondary player actions use color, not a button surface, for state. */
+.like-btn {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.like-btn:hover {
+  color: var(--text-primary);
+}
+
+.like-btn.liked {
+  color: var(--brand-accent);
+  /* Поп при лайке: редкий «момент радости», разрешаем чуть заметный отскок. */
+  animation: likePop 0.375s var(--ease-out);
+}
+
+@keyframes likePop {
+  0% { transform: rotate(0deg); }
+  40% { transform: rotate(-12deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.dislike-btn {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.dislike-btn:hover {
+  color: var(--text-primary);
+}
+
+.dislike-btn.disliked {
+  color: var(--status-danger);
+}
+
+.add-btn {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.add-btn:hover {
+  color: var(--text-primary);
+}
+
+.add-btn:visited {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.lyrics-btn {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.lyrics-btn:hover {
+  color: var(--text-primary);
+}
+
+.like-btn svg,
+.dislike-btn svg,
+.add-btn svg,
+.lyrics-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.lyrics-btn.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.lyrics-btn.disabled:hover {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.like-btn:focus-visible,
+.dislike-btn:focus-visible,
+.add-btn:focus-visible,
+.lyrics-btn:focus-visible,
+.control-btn:focus-visible,
+.play-pause-btn:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.player-center {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 722px;
+  position: relative;
+  z-index: 1;
+}
+
+.player-actions-panel {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  background: rgba(8, 8, 12, 0.82);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  position: relative;
+  z-index: 1;
+}
+
+.player-actions-panel button:active:not(:disabled) {
+  transform: none;
+}
+
+.player-actions-panel .control-btn,
+.player-actions-panel .lyrics-btn {
+  border-radius: 999px;
+}
+
+.player-actions-panel .lyrics-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.player-actions-panel .lyrics-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.control-btn {
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.56);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.control-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.control-btn.active {
+  color: var(--brand-accent);
+  background: rgba(162, 89, 255, 0.1);
+  border-color: rgba(162, 89, 255, 0.16);
+}
+
+/* Кнопка «следующий» заблокирована, пока следующий трек не подгрузился. */
+.control-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.control-btn:disabled:hover {
+  color: rgba(255, 255, 255, 0.56);
+  background: transparent;
+}
+
+.play-pause-btn {
+  background: #55308a;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  transition: filter 0.2s ease;
+}
+
+.play-pause-btn svg {
+  fill: currentColor;
+}
+
+.play-pause-btn:hover {
+  filter: brightness(1.08);
+}
+
+/* Лайк рядом с плей/паузой — только для мобильной капсулы (см. @media ниже). */
+.player-mobile-like {
+  display: none;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+.player-right {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  z-index: 1;
+}
+
+@media (min-width: 769px) {
+  .player-cover {
+    width: 58px;
+    height: 58px;
+  }
+
+  .player-track-title {
+    font-size: var(--text-md);
+  }
+
+  .player-track-artist {
+    font-size: var(--text-sm);
+  }
+
+  .play-pause-btn {
+    width: 52px;
+    height: 52px;
+  }
+
+  .play-pause-btn svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .control-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .control-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .player-actions-panel {
+    padding: 4px 10px;
+  }
+
+  .player-actions-panel .lyrics-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-actions-panel .lyrics-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+.player-volume-slider-wrap {
+  display: flex;
+  align-items: center;
+}
+
+/* Равные боковые колонки держат воспроизведение точно по центру,
+   независимо от длины названия и количества действий с треком. */
+@media (min-width: 1001px) {
+  .player {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .player-center {
+    justify-self: center;
+  }
+
+  .player-right {
+    min-width: 0;
+    justify-self: end;
+  }
+}
+
+@media (min-width: 1280px) {
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
+  }
+}
+
+/* Сжимаем отступы, сохраняя все кнопки на планшетах и узких мониторах. */
+@media (min-width: 769px) and (max-width: 1200px) {
+  .player {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .player-left {
+    gap: 8px;
+  }
+
+  .player-cover {
+    width: 48px;
+    height: 48px;
+  }
+
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
+  }
+
+  .player-track-actions .like-btn,
+  .player-track-actions .dislike-btn,
+  .player-track-actions .add-btn {
+    width: 28px;
+    height: 40px;
+  }
+
+  .player-track-actions svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .player-controls {
+    gap: 2px;
+  }
+
+  .player-controls .control-btn {
+    width: 32px;
+  }
+
+  .play-pause-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .player-actions-panel {
+    padding-inline: 6px;
+    gap: 2px;
+  }
+
+  .player-actions-panel .control-btn,
+  .player-actions-panel .lyrics-btn {
+    width: 28px;
+  }
+
+  .player-right {
+    gap: 2px;
+    min-width: 0;
+    justify-self: end;
+  }
+
+  .player-center {
+    justify-self: center;
+  }
+
+  .player-volume-icon {
+    display: none;
+  }
+
+  .player-actions-panel .player-volume-toggle {
+    display: flex;
+  }
+
+  .player-volume-slider-wrap {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 32px);
+    right: 0;
+    padding: 18px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    background: #0a0a0e;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .volume-control.is-open .player-volume-slider-wrap {
+    display: flex;
+  }
+
+  .player-volume-slider-wrap .volume-slider {
+    width: 112px;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 900px) {
+  .player-left {
+    gap: 4px;
+  }
+
+  .player-cover {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-track-actions .like-btn,
+  .player-track-actions .dislike-btn,
+  .player-track-actions .add-btn {
+    width: 24px;
+  }
+
+  .player-track-actions svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1600px) and (orientation: portrait) {
+  .player {
+    transition: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .player {
+    left: 12px;
+    right: 12px;
+    /* Такой же размер, как меню; выше меню с зазором. */
+    bottom: var(--player-bottom, calc(var(--safe-bottom) + 80px));
+    height: var(--player-height, 72px);
+    padding: 0 16px;
+    gap: 10px;
+    /* Полностью круглые края на мобильных под увеличенную высоту. */
+    border-radius: 999px;
+    background: var(--player-background, #0a0a0e);
+  }
+
+  /* Горизонталь — карусель треков, вертикаль за фиксированным плеером
+     скроллить нечего: жест целиком отдаём JS. */
+  .player {
+    touch-action: none;
+    transition: none;
+  }
+
+  .player-left {
+    flex: 1;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  /* Тап по имени артиста открывает плеер, как и по остальной капсуле:
+     попасть пальцем в ссылку на узкой строке почти нельзя, и вместо плеера
+     внезапно открывалась страница артиста. */
+  .player-info {
+    pointer-events: none;
+  }
+
+  .player-track-title {
+    display: block;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
+  }
+
+  .player-cover {
+    width: 42px;
+    height: 42px;
+  }
+
+  .player-right,
+  .player-track-actions {
+    display: none;
+  }
+
+  /* На мобильных переключение треков доступно свайпом по обложке
+     и из полноэкранного плеера. */
+  .player-controls .control-btn {
+    display: none;
+  }
+
+  .player-controls {
+    gap: 10px;
+  }
+
+  .player-mobile-like {
+    display: flex;
+  }
+}
+
+.volume-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.player-volume-toggle {
+  display: none;
+}
+
+.volume-slider {
+  display: block;
+  width: 93px;
+  height: 5px;
+  margin: 0;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--surface-4);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--surface-inverse);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: var(--surface-inverse);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+  display: none;
+}
+
+.volume-slider:hover {
+  background: #4d4d4d;
+}
+
+.volume-slider:hover::-webkit-slider-thumb {
+  background: var(--brand-accent);
+}
+
+.volume-slider:hover::-moz-range-thumb {
+  background: var(--brand-accent);
+}
+
+.volume-slider:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 4px;
+}
+
+/* Капсула сама заполняется по ходу трека. Форма всегда равна капсуле
+   плеера, движется только граница заливки: заливка во всю ширину сдвинута
+   влево и обрезана скруглением (иначе при узкой заливке браузер сжимал бы её
+   радиусы и углы не совпадали). Сдвиг ведёт композитор — капсула под
+   backdrop-filter не перерисовывается. */
+.player-progress-surface {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.player-progress-surface-fill {
+  will-change: transform;
+  position: absolute;
+  inset: 0;
+  background: var(--player-fill, rgba(255, 255, 255, 0.13));
+  transform: translateX(-100%);
+}
+
+

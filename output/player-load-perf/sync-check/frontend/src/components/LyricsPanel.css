@@ -1,0 +1,154 @@
+.lyrics-panel {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+  width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  /* The fullscreen player owns vertical swipes (drag to close) and sets
+     touch-action: none on its surface; the text still has to scroll under the
+     finger, so the panel re-enables panning for itself. */
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lyrics-panel.is-synced {
+  overflow: hidden;
+}
+
+.lyrics-synced {
+  --lyrics-context-scale: 0.72;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  justify-items: center;
+  gap: clamp(18px, 3vh, 32px);
+  height: 100%;
+  padding: 24px 16px;
+  /* Текст листается колесом и пальцем: окно из трёх строк сдвигается по
+     списку, раскладка при этом не меняется. */
+  touch-action: pan-y;
+  cursor: ns-resize;
+  user-select: none;
+}
+
+.lyrics-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.lyrics-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}
+
+.lyrics-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lyrics-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.lyrics-empty-text {
+  font-size: var(--text-sm);
+}
+
+.lyrics-retry {
+  padding: 10px 18px;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lyrics-retry:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 3px;
+}
+
+.lyrics-plain {
+  padding: 40px 0 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.lyrics-line {
+  max-width: 100%;
+  font-size: clamp(36px, 4vw, 54px);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.3);
+  transition: color 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 4px 0;
+  cursor: default;
+  user-select: none;
+  text-align: center;
+}
+
+.lyrics-synced .lyrics-line {
+  grid-column: 1;
+  grid-row: 3;
+  align-self: start;
+  /* Один кегль сохраняет переносы, размер соседних строк меняется масштабом. */
+  transform: scale(var(--lyrics-context-scale));
+  transform-origin: center;
+}
+
+.lyrics-synced .lyrics-line[role='button'] {
+  cursor: pointer;
+}
+
+.lyrics-line.sung {
+  grid-row: 1;
+  align-self: end;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.lyrics-line.active {
+  grid-row: 2;
+  align-self: center;
+  transform: scale(1);
+  color: var(--text-primary);
+}
+
+.lyrics-plain .lyrics-line {
+  font-size: 18px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+
+/* Mobile: smaller font */
+@media (max-width: 768px) {
+  .lyrics-synced {
+    --lyrics-context-scale: 0.78;
+  }
+
+  .lyrics-line {
+    font-size: clamp(30px, 8vw, 40px);
+  }
+
+  .lyrics-plain .lyrics-line {
+    font-size: 16px;
+  }
+
+  .lyrics-plain {
+    padding: 24px 0 40px;
+  }
+}

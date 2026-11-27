@@ -1,0 +1,422 @@
+.import-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.import-progress-modal {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  border-radius: var(--radius-dialog);
+  background-color: var(--surface-2);
+  box-shadow: var(--shadow-dialog);
+}
+
+.import-progress-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.import-progress-close:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 28px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.import-progress-head svg {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}
+
+.import-progress-stage {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.import-progress-collection {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: var(--surface-4);
+}
+
+.import-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background-color: var(--brand-accent);
+  transition: width 0.4s linear;
+}
+
+.import-progress-bar.indeterminate .import-progress-fill {
+  width: 35%;
+  animation: import-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes import-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-progress-bar.indeterminate .import-progress-fill,
+  .import-pill-bar.indeterminate .import-progress-fill {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
+.import-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+/* Шаги импорта: пройденные — с галочкой, текущий — акцентом, впереди — тускло. */
+.import-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.import-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-tertiary);
+}
+
+.import-progress-step-mark {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--surface-4);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.import-progress-step.active {
+  color: var(--text-primary);
+}
+
+.import-progress-step.active .import-progress-step-mark {
+  border-color: var(--brand-accent);
+  color: var(--brand-accent);
+}
+
+.import-progress-step.done {
+  color: var(--text-secondary);
+}
+
+.import-progress-step.done .import-progress-step-mark {
+  border-color: transparent;
+  background-color: var(--status-success-soft);
+  color: var(--status-success);
+}
+
+.import-progress-step-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-progress-step-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.import-progress-result {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+}
+
+.import-progress-result > svg,
+.import-progress-result > .animate-icon > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.import-progress-result.success {
+  background-color: var(--status-success-soft);
+}
+
+.import-progress-result.success > svg,
+.import-progress-result.success > .animate-icon > svg {
+  color: var(--status-success);
+}
+
+.import-progress-result.warning {
+  background-color: var(--status-warning-soft);
+}
+
+.import-progress-result.warning > svg,
+.import-progress-result.warning > .animate-icon > svg {
+  color: var(--status-warning);
+}
+
+.import-progress-result.error {
+  background-color: var(--status-danger-soft);
+}
+
+.import-progress-result.error > svg,
+.import-progress-result.error > .animate-icon > svg {
+  color: var(--status-danger);
+}
+
+.import-progress-result-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-progress-result-text {
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.import-progress-action {
+  align-self: stretch;
+  margin-top: 4px;
+}
+
+/* Плашка статуса, пока окно закрыто. Десктоп — справа над плеером (по центру
+   там тосты), телефон — над мини-плеером. */
+.import-pill-container {
+  position: fixed;
+  right: 16px;
+  bottom: 104px;
+  z-index: 1400;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.import-pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 300px;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-dialog);
+  pointer-events: auto;
+}
+
+.import-pill-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.import-pill-icon {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}
+
+.import-pill.success .import-pill-icon {
+  color: var(--status-success);
+}
+
+.import-pill.error .import-pill-icon {
+  color: var(--status-danger);
+}
+
+.import-pill-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.import-pill-title,
+.import-pill-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-pill-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-pill-status {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.import-pill-close {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-right: 2px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.import-pill-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  overflow: hidden;
+  background-color: var(--surface-4);
+}
+
+.import-pill-bar.indeterminate .import-progress-fill {
+  width: 35%;
+  animation: import-progress-slide 1.2s ease-in-out infinite;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .import-pill-main:hover .import-pill-title {
+    text-decoration: underline;
+  }
+
+  .import-pill-close:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+@media (max-width: 768px) {
+  .import-pill-container {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--safe-bottom) + 160px);
+  }
+
+  .import-pill {
+    width: 100%;
+  }
+}
+
+.import-progress-error {
+  font-size: 13px;
+  color: var(--status-danger);
+  white-space: pre-line;
+}
+
+.import-progress-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* Телефон: окно прогресса — нижняя шторка. По центру оно висело бы прямо
+   над мини-плеером, а снизу его удобно закрыть большим пальцем. */
+@media (max-width: 768px) {
+  .import-progress-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .import-progress-modal {
+    max-width: none;
+    padding: 24px 20px calc(var(--safe-bottom) + 20px);
+    border: none;
+    border-top: 1px solid rgba(162, 89, 255, 0.25);
+    border-radius: 20px 20px 0 0;
+    animation: import-progress-sheet-in 220ms var(--ease-drawer) both;
+  }
+
+  .import-progress-close {
+    top: 8px;
+    right: 8px;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .import-progress-head {
+    padding-right: 40px;
+  }
+}
+
+@keyframes import-progress-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .import-progress-modal {
+    animation: none;
+  }
+}
